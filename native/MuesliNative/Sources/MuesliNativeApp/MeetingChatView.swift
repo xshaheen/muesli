@@ -3,6 +3,7 @@
 
 import Observation
 import SwiftUI
+import AppKit
 
 /// Chat surface over a meeting transcript.
 ///
@@ -13,11 +14,16 @@ struct MeetingChatView: View {
     @Bindable var conversation: MeetingChatConversation
     let transcript: String
     let systemPrompt: String
+    /// The user's own notes, sent alongside the transcript so answers reflect what
+    /// they thought worth writing down, not only what was said aloud.
+    var manualNotes: String = ""
     let config: AppConfig
     /// Compact mode trims padding and type size for the floating panel.
     var isCompact: Bool = false
 
     @State private var draft: String = ""
+    /// Which answer was just copied, so the button can confirm it happened.
+    @State private var copiedTurnText: String?
     @FocusState private var isInputFocused: Bool
 
     private var canSend: Bool {
@@ -97,19 +103,56 @@ struct MeetingChatView: View {
     private func turnBubble(_ turn: MeetingChatTurn) -> some View {
         HStack(alignment: .top, spacing: 6) {
             if turn.role == .user { Spacer(minLength: 32) }
-            Text(turn.displayText)
-                .font(.system(size: isCompact ? 12 : 13))
-                .foregroundStyle(MuesliTheme.textPrimary)
-                .textSelection(.enabled)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(turn.role == .user ? MuesliTheme.surfaceSelected : MuesliTheme.backgroundRaised)
-                )
-                .frame(maxWidth: .infinity, alignment: turn.role == .user ? .trailing : .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                // Answers arrive as markdown, so render them the way notes and
+                // transcripts render -- otherwise bullets and bold show up as
+                // literal `-` and `**` in the middle of a sentence.
+                if turn.role == .assistant {
+                    MeetingMarkdownContent(
+                        markdown: turn.displayText,
+                        bodyFont: .system(size: isCompact ? 12 : 13)
+                    )
+                } else {
+                    Text(turn.displayText)
+                        .font(.system(size: isCompact ? 12 : 13))
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                        .textSelection(.enabled)
+                }
+                if turn.role == .assistant {
+                    copyButton(for: turn.displayText)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(turn.role == .user ? MuesliTheme.surfaceSelected : MuesliTheme.backgroundRaised)
+            )
+            .frame(maxWidth: .infinity, alignment: turn.role == .user ? .trailing : .leading)
             if turn.role == .assistant { Spacer(minLength: 32) }
         }
+    }
+
+    /// Copying one answer, rather than making the user select it by hand.
+    private func copyButton(for text: String) -> some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            copiedTurnText = text
+            Task {
+                try? await Task.sleep(nanoseconds: 1_400_000_000)
+                if copiedTurnText == text { copiedTurnText = nil }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: copiedTurnText == text ? "checkmark" : "doc.on.doc")
+                Text(copiedTurnText == text ? "Copied" : "Copy")
+            }
+            .font(.system(size: isCompact ? 10 : 11))
+            .foregroundStyle(MuesliTheme.textTertiary)
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 2)
     }
 
     private var thinkingRow: some View {
@@ -206,6 +249,7 @@ struct MeetingChatView: View {
                 sentText: recipe.prompt,
                 transcript: transcript,
                 systemPrompt: systemPrompt,
+                manualNotes: manualNotes,
                 config: config
             )
         }
@@ -241,6 +285,7 @@ struct MeetingChatView: View {
                 displayText: question,
                 transcript: transcript,
                 systemPrompt: systemPrompt,
+                manualNotes: manualNotes,
                 config: config
             )
         }

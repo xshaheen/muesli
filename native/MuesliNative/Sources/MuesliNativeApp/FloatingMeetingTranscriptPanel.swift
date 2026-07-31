@@ -69,6 +69,9 @@ struct FloatingMeetingChatContext {
     /// Whether the selected backend is actually usable. The detail view hides its Chat tab
     /// when this is false; the panel must agree, or it offers a control that always fails.
     let isReady: () -> Bool
+    /// Resolved per send, like the config, because the user types notes during the
+    /// meeting and the panel must see what they have written by the time they ask.
+    var manualNotes: () -> String = { "" }
 }
 
 @MainActor
@@ -118,12 +121,24 @@ final class FloatingMeetingTranscriptModel {
         )
     }
 
+    /// Copies whatever the panel is currently showing.
+    ///
+    /// The header button is the only copy affordance the panel has, so with chat
+    /// open it must copy the conversation. Copying the transcript instead gives the
+    /// user something they were not looking at, silently.
     func copyToPasteboard() {
-        let text = LiveTranscriptCopyContent.text(
-            transcript: presentation.transcript,
-            partialYou: presentation.partialYou,
-            partialOthers: presentation.partialOthers
-        )
+        let text: String
+        if isChatOpen, let context = chatContext {
+            text = MeetingChatConversations.shared
+                .conversation(for: context.meetingID)
+                .transcriptForCopying()
+        } else {
+            text = LiveTranscriptCopyContent.text(
+                transcript: presentation.transcript,
+                partialYou: presentation.partialYou,
+                partialOthers: presentation.partialOthers
+            )
+        }
         guard !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -160,6 +175,7 @@ final class FloatingMeetingTranscriptPanelController {
     private let onOpenNotes: () -> Void
     private let onDismiss: () -> Void
     private var hostingView: FirstMouseHostingView<FloatingMeetingTranscriptPanelView>?
+    private var outsideClickMonitor: Any?
 
     init(
         onHoverChanged: @escaping (Bool) -> Void,
@@ -190,6 +206,9 @@ final class FloatingMeetingTranscriptPanelController {
     var isVisible: Bool {
         hostingView?.superview != nil && hostingView?.isHidden == false
     }
+
+    /// Whether the panel is holding an open chat, and so must not be auto-dismissed.
+    var isChatOpen: Bool { model.isChatOpen }
 
     func update(transcript: String, partialYou: String, partialOthers: String) {
         model.update(
@@ -239,6 +258,7 @@ final class FloatingMeetingTranscriptPanelController {
 
     /// Single place every teardown path goes through, so no route can skip the resign step.
     private func releaseChatFocus() {
+        endOutsideClickDismissal()
         guard model.isChatOpen else { return }
         model.closeChat()
         if let window = hostingView?.window, window.isKeyWindow {
@@ -293,11 +313,44 @@ final class FloatingMeetingTranscriptPanelController {
     func setChatOpen(_ open: Bool) {
         if open {
             model.openChat()
+            beginOutsideClickDismissal()
         } else {
+            endOutsideClickDismissal()
             // Resign only the panel's own key status. Deactivating the whole app would also
             // hide a main window the user may have opened deliberately.
             releaseChatFocus()
         }
+    }
+
+    /// Closes chat when the user clicks somewhere else.
+    ///
+    /// Hover no longer dismisses an open chat, so this is what replaces it. Without
+    /// it the panel would have no deliberate way out short of the header button, and
+    /// would sit over the call until the meeting ended.
+    private func beginOutsideClickDismissal() {
+        guard outsideClickMonitor == nil else { return }
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            guard let self, self.model.isChatOpen else { return }
+            // A global monitor only sees clicks outside this app's windows, but the
+            // panel can also be clicked while another app is frontmost, so check the
+            // pointer against the panel's own frame before dismissing.
+            guard !self.pointerIsInsidePanel() else { return }
+            self.setChatOpen(false)
+        }
+    }
+
+    private func endOutsideClickDismissal() {
+        if let outsideClickMonitor {
+            NSEvent.removeMonitor(outsideClickMonitor)
+        }
+        outsideClickMonitor = nil
+    }
+
+    private func pointerIsInsidePanel() -> Bool {
+        guard let window = hostingView?.window else { return false }
+        return window.frame.contains(NSEvent.mouseLocation)
     }
 
     private func copyTranscript() {
@@ -356,6 +409,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
                         conversation: MeetingChatConversations.shared.conversation(for: context.meetingID),
                         transcript: model.chatTranscript,
                         systemPrompt: MeetingChatPrompts.live,
+                        manualNotes: context.manualNotes(),
                         config: context.currentConfig(),
                         isCompact: true
                     )
@@ -368,12 +422,15 @@ private struct FloatingMeetingTranscriptPanelView: View {
                 height: FloatingMeetingTranscriptPlacement.panelSize.height
             )
             .background(.ultraThinMaterial)
-            .background(MuesliTheme.backgroundRaised.opacity(0.94))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(MuesliTheme.backgroundRaised.opacity(0.92))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(MuesliTheme.surfaceBorder.opacity(0.8), lineWidth: 1)
             }
+            // Reads as floating over the call rather than pasted onto it, which
+            // matters when it sits on top of a video window.
+            .shadow(color: .black.opacity(0.28), radius: 16, x: 0, y: 6)
             .onHover(perform: onHoverChanged)
         }
     }
@@ -390,6 +447,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
             Text(model.isPaused ? "Paused" : "Live")
                 .font(MuesliTheme.caption())
                 .foregroundStyle(MuesliTheme.textSecondary)
+                .fixedSize()
             // Sits immediately left of dismiss, and to the right of the variable-width
             // status label, so its hit region is a fixed offset from the panel's right edge.
             // Placing it left of the status text would make the region depend on whether the
@@ -400,6 +458,12 @@ private struct FloatingMeetingTranscriptPanelView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(model.isChatOpen ? MuesliTheme.accent : MuesliTheme.textSecondary)
                         .frame(width: 24, height: 24)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(model.isChatOpen
+                                    ? MuesliTheme.accent.opacity(0.14)
+                                    : Color.clear)
+                        )
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

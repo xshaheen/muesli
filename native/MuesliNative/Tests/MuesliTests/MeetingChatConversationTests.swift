@@ -221,4 +221,92 @@ struct MeetingChatConversationTests {
         registry.forget(meetingID: 1)
         registry.forget(meetingID: 2)
     }
+
+    // MARK: - The user's own notes as context
+
+    @Test("the user's notes reach the model alongside the transcript")
+    func manualNotesRideInSystemMessage() {
+        // Notes are where the user records the decision the transcript only implies.
+        // Without them, "what did I miss" answers from the conversation alone.
+        let conversation = MeetingChatConversation()
+
+        let request = conversation.requestMessages(
+            transcript: "[10:00:00] Speaker 1: we shipped it",
+            systemPrompt: MeetingChatPrompts.completed,
+            manualNotes: "follow up with Ahmed about the migration"
+        )
+
+        #expect(request.count == 1)
+        #expect(request[0].content.contains("follow up with Ahmed about the migration"))
+        #expect(request[0].content.contains("we shipped it"))
+    }
+
+    @Test("notes are labelled as the user's, not as another speaker")
+    func manualNotesAreLabelled() {
+        let conversation = MeetingChatConversation()
+
+        let request = conversation.requestMessages(
+            transcript: "T",
+            systemPrompt: "P",
+            manualNotes: "my note"
+        )
+
+        #expect(request[0].content.contains("The user's own notes"))
+    }
+
+    @Test("no notes means no notes section")
+    func absentNotesAddNothing() {
+        let conversation = MeetingChatConversation()
+
+        let request = conversation.requestMessages(
+            transcript: "T",
+            systemPrompt: "P",
+            manualNotes: "   "
+        )
+
+        #expect(request[0].content.contains("The user's own notes") == false)
+    }
+
+    @Test("a meeting with notes but no transcript still asks a usable question")
+    func notesWithoutTranscript() {
+        let conversation = MeetingChatConversation()
+
+        let request = conversation.requestMessages(
+            transcript: "",
+            systemPrompt: "P",
+            manualNotes: "just my notes"
+        )
+
+        #expect(request[0].content.contains("just my notes"))
+    }
+
+    @Test("both prompts ask for markdown, because the view renders it")
+    func promptsRequestMarkdown() {
+        #expect(MeetingChatPrompts.live.contains("Markdown"))
+        #expect(MeetingChatPrompts.completed.contains("Markdown"))
+    }
+
+    // MARK: - Copying a conversation
+
+    @Test("copying a conversation yields both sides, labelled")
+    func copyIncludesBothSides() async {
+        let conversation = MeetingChatConversation()
+        await conversation.send(
+            displayText: "what did I miss?",
+            transcript: "T",
+            systemPrompt: "P",
+            config: AppConfig(),
+            send: { _, _ in "They shipped it." }
+        )
+
+        let copied = conversation.transcriptForCopying()
+
+        #expect(copied.contains("You: what did I miss?"))
+        #expect(copied.contains("Muesli: They shipped it."))
+    }
+
+    @Test("copying an empty conversation yields nothing rather than stray labels")
+    func copyEmptyConversation() {
+        #expect(MeetingChatConversation().transcriptForCopying().isEmpty)
+    }
 }

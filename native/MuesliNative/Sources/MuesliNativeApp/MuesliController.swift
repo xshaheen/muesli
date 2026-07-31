@@ -5386,7 +5386,11 @@ final class MuesliController: NSObject {
                         meetingID: meetingID,
                         priorTranscript: priorTranscriptForChat,
                         currentConfig: { [weak self] in self?.config ?? AppConfig() },
-                        isReady: { [weak self] in self?.isMeetingChatReady ?? false }
+                        isReady: { [weak self] in self?.isMeetingChatReady ?? false },
+                        manualNotes: { [weak self] in
+                            guard let self else { return "" }
+                            return (try? self.dictationStore.meeting(id: meetingID))?.manualNotes ?? ""
+                        }
                     )
                 )
                 let micHealthWarningLock = NSLock()

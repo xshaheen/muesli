@@ -53,6 +53,7 @@ private struct LiveChatSection: View {
     let appState: AppState
     let transcriptPrefix: String
     let conversation: MeetingChatConversation
+    let manualNotes: String
     let config: AppConfig
 
     var body: some View {
@@ -63,6 +64,7 @@ private struct LiveChatSection: View {
                 new: appState.liveMeetingTranscript
             ),
             systemPrompt: MeetingChatPrompts.live,
+            manualNotes: manualNotes,
             config: config
         )
     }
@@ -385,6 +387,7 @@ struct MeetingDetailView: View {
                             appState: appState,
                             transcriptPrefix: meeting.rawTranscript,
                             conversation: MeetingChatConversations.shared.conversation(for: meeting.id),
+                            manualNotes: meeting.manualNotes,
                             config: appState.config
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -484,6 +487,7 @@ struct MeetingDetailView: View {
                                 isRecording: false
                             ),
                             systemPrompt: MeetingChatPrompts.completed,
+                            manualNotes: meeting.manualNotes,
                             config: appState.config
                         )
                         .opacity(documentMode == .chat ? 1 : 0)
