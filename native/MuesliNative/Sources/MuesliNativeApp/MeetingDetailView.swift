@@ -255,13 +255,19 @@ struct MeetingDetailView: View {
                     )
 
                     HStack(spacing: MuesliTheme.spacing8) {
+                        // One row: the date/duration/word-count string reads as a single
+                        // fact, and letting it wrap splits "786 words" onto its own line
+                        // while the template chip drifts away from it.
                         Text(formatMeta(meeting))
                             .font(MuesliTheme.callout())
                             .foregroundStyle(MuesliTheme.textSecondary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         if let label = SyncOriginDisplay.badgeLabel(forMeetingSource: meeting.source) {
                             SyncOriginBadge(label: label)
                         }
                         templateChip(for: appliedTemplate)
+                        Spacer(minLength: 0)
                     }
 
                     folderPill(for: meeting)
