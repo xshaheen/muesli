@@ -1342,6 +1342,8 @@ final class MuesliController: NSObject {
         appState.liveMeetingTranscriptOwnerID = nil
         liveMeetingTranscriptGeneration = nil
         indicator.updateMeetingTranscript(transcript: "", partialYou: "", partialOthers: "")
+        // No live meeting means no panel chat, and no reason for the panel to hold focus.
+        indicator.setMeetingChatContext(nil)
     }
 
     private func isCurrentLiveMeetingTranscriptSession(ownerID: Int64, generation: UUID) -> Bool {
@@ -5329,6 +5331,16 @@ final class MuesliController: NSObject {
                     transcript: "",
                     partialYou: "",
                     partialOthers: ""
+                )
+                // Carry the pre-resume transcript so panel chat sees the whole meeting, not
+                // just what this session recorded. Empty for a fresh meeting.
+                let priorTranscriptForChat = (try? dictationStore.meeting(id: meetingID))?.rawTranscript ?? ""
+                indicator.setMeetingChatContext(
+                    FloatingMeetingChatContext(
+                        meetingID: meetingID,
+                        priorTranscript: priorTranscriptForChat,
+                        config: config
+                    )
                 )
                 let micHealthWarningLock = NSLock()
                 var lastForwardedMicHealthWarning: String?
