@@ -369,6 +369,23 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         self.followUpToRecordName = followUpToRecordName
     }
 
+    /// The transcript a reader should display or reason over.
+    ///
+    /// Every surface that shows the transcript to a human or feeds it to a model
+    /// goes through here, so "which surfaces see cleaned text" is one auditable
+    /// decision rather than a dozen scattered ones. Reach past this to
+    /// `rawTranscript` only for the durable record itself -- recovery, export, and
+    /// the resume path, which must keep reading exactly what was transcribed.
+    ///
+    /// Falls back to raw whenever cleanup has not run, did not succeed, or was
+    /// invalidated by a transcript edit, which is also why meetings predating
+    /// cleanup keep working unchanged.
+    public var displayTranscript: String {
+        cleanedTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? rawTranscript
+            : cleanedTranscript
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id
         case title
