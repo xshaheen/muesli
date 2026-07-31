@@ -359,7 +359,7 @@ struct MeetingListItemView: View {
            record.status != .completed {
             source = record.manualNotes
         } else {
-            source = record.formattedNotes.isEmpty ? record.rawTranscript : record.formattedNotes
+            source = record.formattedNotes.isEmpty ? record.displayTranscript : record.formattedNotes
         }
         return MeetingPreviewText.snippet(from: source)
     }
