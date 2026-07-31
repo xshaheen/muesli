@@ -328,6 +328,12 @@ final class FloatingIndicatorController: NSObject {
         )
     }
 
+    /// Gives the panel what it needs to answer questions, or clears it when no meeting is
+    /// recording. Set once per session — the prior transcript does not change mid-meeting.
+    func setMeetingChatContext(_ context: FloatingMeetingChatContext?) {
+        meetingTranscriptPanel.setChatContext(context)
+    }
+
     func refreshMeetingTranscriptPreference(config: AppConfig) {
         guard config.showMeetingTranscriptOnIndicatorHover else {
             hideMeetingTranscript()

@@ -35,6 +35,7 @@ enum FloatingMeetingTranscriptInteraction: Equatable {
     case dismiss
     case copy
     case openMeeting
+    case toggleChat
 
     static func action(at point: NSPoint, in panelFrame: NSRect) -> Self? {
         guard panelFrame.contains(point) else { return nil }
@@ -47,8 +48,22 @@ enum FloatingMeetingTranscriptInteraction: Equatable {
         if point.x >= panelFrame.maxX - 88 {
             return .dismiss
         }
+        if point.x >= panelFrame.maxX - 128 {
+            return .toggleChat
+        }
         return .openMeeting
     }
+}
+
+/// What the panel needs to answer questions: which meeting's conversation to use, and the
+/// transcript recorded before this session so a resumed meeting still has its earlier half.
+struct FloatingMeetingChatContext {
+    let meetingID: Int64
+    /// Transcript captured before the current recording session began. Empty for a fresh
+    /// meeting; non-empty after a resume, where `liveMeetingTranscript` holds only the new
+    /// portion.
+    let priorTranscript: String
+    let config: AppConfig
 }
 
 @MainActor
@@ -58,6 +73,37 @@ final class FloatingMeetingTranscriptModel {
     var isPaused = false
     var isPresented = false
     var didCopy = false
+
+    /// Chat is closed until the user deliberately opens it. This flag gates keyboard focus:
+    /// while it is false the panel must never become key, or it would swallow keystrokes
+    /// meant for the meeting app the user is actually talking in.
+    var isChatOpen = false
+    var chatContext: FloatingMeetingChatContext?
+
+    var isChatAvailable: Bool { chatContext != nil }
+
+    /// The transcript chat reasons over: what was recorded before this session plus what has
+    /// been captured since. Mirrors the detail view's Live tab; using the live portion alone
+    /// would drop a resumed meeting's earlier half.
+    var chatTranscript: String {
+        MeetingResumePolicy.combinedResumeTranscript(
+            prior: chatContext?.priorTranscript ?? "",
+            new: presentation.transcript
+        )
+    }
+
+    func openChat() {
+        guard isChatAvailable else { return }
+        isChatOpen = true
+    }
+
+    func closeChat() {
+        isChatOpen = false
+    }
+
+    func toggleChat() {
+        isChatOpen ? closeChat() : openChat()
+    }
 
     func update(transcript: String, partialYou: String, partialOthers: String) {
         presentation.update(
@@ -84,6 +130,8 @@ final class FloatingMeetingTranscriptModel {
         isPaused = false
         isPresented = false
         didCopy = false
+        isChatOpen = false
+        chatContext = nil
     }
 
     func showCopyConfirmation() {
@@ -116,6 +164,22 @@ final class FloatingMeetingTranscriptPanelController {
         self.onHoverChanged = onHoverChanged
         self.onOpenNotes = onOpenNotes
         self.onDismiss = onDismiss
+    }
+
+    /// Supplies what chat needs. Called when a meeting starts rather than on every transcript
+    /// chunk: the prior transcript does not change during a session.
+    func setChatContext(_ context: FloatingMeetingChatContext?) {
+        model.chatContext = context
+        if context == nil { model.closeChat() }
+    }
+
+    /// True only while the user has the composer open. The window must not become key at any
+    /// other time — a floating panel that takes focus during a call swallows the keystrokes
+    /// the user is typing into Zoom or Teams.
+    var wantsKeyboardFocus: Bool { model.isChatOpen }
+
+    func closeChat() {
+        model.closeChat()
     }
 
     var isVisible: Bool {
@@ -195,6 +259,8 @@ final class FloatingMeetingTranscriptPanelController {
             copyTranscript()
         case .openMeeting:
             onOpenNotes()
+        case .toggleChat:
+            model.toggleChat()
         }
         return true
     }
@@ -209,7 +275,8 @@ final class FloatingMeetingTranscriptPanelController {
                 model: model,
                 onHoverChanged: onHoverChanged,
                 onOpenNotes: onOpenNotes,
-                onDismiss: onDismiss
+                onDismiss: onDismiss,
+                onToggleChat: { [weak model] in model?.toggleChat() }
             )
         )
         hostingView.wantsLayer = true
@@ -222,6 +289,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
     let onHoverChanged: (Bool) -> Void
     let onOpenNotes: () -> Void
     let onDismiss: () -> Void
+    var onToggleChat: () -> Void = {}
 
     private var partialYou: String {
         model.presentation.partialYou.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -248,7 +316,17 @@ private struct FloatingMeetingTranscriptPanelView: View {
             VStack(spacing: 0) {
                 header
                 Divider().background(MuesliTheme.surfaceBorder)
-                transcript
+                if model.isChatOpen, let context = model.chatContext {
+                    MeetingChatView(
+                        conversation: MeetingChatConversations.shared.conversation(for: context.meetingID),
+                        transcript: model.chatTranscript,
+                        systemPrompt: MeetingChatPrompts.live,
+                        config: context.config,
+                        isCompact: true
+                    )
+                } else {
+                    transcript
+                }
             }
             .frame(
                 width: FloatingMeetingTranscriptPlacement.panelSize.width,
@@ -267,10 +345,21 @@ private struct FloatingMeetingTranscriptPanelView: View {
 
     private var header: some View {
         HStack(spacing: MuesliTheme.spacing8) {
-            Text("Live transcript")
+            Text(model.isChatOpen ? "Ask about this meeting" : "Live transcript")
                 .font(MuesliTheme.callout().weight(.semibold))
                 .foregroundStyle(MuesliTheme.textPrimary)
             Spacer()
+            if model.isChatAvailable {
+                Button(action: onToggleChat) {
+                    Image(systemName: model.isChatOpen ? "text.quote" : "bubble.left.and.text.bubble.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(model.isChatOpen ? MuesliTheme.accent : MuesliTheme.textSecondary)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(model.isChatOpen ? "Back to transcript" : "Ask about this meeting")
+            }
             Circle()
                 .fill(model.isPaused ? MuesliTheme.textTertiary : MuesliTheme.success)
                 .frame(width: 6, height: 6)
