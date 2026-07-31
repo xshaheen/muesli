@@ -4,11 +4,13 @@ import MuesliCore
 private enum MeetingDocumentMode: Hashable {
     case notes
     case transcript
+    case chat
 }
 
 private enum RecordingContentMode: Hashable {
     case notes
     case live
+    case chat
 }
 
 private enum ManualNotesSaveStatus {
@@ -41,6 +43,45 @@ private struct LiveTranscriptSection: View {
             partialYou: appState.liveMeetingPartialYou,
             partialOthers: appState.liveMeetingPartialOthers
         )
+    }
+}
+
+/// Live chat is a wrapper for the same reason `LiveTranscriptSection` is: it must be the
+/// sole observer of `liveMeetingTranscript`. Reading that property in `MeetingDetailView.body`
+/// to pass a transcript into chat would re-render the whole detail view on every chunk.
+private struct LiveChatSection: View {
+    let appState: AppState
+    let transcriptPrefix: String
+    let conversation: MeetingChatConversation
+    let config: AppConfig
+
+    var body: some View {
+        MeetingChatView(
+            conversation: conversation,
+            transcript: MeetingResumePolicy.combinedResumeTranscript(
+                prior: transcriptPrefix,
+                new: appState.liveMeetingTranscript
+            ),
+            systemPrompt: MeetingChatPrompts.live,
+            config: config
+        )
+    }
+}
+
+/// Which transcript chat reads, and how the model is told to interpret it.
+///
+/// A recording combines the prior transcript with the live one exactly as the Live tab does:
+/// on a resumed meeting `liveMeetingTranscript` holds only the newly recorded portion, so
+/// reading it alone would answer from less than the user can plainly see on screen.
+enum MeetingChatSource {
+    static func transcript(for meeting: MeetingRecord, live: String, isRecording: Bool) -> String {
+        isRecording
+            ? MeetingResumePolicy.combinedResumeTranscript(prior: meeting.rawTranscript, new: live)
+            : meeting.rawTranscript
+    }
+
+    static func systemPrompt(isRecording: Bool) -> String {
+        isRecording ? MeetingChatPrompts.live : MeetingChatPrompts.completed
     }
 }
 
@@ -315,6 +356,18 @@ struct MeetingDetailView: View {
                         .allowsHitTesting(recordingMode == .live)
                         .accessibilityHidden(recordingMode != .live)
 
+                    if isChatAvailable {
+                        LiveChatSection(
+                            appState: appState,
+                            transcriptPrefix: meeting.rawTranscript,
+                            conversation: MeetingChatConversations.shared.conversation(for: meeting.id),
+                            config: appState.config
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .opacity(recordingMode == .chat ? 1 : 0)
+                        .allowsHitTesting(recordingMode == .chat)
+                        .accessibilityHidden(recordingMode != .chat)
+                    }
                 }
             } else {
                 let isManualNotesEditable = canEditManualNotes(for: meeting)
@@ -397,6 +450,18 @@ struct MeetingDetailView: View {
                         .opacity(documentMode == .transcript ? 1 : 0)
                         .allowsHitTesting(documentMode == .transcript)
                         .accessibilityHidden(documentMode != .transcript)
+
+                    if isChatAvailable {
+                        MeetingChatView(
+                            conversation: MeetingChatConversations.shared.conversation(for: meeting.id),
+                            transcript: meeting.rawTranscript,
+                            systemPrompt: MeetingChatPrompts.completed,
+                            config: appState.config
+                        )
+                        .opacity(documentMode == .chat ? 1 : 0)
+                        .allowsHitTesting(documentMode == .chat)
+                        .accessibilityHidden(documentMode != .chat)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -408,14 +473,23 @@ struct MeetingDetailView: View {
         }
     }
 
+    /// Chat needs a summary backend; showing the segment without one would offer a control
+    /// that fails on first use.
+    private var isChatAvailable: Bool {
+        !MeetingChatClient.resolvedBackend(config: appState.config).isEmpty
+    }
+
     private var documentModePicker: some View {
         Picker("", selection: $documentMode) {
             Text("Notes").tag(MeetingDocumentMode.notes)
             Text("Transcript").tag(MeetingDocumentMode.transcript)
+            if isChatAvailable {
+                Text("Chat").tag(MeetingDocumentMode.chat)
+            }
         }
         .pickerStyle(.segmented)
         .tint(MuesliTheme.accent)
-        .frame(width: 220)
+        .frame(width: isChatAvailable ? 300 : 220)
         .disabled(isEditingNotes || isEditingTranscript)
     }
 
@@ -423,10 +497,13 @@ struct MeetingDetailView: View {
         Picker("", selection: $recordingMode) {
             Text("Notes").tag(RecordingContentMode.notes)
             Text("Live").tag(RecordingContentMode.live)
+            if isChatAvailable {
+                Text("Chat").tag(RecordingContentMode.chat)
+            }
         }
         .pickerStyle(.segmented)
         .tint(MuesliTheme.accent)
-        .frame(width: 180)
+        .frame(width: isChatAvailable ? 260 : 180)
     }
 
     private func showsManualNotesEditor(for meeting: MeetingRecord) -> Bool {
@@ -1353,6 +1430,10 @@ struct MeetingDetailView: View {
             return isEditingNotes ? editableNotes : Self.notesContent(for: meeting)
         case .transcript:
             return isEditingTranscript ? editableTranscript : meeting.rawTranscript
+        case .chat:
+            // Chat bubbles are individually selectable; copying the whole meeting from the
+            // chat tab should still yield the transcript, which is what a user means here.
+            return meeting.rawTranscript
         }
     }
 
