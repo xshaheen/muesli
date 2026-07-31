@@ -219,6 +219,10 @@ final class FloatingIndicatorController: NSObject {
     func collapseForDrag() {
         isDragging = true
         hoverExitWorkItem?.cancel()
+        // Clicking inside an open chat must not tear the panel down. mouseDown lands
+        // here for any click the panel's own region handler did not consume, which
+        // includes most of the chat surface.
+        guard !meetingTranscriptPanel.isChatOpen else { return }
         hideMeetingTranscript()
         guard state == .idle,
               !isShowingLoading,
@@ -825,6 +829,7 @@ final class FloatingIndicatorController: NSObject {
     func setHovered(_ hovered: Bool) {
         if state == .recording, isMeetingRecording, !isShowingLoading, !isDragging {
             guard hovered else {
+                guard !meetingTranscriptPanel.isChatOpen else { return }
                 isMeetingTranscriptManuallyDismissed = false
                 hideMeetingTranscript()
                 return
@@ -844,6 +849,10 @@ final class FloatingIndicatorController: NSObject {
     }
 
     func scheduleHoverExit() {
+        // An open chat is a deliberate interaction, not a hover preview. Leaving the
+        // pointer -- to read the call, or to click back into Zoom -- must not discard
+        // a half-typed question.
+        if meetingTranscriptPanel.isChatOpen { return }
         if state == .recording, isMeetingRecording, meetingTranscriptPanel.isVisible {
             scheduleMeetingTranscriptHoverExit()
             return

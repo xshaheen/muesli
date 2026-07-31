@@ -6,19 +6,34 @@ struct MeetingNotesView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                let lines = markdown.components(separatedBy: .newlines)
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    markdownLine(line)
-                }
-            }
-            .frame(maxWidth: 880, alignment: .leading)
-            .padding(.horizontal, MuesliTheme.spacing24)
-            .padding(.vertical, MuesliTheme.spacing16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .textSelection(.enabled)
+            MeetingMarkdownContent(markdown: markdown)
+                .frame(maxWidth: 880, alignment: .leading)
+                .padding(.horizontal, MuesliTheme.spacing24)
+                .padding(.vertical, MuesliTheme.spacing16)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// Renders markdown the way notes and transcripts are rendered, without imposing a
+/// scroll container or width.
+///
+/// Extracted so chat answers look like every other piece of prose in the app
+/// instead of showing raw `**` and `-` characters.
+struct MeetingMarkdownContent: View {
+    let markdown: String
+    var bodyFont: Font = MuesliTheme.body()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+            let lines = markdown.components(separatedBy: .newlines)
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                markdownLine(line)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .textSelection(.enabled)
     }
 
     @ViewBuilder

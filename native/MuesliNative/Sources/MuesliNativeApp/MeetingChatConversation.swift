@@ -65,6 +65,7 @@ final class MeetingChatConversation {
         sentText: String? = nil,
         transcript: String,
         systemPrompt: String,
+        manualNotes: String = "",
         config: AppConfig,
         send: (([MeetingChatMessage], AppConfig) async throws -> String)? = nil
     ) async {
@@ -77,7 +78,11 @@ final class MeetingChatConversation {
             MeetingChatTurn(role: .user, displayText: displayText, sentText: question)
         )
 
-        let request = requestMessages(transcript: transcript, systemPrompt: systemPrompt)
+        let request = requestMessages(
+            transcript: transcript,
+            systemPrompt: systemPrompt,
+            manualNotes: manualNotes
+        )
         let transport = send ?? { try await MeetingChatClient.send(messages: $0, config: $1) }
 
         do {
@@ -97,9 +102,28 @@ final class MeetingChatConversation {
     }
 
     /// System context plus the answered turn history, oldest first.
-    func requestMessages(transcript: String, systemPrompt: String) -> [MeetingChatMessage] {
+    /// The conversation as plain text, for the panel's copy button.
+    func transcriptForCopying() -> String {
+        turns.map { turn in
+            let speaker = turn.role == .user ? "You" : "Muesli"
+            return "\(speaker): \(turn.displayText)"
+        }.joined(separator: "\n\n")
+    }
+
+    func requestMessages(
+        transcript: String,
+        systemPrompt: String,
+        manualNotes: String = ""
+    ) -> [MeetingChatMessage] {
         var messages: [MeetingChatMessage] = [
-            MeetingChatMessage(role: .system, content: systemContent(transcript: transcript, systemPrompt: systemPrompt))
+            MeetingChatMessage(
+                role: .system,
+                content: systemContent(
+                    transcript: transcript,
+                    systemPrompt: systemPrompt,
+                    manualNotes: manualNotes
+                )
+            )
         ]
         for turn in turns where turn.wasAnswered {
             messages.append(
@@ -112,10 +136,26 @@ final class MeetingChatConversation {
         return messages
     }
 
-    private func systemContent(transcript: String, systemPrompt: String) -> String {
+    private func systemContent(
+        transcript: String,
+        systemPrompt: String,
+        manualNotes: String
+    ) -> String {
+        var content = systemPrompt
+        // The user's own notes are what they chose to write down -- often the
+        // decision or the action item the transcript only implies. Without them
+        // "what did I miss" answers from the conversation alone and misses the
+        // thing the user themselves flagged as mattering.
+        let notes = manualNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !notes.isEmpty {
+            content += MeetingChatClient.transcriptSeparator
+                + "The user's own notes from this meeting:\n" + notes
+        }
         let body = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return systemPrompt }
-        return systemPrompt + MeetingChatClient.transcriptSeparator + body
+        if !body.isEmpty {
+            content += MeetingChatClient.transcriptSeparator + body
+        }
+        return content
     }
 }
 
@@ -152,6 +192,12 @@ enum MeetingChatPrompts {
     so far, and may end mid-sentence. Speech-to-text errors are common; read for meaning. \
     Answer only from the transcript. If it does not contain the answer, say so plainly rather \
     than inventing one. Be brief -- the user is in a meeting.
+
+    The user's own notes may be included above the transcript. Treat them as what \
+    the user considered worth writing down, not as another speaker's words.
+
+    Format your answer in Markdown: `-` for bullets, `**bold**` for emphasis, `##` \
+    for any heading. Keep it short enough to read at a glance.
     """
 
     static let completed = """
@@ -161,5 +207,11 @@ enum MeetingChatPrompts {
     You may reason about who said what using those labels, but never invent a real name. \
     Speech-to-text errors are common; read for meaning. Answer only from the transcript, and \
     say so plainly when it does not contain the answer.
+
+    The user's own notes may be included above the transcript. Treat them as what \
+    the user considered worth writing down, not as another speaker's words.
+
+    Format your answer in Markdown: `-` for bullets, `**bold**` for emphasis, `##` \
+    for any heading.
     """
 }
