@@ -271,15 +271,12 @@ struct MeetingDetailView: View {
 
                 Spacer(minLength: MuesliTheme.spacing16)
 
+                // The mode picker lives in the content toolbar, directly above the content it
+                // switches, rather than up here beside the meeting-level actions.
                 VStack(alignment: .trailing, spacing: 10) {
                     if showsManualNotesEditor(for: meeting) {
                         recordingControlGroup(for: meeting)
-                        if meeting.status == .recording {
-                            recordingModePicker
-                        }
                     } else {
-                        documentModePicker
-
                         headerActions(for: meeting, appliedTemplate: appliedTemplate)
                     }
                 }
@@ -310,6 +307,17 @@ struct MeetingDetailView: View {
                 let persistedNotes = Self.notesContent(for: meeting)
                 let hasPersistedNotes = !meeting.formattedNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || !meeting.rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                // The picker sits above the panes it switches, matching the completed-meeting
+                // layout. It cannot live in manualNotesToolbar — that is markdown-editing
+                // controls inside the Notes pane, so it would vanish on the Live and Chat tabs.
+                HStack {
+                    recordingModePicker
+                    Spacer()
+                }
+                .frame(maxWidth: 980, alignment: .leading)
+                .padding(.horizontal, 40)
+                .padding(.top, 12)
+
                 ZStack {
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                         if hasPersistedNotes {
@@ -754,6 +762,8 @@ struct MeetingDetailView: View {
     @ViewBuilder
     private func contentToolbar(for meeting: MeetingRecord) -> some View {
         HStack {
+            documentModePicker
+
             Spacer()
 
             retranscribeAction(for: meeting)
