@@ -144,6 +144,74 @@ struct MeetingChatView: View {
     // MARK: - Composer
 
     private var composer: some View {
+        VStack(spacing: 6) {
+            recipeChips
+            inputRow
+        }
+        .padding(.horizontal, isCompact ? 10 : 14)
+        .padding(.vertical, isCompact ? 8 : 10)
+    }
+
+    /// One-tap saved prompts. Each sends its full instruction through the same path a typed
+    /// question uses, while the conversation shows only the recipe's name.
+    private var recipeChips: some View {
+        HStack(spacing: 6) {
+            ForEach(MeetingChatRecipes.visible()) { recipe in
+                Button { run(recipe) } label: {
+                    Text(recipe.name)
+                        .font(.system(size: isCompact ? 10 : 11))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule().fill(MuesliTheme.backgroundRaised)
+                        )
+                        .overlay(
+                            Capsule().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(!canRunRecipe)
+                .help(recipe.prompt)
+            }
+
+            if !MeetingChatRecipes.overflow().isEmpty {
+                Menu {
+                    ForEach(MeetingChatRecipes.overflow()) { recipe in
+                        Button(recipe.name) { run(recipe) }
+                    }
+                } label: {
+                    Text("All recipes")
+                        .font(.system(size: isCompact ? 10 : 11))
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(!canRunRecipe)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var canRunRecipe: Bool {
+        hasTranscript && !conversation.isSending
+    }
+
+    private func run(_ recipe: MeetingChatRecipe) {
+        guard canRunRecipe else { return }
+        Task {
+            await conversation.send(
+                displayText: recipe.name,
+                sentText: recipe.prompt,
+                transcript: transcript,
+                systemPrompt: systemPrompt,
+                config: config
+            )
+        }
+    }
+
+    private var inputRow: some View {
         HStack(spacing: 8) {
             TextField("Ask anything", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
@@ -162,8 +230,6 @@ struct MeetingChatView: View {
             .disabled(!canSend)
             .help("Send")
         }
-        .padding(.horizontal, isCompact ? 10 : 14)
-        .padding(.vertical, isCompact ? 8 : 10)
     }
 
     private func submit() {
