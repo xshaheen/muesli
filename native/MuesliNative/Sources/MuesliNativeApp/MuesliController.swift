@@ -3908,7 +3908,10 @@ final class MuesliController: NSObject {
             let plan = MeetingResummarizationPolicy.plan(for: meeting)
             do {
                 let notes = try await MeetingSummaryClient.summarize(
-                    transcript: meeting.rawTranscript,
+                    // Re-summarizing reads the repaired transcript when there is
+                    // one; before cleanup finishes this is still raw, which is
+                    // correct rather than a bug.
+                    transcript: meeting.displayTranscript,
                     meetingTitle: plan.promptTitle,
                     config: self.config,
                     template: templateSnapshot,
@@ -5376,7 +5379,7 @@ final class MuesliController: NSObject {
                 )
                 // Carry the pre-resume transcript so panel chat sees the whole meeting, not
                 // just what this session recorded. Empty for a fresh meeting.
-                let priorTranscriptForChat = (try? dictationStore.meeting(id: meetingID))?.rawTranscript ?? ""
+                let priorTranscriptForChat = (try? dictationStore.meeting(id: meetingID))?.displayTranscript ?? ""
                 indicator.setMeetingChatContext(
                     FloatingMeetingChatContext(
                         meetingID: meetingID,

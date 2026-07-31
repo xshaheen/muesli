@@ -18,6 +18,20 @@ struct MeetingChatSourceTests {
         )
     }
 
+    private func makeMeeting(rawTranscript: String, cleanedTranscript: String) -> MeetingRecord {
+        MeetingRecord(
+            id: 1,
+            title: "Test",
+            startTime: "2026-07-31T10:00:00Z",
+            durationSeconds: 60,
+            rawTranscript: rawTranscript,
+            formattedNotes: "",
+            wordCount: 0,
+            folderID: nil,
+            cleanedTranscript: cleanedTranscript
+        )
+    }
+
     @Test("a completed meeting reads the finalized transcript")
     func completedReadsRawTranscript() {
         let record = meeting(rawTranscript: "[10:00:00] Speaker 1: final record")
@@ -98,5 +112,48 @@ struct MeetingChatSourceTests {
         let transcript = MeetingChatSource.transcript(for: record, live: "leftover", isRecording: false)
 
         #expect(transcript.isEmpty)
+    }
+
+    // MARK: - Cleaned transcript
+
+    @Test("a completed meeting hands chat its cleaned transcript")
+    func completedMeetingUsesCleanedTranscript() {
+        let meeting = makeMeeting(
+            rawTranscript: "[10:00:00] Speaker 1: البرايمريكية",
+            cleanedTranscript: "[10:00:00] Speaker 1: primary key"
+        )
+
+        let transcript = MeetingChatSource.transcript(for: meeting, live: "", isRecording: false)
+
+        #expect(transcript == "[10:00:00] Speaker 1: primary key")
+    }
+
+    @Test("a completed meeting without cleanup still hands chat the raw transcript")
+    func completedMeetingFallsBackToRaw() {
+        let meeting = makeMeeting(rawTranscript: "[10:00:00] Speaker 1: hello", cleanedTranscript: "")
+
+        let transcript = MeetingChatSource.transcript(for: meeting, live: "", isRecording: false)
+
+        #expect(transcript == "[10:00:00] Speaker 1: hello")
+    }
+
+    @Test("a recording meeting ignores any cleaned transcript and combines live text")
+    func recordingMeetingCombinesRaw() {
+        // Cleanup only runs at finalization, so a cleaned transcript on a recording
+        // meeting would be stale by definition — the live session is still appending.
+        let meeting = makeMeeting(
+            rawTranscript: "[09:00:00] You: before the resume",
+            cleanedTranscript: "[09:00:00] You: stale cleaned copy"
+        )
+
+        let transcript = MeetingChatSource.transcript(
+            for: meeting,
+            live: "[10:00:00] You: after the resume",
+            isRecording: true
+        )
+
+        #expect(transcript.contains("before the resume"))
+        #expect(transcript.contains("after the resume"))
+        #expect(transcript.contains("stale cleaned copy") == false)
     }
 }

@@ -74,10 +74,16 @@ private struct LiveChatSection: View {
 /// on a resumed meeting `liveMeetingTranscript` holds only the newly recorded portion, so
 /// reading it alone would answer from less than the user can plainly see on screen.
 enum MeetingChatSource {
+    /// What chat should read for a meeting.
+    ///
+    /// A completed meeting gets `displayTranscript`, so chat reasons over repaired
+    /// text once cleanup has succeeded and over the raw text otherwise. A recording
+    /// meeting has no cleaned transcript yet and combines its pre-resume text with
+    /// the live one, or a resumed meeting would lose everything before the resume.
     static func transcript(for meeting: MeetingRecord, live: String, isRecording: Bool) -> String {
         isRecording
             ? MeetingResumePolicy.combinedResumeTranscript(prior: meeting.rawTranscript, new: live)
-            : meeting.rawTranscript
+            : meeting.displayTranscript
     }
 
     static func systemPrompt(isRecording: Bool) -> String {
@@ -464,7 +470,7 @@ struct MeetingDetailView: View {
                         .allowsHitTesting(documentMode == .notes)
                         .accessibilityHidden(documentMode != .notes)
 
-                    MeetingTranscriptView(transcript: meeting.rawTranscript)
+                    MeetingTranscriptView(transcript: meeting.displayTranscript)
                         .opacity(documentMode == .transcript ? 1 : 0)
                         .allowsHitTesting(documentMode == .transcript)
                         .accessibilityHidden(documentMode != .transcript)
@@ -472,7 +478,11 @@ struct MeetingDetailView: View {
                     if isChatAvailable {
                         MeetingChatView(
                             conversation: MeetingChatConversations.shared.conversation(for: meeting.id),
-                            transcript: meeting.rawTranscript,
+                            transcript: MeetingChatSource.transcript(
+                                for: meeting,
+                                live: "",
+                                isRecording: false
+                            ),
                             systemPrompt: MeetingChatPrompts.completed,
                             config: appState.config
                         )
@@ -644,6 +654,10 @@ struct MeetingDetailView: View {
                     transcriptResummaryPromptMeetingID = meeting.id
                 }
             } else if documentMode == .transcript {
+                // Editing targets the raw transcript, not the displayed one. Saving a
+                // cleaned transcript back over raw would make the model's guesses the
+                // durable record, and the store's trigger discards the cleaned copy on
+                // save anyway -- so the user's edit becomes the new source of truth.
                 editableTranscript = meeting.rawTranscript
                 transcriptEditOriginalTranscript = meeting.rawTranscript
                 transcriptEditHadStructuredNotes = meeting.notesState == .structuredNotes
@@ -1464,11 +1478,11 @@ struct MeetingDetailView: View {
         case .notes:
             return isEditingNotes ? editableNotes : Self.notesContent(for: meeting)
         case .transcript:
-            return isEditingTranscript ? editableTranscript : meeting.rawTranscript
+            return isEditingTranscript ? editableTranscript : meeting.displayTranscript
         case .chat:
             // Chat bubbles are individually selectable; copying the whole meeting from the
             // chat tab should still yield the transcript, which is what a user means here.
-            return meeting.rawTranscript
+            return meeting.displayTranscript
         }
     }
 
