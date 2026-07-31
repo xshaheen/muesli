@@ -797,7 +797,9 @@ struct MeetingDetailView: View {
             }
             .buttonStyle(.plain)
         }
-        .frame(maxWidth: 980, alignment: .leading)
+        // Matches the content container's cap. At 980 the toolbar stopped 100pt short of the
+        // content's right edge, so Copy floated inward instead of aligning with it.
+        .frame(maxWidth: 1080, alignment: .leading)
     }
 
     @ViewBuilder
