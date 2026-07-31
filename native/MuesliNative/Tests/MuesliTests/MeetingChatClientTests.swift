@@ -180,6 +180,40 @@ struct MeetingChatClientTests {
         #expect(result.last?.content == "NEWEST-QUESTION")
     }
 
+    @Test("trimming preserves the grounding instructions and cuts only the transcript")
+    func trimmingPreservesInstructions() {
+        // The failure this prevents: the system message is prompt + transcript, so trimming
+        // it as one blob from the head eats the instructions first on any long meeting,
+        // leaving raw transcript labelled as system content -- ungrounded, and an open path
+        // for meeting speech to read as instruction.
+        let prompt = MeetingChatPrompts.completed
+        let transcript = String(repeating: "X", count: 5_000) + "NEWEST-SPEECH"
+        let system = prompt + MeetingChatClient.transcriptSeparator + transcript
+
+        let trimmed = MeetingChatClient.trimmedKeepingTail(system, to: prompt.count + 400)
+
+        #expect(trimmed.hasPrefix(prompt))
+        #expect(trimmed.contains("never invent a real name"))
+        #expect(trimmed.contains("NEWEST-SPEECH"))
+        #expect(trimmed.count < system.count)
+    }
+
+    @Test("trimming a budgeted request keeps the prompt intact end to end")
+    func budgetedMessagesKeepInstructions() throws {
+        let prompt = MeetingChatPrompts.live
+        let transcript = String(repeating: "Y", count: 200_000) + "TAIL-MARKER"
+        let messages = [
+            message(.system, prompt + MeetingChatClient.transcriptSeparator + transcript),
+            message(.user, "what did I miss?"),
+        ]
+
+        let result = try MeetingChatClient.budgetedMessages(messages, backend: "ollama")
+        let system = try #require(result.first(where: { $0.role == .system }))
+
+        #expect(system.content.hasPrefix(prompt))
+        #expect(system.content.contains("TAIL-MARKER"))
+    }
+
     @Test("a newest turn that alone exceeds budget fails preflight rather than being sent")
     func oversizedNewestTurnFailsPreflight() {
         let limit = MeetingChatClient.Budget.characters(forBackend: "ollama")

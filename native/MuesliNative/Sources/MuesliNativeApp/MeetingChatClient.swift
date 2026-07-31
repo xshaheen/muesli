@@ -167,14 +167,39 @@ enum MeetingChatClient {
         messages.lastIndex(where: { $0.role == .user })
     }
 
-    /// Keeps the end of the transcript. A separator marks the cut so the model does not read
-    /// a mid-sentence start as the beginning of the meeting.
-    private static func trimmedKeepingTail(_ content: String, to limit: Int) -> String {
+    /// Separates the grounding instructions from the transcript inside the system message.
+    /// Trimming splits here so the instructions always survive.
+    static let transcriptSeparator = "\n\n---\n\n"
+
+    /// Trims the transcript, never the instructions.
+    ///
+    /// The system message is `prompt + separator + transcript`. Trimming it as one blob from
+    /// the head would eat the prompt first on any long meeting, leaving raw transcript
+    /// labelled as system content -- ungrounded, and a free path for anything said in the
+    /// meeting to read as instruction. The prompt is preserved whole and only the transcript
+    /// gives ground.
+    static func trimmedKeepingTail(_ content: String, to limit: Int) -> String {
         guard content.count > limit, limit > 0 else { return content }
+
         let marker = "[earlier transcript trimmed]\n"
-        let keep = max(0, limit - marker.count)
-        let tail = String(content.suffix(keep))
-        return marker + tail
+
+        guard let separatorRange = content.range(of: transcriptSeparator) else {
+            // No transcript attached: this is instructions only, so keep the newest part
+            // rather than dropping the message entirely.
+            let keep = max(0, limit - marker.count)
+            return marker + String(content.suffix(keep))
+        }
+
+        let prompt = String(content[content.startIndex ..< separatorRange.lowerBound])
+        let transcript = String(content[separatorRange.upperBound...])
+        let fixedCost = prompt.count + transcriptSeparator.count + marker.count
+        let keep = limit - fixedCost
+
+        // If the instructions alone cannot fit, the caller's budget is too small for any
+        // useful request; return the prompt and let the caller's overflow check refuse.
+        guard keep > 0 else { return prompt }
+
+        return prompt + transcriptSeparator + marker + String(transcript.suffix(keep))
     }
 
     // MARK: - ChatGPT (SSE)
@@ -222,7 +247,9 @@ enum MeetingChatClient {
     }
 
     private static func sendWithOpenAIResponses(messages: [MeetingChatMessage], config: AppConfig) async throws -> String {
-        let apiKey = config.openAIAPIKey
+        // Same resolution order the summary path uses: an environment key is a supported
+        // way to configure this, and chat rejecting it would contradict the readiness UI.
+        let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? config.openAIAPIKey
         guard !apiKey.isEmpty else { throw MeetingChatError.notConfigured(backend: "OpenAI") }
         let model = config.openAIModel.isEmpty ? defaultOpenAIModel : config.openAIModel
 
@@ -291,7 +318,7 @@ enum MeetingChatClient {
     }
 
     private static func sendWithOpenRouter(messages: [MeetingChatMessage], config: AppConfig) async throws -> String {
-        let apiKey = config.openRouterAPIKey
+        let apiKey = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] ?? config.openRouterAPIKey
         guard !apiKey.isEmpty else { throw MeetingChatError.notConfigured(backend: "OpenRouter") }
         let model = config.openRouterModel.isEmpty ? defaultOpenRouterModel : config.openRouterModel
         return try await sendWithChatCompletions(

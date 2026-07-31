@@ -99,7 +99,7 @@ final class MeetingChatConversation {
     private func systemContent(transcript: String, systemPrompt: String) -> String {
         let body = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return systemPrompt }
-        return systemPrompt + "\n\n---\n\n" + body
+        return systemPrompt + MeetingChatClient.transcriptSeparator + body
     }
 }
 

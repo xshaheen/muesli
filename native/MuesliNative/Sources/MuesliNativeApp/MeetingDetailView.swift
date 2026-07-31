@@ -473,11 +473,11 @@ struct MeetingDetailView: View {
         }
     }
 
-    /// Chat needs a summary backend; showing the segment without one would offer a control
-    /// that fails on first use.
-    private var isChatAvailable: Bool {
-        !MeetingChatClient.resolvedBackend(config: appState.config).isEmpty
-    }
+    /// Chat needs a backend that is actually usable, not merely selected. `resolvedBackend`
+    /// always returns something (it defaults to ChatGPT), so gating on it would show the tab
+    /// to users with no credentials and fail on first use. This reuses the same readiness
+    /// test the summary action already applies.
+    private var isChatAvailable: Bool { hasApiKey }
 
     private var documentModePicker: some View {
         Picker("", selection: $documentMode) {

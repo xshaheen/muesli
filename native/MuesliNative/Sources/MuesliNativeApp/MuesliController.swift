@@ -4475,6 +4475,10 @@ final class MuesliController: NSObject {
                 try deleteSavedMeetingRecording(at: savedRecordingPath)
             }
             try dictationStore.deleteMeeting(id: id)
+            // Chat history is held in memory keyed by meeting. Without this, deleting a
+            // meeting would remove its row and recording while leaving the questions and
+            // answers about it resident until the app quits.
+            MeetingChatConversations.shared.forget(meetingID: id)
             cleanupOrphanedMeetingWaveformCacheFiles()
             scheduleICloudSyncAfterLocalChange()
         } catch let error as MeetingLifecycleError {

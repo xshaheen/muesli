@@ -132,11 +132,13 @@ enum ChatGPTResponsesClient {
                     "content": [["type": "input_text", "text": message.content]],
                 ] as [String: Any])
             case .assistant:
-                // Assistant turns echo prior model output, which the Responses API types
-                // as `output_text` rather than `input_text`.
+                // Replayed assistant turns are *input* to the next request, so they use the
+                // easy-input-message form like any other turn. `output_text` belongs to
+                // complete response output items, which carry id/status fields we do not
+                // have; sending it here can get the request rejected.
                 input.append([
                     "role": "assistant",
-                    "content": [["type": "output_text", "text": message.content]],
+                    "content": [["type": "input_text", "text": message.content]],
                 ] as [String: Any])
             }
         }
