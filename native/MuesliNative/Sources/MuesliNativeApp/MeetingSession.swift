@@ -104,6 +104,15 @@ struct MeetingSessionResult {
     let retainedRecordingError: Error?
     let systemRecordingURL: URL?
     let templateSnapshot: MeetingTemplateSnapshot
+    /// Screen/OCR context this summary was built from.
+    ///
+    /// Carried out of the session rather than discarded, so a regeneration after
+    /// transcript cleanup can reproduce the same call. Without it, regenerating
+    /// would quietly drop screen-derived detail and produce a worse summary than
+    /// the one it replaced.
+    var visualContext: String = ""
+    /// Predecessor notes this summary was built from, for the same reason.
+    var previousMeetingNotes: String = ""
 }
 
 extension MeetingSessionResult {
@@ -130,7 +139,9 @@ extension MeetingSessionResult {
             retainedRecordingURL: retainedRecordingURL,
             retainedRecordingError: retainedRecordingError,
             systemRecordingURL: systemRecordingURL,
-            templateSnapshot: templateSnapshot
+            templateSnapshot: templateSnapshot,
+            visualContext: visualContext,
+            previousMeetingNotes: previousMeetingNotes
         )
     }
 }
@@ -779,7 +790,9 @@ final class MeetingSession {
             retainedRecordingURL: retainedRecordingURL,
             retainedRecordingError: retainedRecordingWriterError,
             systemRecordingURL: systemAudioURL,
-            templateSnapshot: templateSnapshot
+            templateSnapshot: templateSnapshot,
+            visualContext: visualContext,
+            previousMeetingNotes: previousMeetingNotes ?? ""
         )
     }
 

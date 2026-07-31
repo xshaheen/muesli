@@ -532,6 +532,7 @@ final class MuesliController: NSObject {
             fputs("[muesli-native] startup error: \(error)\n", stderr)
         }
         recoverStaleLiveMeetings()
+        resumePendingMeetingNotesRegeneration()
         normalizeMeetingTranscriptionSelectionForAvailability()
         SoundController.prewarmLifecycleSounds()
 
@@ -6221,6 +6222,11 @@ final class MuesliController: NSObject {
                 )
             }
         }
+        try? dictationStore.storeMeetingSummaryInputs(
+            id: persistenceResult.meetingID,
+            visualContext: result.visualContext,
+            previousMeetingNotes: result.previousMeetingNotes
+        )
         scheduleMeetingTranscriptCleanup(meetingID: persistenceResult.meetingID)
         return persistenceResult
     }
@@ -6271,6 +6277,78 @@ final class MuesliController: NSObject {
                 // meeting keeps showing raw text until some unrelated refresh fires.
                 self.historyWindowController?.reload()
                 self.syncAppState()
+            }
+
+            await self.regenerateNotesFromCleanedTranscript(meetingID: meetingID)
+        }
+    }
+
+    /// Rebuilds a meeting's notes from its cleaned transcript.
+    ///
+    /// Reproduces the original `summarize` call argument-for-argument, substituting
+    /// only the transcript. The retained visual context and predecessor notes are
+    /// the point: regenerating without them would drop screen-derived detail and
+    /// follow-up continuity, replacing a good summary with a worse one and showing
+    /// nothing to say it happened.
+    func regenerateNotesFromCleanedTranscript(meetingID: Int64) async {
+        guard let meeting = try? dictationStore.meeting(id: meetingID) else { return }
+        guard meeting.notesSource == .raw else { return }
+        let cleaned = meeting.cleanedTranscript
+        guard !cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        let plan = MeetingResummarizationPolicy.plan(for: meeting)
+        let notes: String
+        do {
+            notes = try await MeetingSummaryClient.summarize(
+                transcript: cleaned,
+                meetingTitle: plan.promptTitle,
+                config: config,
+                template: meetingTemplateSnapshot(for: meeting),
+                existingNotes: nil,
+                manualNotesToRetain: meeting.manualNotes,
+                visualContext: meeting.visualContext.isEmpty ? nil : meeting.visualContext,
+                previousMeetingNotes: meeting.previousMeetingNotes.isEmpty
+                    ? nil
+                    : meeting.previousMeetingNotes
+            )
+        } catch {
+            // Leaves notes_source at raw, so the next launch sweep tries again.
+            // Cleanup itself runs once, so without that retry a single failure would
+            // strand the meeting with raw-derived notes forever.
+            return
+        }
+
+        // Conditional on everything the summary was built from. Regeneration takes
+        // seconds while the user is already reading, so all three races are live.
+        let wrote = (try? dictationStore.storeRegeneratedMeetingNotes(
+            id: meetingID,
+            formattedNotes: notes,
+            expectedCleanedTranscript: cleaned,
+            expectedManualNotes: meeting.manualNotes
+        )) ?? false
+        guard wrote else { return }
+
+        await MainActor.run {
+            self.historyWindowController?.reload()
+            self.syncAppState()
+            self.scheduleICloudSyncAfterLocalChange()
+        }
+    }
+
+    /// Finishes regenerations that never completed.
+    ///
+    /// A meeting holding a cleaned transcript whose notes are still raw-derived is
+    /// a regeneration that failed or was interrupted -- the app quit between the two
+    /// writes, or the summary call errored. Bounded per launch so a persistently
+    /// failing meeting cannot spin.
+    func resumePendingMeetingNotesRegeneration(limit: Int = 5) {
+        guard config.enableMeetingTranscriptCleanup else { return }
+        guard let pending = try? dictationStore.meetingsAwaitingNotesRegeneration(limit: limit),
+              !pending.isEmpty else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            for meeting in pending {
+                await self.regenerateNotesFromCleanedTranscript(meetingID: meeting.id)
             }
         }
     }

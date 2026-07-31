@@ -1880,6 +1880,33 @@ public final class DictationStore {
         return sqlite3_changes(db) > 0
     }
 
+    /// Records the inputs the meeting's original summary was built from.
+    ///
+    /// Kept so a regeneration after transcript cleanup can reproduce that call
+    /// rather than silently omitting screen context or follow-up continuity, which
+    /// would replace a good summary with a worse one and show nothing to say so.
+    public func storeMeetingSummaryInputs(
+        id: Int64,
+        visualContext: String,
+        previousMeetingNotes: String
+    ) throws {
+        guard !visualContext.isEmpty || !previousMeetingNotes.isEmpty else { return }
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        let sql = "UPDATE meetings SET visual_context = ?, previous_meeting_notes = ? WHERE id = ?"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (visualContext as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 2, (previousMeetingNotes as NSString).utf8String, -1, nil)
+        sqlite3_bind_int64(statement, 3, id)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
+    }
+
     /// Meetings whose transcript was cleaned but whose notes still come from the
     /// raw text -- a regeneration that failed, was interrupted, or never ran.
     ///

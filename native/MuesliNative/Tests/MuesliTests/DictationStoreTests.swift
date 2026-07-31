@@ -3429,4 +3429,35 @@ struct DictationStoreTests {
 
         #expect(try store.meetingsAwaitingNotesRegeneration().contains { $0.id == id } == false)
     }
+
+    // MARK: - Retained summary inputs
+
+    @Test("the summary inputs a meeting was built from round-trip")
+    func summaryInputsRoundTrip() throws {
+        // Without these, a post-cleanup regeneration cannot reproduce the original
+        // call and would quietly drop screen context and follow-up continuity.
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+
+        try store.storeMeetingSummaryInputs(
+            id: id,
+            visualContext: "Jira MUES-42 open in Safari",
+            previousMeetingNotes: "Last week: agreed on the schema"
+        )
+
+        let meeting = try #require(try store.meeting(id: id))
+        #expect(meeting.visualContext == "Jira MUES-42 open in Safari")
+        #expect(meeting.previousMeetingNotes == "Last week: agreed on the schema")
+    }
+
+    @Test("a meeting with neither input is left alone rather than blanked")
+    func emptySummaryInputsSkipWrite() throws {
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+        try store.storeMeetingSummaryInputs(id: id, visualContext: "screen", previousMeetingNotes: "")
+
+        try store.storeMeetingSummaryInputs(id: id, visualContext: "", previousMeetingNotes: "")
+
+        #expect(try store.meeting(id: id)?.visualContext == "screen")
+    }
 }
