@@ -24,6 +24,35 @@ struct TranscriptCleanupResult {
     let rawOutput: String
     let cleanedOutput: String
     let model: String
+    /// The provider stopped because it hit the output cap, not because it was done.
+    ///
+    /// Without this a cap hit part-way through the final sentence is invisible:
+    /// the response keeps every earlier line intact and simply ends mid-thought.
+    var wasTruncated: Bool = false
+}
+
+/// One backend response, plus whether the provider cut it short.
+struct TranscriptCleanupRawResponse {
+    let text: String
+    let wasTruncated: Bool
+}
+
+/// Per-request overrides that meeting cleanup needs and dictation must not get.
+struct TranscriptCleanupRequestOptions {
+    /// Output cap. `nil` leaves each backend's existing behaviour untouched --
+    /// which for the ChatGPT path means sending no cap field at all, since it
+    /// never has, and imposing the dictation default would newly truncate long
+    /// dictations that work today.
+    var maxOutputTokens: Int?
+    /// Ask the provider not to retain the request. Meeting cleanup sends the whole
+    /// transcript of a private conversation; OpenAI keeps `/v1/responses` state for
+    /// at least 30 days unless told otherwise.
+    var disableProviderRetention: Bool = false
+    /// Preserve line structure in the response instead of collapsing whitespace.
+    /// Dictation wants the collapse; a transcript is destroyed by it.
+    var preserveLineStructure: Bool = false
+
+    static let dictationDefaults = TranscriptCleanupRequestOptions()
 }
 
 enum TranscriptCleanupClient {
@@ -121,7 +150,8 @@ enum TranscriptCleanupClient {
         systemPrompt: String,
         appContext: String?,
         backend: TranscriptCleanupBackendOption,
-        config: AppConfig
+        config: AppConfig,
+        options: TranscriptCleanupRequestOptions = .dictationDefaults
     ) async throws -> TranscriptCleanupResult {
         guard let llmBackend = backend.llmBackend else {
             throw TranscriptCleanupError.missingConfiguration("Local cleanup is handled by Qwen3PostProcessor.")
@@ -134,41 +164,47 @@ enum TranscriptCleanupClient {
             maxAppContextCharacters: hostedAppContextCharacterLimit
         )
         let effectiveSystemPrompt = systemPromptWithAppContextGuidance(systemPrompt, appContext: appContext)
-        let raw: String
+        let response: TranscriptCleanupRawResponse
 
         switch llmBackend {
         case .chatGPT:
-            raw = try await ChatGPTResponsesClient.respond(
-                systemPrompt: effectiveSystemPrompt,
-                userPrompt: userPrompt,
-                model: model,
-                logCategory: "postproc"
+            response = TranscriptCleanupRawResponse(
+                text: try await ChatGPTResponsesClient.respond(
+                    systemPrompt: effectiveSystemPrompt,
+                    userPrompt: userPrompt,
+                    model: model,
+                    logCategory: "postproc",
+                    maxOutputTokens: options.maxOutputTokens
+                ),
+                wasTruncated: false
             )
         case .openAI:
-            raw = try await cleanWithOpenAI(systemPrompt: effectiveSystemPrompt, userPrompt: userPrompt, model: model, config: config)
+            response = try await cleanWithOpenAI(systemPrompt: effectiveSystemPrompt, userPrompt: userPrompt, model: model, config: config, options: options)
         case .openRouter:
             let apiKey = resolvedOpenRouterAPIKey(config: config)
-            raw = try await cleanWithChatCompletions(
+            response = try await cleanWithChatCompletions(
                 backend: "OpenRouter",
                 requestURL: openRouterURL,
                 apiKey: apiKey,
                 systemPrompt: effectiveSystemPrompt,
                 userPrompt: userPrompt,
-                model: model
+                model: model,
+                options: options
             )
         case .ollama:
-            raw = try await cleanWithOllama(systemPrompt: effectiveSystemPrompt, userPrompt: userPrompt, model: model, config: config)
+            response = try await cleanWithOllama(systemPrompt: effectiveSystemPrompt, userPrompt: userPrompt, model: model, config: config)
         case .lmStudio:
             guard let requestURL = MeetingSummaryClient.resolveLMStudioURL(config: cleanupConfig(config, model: model)) else {
                 throw TranscriptCleanupError.missingConfiguration("Invalid LM Studio URL: \(config.lmStudioURL)")
             }
-            raw = try await cleanWithChatCompletions(
+            response = try await cleanWithChatCompletions(
                 backend: "LM Studio",
                 requestURL: requestURL,
                 apiKey: "",
                 systemPrompt: effectiveSystemPrompt,
                 userPrompt: userPrompt,
-                model: model
+                model: model,
+                options: options
             )
         case .customLLM:
             let format = CustomLLMFormat(rawValue: config.customLLMFormat) ?? .openAI
@@ -177,36 +213,57 @@ enum TranscriptCleanupClient {
             }
             switch format {
             case .openAI:
-                raw = try await cleanWithChatCompletions(
+                response = try await cleanWithChatCompletions(
                     backend: "Custom LLM",
                     requestURL: requestURL,
                     apiKey: config.customLLMAPIKey,
                     systemPrompt: effectiveSystemPrompt,
                     userPrompt: userPrompt,
-                    model: model
+                    model: model,
+                    options: options
                 )
             case .anthropic:
-                raw = try await cleanWithAnthropic(
+                response = try await cleanWithAnthropic(
                     requestURL: requestURL,
                     apiKey: config.customLLMAPIKey,
                     systemPrompt: effectiveSystemPrompt,
                     userPrompt: userPrompt,
-                    model: model
+                    model: model,
+                    options: options
                 )
             }
         default:
             throw TranscriptCleanupError.missingConfiguration("Unsupported transcript cleanup backend: \(backend.label)")
         }
 
-        let cleaned = cleanOutput(raw)
+        let raw = response.text
+        // A transcript's newlines are structure. The dictation cleaner collapses
+        // runs of whitespace, which would flatten a multi-line transcript into one
+        // line before anything downstream could check it.
+        let cleaned = options.preserveLineStructure ? lineSafeOutput(raw) : cleanOutput(raw)
         let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty, Qwen3DeletionCueDetector.containsDeletionCue(text) {
-            return TranscriptCleanupResult(rawOutput: raw, cleanedOutput: trimmed, model: model)
+            return TranscriptCleanupResult(rawOutput: raw, cleanedOutput: trimmed, model: model, wasTruncated: response.wasTruncated)
         }
-        if Qwen3PostProcessorOutputCleaner.shouldFallbackToInput(cleaned: trimmed, input: text) {
+        if !options.preserveLineStructure,
+           Qwen3PostProcessorOutputCleaner.shouldFallbackToInput(cleaned: trimmed, input: text) {
             throw TranscriptCleanupError.rejectedOutput
         }
-        return TranscriptCleanupResult(rawOutput: raw, cleanedOutput: trimmed, model: model)
+        return TranscriptCleanupResult(rawOutput: raw, cleanedOutput: trimmed, model: model, wasTruncated: response.wasTruncated)
+    }
+
+    /// Normalizes a response without destroying line structure.
+    ///
+    /// Trims trailing spaces per line and normalizes line endings, but keeps every
+    /// newline and blank line -- transcripts carry meaning in both, including the
+    /// blank lines around a resume separator.
+    static func lineSafeOutput(_ text: String) -> String {
+        guard !text.isEmpty else { return text }
+        return text
+            .replacingOccurrences(of: #"\r\n?"#, with: "\n", options: .regularExpression)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " \t")) }
+            .joined(separator: "\n")
     }
 
     static func cleanOutput(_ text: String) -> String {
@@ -256,8 +313,9 @@ enum TranscriptCleanupClient {
         systemPrompt: String,
         userPrompt: String,
         model: String,
-        config: AppConfig
-    ) async throws -> String {
+        config: AppConfig,
+        options: TranscriptCleanupRequestOptions
+    ) async throws -> TranscriptCleanupRawResponse {
         let key = config.openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let apiKey = key.isEmpty ? (ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "") : key
         guard !apiKey.isEmpty else {
@@ -267,8 +325,11 @@ enum TranscriptCleanupClient {
             "model": model,
             "instructions": systemPrompt,
             "input": userPrompt,
-            "max_output_tokens": defaultMaxOutputTokens,
+            "max_output_tokens": options.maxOutputTokens ?? defaultMaxOutputTokens,
         ]
+        if options.disableProviderRetention {
+            body["store"] = false
+        }
         if let effort = SummaryModelPreset.reasoningEffort(for: model) {
             body["reasoning"] = ["effort": effort]
         }
@@ -288,7 +349,7 @@ enum TranscriptCleanupClient {
         else {
             throw TranscriptCleanupError.emptyResponse("OpenAI")
         }
-        return text
+        return TranscriptCleanupRawResponse(text: text, wasTruncated: responsesHitOutputCap(json))
     }
 
     private static func cleanWithOllama(
@@ -296,7 +357,7 @@ enum TranscriptCleanupClient {
         userPrompt: String,
         model: String,
         config: AppConfig
-    ) async throws -> String {
+    ) async throws -> TranscriptCleanupRawResponse {
         let baseURL = resolveConfiguredOllamaURL(config: config)
         guard let baseURL else {
             throw TranscriptCleanupError.missingConfiguration("Invalid Ollama URL: \(config.ollamaURL)")
@@ -327,7 +388,9 @@ enum TranscriptCleanupClient {
         else {
             throw TranscriptCleanupError.emptyResponse("Ollama")
         }
-        return text
+        // Ollama reports completion via `done_reason`; "length" means it hit the cap.
+        let truncated = (json["done_reason"] as? String) == "length"
+        return TranscriptCleanupRawResponse(text: text, wasTruncated: truncated)
     }
 
     private static func resolveConfiguredOllamaURL(config: AppConfig) -> URL? {
@@ -352,8 +415,9 @@ enum TranscriptCleanupClient {
         apiKey: String,
         systemPrompt: String,
         userPrompt: String,
-        model: String
-    ) async throws -> String {
+        model: String,
+        options: TranscriptCleanupRequestOptions
+    ) async throws -> TranscriptCleanupRawResponse {
         var body: [String: Any] = [
             "model": model,
             "messages": [
@@ -362,7 +426,7 @@ enum TranscriptCleanupClient {
             ],
         ]
         let tokenKey = requestURL.host?.contains("openai.com") == true ? "max_completion_tokens" : "max_tokens"
-        body[tokenKey] = defaultMaxOutputTokens
+        body[tokenKey] = options.maxOutputTokens ?? defaultMaxOutputTokens
         var request = URLRequest(url: requestURL)
         request.timeoutInterval = requestTimeout
         request.httpMethod = "POST"
@@ -382,7 +446,7 @@ enum TranscriptCleanupClient {
         else {
             throw TranscriptCleanupError.emptyResponse(backend)
         }
-        return text
+        return TranscriptCleanupRawResponse(text: text, wasTruncated: chatCompletionsHitOutputCap(json))
     }
 
     private static func cleanWithAnthropic(
@@ -390,8 +454,9 @@ enum TranscriptCleanupClient {
         apiKey: String,
         systemPrompt: String,
         userPrompt: String,
-        model: String
-    ) async throws -> String {
+        model: String,
+        options: TranscriptCleanupRequestOptions
+    ) async throws -> TranscriptCleanupRawResponse {
         let body: [String: Any] = [
             "model": model,
             "max_tokens": defaultMaxOutputTokens,
@@ -418,7 +483,7 @@ enum TranscriptCleanupClient {
         else {
             throw TranscriptCleanupError.emptyResponse("Custom LLM")
         }
-        return text
+        return TranscriptCleanupRawResponse(text: text, wasTruncated: anthropicHitOutputCap(json))
     }
 
     private static func validateHTTPResponse(_ response: URLResponse, data: Data, backend: String) throws {
@@ -429,6 +494,30 @@ enum TranscriptCleanupClient {
                 ?? "HTTP \(http.statusCode)"
             throw TranscriptCleanupError.backendFailed("\(backend) cleanup failed. \(message)")
         }
+    }
+
+    /// Whether an OpenAI Responses reply stopped because it ran out of room.
+    static func responsesHitOutputCap(_ payload: [String: Any]) -> Bool {
+        if (payload["status"] as? String) == "incomplete" { return true }
+        if let details = payload["incomplete_details"] as? [String: Any],
+           (details["reason"] as? String) == "max_output_tokens" {
+            return true
+        }
+        return false
+    }
+
+    /// Whether a chat-completions reply stopped because it ran out of room.
+    static func chatCompletionsHitOutputCap(_ payload: [String: Any]) -> Bool {
+        guard let choices = payload["choices"] as? [[String: Any]] else { return false }
+        return choices.contains { choice in
+            let reason = (choice["finish_reason"] as? String) ?? (choice["native_finish_reason"] as? String)
+            return reason == "length"
+        }
+    }
+
+    /// Whether an Anthropic reply stopped because it ran out of room.
+    static func anthropicHitOutputCap(_ payload: [String: Any]) -> Bool {
+        (payload["stop_reason"] as? String) == "max_tokens"
     }
 
     private static func extractResponsesText(from payload: [String: Any]) -> String? {
