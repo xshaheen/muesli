@@ -179,7 +179,7 @@ final class FloatingMeetingTranscriptPanelController {
     var wantsKeyboardFocus: Bool { model.isChatOpen }
 
     func closeChat() {
-        model.closeChat()
+        setChatOpen(false)
     }
 
     var isVisible: Bool {
@@ -260,9 +260,25 @@ final class FloatingMeetingTranscriptPanelController {
         case .openMeeting:
             onOpenNotes()
         case .toggleChat:
-            model.toggleChat()
+            setChatOpen(!model.isChatOpen)
         }
         return true
+    }
+
+    /// Opening chat lets the panel take keys; closing it must hand them back.
+    ///
+    /// Without the resign step, the panel keeps key status after the composer closes and
+    /// keeps swallowing keystrokes meant for the call — the precise failure the deliberate-
+    /// focus rule exists to prevent, just delayed.
+    func setChatOpen(_ open: Bool) {
+        open ? model.openChat() : model.closeChat()
+        guard !model.isChatOpen else { return }
+        // Resign only the panel's own key status. Deactivating the whole app would also hide
+        // a main window the user may have opened deliberately.
+        if let window = hostingView?.window, window.isKeyWindow {
+            window.resignKey()
+            window.orderBack(nil)
+        }
     }
 
     private func copyTranscript() {
@@ -349,6 +365,16 @@ private struct FloatingMeetingTranscriptPanelView: View {
                 .font(MuesliTheme.callout().weight(.semibold))
                 .foregroundStyle(MuesliTheme.textPrimary)
             Spacer()
+            Circle()
+                .fill(model.isPaused ? MuesliTheme.textTertiary : MuesliTheme.success)
+                .frame(width: 6, height: 6)
+            Text(model.isPaused ? "Paused" : "Live")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textSecondary)
+            // Sits immediately left of dismiss, and to the right of the variable-width
+            // status label, so its hit region is a fixed offset from the panel's right edge.
+            // Placing it left of the status text would make the region depend on whether the
+            // label reads "Live" or "Paused".
             if model.isChatAvailable {
                 Button(action: onToggleChat) {
                     Image(systemName: model.isChatOpen ? "text.quote" : "bubble.left.and.text.bubble.right")
@@ -360,12 +386,6 @@ private struct FloatingMeetingTranscriptPanelView: View {
                 .buttonStyle(.plain)
                 .help(model.isChatOpen ? "Back to transcript" : "Ask about this meeting")
             }
-            Circle()
-                .fill(model.isPaused ? MuesliTheme.textTertiary : MuesliTheme.success)
-                .frame(width: 6, height: 6)
-            Text(model.isPaused ? "Paused" : "Live")
-                .font(MuesliTheme.caption())
-                .foregroundStyle(MuesliTheme.textSecondary)
             Button(action: onDismiss) {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 12, weight: .semibold))

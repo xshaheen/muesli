@@ -60,8 +60,12 @@ struct ChatGPTResponsesMessagesTests {
         #expect(entries.map { text($0) } == ["first question", "first answer", "follow-up"])
     }
 
-    @Test("assistant turns use output_text, user turns use input_text")
-    func assistantTurnsUseOutputText() {
+    @Test("replayed turns all use input_text, including assistant history")
+    func replayedTurnsUseInputText() {
+        // Replayed assistant turns are input to the next request, so they take the
+        // easy-input-message form. `output_text` belongs to complete response output items,
+        // which carry id/status fields we do not have — sending it can get the whole
+        // request rejected, and this is the default backend.
         let body = ChatGPTResponsesClient.requestBody(
             messages: [
                 ChatGPTResponsesMessage(role: .user, content: "q"),
@@ -72,7 +76,8 @@ struct ChatGPTResponsesMessagesTests {
 
         let entries = inputEntries(body)
         #expect(contentType(entries[0]) == "input_text")
-        #expect(contentType(entries[1]) == "output_text")
+        #expect(contentType(entries[1]) == "input_text")
+        #expect(entries.compactMap { contentType($0) }.contains("output_text") == false)
     }
 
     @Test("two-prompt form produces the same body as its two-message equivalent")
