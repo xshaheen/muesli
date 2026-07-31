@@ -1209,7 +1209,11 @@ struct MeetingDetailView: View {
                 .font(.system(size: 10))
             Text(snapshot.name)
                 .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
         }
+        // Without this the chip is the flexible element beside a fixed-width metadata
+        // string, so it collapses to just its icon when the row is tight.
+        .fixedSize(horizontal: true, vertical: false)
         .foregroundStyle(MuesliTheme.accent)
         .padding(.horizontal, MuesliTheme.spacing8)
         .padding(.vertical, 4)
