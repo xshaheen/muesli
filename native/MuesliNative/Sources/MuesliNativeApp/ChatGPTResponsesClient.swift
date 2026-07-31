@@ -38,7 +38,8 @@ enum ChatGPTResponsesClient {
         systemPrompt: String,
         userPrompt: String,
         model: String,
-        logCategory: String
+        logCategory: String,
+        maxOutputTokens: Int? = nil
     ) async throws -> String {
         try await respond(
             messages: [
@@ -46,7 +47,8 @@ enum ChatGPTResponsesClient {
                 ChatGPTResponsesMessage(role: .user, content: userPrompt),
             ],
             model: model,
-            logCategory: logCategory
+            logCategory: logCategory,
+            maxOutputTokens: maxOutputTokens
         )
     }
 
@@ -54,10 +56,11 @@ enum ChatGPTResponsesClient {
     static func respond(
         messages: [ChatGPTResponsesMessage],
         model: String,
-        logCategory: String
+        logCategory: String,
+        maxOutputTokens: Int? = nil
     ) async throws -> String {
         let (token, accountId) = try await ChatGPTAuthManager.shared.validAccessToken()
-        let body = requestBody(messages: messages, model: model)
+        let body = requestBody(messages: messages, model: model, maxOutputTokens: maxOutputTokens)
 
         var request = URLRequest(url: whamURL)
         request.timeoutInterval = requestTimeout
@@ -101,20 +104,26 @@ enum ChatGPTResponsesClient {
     static func requestBody(
         systemPrompt: String,
         userPrompt: String,
-        model: String
+        model: String,
+        maxOutputTokens: Int? = nil
     ) -> [String: Any] {
         requestBody(
             messages: [
                 ChatGPTResponsesMessage(role: .system, content: systemPrompt),
                 ChatGPTResponsesMessage(role: .user, content: userPrompt),
             ],
-            model: model
+            model: model,
+            maxOutputTokens: maxOutputTokens
         )
     }
 
+    /// - Parameter maxOutputTokens: omitted entirely when nil. This path has never
+    ///   sent a cap, and defaulting it to the dictation limit would newly truncate
+    ///   long dictations that work today. Meeting cleanup always passes one.
     static func requestBody(
         messages: [ChatGPTResponsesMessage],
-        model: String
+        model: String,
+        maxOutputTokens: Int? = nil
     ) -> [String: Any] {
         // System content is `instructions`, not an `input` entry. Multiple system messages
         // join in order rather than overwriting, so a caller that layers instructions keeps
@@ -150,6 +159,9 @@ enum ChatGPTResponsesClient {
             "instructions": instructions.joined(separator: "\n\n"),
             "input": input,
         ]
+        if let maxOutputTokens {
+            body["max_output_tokens"] = maxOutputTokens
+        }
         if let effort = SummaryModelPreset.reasoningEffort(for: model) {
             body["reasoning"] = ["effort": effort]
         }

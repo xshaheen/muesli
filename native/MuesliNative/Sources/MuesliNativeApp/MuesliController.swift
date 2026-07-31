@@ -5174,6 +5174,7 @@ final class MuesliController: NSObject {
             source: .audioImport
         )
         scheduleICloudSyncAfterLocalChange()
+        scheduleMeetingTranscriptCleanup(meetingID: meetingID)
         return meetingID
     }
 
@@ -6156,7 +6157,58 @@ final class MuesliController: NSObject {
                 )
             }
         }
+        scheduleMeetingTranscriptCleanup(meetingID: persistenceResult.meetingID)
         return persistenceResult
+    }
+
+    /// Kicks off AI cleanup for a meeting whose transcript is already durable.
+    ///
+    /// Deliberately fire-and-forget and deliberately *after* persistence. The
+    /// transcript is the only copy of what was said -- with a recording save policy
+    /// of `never` there is no audio to re-derive it from -- so a model call must
+    /// never sit between the meeting ending and that text reaching disk.
+    ///
+    /// Both finalization paths funnel through here: recorded meetings via
+    /// `persistCompletedMeetingResultAndDispatchHook`, imports via
+    /// `persistImportedAudioMeeting`. An imported Arabic recording has exactly the
+    /// same cross-language damage as a recorded one.
+    func scheduleMeetingTranscriptCleanup(meetingID: Int64) {
+        let backend = selectedPostProcessorBackend
+        guard MeetingTranscriptCleanup.isEnabled(
+            config: config,
+            backend: backend,
+            isChatGPTAuthenticated: appState.isChatGPTAuthenticated
+        ) else { return }
+
+        let config = self.config
+        Task { [weak self] in
+            guard let self else { return }
+            guard let meeting = try? self.dictationStore.meeting(id: meetingID) else { return }
+            let raw = meeting.rawTranscript
+            guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+            let cleaned = await MeetingTranscriptCleanup.clean(
+                transcript: raw,
+                send: MeetingTranscriptCleanup.liveSender(backend: backend, config: config)
+            )
+            guard let cleaned else { return }
+
+            // The guarded write drops the result if the user edited the transcript
+            // while cleanup was running, which for a long meeting is minutes.
+            let stored = (try? self.dictationStore.storeCleanedMeetingTranscript(
+                id: meetingID,
+                cleanedTranscript: cleaned,
+                expectedRawTranscript: raw
+            )) ?? false
+            guard stored else { return }
+
+            await MainActor.run {
+                // Completion already ran its reload by now, so without this the open
+                // meeting keeps showing raw text until some unrelated refresh fires.
+                self.historyWindowController?.reload()
+                self.syncAppState()
+            }
+        }
     }
 
     /// For a resumed meeting, concatenates the prior transcript with the newly
