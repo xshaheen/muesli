@@ -11,6 +11,25 @@ enum ChatGPTResponsesError: LocalizedError {
     }
 }
 
+/// One turn in a Responses-API conversation.
+///
+/// The Responses API does not carry system content as a message role: it goes in
+/// `instructions`, and only user/assistant turns belong in `input`. Callers express
+/// intent with roles and let `requestBody` place each one correctly.
+struct ChatGPTResponsesMessage: Equatable {
+    enum Role: String, Equatable {
+        case system, user, assistant
+    }
+
+    let role: Role
+    let content: String
+
+    init(role: Role, content: String) {
+        self.role = role
+        self.content = content
+    }
+}
+
 enum ChatGPTResponsesClient {
     private static let whamURL = URL(string: "https://chatgpt.com/backend-api/wham/responses")!
     private static let requestTimeout: TimeInterval = 120
@@ -21,12 +40,24 @@ enum ChatGPTResponsesClient {
         model: String,
         logCategory: String
     ) async throws -> String {
-        let (token, accountId) = try await ChatGPTAuthManager.shared.validAccessToken()
-        let body = requestBody(
-            systemPrompt: systemPrompt,
-            userPrompt: userPrompt,
-            model: model
+        try await respond(
+            messages: [
+                ChatGPTResponsesMessage(role: .system, content: systemPrompt),
+                ChatGPTResponsesMessage(role: .user, content: userPrompt),
+            ],
+            model: model,
+            logCategory: logCategory
         )
+    }
+
+    /// Multi-turn variant. Preserves role order so a conversation's history reaches the model.
+    static func respond(
+        messages: [ChatGPTResponsesMessage],
+        model: String,
+        logCategory: String
+    ) async throws -> String {
+        let (token, accountId) = try await ChatGPTAuthManager.shared.validAccessToken()
+        let body = requestBody(messages: messages, model: model)
 
         var request = URLRequest(url: whamURL)
         request.timeoutInterval = requestTimeout
@@ -72,15 +103,50 @@ enum ChatGPTResponsesClient {
         userPrompt: String,
         model: String
     ) -> [String: Any] {
+        requestBody(
+            messages: [
+                ChatGPTResponsesMessage(role: .system, content: systemPrompt),
+                ChatGPTResponsesMessage(role: .user, content: userPrompt),
+            ],
+            model: model
+        )
+    }
+
+    static func requestBody(
+        messages: [ChatGPTResponsesMessage],
+        model: String
+    ) -> [String: Any] {
+        // System content is `instructions`, not an `input` entry. Multiple system messages
+        // join in order rather than overwriting, so a caller that layers instructions keeps
+        // all of them.
+        var instructions: [String] = []
+        var input: [[String: Any]] = []
+
+        for message in messages {
+            switch message.role {
+            case .system:
+                instructions.append(message.content)
+            case .user:
+                input.append([
+                    "role": "user",
+                    "content": [["type": "input_text", "text": message.content]],
+                ] as [String: Any])
+            case .assistant:
+                // Assistant turns echo prior model output, which the Responses API types
+                // as `output_text` rather than `input_text`.
+                input.append([
+                    "role": "assistant",
+                    "content": [["type": "output_text", "text": message.content]],
+                ] as [String: Any])
+            }
+        }
+
         var body: [String: Any] = [
             "model": model,
             "store": false,
             "stream": true,
-            "instructions": systemPrompt,
-            "input": [[
-                "role": "user",
-                "content": [["type": "input_text", "text": userPrompt]],
-            ] as [String: Any]],
+            "instructions": instructions.joined(separator: "\n\n"),
+            "input": input,
         ]
         if let effort = SummaryModelPreset.reasoningEffort(for: model) {
             body["reasoning"] = ["effort": effort]

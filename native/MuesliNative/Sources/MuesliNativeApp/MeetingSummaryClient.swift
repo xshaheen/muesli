@@ -932,7 +932,7 @@ enum MeetingSummaryClient {
         }
     }
 
-    private static func extractOpenAIText(from payload: [String: Any]) -> String? {
+    static func extractOpenAIText(from payload: [String: Any]) -> String? {
         if let outputText = payload["output_text"] as? String, !outputText.isEmpty {
             return outputText.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -948,7 +948,7 @@ enum MeetingSummaryClient {
         return nil
     }
 
-    private static func validateHTTPResponse(_ response: URLResponse, data: Data, backend: String) throws {
+    static func validateHTTPResponse(_ response: URLResponse, data: Data, backend: String) throws {
         guard let httpResponse = response as? HTTPURLResponse else { return }
         guard (200..<300).contains(httpResponse.statusCode) else {
             let message = extractErrorMessage(from: data)
@@ -962,7 +962,7 @@ enum MeetingSummaryClient {
         }
     }
 
-    private static func extractErrorMessage(from data: Data) -> String? {
+    static func extractErrorMessage(from data: Data) -> String? {
         guard
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
@@ -1003,7 +1003,7 @@ enum MeetingSummaryClient {
         return MeetingSummaryError.requestFailed(backend: backend, underlying: error)
     }
 
-    private static func extractOpenRouterText(from payload: [String: Any]) -> String? {
+    static func extractOpenRouterText(from payload: [String: Any]) -> String? {
         let choices = payload["choices"] as? [[String: Any]] ?? []
         guard let message = choices.first?["message"] as? [String: Any] else {
             return nil
