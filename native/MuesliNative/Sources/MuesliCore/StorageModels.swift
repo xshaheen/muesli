@@ -261,12 +261,27 @@ public struct CalendarOccurrenceReference: Codable, Equatable, Sendable {
     }
 }
 
+/// What a meeting's `formattedNotes` were derived from.
+///
+/// This is the retry state for post-cleanup note regeneration: a meeting holding
+/// a cleaned transcript whose notes are still `.raw` has a regeneration that has
+/// not happened yet, whether it failed, was interrupted, or was never attempted.
+/// `.user` is terminal -- once someone edits their own notes, nothing overwrites them.
+public enum MeetingNotesSource: String, Codable, Sendable {
+    case raw
+    case cleaned
+    case user
+}
+
 public struct MeetingRecord: Identifiable, Codable, Sendable {
     public let id: Int64
     public let title: String
     public let startTime: String
     public let durationSeconds: Double
     public let rawTranscript: String
+    /// AI-repaired transcript, empty when cleanup has not run or did not succeed.
+    /// Never a substitute for `rawTranscript` in storage -- see `displayTranscript`.
+    public let cleanedTranscript: String
     public let formattedNotes: String
     public let wordCount: Int
     public let folderID: Int64?
@@ -288,6 +303,15 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
     /// Stable sync identity for the predecessor. Local row ids differ across
     /// devices, so sync uses the predecessor's cloud record name.
     public let followUpToRecordName: String?
+    /// Screen/OCR context captured during the meeting and fed to the original
+    /// summary. Retained so a later regeneration reproduces that call rather
+    /// than silently producing notes without it.
+    public let visualContext: String
+    /// The predecessor's notes as they were when the original summary ran.
+    /// Snapshotted rather than re-derived from `followUpToID`, because the
+    /// predecessor's notes may have changed since.
+    public let previousMeetingNotes: String
+    public let notesSource: MeetingNotesSource
 
     public init(
         id: Int64,
@@ -311,13 +335,21 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         selectedTemplatePrompt: String? = nil,
         source: MeetingSource = .meeting,
         followUpToID: Int64? = nil,
-        followUpToRecordName: String? = nil
+        followUpToRecordName: String? = nil,
+        cleanedTranscript: String = "",
+        visualContext: String = "",
+        previousMeetingNotes: String = "",
+        notesSource: MeetingNotesSource = .raw
     ) {
         self.id = id
         self.title = title
         self.startTime = startTime
         self.durationSeconds = durationSeconds
         self.rawTranscript = rawTranscript
+        self.cleanedTranscript = cleanedTranscript
+        self.visualContext = visualContext
+        self.previousMeetingNotes = previousMeetingNotes
+        self.notesSource = notesSource
         self.formattedNotes = formattedNotes
         self.wordCount = wordCount
         self.folderID = folderID
