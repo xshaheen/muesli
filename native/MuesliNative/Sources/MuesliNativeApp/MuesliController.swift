@@ -2257,6 +2257,18 @@ final class MuesliController: NSObject {
         preloadExperimentalTranscriptionFeatures()
     }
 
+    /// Enables AI cleanup of finalized meeting transcripts.
+    ///
+    /// Refuses to turn on for a backend that cannot serve it, rather than leaving a
+    /// switch that reads as enabled while every meeting silently skips cleanup.
+    func setMeetingTranscriptCleanupEnabled(_ enabled: Bool) {
+        guard !enabled || MeetingTranscriptCleanupPolicy.isEligible(selectedPostProcessorBackend) else {
+            updateConfig { $0.enableMeetingTranscriptCleanup = false }
+            return
+        }
+        updateConfig { $0.enableMeetingTranscriptCleanup = enabled }
+    }
+
     func preloadExperimentalTranscriptionFeatures() {
         let ppOption = runtimePostProcessorOption()
         let enabled = canRunTranscriptCleanup(option: ppOption)

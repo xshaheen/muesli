@@ -1038,6 +1038,25 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private var meetingTranscriptCleanupSection: some View {
+        let backend = appState.selectedPostProcessorBackend
+        let eligible = MeetingTranscriptCleanupPolicy.isEligible(backend)
+        settingsSection("Meeting Transcript Cleanup") {
+            settingsRow(
+                "Repair mixed-language transcripts",
+                description: MeetingTranscriptCleanupPolicy.ineligibilityReason(backend)
+                    ?? MeetingTranscriptCleanupPolicy.disclosure(for: backend, config: appState.config),
+                controlWidth: meetingControlWidth
+            ) {
+                settingsSwitch(isOn: appState.config.enableMeetingTranscriptCleanup && eligible) { newValue in
+                    controller.setMeetingTranscriptCleanupEnabled(newValue)
+                }
+                .disabled(!eligible)
+            }
+        }
+    }
+
     private var meetingSummarySettingsSection: some View {
         settingsSection("Meeting Summaries") {
             settingsRow("Summary backend", controlWidth: meetingControlWidth) {
@@ -1291,6 +1310,8 @@ struct SettingsView: View {
             }
 
             meetingSummarySettingsSection
+
+            meetingTranscriptCleanupSection
 
             settingsSection("Meeting Notes") {
                 settingsRow("Default template", controlWidth: meetingControlWidth) {
