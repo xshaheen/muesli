@@ -55,6 +55,47 @@ struct MeetingChatConversationTests {
         #expect(conversation.isSending == false)
     }
 
+    @Test("a failed question stays visible but is withheld from later requests")
+    func failedQuestionExcludedFromHistory() async {
+        // Replaying an unanswered question would send two consecutive user turns and invite
+        // the model to answer the stale one instead of the new question.
+        let conversation = MeetingChatConversation()
+
+        await conversation.send(
+            displayText: "failed question",
+            transcript: "T",
+            systemPrompt: "P",
+            config: AppConfig(),
+            send: failingTransport(.notConfigured(backend: "OpenAI"))
+        )
+
+        #expect(conversation.turns.count == 1)
+        #expect(conversation.turns[0].wasAnswered == false)
+
+        let request = conversation.requestMessages(transcript: "T", systemPrompt: "P")
+        #expect(request.count == 1)
+        #expect(request[0].role == .system)
+        #expect(request.contains(where: { $0.content == "failed question" }) == false)
+    }
+
+    @Test("bulk clear drops every conversation")
+    func bulkClearDropsAll() async {
+        let registry = MeetingChatConversations.shared
+        let first = registry.conversation(for: 9001)
+        await first.send(
+            displayText: "q",
+            transcript: "T",
+            systemPrompt: "P",
+            config: AppConfig(),
+            send: stubTransport("a")
+        )
+        #expect(registry.conversation(for: 9001).turns.isEmpty == false)
+
+        registry.forgetAll()
+
+        #expect(registry.conversation(for: 9001).turns.isEmpty)
+    }
+
     @Test("prior history reaches the request in order")
     func historyReachesRequest() async {
         let conversation = MeetingChatConversation()

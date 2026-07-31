@@ -63,7 +63,12 @@ struct FloatingMeetingChatContext {
     /// meeting; non-empty after a resume, where `liveMeetingTranscript` holds only the new
     /// portion.
     let priorTranscript: String
-    let config: AppConfig
+    /// Resolved when the panel sends, not captured, so changing backend or credentials
+    /// mid-meeting takes effect here as it does in the detail view.
+    let currentConfig: () -> AppConfig
+    /// Whether the selected backend is actually usable. The detail view hides its Chat tab
+    /// when this is false; the panel must agree, or it offers a control that always fails.
+    let isReady: () -> Bool
 }
 
 @MainActor
@@ -80,7 +85,7 @@ final class FloatingMeetingTranscriptModel {
     var isChatOpen = false
     var chatContext: FloatingMeetingChatContext?
 
-    var isChatAvailable: Bool { chatContext != nil }
+    var isChatAvailable: Bool { chatContext?.isReady() == true }
 
     /// The transcript chat reasons over: what was recorded before this session plus what has
     /// been captured since. Mirrors the detail view's Live tab; using the live portion alone
@@ -211,6 +216,10 @@ final class FloatingMeetingTranscriptPanelController {
     }
 
     func hide() {
+        // Release focus before the view goes away. Tearing down a key panel without
+        // resigning leaves an invisible window holding the keyboard, so keystrokes meant
+        // for the call vanish into a panel the user cannot even see.
+        releaseChatFocus()
         model.isPresented = false
         hostingView?.isHidden = true
         hostingView?.removeFromSuperview()
@@ -222,9 +231,20 @@ final class FloatingMeetingTranscriptPanelController {
     }
 
     func close() {
+        releaseChatFocus()
         model.isPresented = false
         hostingView?.removeFromSuperview()
         hostingView = nil
+    }
+
+    /// Single place every teardown path goes through, so no route can skip the resign step.
+    private func releaseChatFocus() {
+        guard model.isChatOpen else { return }
+        model.closeChat()
+        if let window = hostingView?.window, window.isKeyWindow {
+            window.resignKey()
+            window.orderBack(nil)
+        }
     }
 
     func containsMouseLocation() -> Bool {
@@ -271,13 +291,12 @@ final class FloatingMeetingTranscriptPanelController {
     /// keeps swallowing keystrokes meant for the call — the precise failure the deliberate-
     /// focus rule exists to prevent, just delayed.
     func setChatOpen(_ open: Bool) {
-        open ? model.openChat() : model.closeChat()
-        guard !model.isChatOpen else { return }
-        // Resign only the panel's own key status. Deactivating the whole app would also hide
-        // a main window the user may have opened deliberately.
-        if let window = hostingView?.window, window.isKeyWindow {
-            window.resignKey()
-            window.orderBack(nil)
+        if open {
+            model.openChat()
+        } else {
+            // Resign only the panel's own key status. Deactivating the whole app would also
+            // hide a main window the user may have opened deliberately.
+            releaseChatFocus()
         }
     }
 
@@ -337,7 +356,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
                         conversation: MeetingChatConversations.shared.conversation(for: context.meetingID),
                         transcript: model.chatTranscript,
                         systemPrompt: MeetingChatPrompts.live,
-                        config: context.config,
+                        config: context.currentConfig(),
                         isCompact: true
                     )
                 } else {

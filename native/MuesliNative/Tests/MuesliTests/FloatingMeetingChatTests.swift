@@ -49,7 +49,7 @@ struct FloatingMeetingChatTests {
         // The failure this prevents: a floating panel that takes key focus during a call
         // swallows keystrokes meant for Zoom or Teams.
         let model = FloatingMeetingTranscriptModel()
-        model.chatContext = FloatingMeetingChatContext(meetingID: 1, priorTranscript: "", config: AppConfig())
+        model.chatContext = FloatingMeetingChatContext(meetingID: 1, priorTranscript: "", currentConfig: { AppConfig() }, isReady: { true })
 
         #expect(model.isChatOpen == false)
 
@@ -71,10 +71,47 @@ struct FloatingMeetingChatTests {
         #expect(model.isChatAvailable == false)
     }
 
+    @Test("chat stays unavailable when the backend is not ready")
+    func unreadyBackendHidesChat() {
+        // The detail view hides its Chat tab when credentials are missing; the panel must
+        // agree, or it offers a control whose every send fails.
+        let model = FloatingMeetingTranscriptModel()
+        model.chatContext = FloatingMeetingChatContext(
+            meetingID: 1,
+            priorTranscript: "",
+            currentConfig: { AppConfig() },
+            isReady: { false }
+        )
+
+        model.openChat()
+
+        #expect(model.isChatAvailable == false)
+        #expect(model.isChatOpen == false)
+    }
+
+    @Test("config is resolved at send time, not captured when recording starts")
+    func configResolvesLate() {
+        // Changing backend or credentials mid-meeting must reach panel chat the same way it
+        // reaches the detail view.
+        var current = AppConfig()
+        current.meetingSummaryBackend = "ollama"
+
+        let context = FloatingMeetingChatContext(
+            meetingID: 1,
+            priorTranscript: "",
+            currentConfig: { current },
+            isReady: { true }
+        )
+
+        #expect(context.currentConfig().meetingSummaryBackend == "ollama")
+        current.meetingSummaryBackend = "openrouter"
+        #expect(context.currentConfig().meetingSummaryBackend == "openrouter")
+    }
+
     @Test("resetting the panel closes chat and drops its context")
     func resetClosesChat() {
         let model = FloatingMeetingTranscriptModel()
-        model.chatContext = FloatingMeetingChatContext(meetingID: 1, priorTranscript: "x", config: AppConfig())
+        model.chatContext = FloatingMeetingChatContext(meetingID: 1, priorTranscript: "x", currentConfig: { AppConfig() }, isReady: { true })
         model.openChat()
 
         model.reset()
@@ -93,7 +130,8 @@ struct FloatingMeetingChatTests {
         model.chatContext = FloatingMeetingChatContext(
             meetingID: 1,
             priorTranscript: "[09:00:00] You: before the resume",
-            config: AppConfig()
+            currentConfig: { AppConfig() },
+            isReady: { true }
         )
         model.update(
             transcript: "[10:00:00] You: after the resume",
@@ -111,7 +149,7 @@ struct FloatingMeetingChatTests {
         let live = "[10:00:00] You: now"
 
         let model = FloatingMeetingTranscriptModel()
-        model.chatContext = FloatingMeetingChatContext(meetingID: 1, priorTranscript: prior, config: AppConfig())
+        model.chatContext = FloatingMeetingChatContext(meetingID: 1, priorTranscript: prior, currentConfig: { AppConfig() }, isReady: { true })
         model.update(transcript: live, partialYou: "", partialOthers: "")
 
         #expect(model.chatTranscript == MeetingResumePolicy.combinedResumeTranscript(prior: prior, new: live))
@@ -120,7 +158,7 @@ struct FloatingMeetingChatTests {
     @Test("a fresh meeting with no prior transcript reads the live one")
     func freshMeetingReadsLive() {
         let model = FloatingMeetingTranscriptModel()
-        model.chatContext = FloatingMeetingChatContext(meetingID: 1, priorTranscript: "", config: AppConfig())
+        model.chatContext = FloatingMeetingChatContext(meetingID: 1, priorTranscript: "", currentConfig: { AppConfig() }, isReady: { true })
         model.update(transcript: "[10:00:00] You: hello", partialYou: "", partialOthers: "")
 
         #expect(model.chatTranscript.contains("hello"))
