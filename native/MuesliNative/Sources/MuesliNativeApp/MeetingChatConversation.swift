@@ -16,12 +16,24 @@ struct MeetingChatTurn: Identifiable, Equatable {
     let role: Role
     let displayText: String
     let sentText: String
+    /// False for a question whose request failed. It stays on screen so the user can see
+    /// what they asked, but it is withheld from later requests: replaying an unanswered
+    /// question would produce two consecutive user turns and invite the model to answer the
+    /// stale one.
+    var wasAnswered: Bool
 
-    init(id: UUID = UUID(), role: Role, displayText: String, sentText: String? = nil) {
+    init(
+        id: UUID = UUID(),
+        role: Role,
+        displayText: String,
+        sentText: String? = nil,
+        wasAnswered: Bool = true
+    ) {
         self.id = id
         self.role = role
         self.displayText = displayText
         self.sentText = sentText ?? displayText
+        self.wasAnswered = wasAnswered
     }
 }
 
@@ -73,19 +85,23 @@ final class MeetingChatConversation {
             turns.append(MeetingChatTurn(role: .assistant, displayText: answer))
         } catch {
             // The failed question stays in the list; removing it would leave the user
-            // staring at an error with no record of what they asked.
+            // staring at an error with no record of what they asked. It is marked unanswered
+            // so it does not enter later requests.
+            if let index = turns.lastIndex(where: { $0.role == .user }) {
+                turns[index].wasAnswered = false
+            }
             lastError = error.localizedDescription
         }
 
         isSending = false
     }
 
-    /// System context plus the full turn history, oldest first.
+    /// System context plus the answered turn history, oldest first.
     func requestMessages(transcript: String, systemPrompt: String) -> [MeetingChatMessage] {
         var messages: [MeetingChatMessage] = [
             MeetingChatMessage(role: .system, content: systemContent(transcript: transcript, systemPrompt: systemPrompt))
         ]
-        for turn in turns {
+        for turn in turns where turn.wasAnswered {
             messages.append(
                 MeetingChatMessage(
                     role: turn.role == .user ? .user : .assistant,
@@ -119,6 +135,12 @@ final class MeetingChatConversations {
 
     func forget(meetingID: Int64) {
         byMeeting.removeValue(forKey: meetingID)
+    }
+
+    /// For bulk deletion. Clearing every meeting must also clear the questions and answers
+    /// about them, which otherwise stay resident until the app quits.
+    func forgetAll() {
+        byMeeting.removeAll()
     }
 }
 

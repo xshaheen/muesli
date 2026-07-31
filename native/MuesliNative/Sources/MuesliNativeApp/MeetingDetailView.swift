@@ -156,6 +156,10 @@ struct MeetingDetailView: View {
                 .background(MuesliTheme.backgroundBase)
                 .onAppear {
                     threadContext = controller.meetingThreadContext(for: meeting.id)
+                    resetChatModeIfUnavailable()
+                }
+                .onChange(of: isChatAvailable) { _, _ in
+                    resetChatModeIfUnavailable()
                 }
                 .onChange(of: meeting.id) { _, _ in
                     syncLocalState(with: meeting)
@@ -478,6 +482,15 @@ struct MeetingDetailView: View {
     /// to users with no credentials and fail on first use. This reuses the same readiness
     /// test the summary action already applies.
     private var isChatAvailable: Bool { hasApiKey }
+
+    /// If credentials disappear while Chat is the selected segment, the picker item and its
+    /// content both vanish and every remaining view sits at zero opacity — a blank pane with
+    /// nothing selected. Fall back to a segment that still exists.
+    private func resetChatModeIfUnavailable() {
+        guard !isChatAvailable else { return }
+        if documentMode == .chat { documentMode = .notes }
+        if recordingMode == .chat { recordingMode = .notes }
+    }
 
     private var documentModePicker: some View {
         Picker("", selection: $documentMode) {

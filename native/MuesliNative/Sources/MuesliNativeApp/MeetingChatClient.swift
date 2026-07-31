@@ -131,25 +131,38 @@ enum MeetingChatClient {
         guard totalCharacters(messages) > limit else { return messages }
 
         var working = messages
+        let systemOriginal = working.first(where: { $0.role == .system })?.content
 
-        if let systemIndex = working.firstIndex(where: { $0.role == .system }) {
-            let others = totalCharacters(working) - working[systemIndex].content.count
-            let allowanceForSystem = limit - others
-            if allowanceForSystem > 0, working[systemIndex].content.count > allowanceForSystem {
-                working[systemIndex] = MeetingChatMessage(
-                    role: .system,
-                    content: trimmedKeepingTail(working[systemIndex].content, to: allowanceForSystem)
-                )
-            }
-        }
-
-        // Drop oldest conversation turns, never the system message and never the newest
-        // user turn -- losing the question itself would make the answer nonsense.
+        // History first, then the transcript. Evicting history can free enough room that the
+        // transcript needs no trimming at all, whereas trimming first would discard meeting
+        // content while stale turns still occupy the budget.
+        //
+        // Whole exchanges go together: dropping a question but keeping its answer leaves an
+        // orphaned assistant turn and two consecutive user turns, which some providers
+        // reject outright and others answer against the wrong question.
         while totalCharacters(working) > limit {
             guard let oldestTurn = working.firstIndex(where: { $0.role != .system }),
                   oldestTurn < lastUserIndex(working) ?? -1
             else { break }
             working.remove(at: oldestTurn)
+            if oldestTurn < working.count,
+               working[oldestTurn].role == .assistant,
+               oldestTurn < lastUserIndex(working) ?? -1 {
+                working.remove(at: oldestTurn)
+            }
+        }
+
+        // Recompute the transcript's allowance against whatever history survived.
+        if let systemIndex = working.firstIndex(where: { $0.role == .system }),
+           let systemOriginal {
+            let others = totalCharacters(working) - working[systemIndex].content.count
+            let allowanceForSystem = limit - others
+            if allowanceForSystem > 0, systemOriginal.count > allowanceForSystem {
+                working[systemIndex] = MeetingChatMessage(
+                    role: .system,
+                    content: trimmedKeepingTail(systemOriginal, to: allowanceForSystem)
+                )
+            }
         }
 
         if totalCharacters(working) > limit {

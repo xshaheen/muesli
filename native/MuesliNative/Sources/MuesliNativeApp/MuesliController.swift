@@ -4463,6 +4463,29 @@ final class MuesliController: NSObject {
         syncAppState()
     }
 
+    /// Whether the selected summary backend can actually answer. Mirrors the detail view's
+    /// gate so the floating panel never offers chat the detail view is hiding.
+    var isMeetingChatReady: Bool {
+        switch MeetingSummaryBackendOption.resolved(config.meetingSummaryBackend).backend {
+        case MeetingSummaryBackendOption.chatGPT.backend:
+            return appState.isChatGPTAuthenticated
+        case MeetingSummaryBackendOption.openAI.backend:
+            return !config.openAIAPIKey.isEmpty
+                || ProcessInfo.processInfo.environment["OPENAI_API_KEY"] != nil
+        case MeetingSummaryBackendOption.openRouter.backend:
+            return !config.openRouterAPIKey.isEmpty
+                || ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] != nil
+        case MeetingSummaryBackendOption.ollama.backend:
+            return true
+        case MeetingSummaryBackendOption.lmStudio.backend:
+            return MeetingSummaryClient.lmStudioHasRequiredSettings(config: config)
+        case MeetingSummaryBackendOption.customLLM.backend:
+            return MeetingSummaryClient.customLLMHasRequiredSettings(config: config)
+        default:
+            return false
+        }
+    }
+
     func deleteMeeting(id: Int64) {
         guard let meeting = meeting(id: id) else { return }
         guard canDeleteMeeting(meeting) else { return }
@@ -4559,6 +4582,8 @@ final class MuesliController: NSObject {
 
         try? dictationStore.clearMeetings()
         scheduleICloudSyncAfterLocalChange()
+        // Clearing every meeting must clear the questions and answers about them too.
+        MeetingChatConversations.shared.forgetAll()
         clearAllCachedMeetingManualNotes()
         clearAllCachedMeetingTitles()
         appState.selectedMeetingID = nil
@@ -5402,7 +5427,8 @@ final class MuesliController: NSObject {
                     FloatingMeetingChatContext(
                         meetingID: meetingID,
                         priorTranscript: priorTranscriptForChat,
-                        config: config
+                        currentConfig: { [weak self] in self?.config ?? AppConfig() },
+                        isReady: { [weak self] in self?.isMeetingChatReady ?? false }
                     )
                 )
                 let micHealthWarningLock = NSLock()
