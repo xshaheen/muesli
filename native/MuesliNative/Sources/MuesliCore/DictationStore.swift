@@ -33,7 +33,7 @@ public final class DictationStore {
     t.id, t.final_status, t.final_message, t.trace_json, t.created_at
     """
     private static let meetingColumns = """
-    id, title, start_time, duration_seconds, raw_transcript, formatted_notes, word_count, folder_id, calendar_event_id, mic_audio_path, system_audio_path, saved_recording_path, meeting_status, manual_notes, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source, follow_up_to_id, follow_up_to_record_name, calendar_occurrence_key, calendar_source, calendar_id, calendar_series_id, calendar_occurrence_start
+    id, title, start_time, duration_seconds, raw_transcript, formatted_notes, word_count, folder_id, calendar_event_id, mic_audio_path, system_audio_path, saved_recording_path, meeting_status, manual_notes, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source, follow_up_to_id, follow_up_to_record_name, calendar_occurrence_key, calendar_source, calendar_id, calendar_series_id, calendar_occurrence_start, cleaned_transcript, visual_context, previous_meeting_notes, notes_source
     """
 
     public init() {
@@ -212,10 +212,38 @@ public final class DictationStore {
             "ALTER TABLE meetings ADD COLUMN calendar_source TEXT",
             "ALTER TABLE meetings ADD COLUMN calendar_id TEXT",
             "ALTER TABLE meetings ADD COLUMN calendar_series_id TEXT",
-            "ALTER TABLE meetings ADD COLUMN calendar_occurrence_start REAL"
+            "ALTER TABLE meetings ADD COLUMN calendar_occurrence_start REAL",
+            "ALTER TABLE meetings ADD COLUMN cleaned_transcript TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE meetings ADD COLUMN visual_context TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE meetings ADD COLUMN previous_meeting_notes TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE meetings ADD COLUMN notes_source TEXT NOT NULL DEFAULT 'raw'"
         ] {
             _ = sqlite3_exec(db, sql, nil, nil, nil)
         }
+        // A cleaned transcript must never outlive the raw text it was derived from.
+        // Enforcing that here rather than in each UPDATE means no existing statement
+        // changes and no future one has to remember: SQLite clears the column
+        // whenever raw_transcript actually changes.
+        //
+        // `IS NOT` (not `!=`) so a NULL on either side compares correctly, and the
+        // guard matters -- upsertSyncedMeeting re-assigns raw_transcript on every
+        // remote metadata update, and restoreResumedMeeting writes back its own
+        // snapshot. Clearing on those would destroy a valid cleanup that nothing
+        // would ever regenerate.
+        //
+        // Scoped to `meetings`: meeting_resume_snapshots has its own raw_transcript
+        // and no cleaned column.
+        try exec(
+            """
+            CREATE TRIGGER IF NOT EXISTS meetings_clear_cleaned_transcript
+            AFTER UPDATE OF raw_transcript ON meetings
+            WHEN new.raw_transcript IS NOT old.raw_transcript
+            BEGIN
+                UPDATE meetings SET cleaned_transcript = '' WHERE id = new.id;
+            END;
+            """,
+            db: db
+        )
         // Calendar metadata is not a meeting identity: one occurrence may be
         // recorded more than once, and recurring providers may reuse ids.
         // Replace the legacy uniqueness constraint with lookup-only indexes.
@@ -1589,6 +1617,9 @@ public final class DictationStore {
             UPDATE meetings
             SET title = 'Deleted Meeting',
                 raw_transcript = '',
+                cleaned_transcript = '',
+                visual_context = '',
+                previous_meeting_notes = '',
                 formatted_notes = NULL,
                 manual_notes = '',
                 mic_audio_path = NULL,
@@ -1705,6 +1736,9 @@ public final class DictationStore {
             UPDATE meetings
             SET title = 'Deleted Meeting',
                 raw_transcript = '',
+                cleaned_transcript = '',
+                visual_context = '',
+                previous_meeting_notes = '',
                 formatted_notes = NULL,
                 manual_notes = '',
                 mic_audio_path = NULL,
@@ -1739,10 +1773,15 @@ public final class DictationStore {
         }
     }
 
+    /// Persists a user's own edit to the notes.
+    ///
+    /// Marks `notes_source = 'user'`, which permanently excludes the meeting from
+    /// post-cleanup regeneration. Someone who has edited their notes does not want
+    /// them replaced by a summary, however good its input.
     public func updateMeetingNotes(id: Int64, formattedNotes: String) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        let sql = "UPDATE meetings SET formatted_notes = ?, updated_at = ?, sync_dirty = 1 WHERE id = ?"
+        let sql = "UPDATE meetings SET formatted_notes = ?, notes_source = 'user', updated_at = ?, sync_dirty = 1 WHERE id = ?"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
@@ -1754,6 +1793,120 @@ public final class DictationStore {
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
         }
+    }
+
+    /// Stores an AI-cleaned transcript, but only while the raw text still matches
+    /// what was actually cleaned.
+    ///
+    /// Cleanup is detached and takes seconds to minutes, so the user may edit the
+    /// transcript while it runs. Guarding on the source text means a stale result
+    /// is dropped rather than published over the newer edit. Returns whether a row
+    /// was written, so the caller can tell a discarded result from a stored one.
+    ///
+    /// Writes only `cleaned_transcript` -- deliberately not a method that can also
+    /// write `raw_transcript`, since that is how the durable record eventually gets
+    /// clobbered.
+    @discardableResult
+    public func storeCleanedMeetingTranscript(
+        id: Int64,
+        cleanedTranscript: String,
+        expectedRawTranscript: String
+    ) throws -> Bool {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        let sql = """
+        UPDATE meetings
+        SET cleaned_transcript = ?, updated_at = ?, sync_dirty = 1
+        WHERE id = ? AND raw_transcript = ?
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (cleanedTranscript as NSString).utf8String, -1, nil)
+        sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
+        sqlite3_bind_int64(statement, 3, id)
+        sqlite3_bind_text(statement, 4, (expectedRawTranscript as NSString).utf8String, -1, nil)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
+        return sqlite3_changes(db) > 0
+    }
+
+    /// Replaces notes with a summary regenerated from the cleaned transcript, only
+    /// if every input that summary was built from is still what it was.
+    ///
+    /// Each term of the predicate closes a distinct race, all of which are live
+    /// because regeneration runs detached while the user is already reading:
+    /// - `notes_source = 'raw'` -- the user edited the notes; theirs win.
+    /// - `cleaned_transcript` -- the user edited the transcript, which cleared the
+    ///   cleaned copy via trigger; the summary is derived from text that is gone.
+    /// - `manual_notes` -- an *input* to the summary changed. This one deliberately
+    ///   leaves `notes_source` at `raw`, so the retry sweep runs again with the
+    ///   fresher manual notes rather than dropping the meeting.
+    ///
+    /// Returns whether a row was written.
+    @discardableResult
+    public func storeRegeneratedMeetingNotes(
+        id: Int64,
+        formattedNotes: String,
+        expectedCleanedTranscript: String,
+        expectedManualNotes: String
+    ) throws -> Bool {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        let sql = """
+        UPDATE meetings
+        SET formatted_notes = ?, notes_source = 'cleaned', updated_at = ?, sync_dirty = 1
+        WHERE id = ?
+          AND notes_source = 'raw'
+          AND cleaned_transcript = ?
+          AND manual_notes = ?
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (formattedNotes as NSString).utf8String, -1, nil)
+        sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
+        sqlite3_bind_int64(statement, 3, id)
+        sqlite3_bind_text(statement, 4, (expectedCleanedTranscript as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 5, (expectedManualNotes as NSString).utf8String, -1, nil)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
+        return sqlite3_changes(db) > 0
+    }
+
+    /// Meetings whose transcript was cleaned but whose notes still come from the
+    /// raw text -- a regeneration that failed, was interrupted, or never ran.
+    ///
+    /// Cleanup itself happens once, at finalization, so without this query a single
+    /// failed regeneration would strand the meeting permanently.
+    public func meetingsAwaitingNotesRegeneration(limit: Int = 20) throws -> [MeetingRecord] {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        let sql = """
+        SELECT \(Self.meetingColumns) FROM meetings
+        WHERE deleted_at IS NULL
+          AND cleaned_transcript <> ''
+          AND notes_source = 'raw'
+        ORDER BY start_time DESC
+        LIMIT ?
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int(statement, 1, Int32(limit))
+        var rows: [MeetingRecord] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            rows.append(makeMeetingRecord(statement))
+        }
+        return rows
     }
 
     public func updateMeetingTranscript(id: Int64, rawTranscript: String) throws {
@@ -3701,7 +3854,11 @@ public final class DictationStore {
             selectedTemplatePrompt: selectedTemplatePrompt,
             source: source,
             followUpToID: followUpToID,
-            followUpToRecordName: followUpToRecordName
+            followUpToRecordName: followUpToRecordName,
+            cleanedTranscript: stringColumn(statement, index: 26),
+            visualContext: stringColumn(statement, index: 27),
+            previousMeetingNotes: stringColumn(statement, index: 28),
+            notesSource: MeetingNotesSource(rawValue: stringColumn(statement, index: 29)) ?? .raw
         )
     }
 
