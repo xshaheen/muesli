@@ -224,20 +224,24 @@ final class FloatingIndicatorController: NSObject {
         // includes most of the chat surface.
         guard !meetingTranscriptPanel.isChatOpen else { return }
         hideMeetingTranscript()
-        guard state == .idle,
-              !isShowingLoading,
+        guard !isShowingLoading,
               let panel,
               let contentView,
               let iconLabel,
               let textLabel else { return }
-        isHovered = false
+        // Only idle has a hover expansion to drop; every other state keeps its size.
+        if state == .idle { isHovered = false }
 
         let config = configStore.load()
-        let style = styleForState(.idle, config: config)
-        let targetFrame = frameForState(.idle, config: config)
+        let style = styleForState(state, config: config)
+        let targetFrame = frameForState(state, config: config)
 
-        // Instant resize — no animation
+        // Resize where the pill already is. Repositioning to the anchor mid-drag
+        // would yank it out from under the cursor.
+        let originBeforeResize = panel.frame.origin
         let localIndicator = applyIndicatorFrame(targetFrame)
+        panel.setFrameOrigin(originBeforeResize)
+
         contentView.layer?.backgroundColor = style.background.cgColor
         contentView.layer?.borderColor = style.border.cgColor
         glassView?.frame = NSRect(origin: .zero, size: localIndicator.size)
@@ -245,10 +249,23 @@ final class FloatingIndicatorController: NSObject {
 
         iconLabel.stringValue = style.icon
         iconLabel.textColor = style.iconColor
-        textLabel.isHidden = true
-        textLabel.alphaValue = 0
-        layoutLabels(iconLabel: iconLabel, textLabel: textLabel, in: targetFrame.size, hasTitle: false, animated: false)
-        applyGlassState(.idle, frameSize: targetFrame.size)
+        let hasTitle = !style.title.isEmpty
+        textLabel.stringValue = style.title
+        textLabel.isHidden = !hasTitle
+        textLabel.alphaValue = hasTitle ? 1 : 0
+        layoutLabels(iconLabel: iconLabel, textLabel: textLabel, in: targetFrame.size, hasTitle: hasTitle, animated: false)
+
+        // Re-apply the chrome for whatever state we are actually in.
+        //
+        // This used to run only for idle, so dragging during a recording hid the
+        // transcript, resized the window, and stopped -- leaving the tint layer and
+        // waveform bars laid out for the old geometry. A recording pill has a clear
+        // background and a hidden glass view, so those two *are* its entire visible
+        // appearance: stale, they render as nothing and the pill vanishes.
+        applyGlassState(state, frameSize: targetFrame.size)
+        if state == .recording {
+            ensureWaveformAnimation(in: targetFrame.size, mode: recordingWaveformMode)
+        }
     }
 
     func savePosition() {
