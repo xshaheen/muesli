@@ -455,7 +455,13 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
                 prefix = ""
                 content = raw
             }
-            let contentRange = NSRange(location: range.location + raw.count - content.count, length: content.count)
+            // `range` is UTF-16, so the prefix offset must be measured in UTF-16 units too —
+            // Character counts truncate lines containing emoji or composed sequences.
+            let contentLength = (content as NSString).length
+            let contentRange = NSRange(
+                location: range.location + (raw as NSString).length - contentLength,
+                length: contentLength
+            )
             return prefix + markdownInline(from: storage, contentRange: contentRange)
         }
 
