@@ -238,6 +238,60 @@ struct MuesliCLITests {
         #expect(posted == 1)
     }
 
+    @Test("summary config decodes the snake_case keys the app writes")
+    func summaryConfigDecodesAppConfigKeys() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-cli-config-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let json = """
+        {
+          "meeting_summary_backend": "ollama",
+          "openai_api_key": "sk-openai",
+          "openrouter_api_key": "sk-openrouter",
+          "openai_model": "gpt-5.4",
+          "openrouter_model": "stepfun/step-3.5-flash",
+          "ollama_url": "http://localhost:9999",
+          "ollama_model": "qwen3.5:14b",
+          "lmstudio_url": "http://localhost:4321",
+          "lmstudio_model": "local-model",
+          "custom_llm_url": "https://llm.example.com/v1",
+          "custom_llm_api_key": "sk-custom",
+          "custom_llm_model": "custom-model",
+          "custom_llm_format": "anthropic"
+        }
+        """
+        try json.write(to: directory.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+
+        let config = CLISummaryConfig.load(from: directory)
+
+        #expect(config.meetingSummaryBackend == "ollama")
+        #expect(config.openAIAPIKey == "sk-openai")
+        #expect(config.openRouterAPIKey == "sk-openrouter")
+        #expect(config.openAIModel == "gpt-5.4")
+        #expect(config.openRouterModel == "stepfun/step-3.5-flash")
+        #expect(config.ollamaURL == "http://localhost:9999")
+        #expect(config.ollamaModel == "qwen3.5:14b")
+        #expect(config.lmStudioURL == "http://localhost:4321")
+        #expect(config.lmStudioModel == "local-model")
+        #expect(config.customLLMURL == "https://llm.example.com/v1")
+        #expect(config.customLLMAPIKey == "sk-custom")
+        #expect(config.customLLMModel == "custom-model")
+        #expect(config.customLLMFormat == "anthropic")
+    }
+
+    @Test("summary config falls back to defaults when config.json is missing")
+    func summaryConfigFallsBackToDefaults() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-cli-config-missing-\(UUID().uuidString)", isDirectory: true)
+
+        let config = CLISummaryConfig.load(from: directory)
+
+        #expect(config.meetingSummaryBackend == "chatgpt")
+        #expect(config.openAIAPIKey.isEmpty)
+        #expect(config.ollamaURL == "http://localhost:11434")
+        #expect(config.lmStudioURL == "http://localhost:1234")
+    }
+
     @Test("transcribe output writes file content")
     func transcribeOutputWritesFile() throws {
         let directory = FileManager.default.temporaryDirectory
