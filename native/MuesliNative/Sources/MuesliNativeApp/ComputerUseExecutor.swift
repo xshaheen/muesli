@@ -334,7 +334,10 @@ enum ComputerUseToolExecutor {
             let actions = advertisedActions.isEmpty ? "none" : advertisedActions.joined(separator: ", ")
             return .unsupported("Element does not advertise \(action) for element-scoped scroll (actions: \(actions)).")
         }
-        let count = max(1, min(8, Int(pages.rounded(.up))))
+        // Clamp in Double space before the Int conversion: a planner-supplied
+        // out-of-range or non-finite page count traps Int() otherwise.
+        let requested = pages.isFinite ? pages : 1
+        let count = Int(max(1, min(8, requested)).rounded(.up))
         for _ in 0..<count {
             guard AXUIElementPerformAction(element, action as CFString) == .success else {
                 return .failed("Could not perform \(action) on scroll target")
