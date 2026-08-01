@@ -7,41 +7,6 @@ import MuesliCore
 @Suite("Floating panel chat")
 @MainActor
 struct FloatingMeetingChatTests {
-    private let panel = NSRect(x: 0, y: 0, width: 360, height: 300)
-
-    private func point(fromRight offset: CGFloat, inHeader: Bool = true) -> NSPoint {
-        NSPoint(x: panel.maxX - offset, y: inHeader ? panel.maxY - 10 : panel.minY + 10)
-    }
-
-    // MARK: - Hit regions
-
-    @Test("the chat toggle has its own header region")
-    func chatToggleHasItsOwnRegion() {
-        let action = FloatingMeetingTranscriptInteraction.action(at: point(fromRight: 100), in: panel)
-
-        #expect(action == .toggleChat)
-    }
-
-    @Test("existing header regions still resolve unchanged")
-    func existingRegionsUnchanged() {
-        // Regression guard: the new region is carved out of the header without shifting the
-        // controls that were already there.
-        #expect(FloatingMeetingTranscriptInteraction.action(at: point(fromRight: 20), in: panel) == .copy)
-        #expect(FloatingMeetingTranscriptInteraction.action(at: point(fromRight: 60), in: panel) == .dismiss)
-        #expect(FloatingMeetingTranscriptInteraction.action(at: point(fromRight: 200), in: panel) == .openMeeting)
-    }
-
-    @Test("points outside the panel resolve to nothing")
-    func outsidePanelIsNil() {
-        #expect(FloatingMeetingTranscriptInteraction.action(at: NSPoint(x: -10, y: 10), in: panel) == nil)
-        #expect(FloatingMeetingTranscriptInteraction.action(at: NSPoint(x: 1_000, y: 10), in: panel) == nil)
-    }
-
-    @Test("points below the header resolve to nothing")
-    func belowHeaderIsNil() {
-        #expect(FloatingMeetingTranscriptInteraction.action(at: point(fromRight: 100, inHeader: false), in: panel) == nil)
-    }
-
     // MARK: - Focus discipline
 
     @Test("the panel wants no keyboard focus until chat is deliberately opened")

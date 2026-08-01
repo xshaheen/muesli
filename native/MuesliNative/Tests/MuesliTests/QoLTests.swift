@@ -242,24 +242,6 @@ struct IndicatorFrameSizeTests {
 
 @Suite("Floating meeting transcript")
 struct FloatingMeetingTranscriptTests {
-    @Test("overlay routes header controls and leaves transcript body to SwiftUI")
-    func overlayClickRouting() {
-        let frame = NSRect(x: 100, y: 100, width: 360, height: 320)
-
-        #expect(FloatingMeetingTranscriptInteraction.action(
-            at: NSPoint(x: 390, y: 400), in: frame
-        ) == .dismiss)
-        #expect(FloatingMeetingTranscriptInteraction.action(
-            at: NSPoint(x: 430, y: 400), in: frame
-        ) == .copy)
-        #expect(FloatingMeetingTranscriptInteraction.action(
-            at: NSPoint(x: 250, y: 250), in: frame
-        ) == nil)
-        #expect(FloatingMeetingTranscriptInteraction.action(
-            at: NSPoint(x: 90, y: 250), in: frame
-        ) == nil)
-    }
-
     @Test("floating panel can receive controls without becoming the main window")
     @MainActor
     func floatingPanelIsInteractive() {
@@ -296,17 +278,14 @@ struct FloatingMeetingTranscriptTests {
         #expect(receivedMouseDown == NSPoint(x: 20, y: 20))
     }
 
-    @Test("shown overlay retains its hosting view and routes dismissal")
+    @Test("the transcript overlay shows in a window of its own")
     @MainActor
-    func shownOverlayRoutesDismissal() {
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 320),
-            styleMask: .borderless,
-            backing: .buffered,
-            defer: false
-        )
-        let container = NSView(frame: panel.contentView?.bounds ?? .zero)
-        panel.contentView = container
+    func shownOverlayUsesItsOwnWindow() {
+        // The transcript used to be a subview of the indicator's window, which forced
+        // that window to be the union of both and made every indicator resize a
+        // geometry negotiation. It owns a window now, so showing it cannot move the
+        // pill, and its buttons are ordinary SwiftUI buttons rather than coordinates
+        // matched against a hit-region table.
         var dismissCount = 0
         let controller = FloatingMeetingTranscriptPanelController(
             onHoverChanged: { _ in },
@@ -314,12 +293,14 @@ struct FloatingMeetingTranscriptTests {
             onDismiss: { dismissCount += 1 }
         )
 
-        controller.show(in: container, frame: container.bounds)
+        controller.show(at: NSRect(x: 120, y: 240, width: 360, height: 320))
 
         #expect(controller.isVisible)
-        #expect(!controller.handleClick(atWindowPoint: NSPoint(x: 180, y: 160)))
-        #expect(controller.handleClick(atWindowPoint: NSPoint(x: 290, y: 300)))
-        #expect(dismissCount == 1)
+
+        controller.hide()
+
+        #expect(controller.isVisible == false)
+        #expect(dismissCount == 0)
     }
 
     @Test("panel prefers the open side and remains inside the screen")

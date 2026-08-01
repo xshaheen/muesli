@@ -24,7 +24,7 @@ struct MeetingCleanupPromptTests {
         let prompt = MeetingTranscriptCleanupPrompt.systemPrompt
 
         #expect(prompt.contains("Summarize, shorten, or omit anything"))
-        #expect(prompt.contains("Translate the transcript into another language"))
+        #expect(prompt.contains("Translate the text into another language"))
     }
 
     @Test("the meeting prompt says nothing about app context")
@@ -42,13 +42,40 @@ struct MeetingCleanupPromptTests {
         #expect(prompt.contains("never translate, renumber, reorder, merge, or drop one"))
     }
 
-    @Test("the meeting prompt is not a dictation preset")
+    @Test("the meeting prompt is not itself a dictation preset")
     func promptIsNotADictationPreset() {
-        // Separate on purpose: editing the dictation preset must not change what
-        // meetings send, and vice versa.
+        // Dictation can select the same *repair*, but not the meeting prompt: that
+        // one carries a chunking protocol dictation has no use for.
         let presets = TranscriptCleanupPrompts.presets(custom: [])
 
         #expect(presets.contains { $0.prompt == MeetingTranscriptCleanupPrompt.systemPrompt } == false)
+    }
+
+    @Test("dictation can select the same mixed-language repair")
+    func dictationOffersTheRepairPreset() {
+        // Dictating Arabic with English technical terms mangles them exactly as a
+        // meeting does, and the default preset forbids the fix.
+        let presets = TranscriptCleanupPrompts.presets(custom: [])
+
+        let repair = presets.first { $0.id == TranscriptCleanupPrompts.mixedLanguageRepairID }
+        #expect(repair != nil)
+        #expect(repair?.prompt.contains("Change words when the recognizer misheard them") == true)
+        #expect(repair?.isCustom == false)
+    }
+
+    @Test("the dictation preset carries no chunking protocol")
+    func dictationPresetHasNoMarkers() {
+        // Markers exist because meetings are split across requests. Dictation sends
+        // one snippet, so instructions about echoing markers would be noise at best.
+        #expect(MixedLanguageRepairPrompt.dictation.contains("<<<U") == false)
+        #expect(MeetingTranscriptCleanupPrompt.systemPrompt.contains("<<<U"))
+    }
+
+    @Test("both prompts share one set of repair instructions")
+    func promptsShareRepairCore() {
+        // One place to improve the repair, rather than two that drift.
+        #expect(MeetingTranscriptCleanupPrompt.systemPrompt
+            .hasPrefix(MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")))
     }
 
     @Test("unit markers are distinct per index")

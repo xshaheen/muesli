@@ -31,32 +31,6 @@ enum FloatingMeetingTranscriptPlacement {
     }
 }
 
-enum FloatingMeetingTranscriptInteraction: Equatable {
-    case dismiss
-    case copy
-    case openMeeting
-    case toggleChat
-
-    static func action(at point: NSPoint, in panelFrame: NSRect) -> Self? {
-        guard panelFrame.contains(point) else { return nil }
-        let headerMinY = panelFrame.maxY - 42
-        guard point.y >= headerMinY else { return nil }
-
-        if point.x >= panelFrame.maxX - 48 {
-            return .copy
-        }
-        if point.x >= panelFrame.maxX - 88 {
-            return .dismiss
-        }
-        if point.x >= panelFrame.maxX - 128 {
-            return .toggleChat
-        }
-        return .openMeeting
-    }
-}
-
-/// What the panel needs to answer questions: which meeting's conversation to use, and the
-/// transcript recorded before this session so a resumed meeting still has its earlier half.
 struct FloatingMeetingChatContext {
     let meetingID: Int64
     /// Transcript captured before the current recording session began. Empty for a fresh
@@ -176,6 +150,13 @@ final class FloatingMeetingTranscriptPanelController {
     private let onDismiss: () -> Void
     private var hostingView: FirstMouseHostingView<FloatingMeetingTranscriptPanelView>?
     private var outsideClickMonitor: Any?
+    /// The transcript's own window.
+    ///
+    /// It used to be a subview of the indicator's window, whose frame then had to be
+    /// the union of both. Every indicator resize had to recompute that union, drag had
+    /// to undo it, and edge-clamping fed back into the indicator's position -- a whole
+    /// class of bug that simply does not exist once the two are separate windows.
+    private var window: NSPanel?
 
     init(
         onHoverChanged: @escaping (Bool) -> Void,
@@ -204,7 +185,7 @@ final class FloatingMeetingTranscriptPanelController {
     }
 
     var isVisible: Bool {
-        hostingView?.superview != nil && hostingView?.isHidden == false
+        window?.isVisible == true && hostingView?.isHidden == false
     }
 
     /// Whether the panel is holding an open chat, and so must not be auto-dismissed.
@@ -222,16 +203,41 @@ final class FloatingMeetingTranscriptPanelController {
         model.isPaused = paused
     }
 
-    func show(in containerView: NSView, frame: NSRect) {
+    /// Shows the transcript at a screen frame of its own.
+    func show(at screenFrame: NSRect) {
         let hostingView = hostingView ?? makeHostingView()
         self.hostingView = hostingView
-        if hostingView.superview !== containerView {
-            hostingView.removeFromSuperview()
-            containerView.addSubview(hostingView)
+
+        let window = window ?? makeWindow()
+        self.window = window
+        hostingView.frame = NSRect(origin: .zero, size: screenFrame.size)
+        if window.contentView !== hostingView {
+            window.contentView = hostingView
         }
-        hostingView.frame = frame
         hostingView.isHidden = false
+        window.setFrame(screenFrame, display: true)
         model.isPresented = true
+        // orderFront, never makeKey: a floating panel that takes focus during a call
+        // swallows the keystrokes meant for Zoom. Chat asks for key explicitly.
+        window.orderFront(nil)
+    }
+
+    private func makeWindow() -> NSPanel {
+        let window = InteractiveFloatingPanel(
+            contentRect: NSRect(origin: .zero, size: FloatingMeetingTranscriptPlacement.panelSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        window.level = .floating
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.hidesOnDeactivate = false
+        window.isMovableByWindowBackground = false
+        window.becomesKeyOnlyIfNeeded = true
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        return window
     }
 
     func hide() {
@@ -241,7 +247,7 @@ final class FloatingMeetingTranscriptPanelController {
         releaseChatFocus()
         model.isPresented = false
         hostingView?.isHidden = true
-        hostingView?.removeFromSuperview()
+        window?.orderOut(nil)
     }
 
     func reset() {
@@ -252,7 +258,9 @@ final class FloatingMeetingTranscriptPanelController {
     func close() {
         releaseChatFocus()
         model.isPresented = false
-        hostingView?.removeFromSuperview()
+        window?.orderOut(nil)
+        window?.contentView = nil
+        window = nil
         hostingView = nil
     }
 
@@ -275,34 +283,6 @@ final class FloatingMeetingTranscriptPanelController {
         guard isVisible, let hostingView, let window = hostingView.window else { return nil }
         let frameInWindow = hostingView.convert(hostingView.bounds, to: nil)
         return window.convertToScreen(frameInWindow)
-    }
-
-    @discardableResult
-    func handleClick(atWindowPoint windowPoint: NSPoint) -> Bool {
-        guard isVisible, let hostingView else { return false }
-        let localPoint = hostingView.convert(windowPoint, from: nil)
-        let interactionPoint = hostingView.isFlipped
-            ? NSPoint(
-                x: localPoint.x,
-                y: hostingView.bounds.maxY - (localPoint.y - hostingView.bounds.minY)
-            )
-            : localPoint
-        guard let interaction = FloatingMeetingTranscriptInteraction.action(
-            at: interactionPoint,
-            in: hostingView.bounds
-        ) else { return false }
-
-        switch interaction {
-        case .dismiss:
-            onDismiss()
-        case .copy:
-            copyTranscript()
-        case .openMeeting:
-            onOpenNotes()
-        case .toggleChat:
-            setChatOpen(!model.isChatOpen)
-        }
-        return true
     }
 
     /// Opening chat lets the panel take keys; closing it must hand them back.

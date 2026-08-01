@@ -404,94 +404,50 @@ final class FloatingIndicatorController: NSObject {
     }
 
     private func showMeetingTranscript() {
-        guard let panel,
-              let containerView,
-              let contentView else { return }
         let indicatorFrame = frameForState(state, config: configStore.load())
-        panel.ignoresMouseEvents = false
-        let screen = NSScreen.screens.first(where: { $0.frame.intersects(indicatorFrame) }) ?? NSScreen.main
+        let screen = NSScreen.screens.first { $0.frame.intersects(indicatorFrame) } ?? NSScreen.main
         guard let visibleFrame = screen?.visibleFrame else { return }
-        let transcriptFrame = FloatingMeetingTranscriptPlacement.frame(
-            beside: indicatorFrame,
-            visibleFrame: visibleFrame
-        )
-        let expandedFrame = indicatorFrame.union(transcriptFrame)
-        panel.setFrame(expandedFrame, display: true)
-        containerView.frame = NSRect(origin: .zero, size: expandedFrame.size)
-        contentView.frame = localFrame(indicatorFrame, in: expandedFrame)
         meetingTranscriptPanel.show(
-            in: containerView,
-            frame: localFrame(transcriptFrame, in: expandedFrame)
+            at: FloatingMeetingTranscriptPlacement.frame(
+                beside: indicatorFrame,
+                visibleFrame: visibleFrame
+            )
         )
     }
 
     private func hideMeetingTranscript(reset: Bool = false) {
-        guard meetingTranscriptPanel.isVisible else {
-            if reset { meetingTranscriptPanel.reset() }
-            return
-        }
-        guard let panel, let containerView, let contentView else {
-            if reset { meetingTranscriptPanel.reset() } else { meetingTranscriptPanel.hide() }
-            return
-        }
-        let indicatorFrame = frameForState(state, config: configStore.load())
+        // Nothing to resize. The transcript owns its window, so showing and hiding it
+        // cannot disturb the indicator's geometry -- which is what used to move the
+        // pill out from under the cursor mid-drag.
         if reset {
             meetingTranscriptPanel.reset()
         } else {
             meetingTranscriptPanel.hide()
         }
-        panel.setFrame(indicatorFrame, display: true)
-        containerView.frame = NSRect(origin: .zero, size: indicatorFrame.size)
-        contentView.frame = NSRect(origin: .zero, size: indicatorFrame.size)
     }
 
-    /// Applies a new indicator geometry, whether or not the transcript is expanded.
+    /// Applies a new indicator geometry.
     ///
-    /// Every resize path used to call `panel.setFrame(indicatorFrame)` directly, which
-    /// is only correct while the window *is* the indicator. With the transcript open
-    /// the window is the union of indicator and transcript, so that call collapsed the
-    /// window out from under a container view still laid out for the union -- leaving
-    /// the mangled outline and stray rounded border that show up when the indicator
-    /// resizes mid-meeting, which it does constantly as state and audio levels change.
-    ///
-    /// Returns the frame the indicator actually occupies in window coordinates, so
-    /// callers can lay out their own subviews against it.
+    /// The indicator's window is always exactly the pill now, so this is a plain
+    /// resize with no union to recompute and no container to keep in step.
     @discardableResult
     private func applyIndicatorFrame(_ indicatorFrame: NSRect, animated: Bool = false) -> NSRect {
         guard let panel, let contentView else { return .zero }
-
-        guard meetingTranscriptPanel.isVisible, let containerView else {
-            let local = NSRect(origin: .zero, size: indicatorFrame.size)
-            if animated {
-                panel.animator().setFrame(indicatorFrame, display: true)
-                contentView.animator().frame = local
-            } else {
-                panel.setFrame(indicatorFrame, display: true)
-                contentView.frame = local
-            }
-            applyIndicatorCornerRadius(height: indicatorFrame.height)
-            return local
+        let local = NSRect(origin: .zero, size: indicatorFrame.size)
+        if animated {
+            panel.animator().setFrame(indicatorFrame, display: true)
+            contentView.animator().frame = local
+        } else {
+            panel.setFrame(indicatorFrame, display: true)
+            contentView.frame = local
         }
-
-        let screen = NSScreen.screens.first { $0.frame.intersects(indicatorFrame) } ?? NSScreen.main
-        guard let visibleFrame = screen?.visibleFrame else { return contentView.frame }
-        let transcriptFrame = FloatingMeetingTranscriptPlacement.frame(
-            beside: indicatorFrame,
-            visibleFrame: visibleFrame
-        )
-        let expanded = indicatorFrame.union(transcriptFrame)
-        let localIndicator = localFrame(indicatorFrame, in: expanded)
-        // Not animated while expanded: animating the union makes the transcript drift
-        // against the indicator for the duration, which reads as the panel tearing.
-        panel.setFrame(expanded, display: true)
-        containerView.frame = NSRect(origin: .zero, size: expanded.size)
-        contentView.frame = localIndicator
-        meetingTranscriptPanel.show(
-            in: containerView,
-            frame: localFrame(transcriptFrame, in: expanded)
-        )
+        containerView?.frame = local
         applyIndicatorCornerRadius(height: indicatorFrame.height)
-        return localIndicator
+        // The transcript is positioned relative to the pill, so a resize moves it.
+        if meetingTranscriptPanel.isVisible {
+            showMeetingTranscript()
+        }
+        return local
     }
 
     /// The pill's radius always follows its own height.
@@ -503,14 +459,6 @@ final class FloatingIndicatorController: NSObject {
         glassView?.layer?.cornerRadius = height / 2
     }
 
-    private func localFrame(_ screenFrame: NSRect, in windowFrame: NSRect) -> NSRect {
-        NSRect(
-            x: screenFrame.minX - windowFrame.minX,
-            y: screenFrame.minY - windowFrame.minY,
-            width: screenFrame.width,
-            height: screenFrame.height
-        )
-    }
 
     func setTranscribingTitle(_ title: String, config: AppConfig) {
         computerUseTranscriptText = nil
@@ -1351,9 +1299,6 @@ final class FloatingIndicatorController: NSObject {
         panel.isMovableByWindowBackground = false
         panel.becomesKeyOnlyIfNeeded = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.leftMouseDownHandler = { [weak self] windowPoint in
-            self?.meetingTranscriptPanel.handleClick(atWindowPoint: windowPoint) ?? false
-        }
 
         let containerView = NSView(frame: NSRect(origin: .zero, size: panel.frame.size))
         containerView.wantsLayer = true
