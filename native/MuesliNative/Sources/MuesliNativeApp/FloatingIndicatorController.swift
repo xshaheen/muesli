@@ -223,6 +223,15 @@ final class FloatingIndicatorController: NSObject {
         // here for any click the panel's own region handler did not consume, which
         // includes most of the chat surface.
         guard !meetingTranscriptPanel.isChatOpen else { return }
+
+        // Where the pill sits on screen *now*, captured before anything moves it.
+        //
+        // hideMeetingTranscript resizes the window to the anchor-derived frame, which
+        // is correct when collapsing normally and wrong mid-drag: the pill teleports
+        // to wherever it is anchored and leaves the cursor holding nothing. Reading
+        // the origin after that call -- as this did -- just records the anchor.
+        let pillScreenOrigin = indicatorScreenFrame?.origin
+
         hideMeetingTranscript()
         guard !isShowingLoading,
               let panel,
@@ -236,11 +245,12 @@ final class FloatingIndicatorController: NSObject {
         let style = styleForState(state, config: config)
         let targetFrame = frameForState(state, config: config)
 
-        // Resize where the pill already is. Repositioning to the anchor mid-drag
-        // would yank it out from under the cursor.
-        let originBeforeResize = panel.frame.origin
         let localIndicator = applyIndicatorFrame(targetFrame)
-        panel.setFrameOrigin(originBeforeResize)
+        // Put it back exactly where the user grabbed it. After the collapse the window
+        // is the pill, so its origin is the pill's origin.
+        if let pillScreenOrigin {
+            panel.setFrameOrigin(pillScreenOrigin)
+        }
 
         contentView.layer?.backgroundColor = style.background.cgColor
         contentView.layer?.borderColor = style.border.cgColor
@@ -263,9 +273,20 @@ final class FloatingIndicatorController: NSObject {
         // background and a hidden glass view, so those two *are* its entire visible
         // appearance: stale, they render as nothing and the pill vanishes.
         applyGlassState(state, frameSize: targetFrame.size)
-        if state == .recording {
+        switch state {
+        case .recording:
             ensureWaveformAnimation(in: targetFrame.size, mode: recordingWaveformMode)
+            // The stop square is laid out against the pill's width, so a resize
+            // without it leaves the control off the end of the pill.
+            addStopLayer(in: targetFrame.size)
+        case .preparing:
+            ensureWaveformAnimation(in: targetFrame.size, mode: .waiting)
+        default:
+            break
         }
+        // setState orders the panel front after every transition; a drag resizes the
+        // same way and needs the same guarantee.
+        panel.orderFrontRegardless()
     }
 
     func savePosition() {
