@@ -400,6 +400,12 @@ private final class CohereMelSpectrogram {
     /// Returns `(mel: [Float], realFrameCount: Int)` — flat [nMels * melLength] in row-major order,
     /// normalized over real frames, zero-padded to `melLength` (3500).
     func compute(audio: [Float]) -> (mel: [Float], realFrameCount: Int) {
+        // A zero-length capture would trap on `audio[0]` below; zero real frames masks the
+        // whole encoder input off, so the chunk decodes to an empty transcript.
+        guard !audio.isEmpty else {
+            return ([Float](repeating: 0, count: nMels * CohereTranscribeConfig.melLength), 0)
+        }
+
         let count = audio.count
         let melLength = CohereTranscribeConfig.melLength
 
@@ -861,6 +867,13 @@ private final class CohereTranscribeManager {
         let start = CFAbsoluteTimeGetCurrent()
         let duration = Double(audioSamples.count) / Double(CohereTranscribeConfig.sampleRate)
         var profile = CohereProfilingSummary(audioDurationS: duration)
+
+        // Nothing to transcribe — skip mel + inference entirely rather than running the
+        // encoder over an all-zero chunk.
+        guard !audioSamples.isEmpty else {
+            profile.totalProcessingMs = (CFAbsoluteTimeGetCurrent() - start) * 1000
+            return ("", profile)
+        }
 
         let scheduleStart = CFAbsoluteTimeGetCurrent()
         let chunks = scheduleChunks(samples: audioSamples)
