@@ -699,12 +699,22 @@ struct CustomTranscriptCleanupPrompt: Codable, Equatable, Identifiable {
 
 enum TranscriptCleanupPrompts {
     static let defaultID = "default"
+    static let mixedLanguageRepairID = "mixed-language-repair"
 
     static let builtIns: [TranscriptCleanupPromptPreset] = [
         TranscriptCleanupPromptPreset(
             id: defaultID,
             name: "Default Cleanup",
             prompt: PostProcessorOption.defaultSystemPrompt,
+            isCustom: false
+        ),
+        // Selectable because the default forbids the word changes this needs. Someone
+        // dictating Arabic with English technical terms gets the same phonetic
+        // mangling a meeting does, and the same repair fixes it.
+        TranscriptCleanupPromptPreset(
+            id: mixedLanguageRepairID,
+            name: "Mixed-Language Repair (Arabic + English)",
+            prompt: MixedLanguageRepairPrompt.dictation,
             isCustom: false
         ),
     ]
@@ -731,6 +741,51 @@ enum TranscriptCleanupPrompts {
 ///
 /// It carries no `<APP-CONTEXT>` block: focused app, URL, and OCR text are
 /// dictation concepts with no meaning during a meeting.
+/// Instructions for repairing a transcript whose speech recognizer was monolingual.
+///
+/// Deliberately not a `TranscriptCleanupPrompts` default. The dictation default
+/// forbids paraphrasing, rewording, and adding words -- correct when the recognizer
+/// heard the right language, and fatal here, because restoring `primary key` from
+/// البرايمريكية *is* changing the words.
+enum MixedLanguageRepairPrompt {
+
+    /// The repair instructions themselves, shared by dictation and meetings.
+    ///
+    /// Carries no `<APP-CONTEXT>` block: it is about the words, not about what was
+    /// on screen when they were spoken.
+    static func core(subject: String) -> String {
+        """
+        You repair \(subject) that mix Arabic and English.
+
+        The speech recognizer was monolingual, so foreign-language terms were \
+        transcribed phonetically into the text's own script and are now nonsense. \
+        Your job is to restore them.
+
+        Restore technical terms, product names, and borrowed words to their correct \
+        original spelling. For example, Arabic text reading "البرايمريكية" is the \
+        English term "primary key" written phonetically, and "وأنتو مين" in a \
+        technical discussion is "one-to-many", not the Arabic question it looks like. \
+        Use the surrounding context to decide which reading is meant.
+
+        Add sentence punctuation where it is missing.
+
+        You MUST:
+        - Change words when the recognizer misheard them. This is the entire task.
+        - Keep every other word as the speaker said it, in the language they said it.
+        - Return every line you were given, in the same order.
+        - Return the full text of every line, however long.
+
+        You MUST NOT:
+        - Summarize, shorten, or omit anything.
+        - Translate the text into another language.
+        - Add commentary, headings, or content nobody said.
+        """
+    }
+
+    /// The dictation preset: one snippet in, one snippet out, no wire protocol.
+    static let dictation = core(subject: "dictated text")
+}
+
 enum MeetingTranscriptCleanupPrompt {
     /// Marker delimiting each unit on the wire.
     ///
@@ -742,34 +797,15 @@ enum MeetingTranscriptCleanupPrompt {
 
     static func marker(for index: Int) -> String { "\(unitMarker)\(index)>>>" }
 
-    static let systemPrompt = """
-    You repair transcripts of meetings that mix Arabic and English.
+    /// The shared repair instructions plus the chunking protocol only meetings use.
+    static let systemPrompt = MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")
+        + """
 
-    The speech recognizer was monolingual, so foreign-language terms were \
-    transcribed phonetically into the transcript's own script and are now \
-    nonsense. Your job is to restore them.
 
-    Restore technical terms, product names, and borrowed words to their correct \
-    original spelling. For example, Arabic text reading "البرايمريكية" is the \
-    English term "primary key" written phonetically, and "وأنتو مين" in a \
-    technical discussion is "one-to-many", not the Arabic question it looks like. \
-    Use the surrounding discussion to decide which reading is meant.
-
-    Add sentence punctuation where it is missing.
-
-    You MUST:
-    - Change words when the recognizer misheard them. This is the entire task.
-    - Keep every other word as the speaker said it, in the language they said it.
-    - Return every line you were given, in the same order.
-    - Copy each <<<U…>>> marker exactly as it appears. Markers are structure, not \
-    content: never translate, renumber, reorder, merge, or drop one.
-    - Return the full text of every line, however long.
-
-    You MUST NOT:
-    - Summarize, shorten, or omit anything.
-    - Translate the transcript into another language.
-    - Add commentary, headings, or content nobody said.
-    """
+        Each line is preceded by a <<<U…>>> marker. Copy every marker exactly as it \
+        appears. Markers are structure, not content: never translate, renumber, \
+        reorder, merge, or drop one.
+        """
 }
 
 struct CustomWord: Codable, Equatable, Identifiable {
