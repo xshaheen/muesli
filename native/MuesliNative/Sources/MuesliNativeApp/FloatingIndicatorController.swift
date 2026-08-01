@@ -254,6 +254,10 @@ final class FloatingIndicatorController: NSObject {
     func savePosition() {
         guard let frame = indicatorScreenFrame else { return }
         let center = CGPoint(x: frame.midX, y: frame.midY)
+        // Update in memory as well as in config: config round-trips through the
+        // owning controller, and a collapse landing before that completes would
+        // otherwise snap the pill back to where it was before the drag.
+        customAnchorCenter = center
         onPositionSaved?(center)
     }
 
@@ -348,6 +352,13 @@ final class FloatingIndicatorController: NSObject {
             showMeetingTranscript()
         }
     }
+
+    /// Where the pill is anchored, independent of what size it currently is.
+    ///
+    /// Only a drag moves this. Hovering, recording, and transcribing all change the
+    /// pill's size and may be clamped to the screen edge, none of which should
+    /// relocate it.
+    private var customAnchorCenter: CGPoint?
 
     private var indicatorScreenFrame: NSRect? {
         guard let panel, let contentView else { return nil }
@@ -1535,29 +1546,46 @@ final class FloatingIndicatorController: NSObject {
             }
         }
 
-        // Use the pill's current on-screen center if it exists, so state
-        // transitions resize around the current position rather than jumping
-        // for custom placement. Preset anchors always resolve from config so
-        // changing the setting snaps immediately to the chosen anchor.
+        // Resolve every size from one stable anchor, never from the pill's current
+        // frame.
+        //
+        // Reading the live frame looks equivalent but is not: the clamp below pushes
+        // a frame back on-screen, so near an edge the expanded pill's real centre is
+        // not the anchor it was laid out from. Feeding that back in on collapse moved
+        // the pill to the middle of wherever the expanded version had been forced to
+        // sit, and each hover walked it further inward -- which is why it was worst
+        // in the corners, where the clamp always bites.
         let center: CGPoint
-        if config.indicatorAnchor == .custom,
-           let currentFrame = indicatorScreenFrame,
-           currentFrame.width > 0 {
-            center = CGPoint(x: currentFrame.midX, y: currentFrame.midY)
-        } else {
-            switch config.indicatorAnchor {
-            case .custom:
-                if let saved = config.indicatorOrigin,
-                   Self.isUsableIndicatorCenter(CGPoint(x: saved.x, y: saved.y), in: screen, size: size) {
-                    center = CGPoint(x: saved.x, y: saved.y)
-                } else {
-                    center = Self.defaultIndicatorCenter(in: screen, idleSize: size)
-                }
-            default:
-                center = Self.anchorCenter(config.indicatorAnchor, in: screen, size: size)
+        switch config.indicatorAnchor {
+        case .custom:
+            if let anchor = customAnchorCenter {
+                center = anchor
+            } else if let saved = config.indicatorOrigin,
+                      Self.isUsableIndicatorCenter(CGPoint(x: saved.x, y: saved.y), in: screen, size: size) {
+                center = CGPoint(x: saved.x, y: saved.y)
+                customAnchorCenter = center
+            } else {
+                center = Self.defaultIndicatorCenter(in: screen, idleSize: size)
+                customAnchorCenter = center
             }
+        default:
+            // A preset anchor is a rule, not a remembered point, so it re-resolves
+            // against the current size and any stale custom anchor is discarded.
+            customAnchorCenter = nil
+            center = Self.anchorCenter(config.indicatorAnchor, in: screen, size: size)
         }
 
+        // Clamping keeps the pill on-screen for *this* size only. It deliberately
+        // does not write back to the anchor.
+        return Self.clampedIndicatorFrame(center: center, size: size, in: screen)
+    }
+
+    /// Places a pill of `size` around `center`, pushed back on-screen if it would
+    /// overhang.
+    ///
+    /// Pure and side-effect free on purpose: the clamp must never feed back into the
+    /// anchor, or a pill parked in a corner walks inward every time it resizes.
+    static func clampedIndicatorFrame(center: CGPoint, size: NSSize, in screen: NSRect) -> NSRect {
         let x = min(max(center.x - size.width / 2, screen.minX), screen.maxX - size.width)
         let y = min(max(center.y - size.height / 2, screen.minY), screen.maxY - size.height)
         return NSRect(x: x, y: y, width: size.width, height: size.height)
