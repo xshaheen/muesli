@@ -579,9 +579,8 @@ final class MuesliController: NSObject {
         meetingRecordingHotkeyMonitor.onToggleStop = { [weak self] in
             DispatchQueue.main.async { self?.toggleMeetingRecording() }
         }
-        meetingRecordingHotkeyMonitor.onCancel = { [weak self] in
-            DispatchQueue.main.async { self?.stopMeetingRecording() }
-        }
+        // Deliberately no onCancel: a sub-threshold press never toggled anything, so
+        // stopping here would end a recording the press did not start.
 
         let canRunMainApp = config.hasCompletedOnboarding
             && hasRequiredStartupPermissions(for: config.resolvedOnboardingUseCase)
@@ -3339,6 +3338,9 @@ final class MuesliController: NSObject {
     // MARK: - Onboarding
 
     func showOnboarding(resumeFrom progress: OnboardingProgress? = nil) {
+        // The window survives losing its controller (isReleasedWhenClosed is false), so
+        // re-entry from a permission failure would stack a second onboarding window.
+        onboardingWindowController?.close()
         let wc = OnboardingWindowController(controller: self, resumeProgress: progress)
         self.onboardingWindowController = wc
         wc.show()
@@ -6300,6 +6302,14 @@ final class MuesliController: NSObject {
         let cleaned = meeting.cleanedTranscript
         guard !cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
+        // Without a usable backend the key-based paths return a raw-transcript stub as a
+        // successful summary, which would replace real notes and mark them cleaned. Bailing
+        // leaves notes_source at raw so the launch sweep retries once it is configured.
+        guard MeetingSummaryClient.isBackendConfigured(
+            config: config,
+            isChatGPTAuthenticated: chatGPTAuth.isAuthenticated
+        ) else { return }
+
         let plan = MeetingResummarizationPolicy.plan(for: meeting)
         let notes: String
         do {
@@ -8299,16 +8309,19 @@ final class MuesliController: NSObject {
                         )
                     }
                 }
+                dictationAudioSessionManager.endExternalSession(reason: "nemotron-stop")
+                setState(.transcribing)
             } else {
                 fputs("[muesli-native] Nemotron streaming stop, controller not ready (short press)\n", stderr)
+                // Finishes synchronously and settles on .idle — no transcription follows,
+                // so this path must not be moved back to .transcribing.
                 finishNemotronStreamingStop(
                     finalText: "",
                     startedAt: startedAt,
                     sessionID: sessionID
                 )
+                dictationAudioSessionManager.endExternalSession(reason: "nemotron-stop")
             }
-            dictationAudioSessionManager.endExternalSession(reason: "nemotron-stop")
-            setState(.transcribing)
             return
         }
 

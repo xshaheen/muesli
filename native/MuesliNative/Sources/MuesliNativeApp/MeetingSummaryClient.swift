@@ -176,6 +176,35 @@ enum MeetingSummaryClient {
         }
     }
 
+    /// Whether the configured summary backend has everything it needs to produce notes.
+    ///
+    /// The OpenAI and OpenRouter paths return a raw-transcript stub instead of throwing
+    /// when their key is missing, so a caller that overwrites stored notes with the
+    /// result has to check this first — otherwise the stub is persisted as a summary.
+    static func isBackendConfigured(config: AppConfig, isChatGPTAuthenticated: Bool) -> Bool {
+        let backend = (config.meetingSummaryBackend.isEmpty ? MeetingSummaryBackendOption.chatGPT.backend : config.meetingSummaryBackend).lowercased()
+        switch backend {
+        case MeetingSummaryBackendOption.chatGPT.backend:
+            return isChatGPTAuthenticated
+        case MeetingSummaryBackendOption.openRouter.backend:
+            return !(ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] ?? config.openRouterAPIKey).isEmpty
+        case MeetingSummaryBackendOption.ollama.backend:
+            let rawURL = config.ollamaURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            return rawURL.isEmpty || URL(string: rawURL) != nil
+        case MeetingSummaryBackendOption.lmStudio.backend:
+            return resolveLMStudioURL(config: config) != nil
+                && !config.lmStudioModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case MeetingSummaryBackendOption.customLLM.backend:
+            let format = CustomLLMFormat(rawValue: config.customLLMFormat) ?? .openAI
+            let key = config.customLLMAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            return resolveCustomLLMURL(config: config, format: format) != nil
+                && !config.customLLMModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && (!customLLMRequiresAPIKey(config: config) || !key.isEmpty)
+        default:
+            return !(ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? config.openAIAPIKey).isEmpty
+        }
+    }
+
     static func withSummaryRetries(
         maxRetries: Int,
         sleep: (TimeInterval) async throws -> Void = { delay in
