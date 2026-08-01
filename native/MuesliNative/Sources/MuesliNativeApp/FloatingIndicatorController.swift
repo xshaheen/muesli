@@ -237,12 +237,10 @@ final class FloatingIndicatorController: NSObject {
         let targetFrame = frameForState(.idle, config: config)
 
         // Instant resize — no animation
-        panel.setFrame(targetFrame, display: true)
-        contentView.frame = NSRect(origin: .zero, size: targetFrame.size)
-        contentView.layer?.cornerRadius = targetFrame.height / 2
+        let localIndicator = applyIndicatorFrame(targetFrame)
         contentView.layer?.backgroundColor = style.background.cgColor
         contentView.layer?.borderColor = style.border.cgColor
-        glassView?.frame = NSRect(origin: .zero, size: targetFrame.size)
+        glassView?.frame = NSRect(origin: .zero, size: localIndicator.size)
         panel.alphaValue = style.alpha
 
         iconLabel.stringValue = style.icon
@@ -400,6 +398,64 @@ final class FloatingIndicatorController: NSObject {
         contentView.frame = NSRect(origin: .zero, size: indicatorFrame.size)
     }
 
+    /// Applies a new indicator geometry, whether or not the transcript is expanded.
+    ///
+    /// Every resize path used to call `panel.setFrame(indicatorFrame)` directly, which
+    /// is only correct while the window *is* the indicator. With the transcript open
+    /// the window is the union of indicator and transcript, so that call collapsed the
+    /// window out from under a container view still laid out for the union -- leaving
+    /// the mangled outline and stray rounded border that show up when the indicator
+    /// resizes mid-meeting, which it does constantly as state and audio levels change.
+    ///
+    /// Returns the frame the indicator actually occupies in window coordinates, so
+    /// callers can lay out their own subviews against it.
+    @discardableResult
+    private func applyIndicatorFrame(_ indicatorFrame: NSRect, animated: Bool = false) -> NSRect {
+        guard let panel, let contentView else { return .zero }
+
+        guard meetingTranscriptPanel.isVisible, let containerView else {
+            let local = NSRect(origin: .zero, size: indicatorFrame.size)
+            if animated {
+                panel.animator().setFrame(indicatorFrame, display: true)
+                contentView.animator().frame = local
+            } else {
+                panel.setFrame(indicatorFrame, display: true)
+                contentView.frame = local
+            }
+            applyIndicatorCornerRadius(height: indicatorFrame.height)
+            return local
+        }
+
+        let screen = NSScreen.screens.first { $0.frame.intersects(indicatorFrame) } ?? NSScreen.main
+        guard let visibleFrame = screen?.visibleFrame else { return contentView.frame }
+        let transcriptFrame = FloatingMeetingTranscriptPlacement.frame(
+            beside: indicatorFrame,
+            visibleFrame: visibleFrame
+        )
+        let expanded = indicatorFrame.union(transcriptFrame)
+        let localIndicator = localFrame(indicatorFrame, in: expanded)
+        // Not animated while expanded: animating the union makes the transcript drift
+        // against the indicator for the duration, which reads as the panel tearing.
+        panel.setFrame(expanded, display: true)
+        containerView.frame = NSRect(origin: .zero, size: expanded.size)
+        contentView.frame = localIndicator
+        meetingTranscriptPanel.show(
+            in: containerView,
+            frame: localFrame(transcriptFrame, in: expanded)
+        )
+        applyIndicatorCornerRadius(height: indicatorFrame.height)
+        return localIndicator
+    }
+
+    /// The pill's radius always follows its own height.
+    ///
+    /// Deriving it from a frame the view may not have ended up with is what produces
+    /// a radius wider than the view, and with it the lens/trapezoid silhouette.
+    private func applyIndicatorCornerRadius(height: CGFloat) {
+        contentView?.layer?.cornerRadius = height / 2
+        glassView?.layer?.cornerRadius = height / 2
+    }
+
     private func localFrame(_ screenFrame: NSRect, in windowFrame: NSRect) -> NSRect {
         NSRect(
             x: screenFrame.minX - windowFrame.minX,
@@ -480,11 +536,9 @@ final class FloatingIndicatorController: NSObject {
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             context.allowsImplicitAnimation = true
 
-            panel.animator().setFrame(targetFrame, display: true)
+            applyIndicatorFrame(targetFrame, animated: true)
             panel.animator().alphaValue = style.alpha
 
-            contentView.animator().frame = NSRect(origin: .zero, size: targetFrame.size)
-            contentView.layer?.cornerRadius = targetFrame.height / 2
             contentView.layer?.backgroundColor = style.background.cgColor
             contentView.layer?.borderWidth = 1.0
             contentView.layer?.borderColor = style.border.cgColor
@@ -600,10 +654,8 @@ final class FloatingIndicatorController: NSObject {
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             context.allowsImplicitAnimation = true
 
-            panel.animator().setFrame(targetFrame, display: true)
+            applyIndicatorFrame(targetFrame, animated: true)
             panel.animator().alphaValue = 1.0
-            contentView.animator().frame = NSRect(origin: .zero, size: targetSize)
-            contentView.layer?.cornerRadius = targetSize.height / 2
             contentView.layer?.backgroundColor = NSColor.colorWith(hex: 0x1455D9, alpha: 0.88).cgColor
             contentView.layer?.borderWidth = 1.0
             contentView.layer?.borderColor = NSColor.colorWith(hex: 0xFFFFFF, alpha: 0.34).cgColor
@@ -678,10 +730,8 @@ final class FloatingIndicatorController: NSObject {
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             context.allowsImplicitAnimation = true
 
-            panel.animator().setFrame(targetFrame, display: true)
+            applyIndicatorFrame(targetFrame, animated: true)
             panel.animator().alphaValue = 1.0
-            contentView.animator().frame = NSRect(origin: .zero, size: warningSize)
-            contentView.layer?.cornerRadius = warningSize.height / 2
             contentView.layer?.backgroundColor = NSColor.colorWith(hex: 0xD99A11, alpha: 0.92).cgColor
             contentView.layer?.borderWidth = 1.0
             contentView.layer?.borderColor = NSColor.colorWith(hex: 0xFFFFFF, alpha: 0.24).cgColor
@@ -769,10 +819,8 @@ final class FloatingIndicatorController: NSObject {
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             context.allowsImplicitAnimation = true
 
-            panel.animator().setFrame(targetFrame, display: true)
+            applyIndicatorFrame(targetFrame, animated: true)
             panel.animator().alphaValue = 1.0
-            contentView.animator().frame = NSRect(origin: .zero, size: loadingSize)
-            contentView.layer?.cornerRadius = loadingSize.height / 2
             contentView.layer?.backgroundColor = NSColor.clear.cgColor
             contentView.layer?.borderWidth = 1.0
             contentView.layer?.borderColor = NSColor.colorWith(hex: 0xFFFFFF, alpha: 0.16).cgColor
@@ -1266,7 +1314,7 @@ final class FloatingIndicatorController: NSObject {
         let contentView = HoverIndicatorView(frame: containerView.bounds)
         contentView.owner = self
         contentView.wantsLayer = true
-        contentView.layer?.cornerRadius = panel.frame.height / 2
+        contentView.layer?.cornerRadius = contentView.bounds.height / 2
         contentView.layer?.masksToBounds = false
 
         let iconLabel = NSTextField(labelWithString: "")

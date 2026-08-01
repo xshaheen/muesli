@@ -44,19 +44,19 @@ struct MeetingMarkdownContent: View {
             Color.clear
                 .frame(height: MuesliTheme.spacing8)
         } else if line.hasPrefix("# ") {
-            Text(String(line.dropFirst(2)))
+            Text(Self.inline(String(line.dropFirst(2))))
                 .font(MuesliTheme.title1())
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .padding(.top, MuesliTheme.spacing8)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else if line.hasPrefix("## ") {
-            Text(String(line.dropFirst(3)))
+            Text(Self.inline(String(line.dropFirst(3))))
                 .font(MuesliTheme.title3())
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .padding(.top, MuesliTheme.spacing12)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else if line.hasPrefix("### ") {
-            Text(String(line.dropFirst(4)))
+            Text(Self.inline(String(line.dropFirst(4))))
                 .font(MuesliTheme.headline())
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .padding(.top, MuesliTheme.spacing4)
@@ -73,8 +73,8 @@ struct MeetingMarkdownContent: View {
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .frame(width: 22, alignment: .trailing)
-                Text(numbered.text)
-                    .font(MuesliTheme.body())
+                Text(Self.inline(numbered.text))
+                    .font(bodyFont)
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .lineSpacing(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -87,8 +87,8 @@ struct MeetingMarkdownContent: View {
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            Text(line)
-                .font(MuesliTheme.body())
+            Text(Self.inline(line))
+                .font(bodyFont)
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .lineSpacing(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -115,14 +115,26 @@ struct MeetingMarkdownContent: View {
                     .offset(y: -2)
                     .frame(width: 14, alignment: .center)
             }
-            Text(text)
-                .font(MuesliTheme.body())
+            Text(Self.inline(text))
+                .font(bodyFont)
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .lineSpacing(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.leading, CGFloat(indentLevel) * MuesliTheme.spacing20)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Parses inline markdown -- bold, italic, code, links -- inside a line.
+    ///
+    /// Line-level parsing above handles headings and list markers, but the text that
+    /// follows a marker is markdown too. Without this, a bullet reading
+    /// `- **No decisions were made.**` shows its asterisks to the user.
+    static func inline(_ text: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(text)
     }
 
     private static func indentLevel(for line: String) -> Int {
