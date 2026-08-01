@@ -1,3 +1,4 @@
+import Atomics
 import AVFoundation
 import Foundation
 import ScreenCaptureKit
@@ -11,8 +12,19 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
     private var outputFile: FileHandle?
     private var outputURL: URL?
     private var totalBytesWritten = 0
-    private(set) var isRecording = false
-    private(set) var isPaused = false
+    /// SCStream delivers sample buffers on this queue, so `outputFile` and
+    /// `totalBytesWritten` are only touched from here once capture is running.
+    private let sampleHandlerQueue = DispatchQueue(label: "com.muesli.system-audio")
+    private let recordingFlag = ManagedAtomic(false)
+    private let pausedFlag = ManagedAtomic(false)
+    private(set) var isRecording: Bool {
+        get { recordingFlag.load(ordering: .acquiring) }
+        set { recordingFlag.store(newValue, ordering: .releasing) }
+    }
+    private(set) var isPaused: Bool {
+        get { pausedFlag.load(ordering: .acquiring) }
+        set { pausedFlag.store(newValue, ordering: .releasing) }
+    }
 
     private static let sampleRate: Double = 16_000
     private static let channels: Int = 1
@@ -106,7 +118,6 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
         guard isRecording || outputFile != nil || outputURL != nil else { return nil }
         isRecording = false
         isPaused = false
-        onPCMSamples = nil
 
         if let stream {
             let semaphore = DispatchSemaphore(value: 0)
@@ -118,18 +129,25 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
         }
         stream = nil
 
-        // Finalize WAV
-        if let outputFile {
-            let header = WavWriter.header(dataSize: totalBytesWritten)
-            outputFile.seek(toFileOffset: 0)
-            outputFile.write(header)
-            outputFile.closeFile()
+        // Finalize WAV on the sample-handler queue so a callback that is already
+        // past the isRecording gate finishes its write before the header rewrite
+        // and close — otherwise it corrupts the header or writes to a closed file.
+        let writtenBytes = sampleHandlerQueue.sync { () -> Int in
+            onPCMSamples = nil
+            let bytes = totalBytesWritten
+            if let file = outputFile {
+                let header = WavWriter.header(dataSize: bytes)
+                file.seek(toFileOffset: 0)
+                file.write(header)
+                file.closeFile()
+            }
+            outputFile = nil
+            totalBytesWritten = 0
+            return bytes
         }
-        outputFile = nil
-        let writtenBytes = totalBytesWritten
+
         let completedURL = outputURL
         outputURL = nil
-        totalBytesWritten = 0
 
         fputs("[system-audio] capture stopped, \(writtenBytes) bytes written\n", stderr)
         return completedURL
@@ -174,7 +192,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
         config.excludesCurrentProcessAudio = true
 
         let stream = SCStream(filter: filter, configuration: config, delegate: nil)
-        try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: DispatchQueue(label: "com.muesli.system-audio"))
+        try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleHandlerQueue)
         try await stream.startCapture()
         self.stream = stream
     }
@@ -307,17 +325,21 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
         isRecording = false
         isPaused = false
         stream = nil
-        onPCMSamples = nil
 
-        if let outputFile {
-            outputFile.closeFile()
+        // A start that timed out can leave the stream delivering buffers, so close
+        // on the sample-handler queue for the same reason stop() does.
+        sampleHandlerQueue.sync {
+            onPCMSamples = nil
+            if let file = outputFile {
+                file.closeFile()
+            }
+            outputFile = nil
+            totalBytesWritten = 0
         }
-        outputFile = nil
 
         if let outputURL {
             try? FileManager.default.removeItem(at: outputURL)
         }
         outputURL = nil
-        totalBytesWritten = 0
     }
 }
