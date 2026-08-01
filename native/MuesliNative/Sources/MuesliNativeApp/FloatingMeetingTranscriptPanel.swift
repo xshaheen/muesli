@@ -428,9 +428,6 @@ private struct FloatingMeetingTranscriptPanelView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder.opacity(0.8), lineWidth: 1)
             }
-            // Reads as floating over the call rather than pasted onto it, which
-            // matters when it sits on top of a video window.
-            .shadow(color: .black.opacity(0.28), radius: 16, x: 0, y: 6)
             .onHover(perform: onHoverChanged)
         }
     }
