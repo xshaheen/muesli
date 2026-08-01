@@ -261,7 +261,9 @@ final class GoogleCalendarClient {
 
         let escapedID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
 
-        repeat {
+        // `while true` rather than `repeat/while pageToken != nil` so the 401 branch can
+        // `continue` to re-run the *same* page with the refreshed token.
+        while true {
             var components = URLComponents(string: "\(Self.baseURL)/calendars/\(escapedID)/events")!
 
             if let pageToken {
@@ -347,7 +349,8 @@ final class GoogleCalendarClient {
                 cachedEventsByCalendar[calendarID] = bucket
                 cachedEventScopesByCalendar[calendarID] = windowScope
             }
-        } while pageToken != nil
+            if pageToken == nil { break }
+        }
     }
 
     private func ensureCurrentFetch(_ fetchGeneration: Int) throws {
@@ -364,7 +367,9 @@ final class GoogleCalendarClient {
         var tokenRetried = false
         var results: [GoogleCalendarSummary] = []
 
-        repeat {
+        // `while true` rather than `repeat/while pageToken != nil` so the 401 branch can
+        // `continue` to re-run the *same* page with the refreshed token.
+        while true {
             var components = URLComponents(string: "\(Self.baseURL)/users/me/calendarList")!
             var items: [URLQueryItem] = [
                 URLQueryItem(name: "maxResults", value: "250"),
@@ -407,7 +412,8 @@ final class GoogleCalendarClient {
                 }
             }
             pageToken = json["nextPageToken"] as? String
-        } while pageToken != nil
+            if pageToken == nil { break }
+        }
 
         return results.sorted { lhs, rhs in
             if lhs.isPrimary != rhs.isPrimary { return lhs.isPrimary }
