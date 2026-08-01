@@ -368,8 +368,8 @@ final class FloatingIndicatorController: NSObject {
     private func showMeetingTranscript() {
         guard let panel,
               let containerView,
-              let contentView,
-              let indicatorFrame = indicatorScreenFrame else { return }
+              let contentView else { return }
+        let indicatorFrame = frameForState(state, config: configStore.load())
         panel.ignoresMouseEvents = false
         let screen = NSScreen.screens.first(where: { $0.frame.intersects(indicatorFrame) }) ?? NSScreen.main
         guard let visibleFrame = screen?.visibleFrame else { return }
@@ -392,13 +392,11 @@ final class FloatingIndicatorController: NSObject {
             if reset { meetingTranscriptPanel.reset() }
             return
         }
-        guard let panel,
-              let containerView,
-              let contentView,
-              let indicatorFrame = indicatorScreenFrame else {
+        guard let panel, let containerView, let contentView else {
             if reset { meetingTranscriptPanel.reset() } else { meetingTranscriptPanel.hide() }
             return
         }
+        let indicatorFrame = frameForState(state, config: configStore.load())
         if reset {
             meetingTranscriptPanel.reset()
         } else {
