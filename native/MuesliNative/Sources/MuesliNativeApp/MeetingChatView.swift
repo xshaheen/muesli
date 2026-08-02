@@ -40,7 +40,12 @@ struct MeetingChatView: View {
             Divider().overlay(MuesliTheme.surfaceBorder)
             composer
         }
-        .background(MuesliTheme.backgroundBase)
+        .background {
+            // The floating panel paints its own translucent material behind this view;
+            // covering it with the main window's opaque base made chat mode a visibly
+            // different color from the transcript mode sharing the same panel.
+            if !isCompact { MuesliTheme.backgroundBase }
+        }
     }
 
     // MARK: - Messages
