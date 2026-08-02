@@ -553,14 +553,14 @@ struct ComputerUseToolInvocation: Codable, Equatable {
                 if trimmed(label).isEmpty { return true }
                 if screenshotID == nil { return true }
             }
-            return containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
+            return Self.containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
         case .clickElement:
-            return containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
+            return Self.containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
         case .performSecondaryAction, .drag:
-            return containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
+            return Self.containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
         case .pressKey, .hotkey:
             let mods = modifiers ?? []
-            return mods.contains(.command) && ["q", "w"].contains(canonical(key ?? ""))
+            return mods.contains(.command) && ["q", "w"].contains(Self.canonical(key ?? ""))
         case .navigateURL, .navigateActiveBrowserTab:
             return safeHTTPURL(trimmed(url)) == nil
         default:
@@ -687,7 +687,9 @@ struct ComputerUseToolInvocation: Codable, Equatable {
         "e\(index)"
     }
 
-    private func containsRiskyWord(_ text: String) -> Bool {
+    /// Shared with the executor so a resolved element's own title can be
+    /// checked against the same list the planner's label is checked against.
+    static func containsRiskyWord(_ text: String) -> Bool {
         let riskyWords = [
             "archive",
             "buy",
@@ -707,7 +709,7 @@ struct ComputerUseToolInvocation: Codable, Equatable {
         return riskyWords.contains { words.contains($0) }
     }
 
-    private func canonical(_ value: String) -> String {
+    private static func canonical(_ value: String) -> String {
         value.lowercased()
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
             .joined(separator: " ")

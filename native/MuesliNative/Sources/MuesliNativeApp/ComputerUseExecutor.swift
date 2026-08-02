@@ -382,7 +382,15 @@ enum ComputerUseToolExecutor {
             case .failure(let message):
                 return .failed(message)
             case .success(let element):
-                return clickElement(element, fallbackLabel: toolCall.label ?? elementTargetLabel(toolCall))
+                if let confirmation = riskyElementConfirmation(element, toolCall: toolCall) {
+                    return confirmation
+                }
+                return clickElement(
+                    element,
+                    clicks: toolCall.clicks ?? 1,
+                    button: mouseButton(from: toolCall.button),
+                    fallbackLabel: toolCall.label ?? elementTargetLabel(toolCall)
+                )
             }
         }
         if toolCall.x != nil, toolCall.y != nil {
@@ -404,6 +412,9 @@ enum ComputerUseToolExecutor {
             return .failed(message)
         case .success(let resolved):
             element = resolved
+        }
+        if let confirmation = riskyElementConfirmation(element, toolCall: toolCall) {
+            return confirmation
         }
         let actionName = toolCall.actionName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !actionName.isEmpty else {
@@ -462,6 +473,29 @@ enum ComputerUseToolExecutor {
             return .success(element)
         }
         return nil
+    }
+
+    /// The planner-label gate in `requiresConfirmation` only sees the label the
+    /// model chose to send, so an unlabeled click on a real Delete or Send
+    /// button would skip confirmation. Re-check the resolved element's own AX
+    /// text against the same risky-word list before acting on it.
+    private static func riskyElementConfirmation(
+        _ element: AXUIElement,
+        toolCall: ComputerUseToolCall
+    ) -> ComputerUseExecutionResult? {
+        let descriptors = [
+            axString(element, kAXTitleAttribute),
+            axString(element, kAXDescriptionAttribute),
+            axString(element, kAXHelpAttribute),
+        ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        guard ComputerUseToolCall.containsRiskyWord(descriptors.joined(separator: " ")) else {
+            return nil
+        }
+        guard let descriptor = descriptors.first(where: { !$0.isEmpty }) else {
+            return .needsConfirmation("Confirm: \(toolCall.summary)")
+        }
+        return .needsConfirmation("Confirm: \(toolCall.summary) on \(descriptor)")
     }
 
     private static func elementTargetLabel(_ toolCall: ComputerUseToolCall) -> String {
@@ -654,7 +688,12 @@ enum ComputerUseToolExecutor {
         return .failed("Could not click \(rawLabel)")
     }
 
-    private static func clickElement(_ element: AXUIElement, fallbackLabel: String) -> ComputerUseExecutionResult {
+    private static func clickElement(
+        _ element: AXUIElement,
+        clicks: Int,
+        button: CGMouseButton,
+        fallbackLabel: String
+    ) -> ComputerUseExecutionResult {
         if let rect = rect(of: element) {
             ComputerUseCursorOverlay.shared.show(
                 at: CGPoint(x: rect.midX, y: rect.midY),
@@ -663,6 +702,15 @@ enum ComputerUseToolExecutor {
         }
         if axBool(element, kAXEnabledAttribute) == false {
             return .failed("\(fallbackLabel) is disabled; click would likely be a no-op")
+        }
+
+        // AXPress cannot express a right-click or a double-click, so those go
+        // through the same coordinate machinery click_point uses.
+        if button == .right || clicks > 1 {
+            guard clickCenter(of: element, clicks: clicks, button: button) else {
+                return .failed("Could not \(clickDescription(clicks: clicks, button: button)) \(fallbackLabel) by coordinates")
+            }
+            return .executed("Performed \(clickDescription(clicks: clicks, button: button)) on \(fallbackLabel) by coordinates")
         }
 
         let advertisedActions = actionNames(of: element)
@@ -690,35 +738,15 @@ enum ComputerUseToolExecutor {
         guard let point = screenPoint(for: toolCall, registry: registry) else {
             return .failed("No current screenshot for point click")
         }
-        guard let source = CGEventSource(stateID: .combinedSessionState) else {
-            return .failed("Could not create mouse event")
-        }
 
         ComputerUseCursorOverlay.shared.show(at: point, label: toolCall.label)
         CGWarpMouseCursorPosition(point)
-        let button = mouseButton(from: toolCall.button)
-        let downType: CGEventType = button == .right ? .rightMouseDown : .leftMouseDown
-        let upType: CGEventType = button == .right ? .rightMouseUp : .leftMouseUp
-        let clickCount = max(1, min(toolCall.clicks ?? 1, 2))
-        for clickIndex in 1...clickCount {
-            guard let mouseDown = CGEvent(
-                mouseEventSource: source,
-                mouseType: downType,
-                mouseCursorPosition: point,
-                mouseButton: button
-            ),
-            let mouseUp = CGEvent(
-                mouseEventSource: source,
-                mouseType: upType,
-                mouseCursorPosition: point,
-                mouseButton: button
-            ) else {
-                return .failed("Could not create mouse event")
-            }
-            mouseDown.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
-            mouseUp.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
-            mouseDown.post(tap: .cghidEventTap)
-            mouseUp.post(tap: .cghidEventTap)
+        guard postClick(
+            at: point,
+            clicks: toolCall.clicks ?? 1,
+            button: mouseButton(from: toolCall.button)
+        ) else {
+            return .failed("Could not create mouse event")
         }
         let label = toolCall.label?.trimmingCharacters(in: .whitespacesAndNewlines)
         return .executed("Clicked \(label?.isEmpty == false ? label! : "point")")
@@ -1056,16 +1084,44 @@ enum ComputerUseToolExecutor {
         return (rawActions as? [String]) ?? []
     }
 
-    private static func clickCenter(of element: AXUIElement) -> Bool {
+    private static func clickCenter(
+        of element: AXUIElement,
+        clicks: Int = 1,
+        button: CGMouseButton = .left
+    ) -> Bool {
         guard let rect = rect(of: element) else { return false }
-        let point = CGPoint(x: rect.midX, y: rect.midY)
-        guard let source = CGEventSource(stateID: .combinedSessionState),
-              let mouseDown = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
-              let mouseUp = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
-        else { return false }
-        mouseDown.post(tap: .cghidEventTap)
-        mouseUp.post(tap: .cghidEventTap)
+        return postClick(at: CGPoint(x: rect.midX, y: rect.midY), clicks: clicks, button: button)
+    }
+
+    private static func postClick(at point: CGPoint, clicks: Int, button: CGMouseButton) -> Bool {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
+        let downType: CGEventType = button == .right ? .rightMouseDown : .leftMouseDown
+        let upType: CGEventType = button == .right ? .rightMouseUp : .leftMouseUp
+        let clickCount = max(1, min(clicks, 2))
+        for clickIndex in 1...clickCount {
+            guard let mouseDown = CGEvent(
+                mouseEventSource: source,
+                mouseType: downType,
+                mouseCursorPosition: point,
+                mouseButton: button
+            ),
+            let mouseUp = CGEvent(
+                mouseEventSource: source,
+                mouseType: upType,
+                mouseCursorPosition: point,
+                mouseButton: button
+            ) else { return false }
+            mouseDown.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
+            mouseUp.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
+            mouseDown.post(tap: .cghidEventTap)
+            mouseUp.post(tap: .cghidEventTap)
+        }
         return true
+    }
+
+    private static func clickDescription(clicks: Int, button: CGMouseButton) -> String {
+        let buttonName = button == .right ? "right" : "left"
+        return clicks > 1 ? "\(buttonName) double-click" : "\(buttonName) click"
     }
 
     private static func rect(of element: AXUIElement) -> CGRect? {

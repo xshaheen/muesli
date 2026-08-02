@@ -277,15 +277,29 @@ enum ComputerUseBrowserAutomation {
                             throw CancellationError()
                         }
                         try process.run()
+
+                        // page_get_text and page_query_dom can return far more
+                        // than the ~64 KB pipe buffer holds, which blocks
+                        // osascript until the parent drains it. Read both pipes
+                        // while the child is still running, not after it exits.
+                        let outputBox = AppleScriptOutputBox()
+                        let errorBox = AppleScriptOutputBox()
+                        let readers = DispatchGroup()
+                        for (pipe, box) in [(output, outputBox), (error, errorBox)] {
+                            DispatchQueue.global(qos: .userInitiated).async(group: readers) {
+                                box.append(pipe.fileHandleForReading.readDataToEndOfFile())
+                            }
+                        }
                         process.waitUntilExit()
+                        readers.wait()
 
                         let wasCancelled = processBox.clear()
                         if wasCancelled {
                             throw CancellationError()
                         }
 
-                        let data = output.fileHandleForReading.readDataToEndOfFile()
-                        let errorData = error.fileHandleForReading.readDataToEndOfFile()
+                        let data = outputBox.value
+                        let errorData = errorBox.value
                         if process.terminationStatus != 0 {
                             let message = String(data: errorData, encoding: .utf8) ?? "Apple Events failed"
                             throw NSError(domain: "ComputerUseBrowserAutomation", code: Int(process.terminationStatus), userInfo: [
@@ -339,6 +353,23 @@ enum ComputerUseBrowserAutomation {
             return "[]"
         }
         return text
+    }
+}
+
+private final class AppleScriptOutputBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        data.append(chunk)
+    }
+
+    var value: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
     }
 }
 
