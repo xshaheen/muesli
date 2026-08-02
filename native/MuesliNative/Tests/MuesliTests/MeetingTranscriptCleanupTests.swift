@@ -20,6 +20,12 @@ struct MeetingTranscriptCleanupTests {
     [10:00:00] Speaker 1: after the break
     """
 
+    /// A single line past the chunk budget, so it has to be split on its sentence
+    /// boundaries -- the path where the spacing between sentences lives in the
+    /// joiner rather than in any unit's text.
+    private let overflowing = String(repeating: "First sentence. Second sentence. ", count: 80)
+        + "Fix البرايمريكية here."
+
     /// Echoes each unit back unchanged, which is what a perfectly behaved model
     /// would do for text that needed no repair.
     private func echoSender(truncated: Bool = false) -> (String) async throws -> TranscriptCleanupResult {
@@ -49,7 +55,7 @@ struct MeetingTranscriptCleanupTests {
     func reassemblyIsLossless() {
         // Everything else rests on this: if the round trip is not an identity, a
         // "successful" cleanup silently reshapes the transcript.
-        for transcript in [diarized, resumed, "one long unprefixed block of speech"] {
+        for transcript in [diarized, resumed, "one long unprefixed block of speech", overflowing] {
             let units = MeetingTranscriptChunker.units(in: transcript, budget: 2_400)
             #expect(MeetingTranscriptChunker.reassemble(units) == transcript)
         }
@@ -149,6 +155,28 @@ struct MeetingTranscriptCleanupTests {
         )
 
         #expect(cleaned?.contains("primary key") == true)
+    }
+
+    @Test("a split line keeps the spaces between its sentences")
+    func splitLineKeepsSentenceSpacing() async {
+        // Every unit is trimmed on the way back -- by the model, and again by the
+        // parser. Any spacing held inside a unit's text is therefore spacing that
+        // does not return, which would close up every sentence boundary of a line
+        // long enough to be split.
+        #expect(overflowing.count > MeetingTranscriptCleanup.chunkBudget)
+        let expected = overflowing.replacingOccurrences(of: "البرايمريكية", with: "primary key")
+
+        let cleaned = await MeetingTranscriptCleanup.clean(
+            transcript: overflowing,
+            send: sender { lines in
+                lines.map {
+                    $0.trimmingCharacters(in: .whitespaces)
+                        .replacingOccurrences(of: "البرايمريكية", with: "primary key")
+                }.joined(separator: "\n")
+            }
+        )
+
+        #expect(cleaned == expected)
     }
 
     // MARK: - Rejection

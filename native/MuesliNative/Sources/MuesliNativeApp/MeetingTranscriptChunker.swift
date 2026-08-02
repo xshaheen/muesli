@@ -148,19 +148,35 @@ enum MeetingTranscriptChunker {
     private static func splitKeepingSeparators(_ line: String, on terminators: Set<Character>) -> [Piece] {
         var pieces: [Piece] = []
         var buffer = ""
-        var pendingJoiner = ""
         for character in line {
             buffer.append(character)
             if terminators.contains(character) {
-                pieces.append(Piece(text: buffer, joiner: pendingJoiner))
+                pieces.append(piece(from: buffer, isFirst: pieces.isEmpty))
                 buffer = ""
-                pendingJoiner = ""
             }
         }
         if !buffer.isEmpty {
-            pieces.append(Piece(text: buffer, joiner: pendingJoiner))
+            pieces.append(piece(from: buffer, isFirst: pieces.isEmpty))
         }
         return pieces
+    }
+
+    /// Moves the space that follows a sentence terminator out of the next piece's
+    /// text and into its joiner.
+    ///
+    /// A model answers per unit and answers trimmed, so whitespace left inside the
+    /// text is whitespace that does not come back -- and every sentence boundary of
+    /// a split line would close up. Held in the joiner it survives, because the
+    /// joiner is ours and is never sent.
+    ///
+    /// The first piece is left alone: `units(in:budget:)` drops its joiner, so
+    /// hoisting there would delete a line's leading indentation instead.
+    private static func piece(from buffer: String, isFirst: Bool) -> Piece {
+        guard !isFirst else { return Piece(text: buffer, joiner: "") }
+        let content = buffer.drop { $0.isWhitespace }
+        // All-whitespace tail: there is no text to attach the joiner to.
+        guard !content.isEmpty else { return Piece(text: buffer, joiner: "") }
+        return Piece(text: String(content), joiner: String(buffer[buffer.startIndex..<content.startIndex]))
     }
 
     private static func splitOnWhitespace(_ piece: Piece, budget: Int) -> [Piece] {
