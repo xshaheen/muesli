@@ -120,6 +120,40 @@ struct FloatingMeetingChatTests {
         #expect(model.chatTranscript == MeetingResumePolicy.combinedResumeTranscript(prior: prior, new: live))
     }
 
+    @Test("the panel and the recording detail tab ask over identical input")
+    func panelAndRecordingTabAgree() {
+        // Both surfaces route through MeetingChatSource so the same question cannot get a
+        // different answer depending on whether it was asked from the pill or the window.
+        // The combination used to be written out separately in each, which is exactly how
+        // they would drift.
+        let prior = "[09:00:00] You: earlier"
+        let live = "[10:00:00] You: now"
+        let record = MeetingRecord(
+            id: 1,
+            title: "Test",
+            startTime: "2026-07-31T10:00:00Z",
+            durationSeconds: 60,
+            rawTranscript: prior,
+            formattedNotes: "",
+            wordCount: 0,
+            folderID: nil
+        )
+
+        let model = FloatingMeetingTranscriptModel()
+        model.chatContext = FloatingMeetingChatContext(
+            meetingID: 1,
+            priorTranscript: prior,
+            currentConfig: { AppConfig() },
+            isReady: { true }
+        )
+        model.update(transcript: live, partialYou: "", partialOthers: "")
+
+        let detailTranscript = MeetingChatSource.transcript(for: record, live: live, isRecording: true)
+
+        #expect(model.chatTranscript == detailTranscript)
+        #expect(MeetingChatSource.systemPrompt(isRecording: true) == MeetingChatPrompts.live)
+    }
+
     @Test("a fresh meeting with no prior transcript reads the live one")
     func freshMeetingReadsLive() {
         let model = FloatingMeetingTranscriptModel()

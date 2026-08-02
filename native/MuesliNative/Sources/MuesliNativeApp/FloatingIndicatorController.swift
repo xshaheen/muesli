@@ -12,19 +12,8 @@ enum FloatingIndicatorPointerIntent {
 }
 
 final class InteractiveFloatingPanel: NSPanel {
-    var leftMouseDownHandler: ((NSPoint) -> Bool)?
-
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
-
-    override func sendEvent(_ event: NSEvent) {
-        if event.type == .leftMouseDown {
-            if leftMouseDownHandler?(event.locationInWindow) == true {
-                return
-            }
-        }
-        super.sendEvent(event)
-    }
 }
 
 @MainActor

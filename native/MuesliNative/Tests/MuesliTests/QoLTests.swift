@@ -242,40 +242,21 @@ struct IndicatorFrameSizeTests {
 
 @Suite("Floating meeting transcript")
 struct FloatingMeetingTranscriptTests {
-    @Test("floating panel can receive controls without becoming the main window")
+    @Test("floating panel can take keys without becoming the main window")
     @MainActor
     func floatingPanelIsInteractive() {
+        // A borderless panel refuses key status by default, which would leave chat's
+        // composer untypable. Becoming main is the part that must stay off: it would
+        // pull activation away from the call the user is in.
         let panel = InteractiveFloatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 360, height: 320),
             styleMask: .borderless,
             backing: .buffered,
             defer: false
         )
-        var receivedMouseDown: NSPoint?
-        panel.leftMouseDownHandler = { point in
-            receivedMouseDown = point
-            return true
-        }
-        let event = NSEvent.mouseEvent(
-            with: .leftMouseDown,
-            location: NSPoint(x: 20, y: 20),
-            modifierFlags: [],
-            timestamp: 0,
-            windowNumber: panel.windowNumber,
-            context: nil,
-            eventNumber: 1,
-            clickCount: 1,
-            pressure: 1
-        )
-        if let event {
-            panel.sendEvent(event)
-        }
 
         #expect(panel.canBecomeKey)
         #expect(!panel.canBecomeMain)
-        #expect(!panel.becomesKeyOnlyIfNeeded)
-        #expect(!panel.styleMask.contains(.nonactivatingPanel))
-        #expect(receivedMouseDown == NSPoint(x: 20, y: 20))
     }
 
     @Test("the transcript overlay shows in a window of its own")

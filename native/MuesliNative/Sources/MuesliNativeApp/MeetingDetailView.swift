@@ -51,7 +51,7 @@ private struct LiveTranscriptSection: View {
 /// to pass a transcript into chat would re-render the whole detail view on every chunk.
 private struct LiveChatSection: View {
     let appState: AppState
-    let transcriptPrefix: String
+    let meeting: MeetingRecord
     let conversation: MeetingChatConversation
     let manualNotes: String
     let config: AppConfig
@@ -59,11 +59,12 @@ private struct LiveChatSection: View {
     var body: some View {
         MeetingChatView(
             conversation: conversation,
-            transcript: MeetingResumePolicy.combinedResumeTranscript(
-                prior: transcriptPrefix,
-                new: appState.liveMeetingTranscript
+            transcript: MeetingChatSource.transcript(
+                for: meeting,
+                live: appState.liveMeetingTranscript,
+                isRecording: true
             ),
-            systemPrompt: MeetingChatPrompts.live,
+            systemPrompt: MeetingChatSource.systemPrompt(isRecording: true),
             manualNotes: manualNotes,
             config: config
         )
@@ -84,8 +85,14 @@ enum MeetingChatSource {
     /// the live one, or a resumed meeting would lose everything before the resume.
     static func transcript(for meeting: MeetingRecord, live: String, isRecording: Bool) -> String {
         isRecording
-            ? MeetingResumePolicy.combinedResumeTranscript(prior: meeting.rawTranscript, new: live)
+            ? liveTranscript(prior: meeting.rawTranscript, live: live)
             : meeting.displayTranscript
+    }
+
+    /// The same combination for a surface that holds its prior transcript as a plain string
+    /// rather than a record — the floating panel, which only ever shows a recording meeting.
+    static func liveTranscript(prior: String, live: String) -> String {
+        MeetingResumePolicy.combinedResumeTranscript(prior: prior, new: live)
     }
 
     static func systemPrompt(isRecording: Bool) -> String {
@@ -385,7 +392,7 @@ struct MeetingDetailView: View {
                     if isChatAvailable {
                         LiveChatSection(
                             appState: appState,
-                            transcriptPrefix: meeting.rawTranscript,
+                            meeting: meeting,
                             conversation: MeetingChatConversations.shared.conversation(for: meeting.id),
                             manualNotes: meeting.manualNotes,
                             config: appState.config
@@ -486,7 +493,7 @@ struct MeetingDetailView: View {
                                 live: "",
                                 isRecording: false
                             ),
-                            systemPrompt: MeetingChatPrompts.completed,
+                            systemPrompt: MeetingChatSource.systemPrompt(isRecording: false),
                             manualNotes: meeting.manualNotes,
                             config: appState.config
                         )

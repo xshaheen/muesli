@@ -68,9 +68,9 @@ final class FloatingMeetingTranscriptModel {
     /// been captured since. Mirrors the detail view's Live tab; using the live portion alone
     /// would drop a resumed meeting's earlier half.
     var chatTranscript: String {
-        MeetingResumePolicy.combinedResumeTranscript(
+        MeetingChatSource.liveTranscript(
             prior: chatContext?.priorTranscript ?? "",
-            new: presentation.transcript
+            live: presentation.transcript
         )
     }
 
@@ -270,8 +270,12 @@ final class FloatingMeetingTranscriptPanelController {
         guard model.isChatOpen else { return }
         model.closeChat()
         if let window = hostingView?.window, window.isKeyWindow {
-            window.resignKey()
-            window.orderBack(nil)
+            // resignKey is only a notification hook -- neither it nor orderBack reassigns
+            // NSApp.keyWindow, so the panel kept the keyboard after chat closed. Ordering
+            // out and straight back in makes AppKit hand key status to another window
+            // while the panel stays on screen.
+            window.orderOut(nil)
+            window.orderFront(nil)
         }
     }
 
@@ -399,7 +403,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
                     MeetingChatView(
                         conversation: MeetingChatConversations.shared.conversation(for: context.meetingID),
                         transcript: model.chatTranscript,
-                        systemPrompt: MeetingChatPrompts.live,
+                        systemPrompt: MeetingChatSource.systemPrompt(isRecording: true),
                         manualNotes: context.manualNotes(),
                         config: context.currentConfig(),
                         isCompact: true
