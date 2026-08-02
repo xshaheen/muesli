@@ -181,6 +181,32 @@ final class FloatingIndicatorController: NSObject {
     init(configStore: ConfigStore) {
         self.configStore = configStore
         super.init()
+        // Display attach/detach moves windows without the app's involvement: macOS
+        // constrains them onto whatever screens remain, leaving the pill and the
+        // transcript wherever they landed until the next state change. Re-resolve
+        // both from the anchor as soon as the topology settles.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleScreenReconfigurationRelayout()
+        }
+    }
+
+    private var screenRelayoutWorkItem: DispatchWorkItem?
+
+    /// Screen-parameter notifications arrive in bursts during a reconfiguration;
+    /// coalesce them and re-layout once the topology has settled.
+    private func scheduleScreenReconfigurationRelayout() {
+        screenRelayoutWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, panel != nil, !isDragging, !isComputerUseCursorMode else { return }
+            fputs("[indicator] screens changed; re-resolving pill and transcript\n", stderr)
+            setState(state, config: configStore.load())
+        }
+        screenRelayoutWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: workItem)
     }
 
     var onStopToggleDictation: (() -> Void)?
@@ -503,10 +529,20 @@ final class FloatingIndicatorController: NSObject {
     /// frame a resize is on its way to, which the live frame does not report until the
     /// animation finishes.
     private func showMeetingTranscript(beside frame: NSRect? = nil) {
-        let indicatorFrame = frame
-            ?? indicatorScreenFrame
-            ?? frameForState(state, config: configStore.load())
+        let source: String
+        let indicatorFrame: NSRect
+        if let frame {
+            source = "caller"
+            indicatorFrame = frame
+        } else if let live = indicatorScreenFrame {
+            source = "live"
+            indicatorFrame = live
+        } else {
+            source = "anchor"
+            indicatorFrame = frameForState(state, config: configStore.load())
+        }
         guard let visibleFrame = Self.screenVisibleFrame(intersecting: indicatorFrame) else { return }
+        fputs("[transcript-panel] show source=\(source) pill=\(indicatorFrame)\n", stderr)
         meetingTranscriptPanel.show(beside: indicatorFrame, in: visibleFrame)
     }
 
