@@ -1,6 +1,14 @@
 import Foundation
 import SQLite3
 
+/// `SQLITE_TRANSIENT` -- SQLite copies the bound bytes before the bind call returns.
+///
+/// Every text bind here hands over `(value as NSString).utf8String`, whose pointer is
+/// only guaranteed for the current autorelease scope. A nil destructor is
+/// `SQLITE_STATIC`, which instead promises the bytes stay put until the statement is
+/// finalized -- a promise this file cannot keep.
+private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
 public enum DictationStoreError: Error, LocalizedError {
     case dictationNotFound(id: Int64)
     case meetingNotFound(id: Int64)
@@ -369,14 +377,14 @@ public final class DictationStore {
         let timestamp = formatISODate(endedAt)
         let started = formatISODate(startedAt)
         let ended = formatISODate(endedAt)
-        sqlite3_bind_text(statement, 1, (timestamp as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (timestamp as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 2, durationSeconds)
-        sqlite3_bind_text(statement, 3, (text as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 4, (appContext as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 3, (text as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 4, (appContext as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int(statement, 5, Int32(Self.countWords(in: text)))
-        sqlite3_bind_text(statement, 6, (source as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 7, (started as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 8, (ended as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 6, (source as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 7, (started as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 8, (ended as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 9, Date().timeIntervalSince1970)
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
@@ -430,7 +438,7 @@ public final class DictationStore {
         }
         defer { sqlite3_finalize(statement) }
         for (index, value) in boundValues.enumerated() {
-            sqlite3_bind_text(statement, Int32(index + 1), (value as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(statement, Int32(index + 1), (value as NSString).utf8String, -1, sqliteTransient)
         }
         let limitIndex = Int32(boundValues.count + 1)
         let offsetIndex = Int32(boundValues.count + 2)
@@ -635,8 +643,8 @@ public final class DictationStore {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (MeetingStatus.recording.rawValue as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 2, (MeetingStatus.processing.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (MeetingStatus.recording.rawValue as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, (MeetingStatus.processing.rawValue as NSString).utf8String, -1, sqliteTransient)
 
         var rows: [MeetingRecord] = []
         while sqlite3_step(statement) == SQLITE_ROW {
@@ -694,10 +702,10 @@ public final class DictationStore {
         }
         defer { sqlite3_finalize(statement) }
         let pattern = Self.escapeLikePattern(query) as NSString
-        sqlite3_bind_text(statement, 1, pattern.utf8String, -1, nil)
-        sqlite3_bind_text(statement, 2, pattern.utf8String, -1, nil)
-        sqlite3_bind_text(statement, 3, pattern.utf8String, -1, nil)
-        sqlite3_bind_text(statement, 4, pattern.utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, pattern.utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, pattern.utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 3, pattern.utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 4, pattern.utf8String, -1, sqliteTransient)
         sqlite3_bind_int(statement, 5, Int32(limit))
 
         var rows: [DictationRecord] = []
@@ -724,10 +732,10 @@ public final class DictationStore {
         }
         defer { sqlite3_finalize(statement) }
         let pattern = Self.escapeLikePattern(query) as NSString
-        sqlite3_bind_text(statement, 1, pattern.utf8String, -1, nil)
-        sqlite3_bind_text(statement, 2, pattern.utf8String, -1, nil)
-        sqlite3_bind_text(statement, 3, pattern.utf8String, -1, nil)
-        sqlite3_bind_text(statement, 4, pattern.utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, pattern.utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, pattern.utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 3, pattern.utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 4, pattern.utf8String, -1, sqliteTransient)
         sqlite3_bind_int(statement, 5, Int32(limit))
 
         var rows: [MeetingRecord] = []
@@ -752,7 +760,7 @@ public final class DictationStore {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (calendarEventID as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (calendarEventID as NSString).utf8String, -1, sqliteTransient)
 
         guard sqlite3_step(statement) == SQLITE_ROW else {
             return nil
@@ -787,8 +795,8 @@ public final class DictationStore {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (occurrence.identityKey as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 2, (occurrence.eventID as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (occurrence.identityKey as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, (occurrence.eventID as NSString).utf8String, -1, sqliteTransient)
         if occurrence.seriesID != nil {
             sqlite3_bind_double(statement, 3, occurrence.originalStartTime.timeIntervalSince1970)
         }
@@ -836,13 +844,13 @@ public final class DictationStore {
         let durationSeconds = max(endTime.timeIntervalSince(startTime), 0)
         let wordCount = Self.countWords(in: rawTranscript)
 
-        sqlite3_bind_text(statement, 1, (title as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (title as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(calendarOccurrence?.eventID ?? calendarEventID, at: 2, statement: statement)
-        sqlite3_bind_text(statement, 3, (startString as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 4, (endString as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 3, (startString as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 4, (endString as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 5, durationSeconds)
-        sqlite3_bind_text(statement, 6, (rawTranscript as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 7, (formattedNotes as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 6, (rawTranscript as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 7, (formattedNotes as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(micAudioPath, at: 8, statement: statement)
         bindOptionalText(systemAudioPath, at: 9, statement: statement)
         bindOptionalText(savedRecordingPath, at: 10, statement: statement)
@@ -851,7 +859,7 @@ public final class DictationStore {
         bindOptionalText(selectedTemplateName, at: 13, statement: statement)
         bindOptionalText(selectedTemplateKind?.rawValue, at: 14, statement: statement)
         bindOptionalText(selectedTemplatePrompt, at: 15, statement: statement)
-        sqlite3_bind_text(statement, 16, (source.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 16, (source.rawValue as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 17, Date().timeIntervalSince1970)
         bindOptionalText(calendarOccurrence?.identityKey, at: 18, statement: statement)
         bindOptionalText(calendarOccurrence?.provider.rawValue, at: 19, statement: statement)
@@ -898,10 +906,10 @@ public final class DictationStore {
         defer { sqlite3_finalize(statement) }
 
         let startString = ISO8601DateFormatter().string(from: startTime)
-        sqlite3_bind_text(statement, 1, (title as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (title as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(calendarOccurrence?.eventID ?? calendarEventID, at: 2, statement: statement)
-        sqlite3_bind_text(statement, 3, (startString as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 4, (MeetingStatus.recording.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 3, (startString as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 4, (MeetingStatus.recording.rawValue as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(selectedTemplateID, at: 5, statement: statement)
         bindOptionalText(selectedTemplateName, at: 6, statement: statement)
         bindOptionalText(selectedTemplateKind?.rawValue, at: 7, statement: statement)
@@ -1132,8 +1140,8 @@ public final class DictationStore {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 2, (MeetingStatus.noteOnly.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, (MeetingStatus.noteOnly.rawValue as NSString).utf8String, -1, sqliteTransient)
         guard sqlite3_step(statement) == SQLITE_ROW else {
             return MeetingStats(totalWords: 0, totalMeetings: 0, averageWPM: 0)
         }
@@ -1264,7 +1272,7 @@ public final class DictationStore {
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
             defer { sqlite3_finalize(statement) }
-            sqlite3_bind_text(statement, 1, (signature as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(statement, 1, (signature as NSString).utf8String, -1, sqliteTransient)
             guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
         }
     }
@@ -1410,15 +1418,14 @@ public final class DictationStore {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (source.kind as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (source.kind as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int64(statement, 2, source.id); sqlite3_bind_double(statement, 3, source.updatedAt)
-        sqlite3_bind_text(statement, 4, (day as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 4, (day as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int64(statement, 5, Int64(isMeeting ? 0 : source.wordCount)); sqlite3_bind_double(statement, 6, source.duration)
         sqlite3_bind_int(statement, 7, isMeeting ? 0 : 1); sqlite3_bind_int64(statement, 8, Int64(isMeeting ? source.wordCount : 0))
         sqlite3_bind_int(statement, 9, isMeeting ? 1 : 0)
         let blob = InsightsContributionCodec.encode(pairs)
-        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-        _ = blob.withUnsafeBytes { sqlite3_bind_blob(statement, 10, $0.baseAddress, Int32(blob.count), transient) }
+        _ = blob.withUnsafeBytes { sqlite3_bind_blob(statement, 10, $0.baseAddress, Int32(blob.count), sqliteTransient) }
         guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
     }
 
@@ -1434,13 +1441,12 @@ public final class DictationStore {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (source.kind as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (source.kind as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int64(statement, 2, source.id)
         sqlite3_bind_double(statement, 3, source.updatedAt)
-        sqlite3_bind_text(statement, 4, (day as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 4, (day as NSString).utf8String, -1, sqliteTransient)
         let blob = InsightsContributionCodec.encode([])
-        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-        _ = blob.withUnsafeBytes { sqlite3_bind_blob(statement, 5, $0.baseAddress, Int32(blob.count), transient) }
+        _ = blob.withUnsafeBytes { sqlite3_bind_blob(statement, 5, $0.baseAddress, Int32(blob.count), sqliteTransient) }
         guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
     }
 
@@ -1448,7 +1454,7 @@ public final class DictationStore {
         let sql = "SELECT activity_day, word_count, duration_seconds, dictation_sessions, meeting_words, meetings, token_blob FROM insights_record_cache WHERE kind = ? AND record_id = ?"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
-        sqlite3_bind_text(statement, 1, (kind as NSString).utf8String, -1, nil); sqlite3_bind_int64(statement, 2, id)
+        sqlite3_bind_text(statement, 1, (kind as NSString).utf8String, -1, sqliteTransient); sqlite3_bind_int64(statement, 2, id)
         guard sqlite3_step(statement) == SQLITE_ROW else { sqlite3_finalize(statement); return }
         let day = stringColumn(statement, index: 0), words = Int(sqlite3_column_int64(statement, 1))
         let duration = sqlite3_column_double(statement, 2), sessions = Int(sqlite3_column_int(statement, 3))
@@ -1472,7 +1478,7 @@ public final class DictationStore {
         var delete: OpaquePointer?
         guard sqlite3_prepare_v2(db, "DELETE FROM insights_record_cache WHERE kind = ? AND record_id = ?", -1, &delete, nil) == SQLITE_OK else { throw lastError(db) }
         defer { sqlite3_finalize(delete) }
-        sqlite3_bind_text(delete, 1, (kind as NSString).utf8String, -1, nil); sqlite3_bind_int64(delete, 2, id)
+        sqlite3_bind_text(delete, 1, (kind as NSString).utf8String, -1, sqliteTransient); sqlite3_bind_int64(delete, 2, id)
         guard sqlite3_step(delete) == SQLITE_DONE else { throw lastError(db) }
     }
 
@@ -1485,7 +1491,7 @@ public final class DictationStore {
           meetings=meetings+excluded.meetings, duration_seconds=duration_seconds+excluded.duration_seconds
         """
         var s: OpaquePointer?; guard sqlite3_prepare_v2(db, sql, -1, &s, nil) == SQLITE_OK else { throw lastError(db) }; defer { sqlite3_finalize(s) }
-        sqlite3_bind_text(s, 1, (day as NSString).utf8String, -1, nil); sqlite3_bind_int64(s, 2, Int64(dictationWords))
+        sqlite3_bind_text(s, 1, (day as NSString).utf8String, -1, sqliteTransient); sqlite3_bind_int64(s, 2, Int64(dictationWords))
         sqlite3_bind_int(s, 3, Int32(dictationSessions)); sqlite3_bind_int64(s, 4, Int64(meetingWords)); sqlite3_bind_int(s, 5, Int32(meetings)); sqlite3_bind_double(s, 6, duration)
         guard sqlite3_step(s) == SQLITE_DONE else { throw lastError(db) }
     }
@@ -1498,7 +1504,7 @@ public final class DictationStore {
         ] {
             var s: OpaquePointer?; guard sqlite3_prepare_v2(db, sql, -1, &s, nil) == SQLITE_OK else { throw lastError(db) }; defer { sqlite3_finalize(s) }
             var index: Int32 = 1
-            if sql.contains("daily_tokens") { sqlite3_bind_text(s, index, (day as NSString).utf8String, -1, nil); index += 1 }
+            if sql.contains("daily_tokens") { sqlite3_bind_text(s, index, (day as NSString).utf8String, -1, sqliteTransient); index += 1 }
             sqlite3_bind_int64(s, index, pair.tokenID); sqlite3_bind_int(s, index + 1, Int32(dictation)); sqlite3_bind_int(s, index + 2, Int32(meetingCount))
             guard sqlite3_step(s) == SQLITE_DONE else { throw lastError(db) }
         }
@@ -1506,15 +1512,15 @@ public final class DictationStore {
 
     private func internInsightsToken(_ token: String, db: OpaquePointer?) throws -> Int64 {
         var insert: OpaquePointer?; guard sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO insights_tokens(token) VALUES(?)", -1, &insert, nil) == SQLITE_OK else { throw lastError(db) }
-        sqlite3_bind_text(insert, 1, (token as NSString).utf8String, -1, nil); guard sqlite3_step(insert) == SQLITE_DONE else { sqlite3_finalize(insert); throw lastError(db) }; sqlite3_finalize(insert)
+        sqlite3_bind_text(insert, 1, (token as NSString).utf8String, -1, sqliteTransient); guard sqlite3_step(insert) == SQLITE_DONE else { sqlite3_finalize(insert); throw lastError(db) }; sqlite3_finalize(insert)
         var select: OpaquePointer?; guard sqlite3_prepare_v2(db, "SELECT id FROM insights_tokens WHERE token=?", -1, &select, nil) == SQLITE_OK else { throw lastError(db) }; defer { sqlite3_finalize(select) }
-        sqlite3_bind_text(select, 1, (token as NSString).utf8String, -1, nil); guard sqlite3_step(select) == SQLITE_ROW else { throw lastError(db) }
+        sqlite3_bind_text(select, 1, (token as NSString).utf8String, -1, sqliteTransient); guard sqlite3_step(select) == SQLITE_ROW else { throw lastError(db) }
         return sqlite3_column_int64(select, 0)
     }
 
     private func insightsCacheMeta(_ key: String, db: OpaquePointer?) throws -> String? {
         var s: OpaquePointer?; guard sqlite3_prepare_v2(db, "SELECT value FROM insights_cache_meta WHERE key=?", -1, &s, nil) == SQLITE_OK else { throw lastError(db) }; defer { sqlite3_finalize(s) }
-        sqlite3_bind_text(s, 1, (key as NSString).utf8String, -1, nil); return sqlite3_step(s) == SQLITE_ROW ? stringColumn(s, index: 0) : nil
+        sqlite3_bind_text(s, 1, (key as NSString).utf8String, -1, sqliteTransient); return sqlite3_step(s) == SQLITE_ROW ? stringColumn(s, index: 0) : nil
     }
 
     private func cacheDay(_ date: Date, calendar: Calendar) -> String {
@@ -1718,9 +1724,9 @@ public final class DictationStore {
         }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int64(statement, 1, dictationID)
-        sqlite3_bind_text(statement, 2, (finalStatus as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 3, (finalMessage as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 4, (traceJSON as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 2, (finalStatus as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 3, (finalMessage as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 4, (traceJSON as NSString).utf8String, -1, sqliteTransient)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
         }
@@ -1758,14 +1764,14 @@ public final class DictationStore {
     public func updateMeeting(id: Int64, title: String, formattedNotes: String) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        let sql = "UPDATE meetings SET title = ?, formatted_notes = ?, updated_at = ?, sync_dirty = 1 WHERE id = ?"
+        let sql = "UPDATE meetings SET title = ?, formatted_notes = ?, updated_at = ?, sync_dirty = 1 WHERE id = ? AND deleted_at IS NULL"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (title as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 2, (formattedNotes as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (title as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, (formattedNotes as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
         sqlite3_bind_int64(statement, 4, id)
         guard sqlite3_step(statement) == SQLITE_DONE else {
@@ -1781,13 +1787,13 @@ public final class DictationStore {
     public func updateMeetingNotes(id: Int64, formattedNotes: String) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        let sql = "UPDATE meetings SET formatted_notes = ?, notes_source = 'user', updated_at = ?, sync_dirty = 1 WHERE id = ?"
+        let sql = "UPDATE meetings SET formatted_notes = ?, notes_source = 'user', updated_at = ?, sync_dirty = 1 WHERE id = ? AND deleted_at IS NULL"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (formattedNotes as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (formattedNotes as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
         sqlite3_bind_int64(statement, 3, id)
         guard sqlite3_step(statement) == SQLITE_DONE else {
@@ -1799,8 +1805,9 @@ public final class DictationStore {
     /// what was actually cleaned.
     ///
     /// Cleanup is detached and takes seconds to minutes, so the user may edit the
-    /// transcript while it runs. Guarding on the source text means a stale result
-    /// is dropped rather than published over the newer edit. Returns whether a row
+    /// transcript -- or delete the meeting -- while it runs. Guarding on the source
+    /// text and on the tombstone means a stale result is dropped rather than
+    /// published over the newer edit or onto a deleted row. Returns whether a row
     /// was written, so the caller can tell a discarded result from a stored one.
     ///
     /// Writes only `cleaned_transcript` -- deliberately not a method that can also
@@ -1817,17 +1824,17 @@ public final class DictationStore {
         let sql = """
         UPDATE meetings
         SET cleaned_transcript = ?, updated_at = ?, sync_dirty = 1
-        WHERE id = ? AND raw_transcript = ?
+        WHERE id = ? AND raw_transcript = ? AND deleted_at IS NULL
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (cleanedTranscript as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (cleanedTranscript as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
         sqlite3_bind_int64(statement, 3, id)
-        sqlite3_bind_text(statement, 4, (expectedRawTranscript as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 4, (expectedRawTranscript as NSString).utf8String, -1, sqliteTransient)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
         }
@@ -1845,6 +1852,8 @@ public final class DictationStore {
     /// - `manual_notes` -- an *input* to the summary changed. This one deliberately
     ///   leaves `notes_source` at `raw`, so the retry sweep runs again with the
     ///   fresher manual notes rather than dropping the meeting.
+    /// - `deleted_at` -- the user deleted the meeting; writing notes back would
+    ///   resurrect content onto the tombstone.
     ///
     /// Returns whether a row was written.
     @discardableResult
@@ -1860,6 +1869,7 @@ public final class DictationStore {
         UPDATE meetings
         SET formatted_notes = ?, notes_source = 'cleaned', updated_at = ?, sync_dirty = 1
         WHERE id = ?
+          AND deleted_at IS NULL
           AND notes_source = 'raw'
           AND cleaned_transcript = ?
           AND manual_notes = ?
@@ -1869,11 +1879,11 @@ public final class DictationStore {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (formattedNotes as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (formattedNotes as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
         sqlite3_bind_int64(statement, 3, id)
-        sqlite3_bind_text(statement, 4, (expectedCleanedTranscript as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 5, (expectedManualNotes as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 4, (expectedCleanedTranscript as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 5, (expectedManualNotes as NSString).utf8String, -1, sqliteTransient)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
         }
@@ -1893,14 +1903,14 @@ public final class DictationStore {
         guard !visualContext.isEmpty || !previousMeetingNotes.isEmpty else { return }
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        let sql = "UPDATE meetings SET visual_context = ?, previous_meeting_notes = ? WHERE id = ?"
+        let sql = "UPDATE meetings SET visual_context = ?, previous_meeting_notes = ? WHERE id = ? AND deleted_at IS NULL"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (visualContext as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 2, (previousMeetingNotes as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (visualContext as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, (previousMeetingNotes as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int64(statement, 3, id)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
@@ -1941,13 +1951,13 @@ public final class DictationStore {
         defer { sqlite3_close(db) }
         let manualNotes = try manualNotesForMeeting(id: id, db: db)
         let wordCount = Self.countWords(in: rawTranscript) + Self.countWords(in: manualNotes)
-        let sql = "UPDATE meetings SET raw_transcript = ?, word_count = ?, updated_at = ?, sync_dirty = 1 WHERE id = ?"
+        let sql = "UPDATE meetings SET raw_transcript = ?, word_count = ?, updated_at = ?, sync_dirty = 1 WHERE id = ? AND deleted_at IS NULL"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (rawTranscript as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (rawTranscript as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int(statement, 2, Int32(wordCount))
         sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
         sqlite3_bind_int64(statement, 4, id)
@@ -2043,11 +2053,11 @@ public final class DictationStore {
                 sqlite3_reset(statement)
                 sqlite3_clear_bindings(statement)
                 sqlite3_bind_int64(statement, 1, meetingID)
-                sqlite3_bind_text(statement, 2, (entry.timestampLabel as NSString).utf8String, -1, nil)
-                sqlite3_bind_text(statement, 3, (entry.speaker as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(statement, 2, (entry.timestampLabel as NSString).utf8String, -1, sqliteTransient)
+                sqlite3_bind_text(statement, 3, (entry.speaker as NSString).utf8String, -1, sqliteTransient)
                 sqlite3_bind_double(statement, 4, entry.startSeconds)
                 sqlite3_bind_double(statement, 5, entry.endSeconds)
-                sqlite3_bind_text(statement, 6, (entry.text as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(statement, 6, (entry.text as NSString).utf8String, -1, sqliteTransient)
                 guard sqlite3_step(statement) == SQLITE_DONE else {
                     throw lastError(db)
                 }
@@ -2093,7 +2103,7 @@ public final class DictationStore {
         let sql = """
         UPDATE meetings
         SET end_time = ?, duration_seconds = ?, raw_transcript = ?, formatted_notes = ?, meeting_status = ?, word_count = ?, updated_at = ?, sync_dirty = 1
-        WHERE id = ?
+        WHERE id = ? AND deleted_at IS NULL
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -2102,9 +2112,9 @@ public final class DictationStore {
         defer { sqlite3_finalize(statement) }
         bindOptionalText(endTime, at: 1, statement: statement)
         sqlite3_bind_double(statement, 2, durationSeconds)
-        sqlite3_bind_text(statement, 3, (transcript as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 4, (formattedNotes as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 5, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 3, (transcript as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 4, (formattedNotes as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 5, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int(statement, 6, Int32(wordCount))
         sqlite3_bind_double(statement, 7, Date().timeIntervalSince1970)
         sqlite3_bind_int64(statement, 8, id)
@@ -2121,13 +2131,13 @@ public final class DictationStore {
     public func updateMeetingManualNotes(id: Int64, manualNotes: String) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        let sql = "UPDATE meetings SET manual_notes = ?, updated_at = ?, sync_dirty = 1 WHERE id = ?"
+        let sql = "UPDATE meetings SET manual_notes = ?, updated_at = ?, sync_dirty = 1 WHERE id = ? AND deleted_at IS NULL"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (manualNotes as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (manualNotes as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
         sqlite3_bind_int64(statement, 3, id)
         guard sqlite3_step(statement) == SQLITE_DONE else {
@@ -2156,14 +2166,14 @@ public final class DictationStore {
     private func updateMeetingStatus(id: Int64, status: MeetingStatus, db: OpaquePointer?) throws {
         let wordCount = try manualNoteWordCountIfNeeded(for: status, id: id, db: db)
         let sql = wordCount == nil
-            ? "UPDATE meetings SET meeting_status = ?, updated_at = ?, sync_dirty = 1 WHERE id = ?"
-            : "UPDATE meetings SET meeting_status = ?, word_count = ?, updated_at = ?, sync_dirty = 1 WHERE id = ?"
+            ? "UPDATE meetings SET meeting_status = ?, updated_at = ?, sync_dirty = 1 WHERE id = ? AND deleted_at IS NULL"
+            : "UPDATE meetings SET meeting_status = ?, word_count = ?, updated_at = ?, sync_dirty = 1 WHERE id = ? AND deleted_at IS NULL"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (status.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (status.rawValue as NSString).utf8String, -1, sqliteTransient)
         if let wordCount {
             sqlite3_bind_int(statement, 2, Int32(wordCount))
             sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
@@ -2202,7 +2212,7 @@ public final class DictationStore {
         let sql = """
         UPDATE meetings
         SET title = ?, calendar_event_id = ?, start_time = ?, end_time = ?, duration_seconds = ?, raw_transcript = ?, formatted_notes = ?, mic_audio_path = ?, system_audio_path = ?, saved_recording_path = ?, meeting_status = ?, word_count = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, updated_at = ?, sync_dirty = 1
-        WHERE id = ?
+        WHERE id = ? AND deleted_at IS NULL
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -2217,17 +2227,17 @@ public final class DictationStore {
         let manualNotes = try manualNotesForMeeting(id: id, db: db)
         let wordCount = Self.countWords(in: rawTranscript) + Self.countWords(in: manualNotes)
 
-        sqlite3_bind_text(statement, 1, (title as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (title as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(calendarEventID, at: 2, statement: statement)
-        sqlite3_bind_text(statement, 3, (startString as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 4, (endString as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 3, (startString as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 4, (endString as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 5, durationSeconds)
-        sqlite3_bind_text(statement, 6, (rawTranscript as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 7, (formattedNotes as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 6, (rawTranscript as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 7, (formattedNotes as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(micAudioPath, at: 8, statement: statement)
         bindOptionalText(systemAudioPath, at: 9, statement: statement)
         bindOptionalText(savedRecordingPath, at: 10, statement: statement)
-        sqlite3_bind_text(statement, 11, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 11, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int(statement, 12, Int32(wordCount))
         bindOptionalText(selectedTemplateID, at: 13, statement: statement)
         bindOptionalText(selectedTemplateName, at: 14, statement: statement)
@@ -2353,7 +2363,7 @@ public final class DictationStore {
         }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int64(statement, 1, meetingID)
-        sqlite3_bind_text(statement, 2, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 2, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, sqliteTransient)
         guard sqlite3_step(statement) == SQLITE_ROW else {
             throw DictationStoreError.meetingNotFound(id: meetingID)
         }
@@ -2385,10 +2395,10 @@ public final class DictationStore {
         }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int64(statement, 1, meetingID)
-        sqlite3_bind_text(statement, 2, (snapshot.rawTranscript as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 2, (snapshot.rawTranscript as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(snapshot.formattedNotes, at: 3, statement: statement)
         sqlite3_bind_double(statement, 4, snapshot.durationSeconds)
-        sqlite3_bind_text(statement, 5, (snapshot.startTime as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 5, (snapshot.startTime as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(snapshot.endTime, at: 6, statement: statement)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
@@ -2499,19 +2509,19 @@ public final class DictationStore {
         let sql = """
         UPDATE meetings
         SET start_time = ?, end_time = ?, duration_seconds = ?, raw_transcript = ?, formatted_notes = ?, meeting_status = ?, word_count = ?, updated_at = ?, sync_dirty = 1
-        WHERE id = ?
+        WHERE id = ? AND deleted_at IS NULL
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (snapshot.startTime as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (snapshot.startTime as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(endTime, at: 2, statement: statement)
         sqlite3_bind_double(statement, 3, durationSeconds)
-        sqlite3_bind_text(statement, 4, (rawTranscript as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 4, (rawTranscript as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(formattedNotes, at: 5, statement: statement)
-        sqlite3_bind_text(statement, 6, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 6, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int(statement, 7, Int32(wordCount))
         sqlite3_bind_double(statement, 8, Date().timeIntervalSince1970)
         sqlite3_bind_int64(statement, 9, id)
@@ -2607,19 +2617,19 @@ public final class DictationStore {
         let sql = """
         UPDATE meetings
         SET title = ?, formatted_notes = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, updated_at = ?, sync_dirty = 1
-        WHERE id = ?
+        WHERE id = ? AND deleted_at IS NULL
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (title as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 2, (formattedNotes as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 3, (selectedTemplateID as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 4, (selectedTemplateName as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 5, (selectedTemplateKind.rawValue as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 6, (selectedTemplatePrompt as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (title as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, (formattedNotes as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 3, (selectedTemplateID as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 4, (selectedTemplateName as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 5, (selectedTemplateKind.rawValue as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 6, (selectedTemplatePrompt as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 7, Date().timeIntervalSince1970)
         sqlite3_bind_int64(statement, 8, id)
         guard sqlite3_step(statement) == SQLITE_DONE else {
@@ -2643,21 +2653,21 @@ public final class DictationStore {
         let sql = """
         UPDATE meetings
         SET raw_transcript = ?, formatted_notes = ?, meeting_status = ?, word_count = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, updated_at = ?, sync_dirty = 1
-        WHERE id = ?
+        WHERE id = ? AND deleted_at IS NULL
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (rawTranscript as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 2, (formattedNotes as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 3, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (rawTranscript as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, (formattedNotes as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 3, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int(statement, 4, Int32(wordCount))
-        sqlite3_bind_text(statement, 5, (selectedTemplateID as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 6, (selectedTemplateName as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 7, (selectedTemplateKind.rawValue as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 8, (selectedTemplatePrompt as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 5, (selectedTemplateID as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 6, (selectedTemplateName as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 7, (selectedTemplateKind.rawValue as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 8, (selectedTemplatePrompt as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 9, Date().timeIntervalSince1970)
         sqlite3_bind_int64(statement, 10, id)
         guard sqlite3_step(statement) == SQLITE_DONE else {
@@ -2671,13 +2681,13 @@ public final class DictationStore {
     public func updateMeetingTitle(id: Int64, title: String) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        let sql = "UPDATE meetings SET title = ?, updated_at = ?, sync_dirty = 1 WHERE id = ?"
+        let sql = "UPDATE meetings SET title = ?, updated_at = ?, sync_dirty = 1 WHERE id = ? AND deleted_at IS NULL"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (title as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (title as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
         sqlite3_bind_int64(statement, 3, id)
         guard sqlite3_step(statement) == SQLITE_DONE else {
@@ -2688,7 +2698,7 @@ public final class DictationStore {
     public func updateMeetingSavedRecordingPath(id: Int64, path: String?) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        let sql = "UPDATE meetings SET saved_recording_path = ? WHERE id = ?"
+        let sql = "UPDATE meetings SET saved_recording_path = ? WHERE id = ? AND deleted_at IS NULL"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
@@ -2711,7 +2721,7 @@ public final class DictationStore {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (name as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (name as NSString).utf8String, -1, sqliteTransient)
         if let parentID {
             sqlite3_bind_int64(statement, 2, parentID)
         } else {
@@ -2732,7 +2742,7 @@ public final class DictationStore {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (name as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (name as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int64(statement, 2, id)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
@@ -2850,7 +2860,7 @@ public final class DictationStore {
     public func moveMeeting(id: Int64, toFolder folderID: Int64?) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        let sql = "UPDATE meetings SET folder_id = ? WHERE id = ?"
+        let sql = "UPDATE meetings SET folder_id = ? WHERE id = ? AND deleted_at IS NULL"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
@@ -3004,8 +3014,8 @@ public final class DictationStore {
             throw lastError(db)
         }
         defer { sqlite3_finalize(meetingStatement) }
-        sqlite3_bind_text(meetingStatement, 1, (MeetingStatus.recording.rawValue as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(meetingStatement, 2, (MeetingStatus.processing.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(meetingStatement, 1, (MeetingStatus.recording.rawValue as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(meetingStatement, 2, (MeetingStatus.processing.rawValue as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int(meetingStatement, 3, Int32(limit))
         sqlite3_bind_int(meetingStatement, 4, Int32(max(offset, 0)))
         while sqlite3_step(meetingStatement) == SQLITE_ROW {
@@ -3144,8 +3154,8 @@ public final class DictationStore {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (MeetingStatus.recording.rawValue as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 2, (MeetingStatus.processing.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (MeetingStatus.recording.rawValue as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, (MeetingStatus.processing.rawValue as NSString).utf8String, -1, sqliteTransient)
         return sqlite3_step(statement) == SQLITE_ROW
     }
 
@@ -3212,7 +3222,7 @@ public final class DictationStore {
         defer { sqlite3_finalize(statement) }
         bindOptionalText(changeTag, at: 1, statement: statement)
         sqlite3_bind_double(statement, 2, syncedAt.timeIntervalSince1970)
-        sqlite3_bind_text(statement, 3, (recordName as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 3, (recordName as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 4, recordUpdatedAt.timeIntervalSince1970)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
@@ -3394,7 +3404,7 @@ public final class DictationStore {
                 throw lastError(db)
             }
             defer { sqlite3_finalize(update) }
-            sqlite3_bind_text(update, 1, (recordName as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(update, 1, (recordName as NSString).utf8String, -1, sqliteTransient)
             sqlite3_bind_double(update, 2, Date().timeIntervalSince1970)
             sqlite3_bind_int64(update, 3, id)
             guard sqlite3_step(update) == SQLITE_DONE else {
@@ -3613,7 +3623,7 @@ public final class DictationStore {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, ("\(recordPrefix)-%" as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, ("\(recordPrefix)-%" as NSString).utf8String, -1, sqliteTransient)
 
         var ids: [Int64] = []
         while sqlite3_step(statement) == SQLITE_ROW {
@@ -3634,7 +3644,7 @@ public final class DictationStore {
                 throw lastError(db)
             }
             defer { sqlite3_finalize(update) }
-            sqlite3_bind_text(update, 1, (source as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(update, 1, (source as NSString).utf8String, -1, sqliteTransient)
             sqlite3_bind_int64(update, 2, id)
             guard sqlite3_step(update) == SQLITE_DONE else {
                 throw lastError(db)
@@ -3685,16 +3695,16 @@ public final class DictationStore {
         defer { sqlite3_finalize(statement) }
 
         let timestamp = record.endedAt ?? record.createdAt
-        sqlite3_bind_text(statement, 1, (formatISODate(timestamp) as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (formatISODate(timestamp) as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 2, record.durationSeconds)
-        sqlite3_bind_text(statement, 3, (record.text as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 3, (record.text as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int(statement, 4, Int32(record.wordCount))
-        sqlite3_bind_text(statement, 5, (syncImportSource(for: record, fallback: "icloud") as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 5, (syncImportSource(for: record, fallback: "icloud") as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(record.startedAt.map(formatISODate), at: 6, statement: statement)
         bindOptionalText(record.endedAt.map(formatISODate), at: 7, statement: statement)
         sqlite3_bind_double(statement, 8, record.updatedAt.timeIntervalSince1970)
         bindOptionalDouble(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, at: 9, statement: statement)
-        sqlite3_bind_text(statement, 10, (record.id as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 10, (record.id as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(record.cloudChangeTag, at: 11, statement: statement)
         sqlite3_bind_double(statement, 12, Date().timeIntervalSince1970)
         guard sqlite3_step(statement) == SQLITE_DONE else {
@@ -3750,23 +3760,23 @@ public final class DictationStore {
         }
         defer { sqlite3_finalize(statement) }
 
-        sqlite3_bind_text(statement, 1, ((record.title ?? "Meeting") as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 2, (formatISODate(start) as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 3, (formatISODate(end) as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, ((record.title ?? "Meeting") as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, (formatISODate(start) as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 3, (formatISODate(end) as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 4, record.durationSeconds)
         let rawTranscript = record.speakerTranscript ?? record.text
-        sqlite3_bind_text(statement, 5, (rawTranscript as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 5, (rawTranscript as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(record.summaryText, at: 6, statement: statement)
         let meetingStatus = record.meetingStatus ?? .completed
-        sqlite3_bind_text(statement, 7, (meetingStatus.rawValue as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 8, ((record.manualNotes ?? "") as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 7, (meetingStatus.rawValue as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 8, ((record.manualNotes ?? "") as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int(statement, 9, Int32(record.wordCount))
-        sqlite3_bind_text(statement, 10, (syncImportSource(for: record, fallback: MeetingSource.meeting.rawValue) as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 10, (syncImportSource(for: record, fallback: MeetingSource.meeting.rawValue) as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(followUpRecordName, at: 11, statement: statement)
         bindOptionalText(followUpRecordName, at: 12, statement: statement)
         sqlite3_bind_double(statement, 13, record.updatedAt.timeIntervalSince1970)
         bindOptionalDouble(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, at: 14, statement: statement)
-        sqlite3_bind_text(statement, 15, (record.id as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 15, (record.id as NSString).utf8String, -1, sqliteTransient)
         bindOptionalText(record.cloudChangeTag, at: 16, statement: statement)
         sqlite3_bind_double(statement, 17, Date().timeIntervalSince1970)
         guard sqlite3_step(statement) == SQLITE_DONE else {
@@ -3788,7 +3798,7 @@ public final class DictationStore {
             throw lastError(db)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, (recordName as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (recordName as NSString).utf8String, -1, sqliteTransient)
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
         return sqlite3_column_double(statement, 0)
     }
@@ -3940,7 +3950,7 @@ public final class DictationStore {
 
     private func bindOptionalText(_ value: String?, at index: Int32, statement: OpaquePointer?) {
         if let value {
-            sqlite3_bind_text(statement, index, (value as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(statement, index, (value as NSString).utf8String, -1, sqliteTransient)
         } else {
             sqlite3_bind_null(statement, index)
         }
@@ -3977,9 +3987,15 @@ public final class DictationStore {
         return Date(timeIntervalSince1970: value)
     }
 
+    /// Days are bucketed in the *local* zone, not UTC.
+    ///
+    /// `timestamp` is stored as UTC ISO8601, so `date(timestamp)` would group by UTC
+    /// day while `computeStreak` compares against `Calendar.current` -- west of GMT a
+    /// morning dictation lands on the previous day, and the streak disagrees with the
+    /// Insights daily chart, which keys on local components (see `cacheDay`).
     private func dictationStreaks(db: OpaquePointer?) throws -> (current: Int, longest: Int) {
         let sql = """
-        SELECT DISTINCT date(timestamp) AS used_day
+        SELECT DISTINCT date(timestamp, 'localtime') AS used_day
         FROM dictations
         WHERE deleted_at IS NULL
         ORDER BY used_day ASC
@@ -3990,13 +4006,20 @@ public final class DictationStore {
         }
         defer { sqlite3_finalize(statement) }
 
+        // Gregorian rather than `Calendar.current`: SQLite emits proleptic Gregorian
+        // day strings, and a non-Gregorian user calendar would read the year wrong.
+        // The resulting instant is local midnight either way, which is what
+        // `computeStreak`'s `startOfDay` normalization expects.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+
         var days: [Date] = []
-        let formatter = ISO8601DateFormatter()
         while sqlite3_step(statement) == SQLITE_ROW {
-            let raw = stringColumn(statement, index: 0)
-            if let date = formatter.date(from: "\(raw)T00:00:00Z") {
-                days.append(date)
-            }
+            let parts = stringColumn(statement, index: 0).split(separator: "-").compactMap { Int($0) }
+            guard parts.count == 3,
+                  let day = calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+            else { continue }
+            days.append(day)
         }
         return Self.computeStreak(days: days)
     }

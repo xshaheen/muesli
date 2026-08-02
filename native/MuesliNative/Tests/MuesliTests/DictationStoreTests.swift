@@ -2029,6 +2029,35 @@ struct DictationStoreTests {
         #expect(stats.longestStreakDays == 1)
     }
 
+    /// Streak days must be bucketed in the user's zone, not UTC.
+    ///
+    /// A dictation just after local midnight falls on a different UTC day for every
+    /// non-zero UTC offset, so grouping by UTC day credited it to the neighbouring
+    /// day and the current streak collapsed to zero.
+    @Test("dictation streaks bucket by local day")
+    func dictationStreaksBucketByLocalDay() throws {
+        let store = try makeStore()
+
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let yesterday = try #require(calendar.date(byAdding: .day, value: -1, to: today))
+        let dayBeforeYesterday = try #require(calendar.date(byAdding: .day, value: -2, to: today))
+
+        for (index, localMidnight) in [dayBeforeYesterday, yesterday].enumerated() {
+            let endedAt = localMidnight.addingTimeInterval(1)
+            try store.insertDictation(
+                text: "just after local midnight \(index)",
+                durationSeconds: 1,
+                startedAt: localMidnight,
+                endedAt: endedAt
+            )
+        }
+
+        let stats = try store.dictationStats()
+        #expect(stats.currentStreakDays == 2)
+        #expect(stats.longestStreakDays == 2)
+    }
+
     @Test("meeting stats aggregate correctly")
     func meetingStats() throws {
         let store = try makeStore()
