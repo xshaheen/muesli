@@ -534,6 +534,12 @@ final class FloatingMeetingTranscriptPanelController {
             )
         )
         hostingView.wantsLayer = true
+        // The controller owns the window's frame; SwiftUI must never drive it. With the
+        // default sizing options, the `if isPresented` empty state collapses the window
+        // to 0x0 at a stale corner, and the next show's setFrame is then re-moved by the
+        // async content pass — the panel lands correctly and visibly jumps away, from
+        // whatever anchor the zero-size window last had.
+        hostingView.sizingOptions = []
         return hostingView
     }
 }
