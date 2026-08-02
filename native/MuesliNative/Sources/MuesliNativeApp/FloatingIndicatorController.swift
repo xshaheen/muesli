@@ -5,10 +5,19 @@ import MuesliCore
 import os
 
 enum FloatingIndicatorPointerIntent {
-    static let dragThreshold: CGFloat = 4
+    static let dragThreshold: CGFloat = 6
+    /// A release closer to the press than this is a click that wobbled, not a drag:
+    /// clicks carry a few points of jitter, and starting a drag collapses the
+    /// hover-expanded pill under the pointer — so a misread click visibly
+    /// displaces the pill and then persists the accident.
+    static let deliberateDragDistance: CGFloat = 12
 
     static func isDrag(from start: NSPoint, to current: NSPoint) -> Bool {
         hypot(current.x - start.x, current.y - start.y) >= dragThreshold
+    }
+
+    static func isDeliberateDrag(from start: NSPoint, to current: NSPoint) -> Bool {
+        hypot(current.x - start.x, current.y - start.y) >= deliberateDragDistance
     }
 }
 
@@ -83,7 +92,16 @@ private final class HoverIndicatorView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        if didDrag {
+        let releasedNearPress = mouseDownScreenLocation.map {
+            !FloatingIndicatorPointerIntent.isDeliberateDrag(from: $0, to: NSEvent.mouseLocation)
+        } ?? false
+        if didDrag, releasedNearPress {
+            // The wobble crossed the drag threshold but the release came back to the
+            // press: a click. The collapse already moved the pill, so snap it home
+            // instead of persisting the accident, then deliver the click.
+            owner?.abandonDragAsClick(atX: convert(event.locationInWindow, from: nil).x,
+                                      optionClick: event.modifierFlags.contains(.option))
+        } else if didDrag {
             owner?.savePosition()
         } else if event.modifierFlags.contains(.option) {
             owner?.handleOptionClick()
@@ -413,6 +431,22 @@ final class FloatingIndicatorController: NSObject {
         // setState orders the panel front after every transition; a drag resizes the
         // same way and needs the same guarantee.
         panel.orderFrontRegardless()
+    }
+
+    /// A drag that ended back at its press point was a click that wobbled. The
+    /// collapse already displaced the pill under the pointer, so re-resolve it from
+    /// its unchanged anchor — no position is saved — and deliver the click.
+    func abandonDragAsClick(atX x: CGFloat, optionClick: Bool) {
+        isDragging = false
+        dragStartAnchorCenter = nil
+        dragStartPillCenter = nil
+        dragScreenFrames = []
+        setState(state, config: configStore.load())
+        if optionClick {
+            handleOptionClick()
+        } else {
+            handleClick(atX: x)
+        }
     }
 
     func savePosition() {
