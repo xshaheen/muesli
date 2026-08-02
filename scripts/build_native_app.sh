@@ -115,9 +115,9 @@ CLI_BIN="$BIN_DIR/$CLI_BINARY"
 rm -rf "$STAGED_APP_DIR"
 mkdir -p "$STAGED_APP_DIR/Contents/MacOS" "$STAGED_APP_DIR/Contents/Resources"
 
-cp "$APP_BIN" "$STAGED_APP_DIR/Contents/MacOS/$APP_EXECUTABLE_NAME"
+cp -f "$APP_BIN" "$STAGED_APP_DIR/Contents/MacOS/$APP_EXECUTABLE_NAME"
 chmod +x "$STAGED_APP_DIR/Contents/MacOS/$APP_EXECUTABLE_NAME"
-cp "$CLI_BIN" "$STAGED_APP_DIR/Contents/MacOS/$CLI_BINARY"
+cp -f "$CLI_BIN" "$STAGED_APP_DIR/Contents/MacOS/$CLI_BINARY"
 chmod +x "$STAGED_APP_DIR/Contents/MacOS/$CLI_BINARY"
 
 # Bundle SwiftPM-linked frameworks (rpath is @loader_path, so they go next to the binary)
@@ -131,7 +131,7 @@ done
 for dylib in "$BIN_DIR"/*.dylib; do
   [[ -f "$dylib" ]] || continue
   target="$STAGED_APP_DIR/Contents/MacOS/$(basename "$dylib")"
-  cp -RL "$dylib" "$target"
+  cp -fRL "$dylib" "$target"
   thin_macho_to_bundle_arch "$target"
 done
 
@@ -146,7 +146,7 @@ LOCALVQE_LIB_DIR="${MUESLI_LOCALVQE_LIB_DIR:-$ROOT/native/MuesliNative/LocalVQE/
 if [[ -d "$LOCALVQE_LIB_DIR" ]]; then
   find "$LOCALVQE_LIB_DIR" -maxdepth 1 \( -name "liblocalvqe*.dylib" -o -name "libggml*.dylib" -o -name "libggml*.so" \) \( -type f -o -type l \) | while read -r dylib; do
     target="$STAGED_APP_DIR/Contents/MacOS/$(basename "$dylib")"
-    cp -RL "$dylib" "$target"
+    cp -fRL "$dylib" "$target"
     thin_macho_to_bundle_arch "$target"
   done
 fi

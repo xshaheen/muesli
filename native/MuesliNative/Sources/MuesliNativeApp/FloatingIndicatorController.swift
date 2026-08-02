@@ -1768,7 +1768,7 @@ final class FloatingIndicatorController: NSObject {
 
     /// The collapsed pill. The anchor is defined against this size, not against whichever
     /// state happens to be showing.
-    static let idleIndicatorSize = NSSize(width: 44, height: 28)
+    nonisolated static let idleIndicatorSize = NSSize(width: 44, height: 28)
 
     /// Stand-in bounds for sizing when no display is attached. Only the states that clamp
     /// their width against the screen read it at all.
