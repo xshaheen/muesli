@@ -622,7 +622,6 @@ final class MuesliController: NSObject {
                 self.handleCancel()
                 self.hotkeyMonitor.cancelToggleMode()
             }
-            self.indicator.isToggleDictation = false
         }
         indicator.onPositionSaved = { [weak self] center in
             self?.updateConfig {
@@ -7266,13 +7265,11 @@ final class MuesliController: NSObject {
             return
         }
         fputs("[cua] toggle command start\n", stderr)
-        indicator.isToggleDictation = true
         handleComputerUseStart()
     }
 
     private func handleComputerUseToggleStop() {
         fputs("[cua] toggle command stop\n", stderr)
-        indicator.isToggleDictation = false
         handleComputerUseStop()
     }
 
@@ -7291,7 +7288,6 @@ final class MuesliController: NSObject {
         computerUseCommandStartedAt = nil
         pendingComputerUseStopSessionID = nil
         pendingComputerUseStopStartedAt = nil
-        indicator.isToggleDictation = false
         computerUseHotkeyMonitor.cancelToggleMode()
         indicator.hideComputerUseCursor()
         resetComputerUseFloatingStatus()
@@ -7311,7 +7307,6 @@ final class MuesliController: NSObject {
             fputs("[cua] stop without owned audio session\n", stderr)
             return
         }
-        indicator.isToggleDictation = false
         let startedAt = computerUseCommandStartedAt ?? Date()
         computerUseCommandStartedAt = nil
         activeComputerUseAudioSessionID = nil
@@ -8333,7 +8328,6 @@ final class MuesliController: NSObject {
 
     private func handleToggleStop() {
         fputs("[muesli-native] toggle dictation stop\n", stderr)
-        indicator.isToggleDictation = false
         handleStop()
     }
 

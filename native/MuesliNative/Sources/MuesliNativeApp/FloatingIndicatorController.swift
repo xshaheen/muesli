@@ -140,9 +140,9 @@ final class FloatingIndicatorController: NSObject {
     private var recordingWaveformMode: WaveformAnimationMode = .level
     private var waveformAnimationStartedAt = Date()
     fileprivate var isDragging = false
-    // Captured when a drag begins, before the collapse moves anything: the anchor the
-    // pill was placed from, where that placement actually left it, and the displays the
-    // drag may cross.
+    // Captured when a drag begins: the anchor the pill was placed from (read before the
+    // collapse, which does not move it), where the collapse left the pill (read after),
+    // and the displays the drag may cross.
     private var dragStartAnchorCenter: CGPoint?
     private var dragStartPillCenter: CGPoint?
     private var dragScreenFrames: [NSRect] = []
@@ -153,7 +153,6 @@ final class FloatingIndicatorController: NSObject {
     var onOpenMeetingNotes: (() -> Void)?
     var onCancelToggleDictation: (() -> Void)?
     var onPositionSaved: ((CGPoint) -> Void)?
-    var isToggleDictation = false
     private var stopLayer: CALayer?
     private var transcribingTitle = "Transcribing"
     private var computerUseTranscriptText: String?
@@ -170,6 +169,13 @@ final class FloatingIndicatorController: NSObject {
     /// Bumped by every pass that rewrites the pill's chrome, so work deferred to the end
     /// of a transition can tell whether it is still the current one.
     private var chromeGeneration: UInt64 = 0
+    /// The generation whose waveform layout is still waiting on a transition to finish.
+    ///
+    /// Compared against the live generation rather than cleared by hand: anything that
+    /// claims the chrome bumps that counter, which is exactly what makes this marker
+    /// stale, so there is no cancellation path to keep in step.
+    private var pendingWaveformChromeGeneration: UInt64?
+    private var hasPendingWaveformChrome: Bool { pendingWaveformChromeGeneration == chromeGeneration }
 
     private static let logger = Logger(subsystem: "com.muesli.native", category: "FloatingIndicator")
 
@@ -204,7 +210,10 @@ final class FloatingIndicatorController: NSObject {
     private func scheduleScreenReconfigurationRelayout() {
         screenRelayoutWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self, panel != nil, !isDragging, !isComputerUseCursorMode else { return }
+            // A loading pill is excluded along with the drag and the cursor: setState knows
+            // nothing about the spinner, so re-framing through it would strand the spinner
+            // on an idle pill and leave the flag latched with it.
+            guard let self, panel != nil, !isDragging, !isComputerUseCursorMode, !isShowingLoading else { return }
             Self.logger.notice("screens changed; re-resolving pill and transcript")
             setState(state, config: configStore.load())
         }
@@ -236,17 +245,25 @@ final class FloatingIndicatorController: NSObject {
     }
 
     func pointerDragBegan() {
-        // Read before the collapse moves the pill: the anchor it was placed from, and
-        // where that placement actually put it. Those two differ whenever the frame was
-        // clamped, and the difference is exactly what the save has to leave alone.
-        let liveCenter = indicatorScreenFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
-        dragStartAnchorCenter = customAnchorCenter ?? liveCenter
-        dragStartPillCenter = liveCenter
+        // The anchor the pill was placed from, read before the collapse: the collapse
+        // resizes and moves the pill but does not change where it is anchored. The
+        // settled frame rather than the live one, so a drag started mid-transition
+        // measures against the rect the pill is arriving at instead of one it is only
+        // passing through.
+        let settledFrame = lastAppliedIndicatorFrame ?? indicatorScreenFrame
+        dragStartAnchorCenter = customAnchorCenter ?? settledFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
         dragScreenFrames = NSScreen.screens.map(\.visibleFrame)
-        // An open chat declines the collapse but not the hide -- the pill is leaving
-        // either way, so the panel cannot stay pinned to where it was.
+        // The pill is leaving either way, so the panel cannot stay pinned to where it was.
         hideMeetingTranscript()
         collapseForDrag()
+        // Where the collapse actually left the pill, read after it runs rather than
+        // before. A wide state is clamped inward from its anchor and the collapse undoes
+        // that clamp; measuring the drag from the pre-collapse centre would carry the
+        // clamp into the saved anchor on top of the movement, so a drop a few points
+        // from the grab could migrate the anchor by the full clamp. The live frame, not
+        // the applied one: the collapse ends by moving the window off it to put the grab
+        // back under the pointer.
+        dragStartPillCenter = indicatorScreenFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
     }
 
     func pointerInteractionEnded() {
@@ -266,27 +283,35 @@ final class FloatingIndicatorController: NSObject {
     }
 
     func handleClick(atX x: CGFloat? = nil) {
-        if state == .recording, let x {
-            if x < 30 {
-                if isMeetingRecording {
-                    onToggleMeetingPause?()
-                } else {
-                    onCancelToggleDictation?()
-                }
-            } else {
-                if isMeetingRecording {
-                    onStopMeeting?()
-                } else {
-                    onStopToggleDictation?()
-                }
-            }
-        } else if state == .recording {
+        guard state == .recording else { return }
+        if let x, x < recordingPauseRegionMaxX() {
             if isMeetingRecording {
-                onStopMeeting?()
+                onToggleMeetingPause?()
             } else {
-                onStopToggleDictation?()
+                onCancelToggleDictation?()
             }
+            return
         }
+        if isMeetingRecording {
+            onStopMeeting?()
+        } else {
+            onStopToggleDictation?()
+        }
+    }
+
+    /// Where the leading control's hit region ends on a recording pill.
+    ///
+    /// Derived from the chrome rather than fixed at 30pt: the glyph and the stop square
+    /// are both laid out against the pill's width, so on a pill that is not 76pt wide a
+    /// constant split falls in the middle of neither control. The glyph itself is 10pt
+    /// across -- too small to aim at -- so its region is the minimum comfortable target
+    /// centred on it, stopping short of the stop square. Everything to the right of it
+    /// stops the recording, which is what the pill's trailing side has always done.
+    private func recordingPauseRegionMaxX() -> CGFloat {
+        guard let iconLabel, !iconLabel.isHidden, iconLabel.frame.width > 0 else { return 0 }
+        let padded = iconLabel.frame.midX + Self.minimumControlHitWidth / 2
+        guard let stopMinX = stopLayer?.frame.minX else { return padded }
+        return min(padded, stopMinX)
     }
 
     func handleOptionClick() {
@@ -303,19 +328,14 @@ final class FloatingIndicatorController: NSObject {
         // transition it interrupts -- a hover expansion, most often -- is stale now.
         chromeGeneration &+= 1
         hoverExitWorkItem?.cancel()
-        // Clicking inside an open chat must not tear the panel down. mouseDown lands
-        // here for any click the panel's own region handler did not consume, which
-        // includes most of the chat surface.
-        guard !meetingTranscriptPanel.isChatOpen else { return }
 
-        // Where the pill sits on screen *now* and where the pointer grabbed it, both
-        // captured before anything moves either.
+        // Where the pill sits and where the pointer grabbed it, both read before the
+        // resize below moves either.
         //
-        // hideMeetingTranscript resizes the window to the anchor-derived frame, which
-        // is correct when collapsing normally and wrong mid-drag: the pill teleports
-        // to wherever it is anchored and leaves the cursor holding nothing. Reading
-        // the origin after that call -- as this did -- just records the anchor.
-        let pillScreenFrame = indicatorScreenFrame
+        // The settled frame rather than the live one: a window animation reports an
+        // interpolated rect while it runs, so a drag started mid-transition would map
+        // the grab against a size and origin the pill is only passing through.
+        let pillScreenFrame = lastAppliedIndicatorFrame ?? indicatorScreenFrame
         let grabPoint = NSEvent.mouseLocation
 
         hideMeetingTranscript()
@@ -323,7 +343,15 @@ final class FloatingIndicatorController: NSObject {
               let panel,
               let contentView,
               let iconLabel,
-              let textLabel else { return }
+              let textLabel else {
+            // A declined collapse still leaves the drag running, so settle any transition
+            // in flight onto the frame the pill already has: setFrameOrigin does not stop
+            // a running animation, and its next step would overwrite what the drag writes.
+            // The frame itself is kept on purpose -- whatever declined the collapse, the
+            // loading pill above all, owns its own geometry.
+            if let panel { applyIndicatorFrame(lastAppliedIndicatorFrame ?? panel.frame) }
+            return
+        }
         // Only idle has a hover expansion to drop; every other state keeps its size.
         if state == .idle { isHovered = false }
 
@@ -347,13 +375,27 @@ final class FloatingIndicatorController: NSObject {
         glassView?.frame = NSRect(origin: .zero, size: localIndicator.size)
         panel.alphaValue = style.alpha
 
-        iconLabel.stringValue = style.icon
-        iconLabel.textColor = style.iconColor
-        let hasTitle = !style.title.isEmpty
-        textLabel.stringValue = style.title
-        textLabel.isHidden = !hasTitle
-        textLabel.alphaValue = hasTitle ? 1 : 0
-        layoutLabels(iconLabel: iconLabel, textLabel: textLabel, in: targetFrame.size, hasTitle: hasTitle, animated: false)
+        if state == .recording {
+            // Through the same helper setState uses, not the generic icon/title layout:
+            // that centres the glyph over the waveform at whatever font the previous
+            // state left behind, which is what turned the pause control into a smeared
+            // block the moment a recording pill was dragged.
+            applyRecordingControlChrome(
+                iconLabel: iconLabel,
+                textLabel: textLabel,
+                in: targetFrame.size,
+                animated: false
+            )
+        } else {
+            iconLabel.font = NSFont.systemFont(ofSize: 14, weight: .bold)
+            iconLabel.stringValue = style.icon
+            iconLabel.textColor = style.iconColor
+            let hasTitle = !style.title.isEmpty
+            textLabel.stringValue = style.title
+            textLabel.isHidden = !hasTitle
+            textLabel.alphaValue = hasTitle ? 1 : 0
+            layoutLabels(iconLabel: iconLabel, textLabel: textLabel, in: targetFrame.size, hasTitle: hasTitle, animated: false)
+        }
 
         // Re-apply the chrome for whatever state we are actually in.
         //
@@ -363,17 +405,7 @@ final class FloatingIndicatorController: NSObject {
         // background and a hidden glass view, so those two *are* its entire visible
         // appearance: stale, they render as nothing and the pill vanishes.
         applyGlassState(state, frameSize: targetFrame.size)
-        switch state {
-        case .recording:
-            ensureWaveformAnimation(in: targetFrame.size, mode: recordingWaveformMode)
-            // The stop square is laid out against the pill's width, so a resize
-            // without it leaves the control off the end of the pill.
-            addStopLayer(in: targetFrame.size)
-        case .preparing:
-            ensureWaveformAnimation(in: targetFrame.size, mode: .waiting)
-        default:
-            break
-        }
+        applyWaveformChrome(for: state, mode: recordingWaveformMode, in: targetFrame.size)
         // setState orders the panel front after every transition; a drag resizes the
         // same way and needs the same guarantee.
         panel.orderFrontRegardless()
@@ -382,20 +414,20 @@ final class FloatingIndicatorController: NSObject {
     func savePosition() {
         guard let frame = indicatorScreenFrame else { return }
         let liveCenter = CGPoint(x: frame.midX, y: frame.midY)
+        // No captures means the drag was interrupted rather than dropped -- the
+        // computer-use cursor ends one out from under the pointer -- and the anchor it
+        // started from still stands. Adopting the live centre here would persist wherever
+        // the cursor pill happened to be pointing.
+        guard let anchor = dragStartAnchorCenter, let start = dragStartPillCenter else { return }
         // Move the anchor by as far as the drag moved the pill, instead of adopting the
         // pill's own centre. In a wide state the live frame is clamped inward, so adopting
         // it turns a 5pt nudge into a permanent ~60pt migration of the anchor; the delta
         // carries the same movement without inheriting the clamp.
-        let moved: CGPoint
-        if let anchor = dragStartAnchorCenter, let start = dragStartPillCenter {
-            moved = Self.draggedAnchorCenter(
-                anchorAtDragStart: anchor,
-                pillCenterAtDragStart: start,
-                pillCenterAtDrop: liveCenter
-            )
-        } else {
-            moved = liveCenter
-        }
+        let moved = Self.draggedAnchorCenter(
+            anchorAtDragStart: anchor,
+            pillCenterAtDragStart: start,
+            pillCenterAtDrop: liveCenter
+        )
         let home = Self.screenVisibleFrame(containing: moved) ?? Self.primaryVisibleFrame
         let center = home.map {
             Self.clampedAnchorCenter(moved, in: $0, size: Self.idleIndicatorSize)
@@ -410,14 +442,22 @@ final class FloatingIndicatorController: NSObject {
         // just stored. Leaving the flag up would have the guard swallow it.
         isDragging = false
         onPositionSaved?(center)
+        // Reconcile locally too, and after the callback so this pass sees whatever it
+        // wrote. The config round-trip is not a reliable repair on its own: it re-lays
+        // the pill out only when the clamped centre actually differs from the stored one,
+        // so a drop that lands back on the saved position leaves the chrome laid out
+        // against the mid-drag geometry for good.
+        setState(state, config: configStore.load())
     }
 
     func setToggleDictation(_ active: Bool, config: AppConfig) {
-        isToggleDictation = active
         if active {
             setState(.recording, config: config)
         } else {
             removeStopLayer()
+            // The provider belongs to the recording that just ended; a stale one would
+            // drive the next waveform from an audio engine that is no longer running.
+            powerProvider = nil
             setState(.idle, config: config)
         }
     }
@@ -431,6 +471,8 @@ final class FloatingIndicatorController: NSObject {
         if !recording {
             isMeetingRecordingPaused = false
             hideMeetingTranscript(reset: true)
+            // The provider reads the meeting session's level; the session is gone.
+            powerProvider = nil
         }
         if recording {
             clearLoadingChrome()
@@ -443,8 +485,7 @@ final class FloatingIndicatorController: NSObject {
     func setRecordingWaveformWaiting(config: AppConfig) {
         recordingWaveformMode = .waiting
         guard state == .recording else { return }
-        let targetSize = frameForState(.recording, config: config).size
-        ensureWaveformAnimation(in: targetSize, mode: .waiting)
+        reapplyWaveformChrome(for: .recording, mode: .waiting, config: config)
     }
 
     func setRecordingWaveformLevel(config: AppConfig) {
@@ -453,8 +494,7 @@ final class FloatingIndicatorController: NSObject {
             setState(.recording, config: config)
             return
         }
-        let targetSize = frameForState(.recording, config: config).size
-        ensureWaveformAnimation(in: targetSize, mode: .level)
+        reapplyWaveformChrome(for: .recording, mode: .level, config: config)
     }
 
     func setPreparingWaveformWaiting(config: AppConfig) {
@@ -463,9 +503,22 @@ final class FloatingIndicatorController: NSObject {
             setState(.preparing, config: config)
             return
         }
-        if let contentView {
-            ensureWaveformAnimation(in: contentView.frame.size, mode: .waiting)
-        }
+        reapplyWaveformChrome(for: .preparing, mode: .waiting, config: config)
+    }
+
+    /// Re-lays the waveform for a mode change that arrives outside a state transition.
+    ///
+    /// Declines while setState still has a deferred pass pending for this same chrome
+    /// generation: that pass reads the mode live and lays out against the size the pill
+    /// is arriving at, so running now would only put the bars on the interpolating frame
+    /// and be overwritten a moment later.
+    private func reapplyWaveformChrome(
+        for state: DictationState,
+        mode: WaveformAnimationMode,
+        config: AppConfig
+    ) {
+        guard !hasPendingWaveformChrome else { return }
+        applyWaveformChrome(for: state, mode: mode, in: chromeLayoutSize(for: state, config: config))
     }
 
     func setMeetingRecordingPaused(_ paused: Bool, config: AppConfig) {
@@ -725,17 +778,12 @@ final class FloatingIndicatorController: NSObject {
         // group's completion handler: that handler is `@Sendable`, so main-actor work
         // routed through it is a concurrency violation, and every other deferred pass in
         // this file already waits this way.
-        let applyWaveformChrome = DispatchWorkItem { [weak self] in
+        let waveformChrome = DispatchWorkItem { [weak self] in
             guard let self, self.chromeGeneration == generation else { return }
-            switch state {
-            case .recording:
-                self.ensureWaveformAnimation(in: layoutFrame.size, mode: self.recordingWaveformMode)
-                self.addStopLayer(in: layoutFrame.size)
-            case .preparing:
-                self.ensureWaveformAnimation(in: layoutFrame.size, mode: .waiting)
-            default:
-                break
-            }
+            self.pendingWaveformChromeGeneration = nil
+            // The mode is read here rather than captured: a level/waiting change arriving
+            // mid-transition defers to this pass, so this pass has to honour it.
+            self.applyWaveformChrome(for: state, mode: self.recordingWaveformMode, in: layoutFrame.size)
         }
 
         NSAnimationContext.runAnimationGroup { context in
@@ -753,22 +801,12 @@ final class FloatingIndicatorController: NSObject {
             contentView.layer?.borderColor = style.border.cgColor
 
             if state == .recording {
-                // Dictation uses cancel on the left. Meeting recordings use pause/resume.
-                iconLabel.isHidden = false
-                iconLabel.animator().alphaValue = 1
-                iconLabel.stringValue = recordingControlSymbol()
-                iconLabel.textColor = .white.withAlphaComponent(isMeetingRecording ? 0.86 : 0.45)
-                iconLabel.font = NSFont.systemFont(ofSize: isMeetingRecording ? 8 : 7, weight: .semibold)
-                let xSize: CGFloat = 10
-                iconLabel.frame = NSRect(
-                    x: 7,
-                    y: floor((layoutFrame.height - xSize) / 2),
-                    width: xSize,
-                    height: xSize
+                applyRecordingControlChrome(
+                    iconLabel: iconLabel,
+                    textLabel: textLabel,
+                    in: layoutFrame.size,
+                    animated: true
                 )
-
-                textLabel.animator().alphaValue = 0
-                textLabel.isHidden = true
             } else {
                 iconLabel.isHidden = false
                 iconLabel.animator().alphaValue = 1
@@ -810,9 +848,10 @@ final class FloatingIndicatorController: NSObject {
             }
         }
         if animatesFrame {
-            DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: applyWaveformChrome)
+            pendingWaveformChromeGeneration = generation
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: waveformChrome)
         } else {
-            applyWaveformChrome.perform()
+            waveformChrome.perform()
         }
 
         panel.orderFrontRegardless()
@@ -919,6 +958,13 @@ final class FloatingIndicatorController: NSObject {
     /// Flash a brief warning message on the indicator pill, then snap back to idle.
     func showWarning(_ message: String, icon: String = "⚡", duration: TimeInterval = 2.5) {
         guard state == .idle else { return }
+        // The cursor pill is mouse-transparent, sits at statusBar level and is placed
+        // against the thing it points at. Re-framing it here would leave all three wrong
+        // and hand the eventual cursor exit a stale frame to restore over the top.
+        guard !isComputerUseCursorMode else {
+            Self.logger.notice("Ignoring warning during computer-use cursor: \(message, privacy: .public)")
+            return
+        }
         let config = configStore.load()
         if panel == nil { createPanel(config: config) }
         guard let panel, let contentView, let iconLabel, let textLabel else { return }
@@ -934,6 +980,11 @@ final class FloatingIndicatorController: NSObject {
         // Stacked warnings must not truncate each other: the pending dismissal belongs to
         // the message being replaced.
         cancelWarningDismissal()
+        // A warning replaces the loading pill rather than landing on top of it: the
+        // spinner would otherwise keep turning over the amber fill, and the latched flag
+        // would take hover, hover-to-transcript and drag-collapse with it until an
+        // unrelated hideLoading happened along.
+        clearLoadingChrome()
         chromeGeneration &+= 1
 
         let warningFont = NSFont.systemFont(ofSize: 11, weight: .medium)
@@ -1019,6 +1070,13 @@ final class FloatingIndicatorController: NSObject {
         // hover-to-transcript, and drag-collapse, for as long as the recording lasts.
         guard !isMeetingRecording, state != .recording else {
             Self.logger.notice("Ignoring loading pill during recording: \(message, privacy: .public)")
+            return
+        }
+        // Same reasoning for the computer-use cursor: it is mouse-transparent, raised to
+        // statusBar level and placed against its target, none of which survives being
+        // re-framed as a loading pill.
+        guard !isComputerUseCursorMode else {
+            Self.logger.notice("Ignoring loading pill during computer-use cursor: \(message, privacy: .public)")
             return
         }
         let config = configStore.load()
@@ -1211,7 +1269,9 @@ final class FloatingIndicatorController: NSObject {
         isComputerUseCursorMode = false
         computerUseCursorReturnFrame = nil
         lastAppliedIndicatorFrame = nil
+        pendingWaveformChromeGeneration = nil
         loadingSpinner = nil
+        powerProvider = nil
         // The transcript window goes down with the pill below, so the latch suppressing
         // its re-show has nothing left to suppress.
         isMeetingTranscriptManuallyDismissed = false
@@ -1263,25 +1323,101 @@ final class FloatingIndicatorController: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: workItem)
     }
 
-    // MARK: - Stop Layer (toggle dictation)
+    // MARK: - Recording chrome
+
+    /// The recording pill's leading control: cancel for dictation, pause/resume for a
+    /// meeting.
+    ///
+    /// Shared with the drag collapse so the two can never disagree. The generic
+    /// icon/title layout is wrong for this control -- it centres the glyph over the
+    /// waveform at a 26x18 minimum and leaves the font whatever the previous state set --
+    /// so a path that reached for it rendered the pause glyph as a smear.
+    private func applyRecordingControlChrome(
+        iconLabel: NSTextField,
+        textLabel: NSTextField,
+        in size: NSSize,
+        animated: Bool
+    ) {
+        iconLabel.isHidden = false
+        iconLabel.stringValue = recordingControlSymbol()
+        iconLabel.textColor = .white.withAlphaComponent(isMeetingRecording ? 0.86 : 0.45)
+        iconLabel.font = NSFont.systemFont(ofSize: isMeetingRecording ? 8 : 7, weight: .semibold)
+        let controlSize = Self.recordingControlSize
+        iconLabel.frame = NSRect(
+            x: Self.recordingControlLeadingInset,
+            y: floor((size.height - controlSize) / 2),
+            width: controlSize,
+            height: controlSize
+        )
+        textLabel.isHidden = true
+        if animated {
+            iconLabel.animator().alphaValue = 1
+            textLabel.animator().alphaValue = 0
+        } else {
+            iconLabel.alphaValue = 1
+            textLabel.alphaValue = 0
+        }
+    }
+
+    /// Lays the waveform out, plus the stop square a recording also carries.
+    ///
+    /// Every pass that re-lays the bars goes through here: the stop square is positioned
+    /// against the pill's width, so the two are the same piece of chrome and separating
+    /// them leaves the control hanging off the end of a resized pill.
+    private func applyWaveformChrome(
+        for state: DictationState,
+        mode: WaveformAnimationMode,
+        in size: NSSize
+    ) {
+        switch state {
+        case .recording:
+            ensureWaveformAnimation(in: size, mode: mode)
+            addStopLayer(in: size)
+        case .preparing:
+            ensureWaveformAnimation(in: size, mode: .waiting)
+        default:
+            break
+        }
+    }
+
+    /// The size chrome raised outside a state transition lays itself out against.
+    ///
+    /// Mirrors what setState does with its layout frame: a drag owns the window, so
+    /// chrome has to match the size it actually has; otherwise it matches the size the
+    /// state is on its way to.
+    private func chromeLayoutSize(for state: DictationState, config: AppConfig) -> NSSize {
+        if isDragging, let live = indicatorScreenFrame { return live.size }
+        return indicatorSize(for: state, config: config)
+    }
 
     private func addStopLayer(in size: NSSize) {
         removeStopLayer()
         guard let contentView else { return }
 
-        let sq: CGFloat = 6
         let stop = CALayer()
-        stop.frame = CGRect(
-            x: size.width - sq - 8,
-            y: floor((size.height - sq) / 2),
-            width: sq,
-            height: sq
-        )
+        stop.frame = Self.stopLayerFrame(in: size)
         stop.cornerRadius = 1
         stop.backgroundColor = NSColor.white.withAlphaComponent(0.85).cgColor
 
         contentView.layer?.addSublayer(stop)
         stopLayer = stop
+    }
+
+    private static let stopSquareSize: CGFloat = 6
+    private static let stopSquareTrailingInset: CGFloat = 8
+    private static let recordingControlSize: CGFloat = 10
+    private static let recordingControlLeadingInset: CGFloat = 7
+    /// The smallest region a pointer can comfortably aim at, used to pad the recording
+    /// pill's 10pt leading control out to a clickable width.
+    private static let minimumControlHitWidth: CGFloat = 36
+
+    private static func stopLayerFrame(in size: NSSize) -> CGRect {
+        CGRect(
+            x: size.width - stopSquareSize - stopSquareTrailingInset,
+            y: floor((size.height - stopSquareSize) / 2),
+            width: stopSquareSize,
+            height: stopSquareSize
+        )
     }
 
     private func recordingControlSymbol() -> String {
@@ -1301,7 +1437,10 @@ final class FloatingIndicatorController: NSObject {
         barLayers.removeAll()
         smoothedAmplitude = 0
         waveformAnimationMode = .level
-        powerProvider = nil
+        // The power provider is wiring, not animation state: the computer-use cursor stops
+        // the animation on a recording that is still running, and clearing it here left the
+        // waveform flat at minimum height for the rest of that meeting. It is cleared where
+        // the recording it belongs to actually ends.
         contentView?.layer?.transform = CATransform3DIdentity
         removeStopLayer()
     }
@@ -1415,6 +1554,12 @@ final class FloatingIndicatorController: NSObject {
             let h = minHeight + (maxHeight - minHeight) * amplitude
             bar.frame.size.height = h
             bar.frame.origin.y = (pillHeight - h) / 2
+        }
+        // The bars re-seat themselves against the live pill on every tick, so the stop
+        // square has to as well: its frame is frozen at layout time, and the 0.16-0.24s
+        // resize after a drop would otherwise leave it floating off the row.
+        if let stopLayer {
+            stopLayer.frame = Self.stopLayerFrame(in: contentView.frame.size)
         }
         CATransaction.commit()
     }
@@ -1943,6 +2088,14 @@ final class FloatingIndicatorController: NSObject {
         }
     }
 
+    /// The size `state` lays out against, without resolving or caching an anchor.
+    ///
+    /// `frameForState` writes `customAnchorCenter` as a side effect of answering, so
+    /// asking it for a size alone moves the pill's home.
+    private func indicatorSize(for state: DictationState, config: AppConfig) -> NSSize {
+        indicatorSize(for: state, on: indicatorVisibleFrame(config: config) ?? Self.headlessSizingFrame)
+    }
+
     private func frameForState(_ state: DictationState, config: AppConfig) -> NSRect {
         // Size first. With no display attached there is nothing to anchor or clamp
         // against, but every caller lays its chrome out against whatever comes back --
@@ -2041,12 +2194,11 @@ final class FloatingIndicatorController: NSObject {
         case .preparing:
             return (.clear, .colorWith(hex: 0xFFFFFF, alpha: 0.16), "", "", .white, .white, 1.0)
         case .recording:
-            return (
-                .clear, .colorWith(hex: 0xFFFFFF, alpha: 0.16),
-                isMeetingRecording ? "⏹" : "",
-                isMeetingRecording ? "" : "",
-                .white, .white, 1.0
-            )
+            // No icon or title here: the recording pill's leading control comes from
+            // `applyRecordingControlChrome`, which every path that lays it out uses. The
+            // stop glyph this used to carry was only ever picked up by the drag collapse,
+            // where it rendered at the wrong size in the wrong place.
+            return (.clear, .colorWith(hex: 0xFFFFFF, alpha: 0.16), "", "", .white, .white, 1.0)
         case .transcribing:
             return (
                 .clear, .colorWith(hex: 0xFFFFFF, alpha: 0.16),
