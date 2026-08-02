@@ -256,6 +256,7 @@ Event-driven architecture for meeting notifications:
 - **App restart during onboarding:** Uses `exit(0)` via detached shell. `NSApp.terminate(nil)` inside SwiftUI animation context can crash.
 - **macOS 26 App Nap:** LSUIElement apps have all timers suspended by aggressive power management. Calendar notifications rely on `EKEventStoreChangedNotification` (immune). The 60s Google Calendar poll timer may not fire. See Calendar Notification Pipeline section.
 - **"Meeting starting now" after Join Only/Dismiss:** The scheduled timer is not cancelled when the user clicks Join Only or Dismiss on the "Upcoming meeting" notification. A redundant "Meeting starting now" fires at event start time. Fix: pass notification key into `handleUpcomingMeeting` so callbacks can cancel it.
+- **Floating transcript panel is user-positioned by design — do not re-attach it to the pill** (2026-08-02). Three attachment mechanisms (per-event re-placement, child windows, didMove-follow) all produced misplacement bugs against a draggable/animating/edge-clamped pill. The panel opens beside the pill only on first-ever use, then always at the user's saved `meeting_panel_origin` (draggable by its header; "Show Live Transcript" in the status-bar menu). Details: `.context/docs/floating-ui-review-02-08-2026.md`.
 
 ## Upcoming Work
 
