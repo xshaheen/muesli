@@ -295,6 +295,10 @@ final class FloatingMeetingTranscriptPanelController {
             preferredSide: placementSide
         )
         placementSide = placement.side
+        fputs(
+            "[transcript-panel] place beside=\(indicatorFrame) visible=\(visibleFrame) -> \(placement.frame) side=\(placement.side)\n",
+            stderr
+        )
         show(at: placement.frame)
     }
 
