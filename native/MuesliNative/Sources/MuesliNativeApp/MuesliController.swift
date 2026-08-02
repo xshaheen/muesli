@@ -1066,7 +1066,13 @@ final class MuesliController: NSObject {
         historyWindowController?.updateBackendLabel()
         historyWindowController?.reload()
         preferencesWindowController?.refresh()
-        refreshIndicatorVisibility()
+        // Only the launch pass needs the pill brought up here. Every other caller is a
+        // data refresh (iCloud sync completion, backend preload) that cannot change
+        // anything the pill reads, and re-deriving its frame from those re-anchored it
+        // mid-drag and re-applied the hover-transcript preference behind the user.
+        if indicator.currentFrame == nil {
+            refreshIndicatorVisibility()
+        }
         syncAppState()
     }
 
@@ -1281,6 +1287,12 @@ final class MuesliController: NSObject {
         let previousMeetingRecordingHotkeyTriggerThresholdMS = config.meetingRecordingHotkeyTriggerThresholdMS
         let previousEnableDictionaryCorrectionPrompts = config.enableDictionaryCorrectionPrompts
         let previousEnableLiveStreamingPartials = config.enableLiveStreamingPartials
+        let previousShowFloatingIndicator = config.showFloatingIndicator
+        let previousIndicatorAnchor = config.indicatorAnchor
+        let previousIndicatorOrigin = config.indicatorOrigin
+        let previousShowMeetingTranscriptOnIndicatorHover = config.showMeetingTranscriptOnIndicatorHover
+        let previousRecordingColorHex = config.recordingColorHex
+        let previousDictationHotkey = config.dictationHotkey
         mutate(&config)
         if previousEnableLiveStreamingPartials, !config.enableLiveStreamingPartials {
             preparingMeetingSession?.stopStreamingPartials()
@@ -1301,6 +1313,17 @@ final class MuesliController: NSObject {
         let hotkeyTriggerThresholdChanged = config.hotkeyTriggerThresholdMS != previousHotkeyTriggerThresholdMS
             || config.computerUseHotkeyTriggerThresholdMS != previousComputerUseHotkeyTriggerThresholdMS
             || config.meetingRecordingHotkeyTriggerThresholdMS != previousMeetingRecordingHotkeyTriggerThresholdMS
+        // Every field the pill re-reads when it re-lays out: anchor/origin (frame),
+        // showFloatingIndicator (existence), recordingColorHex (tint), dictationHotkey
+        // (hovered idle title), and the hover-transcript preference. Anything else in the
+        // config leaves the pill alone, so it must not trigger an animated re-layout.
+        let indicatorConfigChanged = config.showFloatingIndicator != previousShowFloatingIndicator
+            || config.indicatorAnchor != previousIndicatorAnchor
+            || config.indicatorOrigin?.x != previousIndicatorOrigin?.x
+            || config.indicatorOrigin?.y != previousIndicatorOrigin?.y
+            || config.showMeetingTranscriptOnIndicatorHover != previousShowMeetingTranscriptOnIndicatorHover
+            || config.recordingColorHex != previousRecordingColorHex
+            || config.dictationHotkey != previousDictationHotkey
         MuesliTheme.accentOverrideHex = config.recordingColorHex == "1e1e2e" ? nil : config.recordingColorHex
         selectedBackend = BackendOption.all.first(where: {
             $0.backend == config.sttBackend && $0.model == config.sttModel
@@ -1332,7 +1355,8 @@ final class MuesliController: NSObject {
         selectedPostProcessorBackend = TranscriptCleanupBackendOption.resolved(config.postProcessorBackend)
         applyConfigRuntimeSideEffects(
             wasICloudSyncEnabled: wasICloudSyncEnabled,
-            hotkeyTriggerThresholdChanged: hotkeyTriggerThresholdChanged
+            hotkeyTriggerThresholdChanged: hotkeyTriggerThresholdChanged,
+            indicatorConfigChanged: indicatorConfigChanged
         )
         if previousMeetingInputDeviceUID != config.meetingInputDeviceUID {
             dictationAudioRoutingController.selectedMeetingInputDeviceUID = config.meetingInputDeviceUID
@@ -1340,7 +1364,11 @@ final class MuesliController: NSObject {
         }
     }
 
-    private func applyConfigRuntimeSideEffects(wasICloudSyncEnabled: Bool, hotkeyTriggerThresholdChanged: Bool) {
+    private func applyConfigRuntimeSideEffects(
+        wasICloudSyncEnabled: Bool,
+        hotkeyTriggerThresholdChanged: Bool,
+        indicatorConfigChanged: Bool
+    ) {
         statusBarController?.refresh()
         statusBarController?.refreshIcon()
         indicator.refreshIcon()
@@ -1351,7 +1379,9 @@ final class MuesliController: NSObject {
         }
         dictationAudioRoutingController.selectedInputDeviceUID = config.dictationInputDeviceUID
         historyWindowController?.updateBackendLabel()
-        refreshIndicatorVisibility()
+        if indicatorConfigChanged {
+            refreshIndicatorVisibility()
+        }
         appState.selectedBackend = selectedBackend
         appState.selectedMeetingTranscriptionBackend = selectedMeetingTranscriptionBackend
         appState.selectedMeetingSummaryBackend = selectedMeetingSummaryBackend
@@ -2155,7 +2185,8 @@ final class MuesliController: NSObject {
             activeMeetingSession?.updateBackend(option)
             applyConfigRuntimeSideEffects(
                 wasICloudSyncEnabled: wasICloudSyncEnabled,
-                hotkeyTriggerThresholdChanged: false
+                hotkeyTriggerThresholdChanged: false,
+                indicatorConfigChanged: false
             )
             return
         }
@@ -5491,6 +5522,10 @@ final class MuesliController: NSObject {
                 indicator.powerProvider = { [weak meetingSession] in
                     meetingSession?.currentPower() ?? -160
                 }
+                // Anything that raised a loading pill during the start window (an import
+                // that preceded this meeting) must not leave the pill's loading flag set,
+                // or hover and drag stay dead for the whole recording.
+                indicator.hideLoading()
                 indicator.setMeetingRecording(true, config: config)
                 statusBarController?.refresh()
                 syncAppState()
@@ -6873,8 +6908,11 @@ final class MuesliController: NSObject {
 
     private func blockDictationForMeetingActivityIfNeeded() -> Bool {
         guard isStartingMeetingRecording else { return false }
+        // Status bar only. A loading pill here is sticky — nothing on the meeting-start
+        // path hides it, and while it is up the pill cannot hover, drag, or show the
+        // transcript for the rest of the meeting. The pill is already in its preparing
+        // state (meeting start) or showing import progress, which is the same news.
         let status = meetingStartStatus ?? "Preparing meeting..."
-        indicator.showLoading(status)
         statusBarController?.setStatus(status)
         statusBarController?.refresh()
         return true
@@ -7687,9 +7725,11 @@ final class MuesliController: NSObject {
 
     private func handlePrepare() {
         if shouldRejectDictationForComputerUseActivity() { return }
-        guard ensureDictationBackendReady() else { return }
+        // Meeting activity wins over backend readiness: the press is rejected either way,
+        // and asking about readiness first puts a warmup pill on the meeting's own pill.
         if isMeetingRecording() { return }
         if blockDictationForMeetingActivityIfNeeded() { return }
+        guard ensureDictationBackendReady() else { return }
         fputs("[muesli-native] prepare\n", stderr)
         if dictationLatencyTraceID == nil {
             beginDictationLatencyTrace(reason: "prepare")
@@ -7708,9 +7748,9 @@ final class MuesliController: NSObject {
 
     private func handleArm() {
         if shouldRejectDictationForComputerUseActivity() { return }
-        guard ensureDictationBackendReady() else { return }
         if isMeetingRecording() { return }
         if blockDictationForMeetingActivityIfNeeded() { return }
+        guard ensureDictationBackendReady() else { return }
         if dictationLatencyTraceID == nil {
             beginDictationLatencyTrace(reason: "hotkey")
         }
@@ -8054,9 +8094,9 @@ final class MuesliController: NSObject {
 
     private func handleStart() {
         if shouldRejectDictationForComputerUseActivity() { return }
-        guard ensureDictationBackendReady() else { return }
         if isMeetingRecording() { return }
         if blockDictationForMeetingActivityIfNeeded() { return }
+        guard ensureDictationBackendReady() else { return }
 
         // Nemotron backends support hold-to-talk (record → transcribe on release) in
         // addition to double-tap handsfree streaming. The hold path uses the normal
@@ -8230,9 +8270,9 @@ final class MuesliController: NSObject {
 
     private func handleToggleStart(outputMode: DictationOutputMode? = nil) {
         if shouldRejectDictationForComputerUseActivity() { return }
-        guard ensureDictationBackendReady() else { return }
         if isMeetingRecording() { return }
         if blockDictationForMeetingActivityIfNeeded() { return }
+        guard ensureDictationBackendReady() else { return }
         fputs("[muesli-native] toggle dictation start\n", stderr)
         if dictationLatencyTraceID == nil {
             beginDictationLatencyTrace(reason: "toggle")
