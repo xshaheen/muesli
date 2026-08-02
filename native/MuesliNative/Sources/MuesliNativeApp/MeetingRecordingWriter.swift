@@ -48,6 +48,12 @@ final class MeetingRecordingWriter {
 
     private let lock = OSAllocatedUnfairLock(initialState: State())
 
+    private static let sampleRate: UInt32 = 16_000
+    /// A dead mic or system stream would otherwise let the surviving side's
+    /// backlog grow for the whole meeting (~115 MB/h) and then land as a
+    /// duplicate-sounding single-track tail at `stop()`.
+    private static let maxPendingImbalance = Int(sampleRate) * 3
+
     init() throws {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-meeting-recordings", isDirectory: true)
@@ -161,9 +167,18 @@ final class MeetingRecordingWriter {
     }
 
     private func writeMixedSamples(state: inout State, flushAll: Bool) {
-        let availableCount = flushAll
-            ? max(state.pendingMic.count, state.pendingSystem.count)
-            : min(state.pendingMic.count, state.pendingSystem.count)
+        let pendingCount = max(state.pendingMic.count, state.pendingSystem.count)
+        let matchedCount = min(state.pendingMic.count, state.pendingSystem.count)
+        let availableCount: Int
+        if flushAll {
+            availableCount = pendingCount
+        } else if pendingCount - matchedCount > Self.maxPendingImbalance {
+            // Drain the surplus against silence so the stalled side stays
+            // time-aligned when (or if) it comes back.
+            availableCount = pendingCount - Self.maxPendingImbalance
+        } else {
+            availableCount = matchedCount
+        }
         guard availableCount > 0 else { return }
 
         let mixedSamples = Self.mix(
@@ -247,7 +262,7 @@ final class MeetingRecordingWriter {
     }
 
     private static func wavHeader(dataSize: UInt32) -> Data {
-        let sampleRate: UInt32 = 16_000
+        let sampleRate = Self.sampleRate
         let channels: UInt16 = 1
         let bitsPerSample: UInt16 = 16
         let byteRate = sampleRate * UInt32(channels) * UInt32(bitsPerSample / 8)

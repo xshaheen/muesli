@@ -43,6 +43,25 @@ struct MeetingRecordingWriterTests {
         #expect(samples == [1000, 3000, 5000, 7000])
     }
 
+    @Test("a stalled stream drains the other side's surplus instead of buffering it")
+    func writerBoundsOneSidedBacklog() throws {
+        let writer = try MeetingRecordingWriter()
+        // 4s of mic against a dead system stream: 1s past the 3s imbalance bound.
+        writer.appendMic([Int16](repeating: 1000, count: 64_000))
+        writer.appendSystem([3000, 3000])
+
+        let tempURL = try #require(writer.stop())
+        let samples = try readMonoPCM16WAVSamples(from: tempURL)
+
+        #expect(samples.count == 64_000)
+        // The first second was written mic-only, so the system pair mixes at 1s
+        // rather than being back-dated onto the start of the meeting.
+        #expect(samples[15_999] == 1000)
+        #expect(samples[16_000] == 2000)
+        #expect(samples[16_001] == 2000)
+        #expect(samples[16_002] == 1000)
+    }
+
     @Test("persistTemporaryRecording moves the temp wav when WAV is selected")
     func persistTemporaryRecordingMovesWAVFile() async throws {
         let writer = try MeetingRecordingWriter()
