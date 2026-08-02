@@ -3,6 +3,32 @@ import MuesliCore
 @preconcurrency import CoreML
 import Foundation
 
+/// On-disk cache layout for the Nemotron 3.5 multilingual model. The transcriber and the
+/// Models tab share this so both agree on what "downloaded" means.
+enum Nemotron35ModelCache {
+    static func directory(fileManager: FileManager = .default) -> URL {
+        fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms", isDirectory: true)
+    }
+
+    /// Every file the loader opens. An interrupted download leaves a partial tree behind,
+    /// so the presence of any single file is not proof the model is usable.
+    static let requiredFiles = [
+        "preprocessor.mlmodelc/coremldata.bin",
+        "encoder.mlmodelc/coremldata.bin",
+        "decoder.mlmodelc/coremldata.bin",
+        "joint.mlmodelc/coremldata.bin",
+        "tokenizer.json",
+    ]
+
+    static func isComplete(fileManager: FileManager = .default) -> Bool {
+        let directory = directory(fileManager: fileManager)
+        return requiredFiles.allSatisfy { relativePath in
+            fileManager.fileExists(atPath: directory.appendingPathComponent(relativePath).path)
+        }
+    }
+}
+
 /// Native RNNT streaming ASR backend for NVIDIA Nemotron 3.5 ASR Streaming (multilingual).
 /// Runs entirely on Apple Neural Engine via CoreML.
 ///
@@ -61,8 +87,7 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
     // MARK: - Model Loading
 
     private static let cacheDir: URL = {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms", isDirectory: true)
+        let dir = Nemotron35ModelCache.directory()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
@@ -254,12 +279,13 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
 
     private func ensureModelsDownloaded(progress: ((Double, String?) -> Void)? = nil) async throws -> URL {
         let modelDir = Self.cacheDir
-        let requiredFile = modelDir.appendingPathComponent("encoder.mlmodelc/coremldata.bin")
-        if FileManager.default.fileExists(atPath: requiredFile.path) {
+        if Nemotron35ModelCache.isComplete() {
             fputs("[nemotron35] models already cached\n", stderr)
             return modelDir
         }
 
+        // An interrupted download leaves part of the tree on disk. The tree walk below skips
+        // files that already exist, so this resumes rather than re-downloading everything.
         fputs("[nemotron35] downloading multilingual/2240ms variant from HuggingFace...\n", stderr)
         progress?(0.0, "Downloading Nemotron 3.5 model...")
 

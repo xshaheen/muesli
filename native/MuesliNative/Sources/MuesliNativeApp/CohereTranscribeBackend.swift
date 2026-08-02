@@ -93,25 +93,38 @@ enum CohereTranscribeUtils {
         return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Trim a hallucinated repetition loop off the tail. A decoder that never gets a clean
+    /// EOS repeats one sentence until the token budget runs out, so only a run of 3+
+    /// identical consecutive sentences that reaches the end of the transcript is trimmed —
+    /// everything before the loop plus one instance is kept. Natural repetition earlier in
+    /// the transcript ("Okay. Okay. Sounds good. Thanks.") is left alone.
     static func trimRepeatedSuffix(_ text: String) -> String {
         let sentences = text.components(separatedBy: ". ")
         guard sentences.count >= 4 else { return text }
 
-        for i in 1..<sentences.count {
-            let current = sentences[i].trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !current.isEmpty else { continue }
-            for j in 0..<i {
-                let earlier = sentences[j].trimmingCharacters(in: .whitespacesAndNewlines)
-                if current == earlier && i - j <= 3 {
-                    let kept = sentences[0..<i].joined(separator: ". ")
-                    if !kept.hasSuffix(".") && !kept.hasSuffix("!") && !kept.hasSuffix("?") {
-                        return kept + "."
-                    }
-                    return kept
-                }
-            }
+        // The final component keeps its terminal punctuation; strip it so it can match the
+        // interior components of the same loop.
+        let normalize: (String) -> String = { sentence in
+            sentence
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+                .trimmingCharacters(in: CharacterSet(charactersIn: ".!?"))
         }
-        return text
+
+        let tail = normalize(sentences[sentences.count - 1])
+        guard !tail.isEmpty else { return text }
+
+        var loopStart = sentences.count - 1
+        while loopStart > 0 && normalize(sentences[loopStart - 1]) == tail {
+            loopStart -= 1
+        }
+        guard sentences.count - loopStart >= 3 else { return text }
+
+        let kept = sentences[0...loopStart].joined(separator: ". ")
+        if !kept.hasSuffix(".") && !kept.hasSuffix("!") && !kept.hasSuffix("?") {
+            return kept + "."
+        }
+        return kept
     }
 }
 

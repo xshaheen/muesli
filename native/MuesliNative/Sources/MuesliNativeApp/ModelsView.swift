@@ -377,15 +377,19 @@ struct ModelsView: View {
                     }
                 }
                 guard !Task.isCancelled else { return }
-                isLiveCaptionModelDownloaded = true
+                await MainActor.run {
+                    isLiveCaptionModelDownloaded = true
+                }
             } catch is CancellationError {
                 // Cancellation is an expected user action.
             } catch {
                 fputs("[muesli-native] live caption model download failed: \(error)\n", stderr)
             }
-            isDownloadingLiveCaptionModel = false
-            liveCaptionDownloadProgress = 0
-            liveCaptionDownloadTask = nil
+            await MainActor.run {
+                isDownloadingLiveCaptionModel = false
+                liveCaptionDownloadProgress = 0
+                liveCaptionDownloadTask = nil
+            }
         }
     }
 
@@ -1421,9 +1425,7 @@ struct ModelsView: View {
         case "whisper":
             return WhisperKitTranscriber.isModelDownloaded(option.model)
         case "nemotron35":
-            let path = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms/encoder.mlmodelc/coremldata.bin")
-            return fm.fileExists(atPath: path.path)
+            return Nemotron35ModelCache.isComplete(fileManager: fm)
         case "fluidaudio":
             // Check FluidAudio's cache
             let supportDir = fm.homeDirectoryForCurrentUser

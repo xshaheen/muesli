@@ -173,14 +173,29 @@ struct CohereTranscribeUtilsTests {
         #expect(result == "Hello world")
     }
 
-    @Test("cleanTranscript trims repeated suffix")
-    func trimsRepeatedSuffix() {
-        // Split on ". " produces: ["First", "Second", "Third", "Fourth", "Second", "more"]
-        // Position 4 "Second" matches position 1 "Second", i-j=3 ≤ 3 → truncate at position 4
+    @Test("cleanTranscript trims a repeated tail loop to one instance")
+    func trimsRepeatedTailLoop() {
+        // Five consecutive "Thank you." sentences run to the end — a decoder repetition loop.
+        let result = CohereTranscribeUtils.cleanTranscript(
+            "Let's wrap up here. Thank you. Thank you. Thank you. Thank you. Thank you."
+        )
+        #expect(result == "Let's wrap up here. Thank you.")
+    }
+
+    @Test("cleanTranscript keeps a natural repeated interjection")
+    func keepsNaturalRepetition() {
+        // Two consecutive "Okay." sentences are natural speech, and the repetition does not
+        // run to the end of the transcript.
+        let result = CohereTranscribeUtils.cleanTranscript("Okay. Okay. Sounds good. Thanks.")
+        #expect(result == "Okay. Okay. Sounds good. Thanks.")
+    }
+
+    @Test("cleanTranscript keeps a repeated sentence that is not at the tail")
+    func keepsNonTailRepetition() {
         let result = CohereTranscribeUtils.cleanTranscript(
             "First. Second. Third. Fourth. Second. more text"
         )
-        #expect(result == "First. Second. Third. Fourth.")
+        #expect(result == "First. Second. Third. Fourth. Second. more text")
     }
 
     @Test("cleanTranscript passes normal text unchanged")
