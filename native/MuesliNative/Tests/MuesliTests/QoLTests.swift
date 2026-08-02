@@ -369,13 +369,26 @@ struct FloatingIndicatorPointerInteractionTests {
     @Test("small pointer movement remains a click while deliberate movement drags")
     func dragThreshold() {
         let start = NSPoint(x: 100, y: 100)
+        // Click jitter of a few points must not start a drag: starting one collapses
+        // the hover-expanded pill under the pointer, so a misread click visibly
+        // displaces the pill.
         #expect(!FloatingIndicatorPointerIntent.isDrag(
             from: start,
-            to: NSPoint(x: 102, y: 102)
+            to: NSPoint(x: 104, y: 100)
         ))
         #expect(FloatingIndicatorPointerIntent.isDrag(
             from: start,
-            to: NSPoint(x: 104, y: 100)
+            to: NSPoint(x: 106, y: 100)
+        ))
+        // A drag that never travels the deliberate distance is snapped back and
+        // delivered as a click on release.
+        #expect(!FloatingIndicatorPointerIntent.isDeliberateDrag(
+            from: start,
+            to: NSPoint(x: 108, y: 100)
+        ))
+        #expect(FloatingIndicatorPointerIntent.isDeliberateDrag(
+            from: start,
+            to: NSPoint(x: 112, y: 100)
         ))
     }
 
