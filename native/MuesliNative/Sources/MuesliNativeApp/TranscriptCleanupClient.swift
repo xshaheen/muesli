@@ -60,8 +60,36 @@ enum TranscriptCleanupClient {
     private static let openRouterURL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
     private static let defaultOllamaBaseURL = URL(string: "http://localhost:11434")!
     private static let requestTimeout: TimeInterval = 120
-    private static let defaultMaxOutputTokens = 1000
+    static let defaultMaxOutputTokens = 1000
     private static let hostedAppContextCharacterLimit = 5_000
+
+    /// Refuses every redirect.
+    ///
+    /// Local backends are disclosed to the user as staying on this machine, but
+    /// `URLSession.shared` follows 307/308 on its own -- a loopback endpoint could
+    /// bounce the whole transcript to a remote host with nothing in the UI to show
+    /// for it. Refusing leaves the 3xx as the response, which the status check below
+    /// treats as a failure, so cleanup falls back to the original transcript.
+    private final class RedirectRejectingDelegate: NSObject, URLSessionTaskDelegate {
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest,
+            completionHandler: @escaping (URLRequest?) -> Void
+        ) {
+            completionHandler(nil)
+        }
+    }
+
+    private static let redirectRejectingDelegate = RedirectRejectingDelegate()
+
+    /// Every cleanup request goes through this instead of `URLSession.shared`.
+    private static let session = URLSession(
+        configuration: .default,
+        delegate: redirectRejectingDelegate,
+        delegateQueue: nil
+    )
 
     static func defaultModel(for backend: TranscriptCleanupBackendOption) -> String {
         if backend == .gemma4LiteRT {
@@ -341,7 +369,7 @@ enum TranscriptCleanupClient {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         try validateHTTPResponse(response, data: data, backend: "OpenAI")
         guard
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -351,6 +379,23 @@ enum TranscriptCleanupClient {
             throw TranscriptCleanupError.emptyResponse("OpenAI")
         }
         return TranscriptCleanupRawResponse(text: text, wasTruncated: responsesHitOutputCap(json))
+    }
+
+    static func ollamaRequestBody(
+        systemPrompt: String,
+        userPrompt: String,
+        model: String,
+        options: TranscriptCleanupRequestOptions
+    ) -> [String: Any] {
+        [
+            "model": model,
+            "messages": [
+                ["role": "system", "content": systemPrompt],
+                ["role": "user", "content": userPrompt],
+            ],
+            "stream": false,
+            "options": ["num_predict": options.maxOutputTokens ?? defaultMaxOutputTokens],
+        ]
     }
 
     private static func cleanWithOllama(
@@ -365,22 +410,19 @@ enum TranscriptCleanupClient {
             throw TranscriptCleanupError.missingConfiguration("Invalid Ollama URL: \(config.ollamaURL)")
         }
         let chatURL = baseURL.appendingPathComponent("api/chat")
-        let body: [String: Any] = [
-            "model": model,
-            "messages": [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": userPrompt],
-            ],
-            "stream": false,
-            "options": ["num_predict": options.maxOutputTokens ?? defaultMaxOutputTokens],
-        ]
+        let body = ollamaRequestBody(
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            model: model,
+            options: options
+        )
         var request = URLRequest(url: chatURL)
         request.timeoutInterval = requestTimeout
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         try validateHTTPResponse(response, data: data, backend: "Ollama")
         guard
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -439,7 +481,7 @@ enum TranscriptCleanupClient {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         try validateHTTPResponse(response, data: data, backend: backend)
         guard
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -451,6 +493,20 @@ enum TranscriptCleanupClient {
         return TranscriptCleanupRawResponse(text: text, wasTruncated: chatCompletionsHitOutputCap(json))
     }
 
+    static func anthropicRequestBody(
+        systemPrompt: String,
+        userPrompt: String,
+        model: String,
+        options: TranscriptCleanupRequestOptions
+    ) -> [String: Any] {
+        [
+            "model": model,
+            "max_tokens": options.maxOutputTokens ?? defaultMaxOutputTokens,
+            "system": systemPrompt,
+            "messages": [["role": "user", "content": userPrompt]],
+        ]
+    }
+
     private static func cleanWithAnthropic(
         requestURL: URL,
         apiKey: String,
@@ -459,12 +515,12 @@ enum TranscriptCleanupClient {
         model: String,
         options: TranscriptCleanupRequestOptions
     ) async throws -> TranscriptCleanupRawResponse {
-        let body: [String: Any] = [
-            "model": model,
-            "max_tokens": options.maxOutputTokens ?? defaultMaxOutputTokens,
-            "system": systemPrompt,
-            "messages": [["role": "user", "content": userPrompt]],
-        ]
+        let body = anthropicRequestBody(
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            model: model,
+            options: options
+        )
         var request = URLRequest(url: requestURL)
         request.timeoutInterval = requestTimeout
         request.httpMethod = "POST"
@@ -476,7 +532,7 @@ enum TranscriptCleanupClient {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         try validateHTTPResponse(response, data: data, backend: "Custom LLM")
         guard
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],

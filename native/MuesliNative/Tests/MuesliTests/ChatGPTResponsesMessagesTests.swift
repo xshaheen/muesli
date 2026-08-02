@@ -135,3 +135,63 @@ struct ChatGPTResponsesMessagesTests {
         #expect(instructions?.contains("Second.") == true)
     }
 }
+
+@Suite("ChatGPTResponsesClient — truncation reporting")
+struct ChatGPTResponsesTruncationTests {
+    private func payload(_ json: String) throws -> [String: Any] {
+        try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    }
+
+    @Test("a terminal response.incomplete event reports a cap hit")
+    func incompleteTerminalEventIsTruncated() throws {
+        // Regression guard: cleanup used to hardcode wasTruncated to false on this
+        // backend, so a chunk cut off mid-sentence passed validation and was stored
+        // as the repaired transcript.
+        let event = try payload(
+            """
+            {
+              "type": "response.incomplete",
+              "response": {
+                "status": "incomplete",
+                "incomplete_details": { "reason": "max_output_tokens" }
+              }
+            }
+            """
+        )
+
+        #expect(ChatGPTResponsesClient.hitOutputCap(event))
+    }
+
+    @Test("a completed response reports no cap hit")
+    func completedTerminalEventIsNotTruncated() throws {
+        let event = try payload(
+            """
+            {
+              "type": "response.completed",
+              "response": { "status": "completed", "incomplete_details": null }
+            }
+            """
+        )
+
+        #expect(ChatGPTResponsesClient.hitOutputCap(event) == false)
+    }
+
+    @Test("in-progress and delta events never report a cap hit")
+    func inFlightEventsAreNotTruncated() throws {
+        // `in_progress` responses carry the same envelope as the terminal event, so
+        // matching on the envelope alone would flag every stream as truncated.
+        let inProgress = try payload(
+            """
+            {"type": "response.in_progress", "response": {"status": "in_progress"}}
+            """
+        )
+        let delta = try payload(
+            """
+            {"type": "response.output_text.delta", "delta": "hello"}
+            """
+        )
+
+        #expect(ChatGPTResponsesClient.hitOutputCap(inProgress) == false)
+        #expect(ChatGPTResponsesClient.hitOutputCap(delta) == false)
+    }
+}
