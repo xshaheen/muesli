@@ -542,6 +542,17 @@ final class FloatingIndicatorController: NSObject {
             indicatorFrame = frameForState(state, config: configStore.load())
         }
         guard let visibleFrame = Self.screenVisibleFrame(intersecting: indicatorFrame) else { return }
+        // Attaching to a pill whose frame animation is still in flight would let the
+        // remaining delta drag the freshly placed panel. Settle the pill on its target
+        // first; the non-animated path retargets any running animation at zero duration.
+        // Safe from recursion: the panel is not visible yet, so applyIndicatorFrame's
+        // re-show branch cannot re-enter this method.
+        if !meetingTranscriptPanel.isVisible,
+           let settled = lastAppliedIndicatorFrame,
+           let pill = panel,
+           pill.frame != settled {
+            applyIndicatorFrame(settled, animated: false)
+        }
         Self.logger.notice("transcript show source=\(source, privacy: .public) pill=\(NSStringFromRect(indicatorFrame), privacy: .public)")
         // Attached to the pill's window: AppKit keeps the two moving together, so a
         // pill move that never runs our re-placement code cannot strand the panel.
@@ -568,7 +579,12 @@ final class FloatingIndicatorController: NSObject {
         guard let panel, let contentView else { return .zero }
         let local = NSRect(origin: .zero, size: indicatorFrame.size)
         lastAppliedIndicatorFrame = indicatorFrame
-        if animated {
+        // Never animate the pill while the transcript is attached as its child window:
+        // AppKit translates children by every step of a parent animation, so the panel
+        // would be dragged off the placement this method sets right afterwards — by the
+        // pill's whole move delta. Snapping is the invariant that keeps them glued.
+        let animatesFrame = animated && !meetingTranscriptPanel.isVisible
+        if animatesFrame {
             // The animator retargets an animation already in flight for the same property;
             // the plain setter cannot, which is what the branch below has to work around.
             panel.animator().setFrame(indicatorFrame, display: true)
