@@ -213,6 +213,9 @@ final class StreamingDictationController {
         if let wavURL = recorder.stop() {
             try? FileManager.default.removeItem(at: wavURL)
         }
+        // stop() leaves the audio queue allocated and its callback still holding a
+        // retain on the recorder. Only cancel() disposes the queue and releases it.
+        recorder.cancel()
         recorder.onAudioBuffer = nil
         recorder.onRecordingFailed = nil
 

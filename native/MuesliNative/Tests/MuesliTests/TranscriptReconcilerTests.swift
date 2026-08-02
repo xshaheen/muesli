@@ -106,6 +106,22 @@ struct TranscriptReconcilerTests {
         #expect(reconciled.systemSegments.map(\.text) == ["कि", "क"])
     }
 
+    @Test("keeps one copy when two short system turns duplicate each other")
+    func keepsOneCopyOfMutuallyDuplicatedShortSystemTurns() {
+        let system = [
+            SpeechSegment(start: 0.0, end: 0.6, text: "Yeah."),
+            SpeechSegment(start: 0.05, end: 0.65, text: "Yeah.")
+        ]
+
+        let reconciled = TranscriptReconciler.reconcile(
+            micTurns: [],
+            systemSegments: system,
+            diarizationSegments: nil
+        )
+
+        #expect(reconciled.systemSegments.map(\.text) == ["Yeah."])
+    }
+
     private func makeDiarSeg(speakerId: String, start: Float, end: Float) -> TimedSpeakerSegment {
         TimedSpeakerSegment(
             speakerId: speakerId,

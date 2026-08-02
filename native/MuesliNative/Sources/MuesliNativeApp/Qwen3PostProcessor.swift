@@ -269,10 +269,13 @@ private actor Qwen3PostProcessorManager {
     func process(_ text: String, appContext: String? = nil) async throws -> String {
         // Actors can re-enter while respond() awaits; serialize access to the cached mutable LLM.
         try await inferenceGate.acquire()
+        // Reset the cached LLM before releasing the gate; a queued waiter starts
+        // generating the moment release() hands it over.
+        var loadedBot: LLM?
         do {
             try Task.checkCancellation()
             let bot = try loadBot()
-            defer { bot.reset() }
+            loadedBot = bot
             let formattedInput = Qwen3PostProcessorConfig.formatInput(text, appContext: appContext)
             await bot.respond(to: formattedInput, thinking: .suppressed)
             let raw = bot.output
@@ -289,9 +292,11 @@ private actor Qwen3PostProcessorManager {
             } else {
                 result = cleaned
             }
+            bot.reset()
             await inferenceGate.release()
             return result
         } catch {
+            loadedBot?.reset()
             await inferenceGate.release()
             throw error
         }

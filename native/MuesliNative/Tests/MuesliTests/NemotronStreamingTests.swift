@@ -276,7 +276,9 @@ struct StreamingDictationControllerTests {
         await transcriber.releaseState()
         let text = await stoppedText
         #expect(text == " hello")
-        #expect(recorder.cancelCalls == 0)
+        // Exactly the stop path's own cancel (which disposes the audio queue) —
+        // the late failure must not trigger a second one via the failure path.
+        #expect(recorder.cancelCalls == 1)
         #expect(failures.value == 0)
     }
 
