@@ -130,7 +130,9 @@ struct StreamingVadControllerTests {
         controller.start()
         controller.processAudio([Float](repeating: 0, count: VadManager.chunkSize))
 
-        let deadline = ContinuousClock.now + .seconds(3)
+        // Generous deadline: the controller delivers through the main queue, which
+        // @MainActor suites monopolize for seconds when the full run is parallel.
+        let deadline = ContinuousClock.now + .seconds(15)
         while boundaryProbe.count < 1, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(20))
         }
