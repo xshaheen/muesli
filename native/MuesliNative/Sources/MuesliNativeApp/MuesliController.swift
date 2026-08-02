@@ -1061,7 +1061,8 @@ final class MuesliController: NSObject {
         } else {
             indicator.closeIfIdle()
         }
-        indicator.refreshMeetingTranscriptPreference(config: config)
+        // The hover preference gates hover-opening only (checked in setHovered);
+        // a deliberately shown panel is never torn down by a config write.
     }
 
     func refreshUI() {
@@ -4654,6 +4655,10 @@ final class MuesliController: NSObject {
 
     func isMeetingRecordingPaused() -> Bool {
         activeMeetingSession?.isPaused == true
+    }
+
+    func isMeetingTranscriptPanelVisible() -> Bool {
+        indicator.isMeetingTranscriptPanelVisible
     }
 
     private var meetingTerminationState: MeetingTerminationState {

@@ -119,9 +119,6 @@ final class FloatingIndicatorController: NSObject {
     private var isMeetingRecordingPaused = false
     private var isMeetingTranscriptManuallyDismissed = false
     private lazy var meetingTranscriptPanel = FloatingMeetingTranscriptPanelController(
-        onHoverChanged: { [weak self] hovered in
-            self?.setMeetingTranscriptPanelHovered(hovered)
-        },
         onOpenNotes: { [weak self] in
             self?.openMeetingNotesFromTranscript()
         },
@@ -191,9 +188,11 @@ final class FloatingIndicatorController: NSObject {
             self?.configStore.load().meetingPanelOrigin.map { CGPoint(x: $0.x, y: $0.y) }
         }
         // Display attach/detach moves windows without the app's involvement: macOS
-        // constrains them onto whatever screens remain, leaving the pill and the
-        // transcript wherever they landed until the next state change. Re-resolve
-        // both from the anchor as soon as the topology settles.
+        // constrains them onto whatever screens remain, leaving the pill wherever it
+        // landed until the next state change. Re-resolve it from its anchor as soon as
+        // the topology settles. The transcript is not re-placed here -- it is a window
+        // the user positioned, and its saved origin is re-clamped onto an attached
+        // screen at the next show.
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
@@ -214,7 +213,7 @@ final class FloatingIndicatorController: NSObject {
             // nothing about the spinner, so re-framing through it would strand the spinner
             // on an idle pill and leave the flag latched with it.
             guard let self, panel != nil, !isDragging, !isComputerUseCursorMode, !isShowingLoading else { return }
-            Self.logger.notice("screens changed; re-resolving pill and transcript")
+            Self.logger.notice("screens changed; re-resolving pill")
             setState(state, config: configStore.load())
         }
         screenRelayoutWorkItem = workItem
@@ -229,10 +228,18 @@ final class FloatingIndicatorController: NSObject {
         set { meetingTranscriptPanel.onUserMovedPanel = newValue }
     }
 
+    /// Whether the transcript window is on screen, for the menu item's title.
+    var isMeetingTranscriptPanelVisible: Bool { meetingTranscriptPanel.isVisible }
+
     /// Menu-bar toggle: shows the transcript at the user's saved position (or beside
     /// the pill on first use) regardless of hover state, or hides a visible one.
+    ///
+    /// Both directions are deliberate, so both move the latch: hiding from here suppresses
+    /// hover-to-show for the rest of the meeting exactly as the chevron does, and showing
+    /// from here is the way back.
     func toggleMeetingTranscriptPanel() {
         if meetingTranscriptPanel.isVisible {
+            isMeetingTranscriptManuallyDismissed = true
             hideMeetingTranscript()
         } else {
             isMeetingTranscriptManuallyDismissed = false
@@ -253,8 +260,6 @@ final class FloatingIndicatorController: NSObject {
         let settledFrame = lastAppliedIndicatorFrame ?? indicatorScreenFrame
         dragStartAnchorCenter = customAnchorCenter ?? settledFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
         dragScreenFrames = NSScreen.screens.map(\.visibleFrame)
-        // The pill is leaving either way, so the panel cannot stay pinned to where it was.
-        hideMeetingTranscript()
         collapseForDrag()
         // Where the collapse actually left the pill, read after it runs rather than
         // before. A wide state is clamped inward from its anchor and the collapse undoes
@@ -338,7 +343,6 @@ final class FloatingIndicatorController: NSObject {
         let pillScreenFrame = lastAppliedIndicatorFrame ?? indicatorScreenFrame
         let grabPoint = NSEvent.mouseLocation
 
-        hideMeetingTranscript()
         guard !isShowingLoading,
               let panel,
               let contentView,
@@ -399,9 +403,9 @@ final class FloatingIndicatorController: NSObject {
 
         // Re-apply the chrome for whatever state we are actually in.
         //
-        // This used to run only for idle, so dragging during a recording hid the
-        // transcript, resized the window, and stopped -- leaving the tint layer and
-        // waveform bars laid out for the old geometry. A recording pill has a clear
+        // This used to run only for idle, so dragging during a recording resized the
+        // window and stopped -- leaving the tint layer and waveform bars laid out for
+        // the old geometry. A recording pill has a clear
         // background and a hidden glass view, so those two *are* its entire visible
         // appearance: stale, they render as nothing and the pill vanishes.
         applyGlassState(state, frameSize: targetFrame.size)
@@ -465,8 +469,9 @@ final class FloatingIndicatorController: NSObject {
     func setMeetingRecording(_ recording: Bool, config: AppConfig) {
         isMeetingRecording = recording
         recordingWaveformMode = .level
-        // A dismissal only ever means "not for this hover". Letting it survive a meeting
-        // boundary leaves hover-to-show dead in a meeting the user dismissed nothing in.
+        // A dismissal holds for the meeting it was made in, and no longer: letting it
+        // survive the boundary leaves hover-to-show dead in a meeting the user dismissed
+        // nothing in.
         isMeetingTranscriptManuallyDismissed = false
         if !recording {
             isMeetingRecordingPaused = false
@@ -524,24 +529,12 @@ final class FloatingIndicatorController: NSObject {
     func setMeetingRecordingPaused(_ paused: Bool, config: AppConfig) {
         guard isMeetingRecordingPaused != paused else { return }
         isMeetingRecordingPaused = paused
+        // The panel reports the pause in its own header, so pausing is not a reason to
+        // take it down: hiding it here meant the user lost the transcript for asking the
+        // recording to wait, and the re-show on resume then had to guess from the pointer.
         meetingTranscriptPanel.setPaused(paused)
-        // The panel reports the pause in place, so there is nothing here an open chat has
-        // to be torn down for -- and every other dismissal path already declines while the
-        // composer is up.
-        if !meetingTranscriptPanel.isChatOpen {
-            hideMeetingTranscript()
-        }
         guard isMeetingRecording, state == .recording else { return }
         setState(.recording, config: config)
-        // The hide above happened without the pointer ever leaving the pill, so no hover
-        // event is coming to undo it: resuming under the pointer has to bring the
-        // transcript back itself.
-        if !paused,
-           config.showMeetingTranscriptOnIndicatorHover,
-           !isMeetingTranscriptManuallyDismissed,
-           pointerIsInsidePanel() {
-            showMeetingTranscript()
-        }
     }
 
     func updateMeetingTranscript(
@@ -562,26 +555,8 @@ final class FloatingIndicatorController: NSObject {
         meetingTranscriptPanel.setChatContext(context)
     }
 
-    func refreshMeetingTranscriptPreference(config: AppConfig) {
-        guard config.showMeetingTranscriptOnIndicatorHover else {
-            // This arrives from any config write or sync landing, not from an action aimed
-            // at the panel, so it gets the same courtesy every other hide path gives an
-            // open chat: the composer outlives it.
-            guard !meetingTranscriptPanel.isChatOpen else { return }
-            hideMeetingTranscript()
-            return
-        }
-        // A dismissal holds until the pointer leaves the pill. Re-showing here would let a
-        // background config round-trip undo what the user just clicked away.
-        guard !isMeetingTranscriptManuallyDismissed else { return }
-        if isMeetingRecording,
-           state == .recording,
-           pointerIsInsidePanel(),
-           panel != nil {
-            showMeetingTranscript()
-        }
-    }
-
+    /// Honours a change to the hover preference, and nothing else.
+    ///
     /// Where the pill is anchored, independent of what size it currently is.
     ///
     /// Only a drag moves this. Hovering, recording, and transcribing all change the
@@ -594,20 +569,17 @@ final class FloatingIndicatorController: NSObject {
         return panel.convertToScreen(contentView.frame)
     }
 
-    /// Places the transcript beside where the pill actually is.
+    /// Shows the transcript, offering the pill's frame as a first-time position.
     ///
-    /// Re-deriving the frame from the anchor -- as this did -- describes a pill that may
-    /// not exist: loading, the computer-use cursor, and a drag all move the window away
-    /// from its anchor, and the panel then lands beside a phantom. `beside` carries the
-    /// frame a resize is on its way to, which the live frame does not report until the
-    /// animation finishes.
-    private func showMeetingTranscript(beside frame: NSRect? = nil) {
+    /// The panel only uses that frame until the user drags it; from then on it shows at
+    /// its saved origin and the pill is irrelevant. The live frame rather than the anchor:
+    /// loading, the computer-use cursor, and a drag all move the window away from its
+    /// anchor, and a first-time placement derived from the anchor would land beside a
+    /// pill that is not there.
+    private func showMeetingTranscript() {
         let source: String
         let indicatorFrame: NSRect
-        if let frame {
-            source = "caller"
-            indicatorFrame = frame
-        } else if let live = indicatorScreenFrame {
+        if let live = indicatorScreenFrame {
             source = "live"
             indicatorFrame = live
         } else {
@@ -665,12 +637,10 @@ final class FloatingIndicatorController: NSObject {
         }
         containerView?.frame = local
         applyIndicatorCornerRadius(height: indicatorFrame.height)
-        // The transcript is positioned relative to the pill, so a resize moves it. Not
-        // mid-drag: the pill is following the pointer and the transcript is already
-        // hidden, so a background re-show would only park a panel beside a moving target.
-        if meetingTranscriptPanel.isVisible, !isDragging {
-            showMeetingTranscript(beside: indicatorFrame)
-        }
+        // Nothing here touches the transcript. It is a window the user positions, not
+        // something pinned to the pill, so a hover expansion or a state resize has no
+        // business re-placing it -- which is what used to walk it across the screen every
+        // time the pill changed size.
         return local
     }
 
@@ -1200,16 +1170,14 @@ final class FloatingIndicatorController: NSObject {
 
     func setHovered(_ hovered: Bool) {
         if state == .recording, isMeetingRecording, !isShowingLoading, !isDragging {
-            guard hovered else {
-                guard !meetingTranscriptPanel.isChatOpen else { return }
-                isMeetingTranscriptManuallyDismissed = false
-                hideMeetingTranscript()
-                return
-            }
+            // Hover opens the transcript and never closes it. The panel is its own window
+            // at a position the user chose, which may be nowhere near the pill, so the
+            // pointer leaving says nothing about whether they still want it -- it usually
+            // means they are on their way over to read it.
+            guard hovered else { return }
             guard !isMeetingTranscriptManuallyDismissed else { return }
             let config = configStore.load()
             guard config.showMeetingTranscriptOnIndicatorHover, panel != nil else { return }
-            hoverExitWorkItem?.cancel()
             showMeetingTranscript()
             return
         }
@@ -1221,27 +1189,15 @@ final class FloatingIndicatorController: NSObject {
     }
 
     func scheduleHoverExit() {
-        // An open chat is a deliberate interaction, not a hover preview. Leaving the
-        // pointer -- to read the call, or to click back into Zoom -- must not discard
-        // a half-typed question.
-        if meetingTranscriptPanel.isChatOpen { return }
-        if state == .recording, isMeetingRecording {
-            // The pointer has left the pill, so a manual dismissal has done its job: it
-            // suppresses the re-show for the hover it was made during, not for the rest
-            // of the session. The delayed reset in dismissMeetingTranscript cannot cover
-            // this on its own -- if the pointer is over the pill when it fires it declines
-            // to clear, and nothing else ever would.
-            isMeetingTranscriptManuallyDismissed = false
-            if meetingTranscriptPanel.isVisible {
-                scheduleMeetingTranscriptHoverExit()
-            }
-            return
-        }
+        // A meeting pill has no hover exit. Nothing here is a preview the pointer owns:
+        // the transcript stays until the chevron, the menu bar, or the meeting ends, and
+        // the dismissal that suppresses hover-to-show holds for the same reasons.
+        if state == .recording, isMeetingRecording { return }
         guard state == .idle, !isShowingLoading, isHovered else { return }
         hoverExitWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            guard !self.pointerIsInsidePanel() else { return }
+            guard !self.pointerIsInsidePill() else { return }
             self.setHovered(false)
         }
         hoverExitWorkItem = workItem
@@ -1288,39 +1244,20 @@ final class FloatingIndicatorController: NSObject {
         meetingTranscriptPanel.close()
     }
 
-    private func setMeetingTranscriptPanelHovered(_ hovered: Bool) {
-        if hovered {
-            hoverExitWorkItem?.cancel()
-        } else {
-            scheduleMeetingTranscriptHoverExit()
-        }
-    }
-
+    /// The chevron in the panel's own header.
+    ///
+    /// The latch it sets holds for the rest of the meeting: only a deliberate show --
+    /// the menu bar -- or the next meeting clears it. It used to clear itself after
+    /// 0.2s, which made the chevron a button that undid itself while the user was still
+    /// looking at it.
     private func dismissMeetingTranscript() {
         isMeetingTranscriptManuallyDismissed = true
-        hoverExitWorkItem?.cancel()
         hideMeetingTranscript()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            guard let self, !self.pointerIsInsidePanel() else { return }
-            self.isMeetingTranscriptManuallyDismissed = false
-        }
     }
 
     private func openMeetingNotesFromTranscript() {
         hideMeetingTranscript()
         onOpenMeetingNotes?()
-    }
-
-    private func scheduleMeetingTranscriptHoverExit() {
-        hoverExitWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            guard !self.pointerIsInsidePanel(),
-                  !self.meetingTranscriptPanel.containsMouseLocation() else { return }
-            self.hideMeetingTranscript()
-        }
-        hoverExitWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: workItem)
     }
 
     // MARK: - Recording chrome
@@ -2349,7 +2286,13 @@ final class FloatingIndicatorController: NSObject {
             .joined(separator: " ")
     }
 
-    private func pointerIsInsidePanel() -> Bool {
+    /// Whether the pointer is over the pill itself.
+    ///
+    /// Named for what it reads: it tests the indicator's frame, not the transcript's, and
+    /// under the old name it was reached for whenever a decision was about "the panel" --
+    /// including deciding whether the user was still looking at a transcript parked on the
+    /// other side of the screen.
+    private func pointerIsInsidePill() -> Bool {
         indicatorScreenFrame?.contains(NSEvent.mouseLocation) == true
     }
 }

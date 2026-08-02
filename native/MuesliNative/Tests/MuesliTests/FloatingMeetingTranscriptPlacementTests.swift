@@ -124,7 +124,6 @@ struct FloatingMeetingTranscriptPlacementTests {
     @MainActor
     func controllerRemembersSideUntilReset() {
         let controller = FloatingMeetingTranscriptPanelController(
-            onHoverChanged: { _ in },
             onOpenNotes: {},
             onDismiss: {}
         )

@@ -269,7 +269,6 @@ struct FloatingMeetingTranscriptTests {
         // matched against a hit-region table.
         var dismissCount = 0
         let controller = FloatingMeetingTranscriptPanelController(
-            onHoverChanged: { _ in },
             onOpenNotes: {},
             onDismiss: { dismissCount += 1 }
         )

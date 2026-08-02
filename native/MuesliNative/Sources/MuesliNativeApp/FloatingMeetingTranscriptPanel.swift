@@ -5,11 +5,8 @@ import os
 
 enum FloatingMeetingTranscriptPlacement {
     static let panelSize = NSSize(width: 360, height: 320)
-    /// Keeps the panel off the pill rather than flush against it.
-    ///
-    /// Non-zero is safe for the hover bridge: leaving the pill schedules a delayed exit
-    /// that re-tests the pointer against both frames when it fires, and entering the panel
-    /// cancels it, so a pointer crossing 8pt reads as neither having left.
+    /// Keeps the panel off the pill rather than flush against it, so the two read as
+    /// separate windows and the pill's controls stay clear of the panel's edge.
     static let gap: CGFloat = 8
     static let screenInset: CGFloat = 8
 
@@ -225,7 +222,6 @@ private final class FirstMouseHostingView<Content: View>: NSHostingView<Content>
 final class FloatingMeetingTranscriptPanelController {
     private static let logger = Logger(subsystem: "com.muesli.native", category: "transcript-panel")
     private let model = FloatingMeetingTranscriptModel()
-    private let onHoverChanged: (Bool) -> Void
     private let onOpenNotes: () -> Void
     private let onDismiss: () -> Void
     private var hostingView: FirstMouseHostingView<FloatingMeetingTranscriptPanelView>?
@@ -252,11 +248,9 @@ final class FloatingMeetingTranscriptPanelController {
     private(set) var placementSide: FloatingMeetingTranscriptPlacement.Side?
 
     init(
-        onHoverChanged: @escaping (Bool) -> Void,
         onOpenNotes: @escaping () -> Void,
         onDismiss: @escaping () -> Void
     ) {
-        self.onHoverChanged = onHoverChanged
         self.onOpenNotes = onOpenNotes
         self.onDismiss = onDismiss
     }
@@ -296,15 +290,14 @@ final class FloatingMeetingTranscriptPanelController {
         model.isPaused = paused
     }
 
-    /// Shows the transcript beside the pill, on the side it is already using when that
-    /// side still fits. Preferred over `show(at:)`, which cannot remember anything.
-    /// Places the panel beside the pill and remembers the chosen side.
+    /// Shows the transcript, placing it beside the pill only when the user has never
+    /// moved it. Preferred over `show(at:)`, which cannot remember anything.
     ///
-    /// The panel is an independent window: the pill's controller re-invokes this from
-    /// its window's didMove/didResize notifications, so the panel follows the live
-    /// pill through moves, animations, and system-originated relocations — and every
-    /// step re-runs the clamped placement math, which a fixed child-window offset
-    /// cannot express (a bottom-edge pill pins the panel to the screen, not to itself).
+    /// Placement runs at show time and never again: a saved origin wins outright, and
+    /// without one the pill supplies a sensible first position and the side is
+    /// remembered for the next show. The panel does not follow the pill — it is an
+    /// independent window the user owns the position of, so nothing about the pill
+    /// moving or resizing re-invokes this.
     func show(beside indicatorFrame: NSRect, in visibleFrame: NSRect) {
         if let saved = savedFrameOnAnAttachedScreen() {
             Self.logger.notice("place saved=\(NSStringFromRect(saved), privacy: .public)")
@@ -450,16 +443,6 @@ final class FloatingMeetingTranscriptPanelController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: workItem)
     }
 
-    func containsMouseLocation() -> Bool {
-        screenFrame?.contains(NSEvent.mouseLocation) == true
-    }
-
-    private var screenFrame: NSRect? {
-        guard isVisible, let hostingView, let window = hostingView.window else { return nil }
-        let frameInWindow = hostingView.convert(hostingView.bounds, to: nil)
-        return window.convertToScreen(frameInWindow)
-    }
-
     /// Opening chat lets the panel take keys; closing it must hand them back.
     ///
     /// Without the resign step, the panel keeps key status after the composer closes and
@@ -520,7 +503,6 @@ final class FloatingMeetingTranscriptPanelController {
         let hostingView = FirstMouseHostingView(
             rootView: FloatingMeetingTranscriptPanelView(
                 model: model,
-                onHoverChanged: onHoverChanged,
                 onOpenNotes: onOpenNotes,
                 onDismiss: onDismiss,
                 // Through the controller, never straight to the model: opening chat has
@@ -559,7 +541,6 @@ private struct PanelWindowDragHandle: NSViewRepresentable {
 
 private struct FloatingMeetingTranscriptPanelView: View {
     let model: FloatingMeetingTranscriptModel
-    let onHoverChanged: (Bool) -> Void
     let onOpenNotes: () -> Void
     let onDismiss: () -> Void
     var onToggleChat: () -> Void = {}
@@ -614,7 +595,6 @@ private struct FloatingMeetingTranscriptPanelView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder.opacity(0.8), lineWidth: 1)
             }
-            .onHover(perform: onHoverChanged)
         }
     }
 
