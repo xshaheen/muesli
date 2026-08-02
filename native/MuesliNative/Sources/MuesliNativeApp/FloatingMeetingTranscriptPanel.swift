@@ -293,6 +293,10 @@ final class FloatingMeetingTranscriptPanelController {
     func setChatOpen(_ open: Bool) {
         if open {
             model.openChat()
+            // openChat declines when no usable backend is configured. Arming the monitor
+            // anyway would leave a global event monitor running that nothing ever tears
+            // down, since every teardown path is reached through the open chat.
+            guard model.isChatOpen else { return }
             beginOutsideClickDismissal()
         } else {
             endOutsideClickDismissal()
@@ -344,7 +348,14 @@ final class FloatingMeetingTranscriptPanelController {
                 onHoverChanged: onHoverChanged,
                 onOpenNotes: onOpenNotes,
                 onDismiss: onDismiss,
-                onToggleChat: { [weak model] in model?.toggleChat() }
+                // Through the controller, never straight to the model: opening chat has
+                // to arm outside-click dismissal and closing it has to hand keyboard focus
+                // back. Flipping the model's flag alone leaves a 360x320 panel parked over
+                // the call with no way out but the header button.
+                onToggleChat: { [weak self] in
+                    guard let self else { return }
+                    self.setChatOpen(!self.model.isChatOpen)
+                }
             )
         )
         hostingView.wantsLayer = true

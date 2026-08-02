@@ -224,13 +224,15 @@ final class FloatingIndicatorController: NSObject {
         // includes most of the chat surface.
         guard !meetingTranscriptPanel.isChatOpen else { return }
 
-        // Where the pill sits on screen *now*, captured before anything moves it.
+        // Where the pill sits on screen *now* and where the pointer grabbed it, both
+        // captured before anything moves either.
         //
         // hideMeetingTranscript resizes the window to the anchor-derived frame, which
         // is correct when collapsing normally and wrong mid-drag: the pill teleports
         // to wherever it is anchored and leaves the cursor holding nothing. Reading
         // the origin after that call -- as this did -- just records the anchor.
-        let pillScreenOrigin = indicatorScreenFrame?.origin
+        let pillScreenFrame = indicatorScreenFrame
+        let grabPoint = NSEvent.mouseLocation
 
         hideMeetingTranscript()
         guard !isShowingLoading,
@@ -246,10 +248,14 @@ final class FloatingIndicatorController: NSObject {
         let targetFrame = frameForState(state, config: config)
 
         let localIndicator = applyIndicatorFrame(targetFrame)
-        // Put it back exactly where the user grabbed it. After the collapse the window
-        // is the pill, so its origin is the pill's origin.
-        if let pillScreenOrigin {
-            panel.setFrameOrigin(pillScreenOrigin)
+        // Put it back under the pointer. After the collapse the window is the pill, so
+        // its origin is the pill's origin.
+        if let pillScreenFrame {
+            panel.setFrameOrigin(Self.collapsedDragOrigin(
+                pillFrame: pillScreenFrame,
+                collapsedSize: targetFrame.size,
+                grabPoint: grabPoint
+            ))
         }
 
         contentView.layer?.backgroundColor = style.background.cgColor
@@ -312,6 +318,9 @@ final class FloatingIndicatorController: NSObject {
     func setMeetingRecording(_ recording: Bool, config: AppConfig) {
         isMeetingRecording = recording
         recordingWaveformMode = .level
+        // A dismissal only ever means "not for this hover". Letting it survive a meeting
+        // boundary leaves hover-to-show dead in a meeting the user dismissed nothing in.
+        isMeetingTranscriptManuallyDismissed = false
         if !recording {
             isMeetingRecordingPaused = false
             hideMeetingTranscript(reset: true)
@@ -701,7 +710,9 @@ final class FloatingIndicatorController: NSObject {
         let config = configStore.load()
         if panel == nil { createPanel(config: config) }
         guard let panel, let contentView, let iconLabel, let textLabel else { return }
-        guard let screen = NSScreen.main?.visibleFrame else { return }
+        // The warning is centred on the pill's current position, so it has to be sized
+        // and clamped against the display the pill is actually on.
+        guard let screen = Self.screenVisibleFrame(intersecting: panel.frame) else { return }
 
         let warningFont = NSFont.systemFont(ofSize: 11, weight: .medium)
         let warningSize = warningPillSize(
@@ -771,7 +782,7 @@ final class FloatingIndicatorController: NSObject {
         let config = configStore.load()
         if panel == nil { createPanel(config: config) }
         guard let panel, let contentView, let textLabel else { return }
-        guard let screen = NSScreen.main?.visibleFrame else { return }
+        guard let screen = Self.screenVisibleFrame(intersecting: panel.frame) else { return }
 
         isShowingLoading = true
         let loadingSize = loadingPillSize(message: message, screen: screen)
@@ -896,8 +907,16 @@ final class FloatingIndicatorController: NSObject {
         // pointer -- to read the call, or to click back into Zoom -- must not discard
         // a half-typed question.
         if meetingTranscriptPanel.isChatOpen { return }
-        if state == .recording, isMeetingRecording, meetingTranscriptPanel.isVisible {
-            scheduleMeetingTranscriptHoverExit()
+        if state == .recording, isMeetingRecording {
+            // The pointer has left the pill, so a manual dismissal has done its job: it
+            // suppresses the re-show for the hover it was made during, not for the rest
+            // of the session. The delayed reset in dismissMeetingTranscript cannot cover
+            // this on its own -- if the pointer is over the pill when it fires it declines
+            // to clear, and nothing else ever would.
+            isMeetingTranscriptManuallyDismissed = false
+            if meetingTranscriptPanel.isVisible {
+                scheduleMeetingTranscriptHoverExit()
+            }
             return
         }
         guard state == .idle, !isShowingLoading, isHovered else { return }
@@ -1365,24 +1384,18 @@ final class FloatingIndicatorController: NSObject {
         size: NSSize,
         offsetFromTarget: Bool
     ) -> NSRect {
-        let screen = NSScreen.screens.first { screen in
-            let convertedY = screen.frame.maxY - point.y
-            return point.x >= screen.frame.minX
-                && point.x <= screen.frame.maxX
-                && convertedY >= screen.frame.minY
-                && convertedY <= screen.frame.maxY
-        } ?? NSScreen.main
-
-        guard let screen else {
-            return NSRect(
-                x: point.x - size.width / 2,
-                y: point.y - size.height / 2,
-                width: size.width,
-                height: size.height
-            )
-        }
-
-        let appKitPoint = CGPoint(x: point.x, y: screen.frame.maxY - point.y)
+        // Quartz coordinates are global with their origin at the top-left of the *primary*
+        // display, so the flip is against that one screen and no other.
+        //
+        // Converting with each candidate screen's own maxY -- as the containment test that
+        // used to live here did -- moves the point along with whichever screen is being
+        // tested, which makes the test self-referential: it can match the wrong display, or
+        // match none at all and fall back to NSScreen.main, dropping the cursor pill on the
+        // main screen while the thing it points at sits on another.
+        let appKitPoint = CGPoint(
+            x: point.x,
+            y: (NSScreen.screens.first?.frame.maxY ?? 0) - point.y
+        )
         let xOffset: CGFloat = offsetFromTarget ? 14 : 0
         let yOffset: CGFloat = offsetFromTarget ? 14 : 0
         let proposed = NSRect(
@@ -1391,7 +1404,11 @@ final class FloatingIndicatorController: NSObject {
             width: size.width,
             height: size.height
         )
-        let bounds = screen.visibleFrame.insetBy(dx: 4, dy: 4)
+        guard let visibleFrame = screenVisibleFrame(containing: appKitPoint)
+            ?? NSScreen.main?.visibleFrame else {
+            return proposed
+        }
+        let bounds = visibleFrame.insetBy(dx: 4, dy: 4)
         return NSRect(
             x: min(max(proposed.minX, bounds.minX), bounds.maxX - size.width),
             y: min(max(proposed.minY, bounds.minY), bounds.maxY - size.height),
@@ -1509,8 +1526,40 @@ final class FloatingIndicatorController: NSObject {
         return allowedRect.contains(center)
     }
 
+    /// The visible frame of the display the pill belongs to.
+    ///
+    /// Resolving `NSScreen.main` here -- as this did -- pulls a pill parked on a second
+    /// display back onto the main screen every time it resizes or is hovered, and on
+    /// relaunch rejects its saved centre outright: a display left of or below the main
+    /// one has coordinates the main screen's bounds can never contain.
+    ///
+    /// Only a custom position can leave the main screen. A preset anchor is a rule
+    /// resolved against the main screen, and stays that way.
+    private func indicatorVisibleFrame(config: AppConfig) -> NSRect? {
+        guard config.indicatorAnchor == .custom else { return NSScreen.main?.visibleFrame }
+        let candidate = customAnchorCenter ?? config.indicatorOrigin.map { CGPoint(x: $0.x, y: $0.y) }
+        // No saved position, or the display it named is no longer attached: the main
+        // screen's default centre is the right answer either way.
+        guard let candidate,
+              let visibleFrame = Self.screenVisibleFrame(containing: candidate) else {
+            return NSScreen.main?.visibleFrame
+        }
+        return visibleFrame
+    }
+
+    /// The visible frame of whichever attached display holds `point`.
+    private static func screenVisibleFrame(containing point: CGPoint) -> NSRect? {
+        NSScreen.screens.first { $0.frame.contains(point) }?.visibleFrame
+    }
+
+    /// The visible frame of the display a pill currently occupies, for the states that
+    /// re-place themselves from where the pill already is rather than from its anchor.
+    private static func screenVisibleFrame(intersecting frame: NSRect) -> NSRect? {
+        (NSScreen.screens.first { $0.frame.intersects(frame) } ?? NSScreen.main)?.visibleFrame
+    }
+
     private func frameForState(_ state: DictationState, config: AppConfig) -> NSRect {
-        guard let screen = NSScreen.main?.visibleFrame else {
+        guard let screen = indicatorVisibleFrame(config: config) else {
             return NSRect(x: 0, y: 0, width: 64, height: 28)
         }
         let size: NSSize
@@ -1570,6 +1619,29 @@ final class FloatingIndicatorController: NSObject {
         let x = min(max(center.x - size.width / 2, screen.minX), screen.maxX - size.width)
         let y = min(max(center.y - size.height / 2, screen.minY), screen.maxY - size.height)
         return NSRect(x: x, y: y, width: size.width, height: size.height)
+    }
+
+    /// Keeps the grabbed point under the pointer when the pill changes size mid-drag.
+    ///
+    /// Reusing the pre-collapse origin pins the pill's *left edge* to where the user
+    /// grabbed, so a hovered idle pill collapsing 220pt -> 44pt hands whoever grabbed
+    /// its right half up to 176pt of empty space to drag. Mapping the grab's fractional
+    /// position into the new size keeps the pointer at the same relative spot, and the
+    /// clamped fraction keeps it inside the pill whatever the size becomes.
+    ///
+    /// Sizes that do not change return the original origin exactly, so the states that
+    /// keep their size across a collapse are unaffected.
+    static func collapsedDragOrigin(
+        pillFrame: NSRect,
+        collapsedSize: NSSize,
+        grabPoint: NSPoint
+    ) -> NSPoint {
+        let fractionX = pillFrame.width > 0 ? (grabPoint.x - pillFrame.minX) / pillFrame.width : 0.5
+        let fractionY = pillFrame.height > 0 ? (grabPoint.y - pillFrame.minY) / pillFrame.height : 0.5
+        return NSPoint(
+            x: grabPoint.x - min(max(fractionX, 0), 1) * collapsedSize.width,
+            y: grabPoint.y - min(max(fractionY, 0), 1) * collapsedSize.height
+        )
     }
 
     private func styleForState(_ state: DictationState, config: AppConfig) -> (background: NSColor, border: NSColor, icon: String, title: String, iconColor: NSColor, textColor: NSColor, alpha: CGFloat) {
