@@ -1524,7 +1524,11 @@ struct SettingsView: View {
                     ) { label in
                         if label == customIndicatorPositionLabel { return }
                         guard let anchor = IndicatorAnchor.allCases.first(where: { $0.label == label }) else { return }
-                        controller.updateConfig { $0.indicatorAnchor = anchor }
+                        controller.updateConfig {
+                            $0.indicatorAnchor = anchor
+                            // Only presets reach here; a stale origin would decode back to .custom.
+                            $0.indicatorOrigin = nil
+                        }
                         controller.refreshIndicatorVisibility()
                     }
                 }
