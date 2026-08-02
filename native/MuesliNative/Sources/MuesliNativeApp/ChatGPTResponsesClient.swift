@@ -30,6 +30,13 @@ struct ChatGPTResponsesMessage: Equatable {
     }
 }
 
+/// A completed Responses reply, plus whether the provider cut it short.
+struct ChatGPTResponsesResult {
+    let text: String
+    /// The response stopped at the output cap rather than finishing its thought.
+    let wasTruncated: Bool
+}
+
 enum ChatGPTResponsesClient {
     private static let whamURL = URL(string: "https://chatgpt.com/backend-api/wham/responses")!
     private static let requestTimeout: TimeInterval = 120
@@ -41,7 +48,39 @@ enum ChatGPTResponsesClient {
         logCategory: String,
         maxOutputTokens: Int? = nil
     ) async throws -> String {
-        try await respond(
+        try await respondDetailed(
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            model: model,
+            logCategory: logCategory,
+            maxOutputTokens: maxOutputTokens
+        ).text
+    }
+
+    /// Multi-turn variant. Preserves role order so a conversation's history reaches the model.
+    static func respond(
+        messages: [ChatGPTResponsesMessage],
+        model: String,
+        logCategory: String,
+        maxOutputTokens: Int? = nil
+    ) async throws -> String {
+        try await respondDetailed(
+            messages: messages,
+            model: model,
+            logCategory: logCategory,
+            maxOutputTokens: maxOutputTokens
+        ).text
+    }
+
+    /// Same request as `respond`, but reports whether the reply hit the output cap.
+    static func respondDetailed(
+        systemPrompt: String,
+        userPrompt: String,
+        model: String,
+        logCategory: String,
+        maxOutputTokens: Int? = nil
+    ) async throws -> ChatGPTResponsesResult {
+        try await respondDetailed(
             messages: [
                 ChatGPTResponsesMessage(role: .system, content: systemPrompt),
                 ChatGPTResponsesMessage(role: .user, content: userPrompt),
@@ -52,13 +91,12 @@ enum ChatGPTResponsesClient {
         )
     }
 
-    /// Multi-turn variant. Preserves role order so a conversation's history reaches the model.
-    static func respond(
+    static func respondDetailed(
         messages: [ChatGPTResponsesMessage],
         model: String,
         logCategory: String,
         maxOutputTokens: Int? = nil
-    ) async throws -> String {
+    ) async throws -> ChatGPTResponsesResult {
         let (token, accountId) = try await ChatGPTAuthManager.shared.validAccessToken()
         let body = requestBody(messages: messages, model: model, maxOutputTokens: maxOutputTokens)
 
@@ -86,6 +124,7 @@ enum ChatGPTResponsesClient {
 
         var deltaText = ""
         var finalText = ""
+        var wasTruncated = false
         for try await line in bytes.lines {
             guard line.hasPrefix("data: ") else { continue }
             let jsonString = String(line.dropFirst(6))
@@ -93,12 +132,14 @@ enum ChatGPTResponsesClient {
             guard let json = try decodeStreamPayload(jsonString, httpStatus: httpStatus) else { continue }
 
             applyStreamPayload(json, deltaText: &deltaText, finalText: &finalText)
+            if hitOutputCap(json) { wasTruncated = true }
         }
 
         let fullText = accumulatedOutputText(deltaText: deltaText, finalText: finalText)
         let trimmed = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
-        fputs("[\(logCategory)] ChatGPT WHAM: collected \(trimmed.count) chars\n", stderr)
-        return trimmed
+        let truncationNote = wasTruncated ? " (hit output cap)" : ""
+        fputs("[\(logCategory)] ChatGPT WHAM: collected \(trimmed.count) chars\(truncationNote)\n", stderr)
+        return ChatGPTResponsesResult(text: trimmed, wasTruncated: wasTruncated)
     }
 
     static func requestBody(
@@ -181,6 +222,24 @@ enum ChatGPTResponsesClient {
 
     static func accumulatedOutputText(deltaText: String, finalText: String) -> String {
         finalText.isEmpty ? deltaText : finalText
+    }
+
+    /// Whether a stream event says the response stopped because it ran out of room.
+    ///
+    /// The terminal `response.completed` / `response.incomplete` events carry the
+    /// response object, which marks a capped reply with `status: "incomplete"` and
+    /// `incomplete_details.reason == "max_output_tokens"`. In-progress events report
+    /// `"in_progress"`, so only a finished-but-cut-short reply matches here.
+    static func hitOutputCap(_ payload: [String: Any]) -> Bool {
+        if (payload["status"] as? String) == "incomplete" { return true }
+        if let details = payload["incomplete_details"] as? [String: Any],
+           (details["reason"] as? String) == "max_output_tokens" {
+            return true
+        }
+        if let response = payload["response"] as? [String: Any] {
+            return hitOutputCap(response)
+        }
+        return false
     }
 
     static func decodeStreamPayload(_ jsonString: String, httpStatus: Int) throws -> [String: Any]? {

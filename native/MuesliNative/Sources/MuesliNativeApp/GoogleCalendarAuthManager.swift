@@ -43,6 +43,9 @@ final class GoogleCalendarAuthManager {
         AppIdentity.supportDirectoryURL.appendingPathComponent("google-calendar-auth.json")
     }
 
+    /// The refresh currently in flight, so overlapping callers share one round trip.
+    private var refreshTask: Task<TokenResponse, Error>?
+
     private init() {
         credentials = GoogleCalendarCredentials.load()
     }
@@ -94,19 +97,41 @@ final class GoogleCalendarAuthManager {
             if expiresAt > Date().addingTimeInterval(30) {
                 return accessToken
             }
-            fputs("[google-cal] token expired, refreshing...\n", stderr)
-            guard let refreshToken = tokenRead(key: "refresh_token") else {
-                throw GoogleCalendarAuthError.notAuthenticated
-            }
-            let tokens = try await refreshAccessToken(
-                refreshToken: refreshToken,
-                credentials: credentials
-            )
-            saveTokens(tokens)
+            let tokens = try await refreshSharingInFlightRequest(credentials: credentials)
             return tokens.accessToken
         }
 
         return accessToken
+    }
+
+    /// Runs one refresh at a time, letting concurrent callers await the same result.
+    ///
+    /// Without this, two callers that both find an expired token POST the same refresh
+    /// token: if Google rotates it, the second request fails and the later `saveTokens`
+    /// overwrites the good tokens — an effective sign-out.
+    private func refreshSharingInFlightRequest(
+        credentials: GoogleCalendarCredentials
+    ) async throws -> TokenResponse {
+        if let refreshTask {
+            return try await refreshTask.value
+        }
+
+        fputs("[google-cal] token expired, refreshing...\n", stderr)
+        guard let refreshToken = tokenRead(key: "refresh_token") else {
+            throw GoogleCalendarAuthError.notAuthenticated
+        }
+
+        let task = Task { @MainActor in
+            let tokens = try await self.refreshAccessToken(
+                refreshToken: refreshToken,
+                credentials: credentials
+            )
+            self.saveTokens(tokens)
+            return tokens
+        }
+        refreshTask = task
+        defer { refreshTask = nil }
+        return try await task.value
     }
 
     // MARK: - PKCE (reuses Data.base64URLEncoded() from ChatGPTAuthManager)

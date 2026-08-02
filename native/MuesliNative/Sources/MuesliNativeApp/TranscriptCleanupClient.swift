@@ -168,15 +168,16 @@ enum TranscriptCleanupClient {
 
         switch llmBackend {
         case .chatGPT:
+            let chatGPTResult = try await ChatGPTResponsesClient.respondDetailed(
+                systemPrompt: effectiveSystemPrompt,
+                userPrompt: userPrompt,
+                model: model,
+                logCategory: "postproc",
+                maxOutputTokens: options.maxOutputTokens
+            )
             response = TranscriptCleanupRawResponse(
-                text: try await ChatGPTResponsesClient.respond(
-                    systemPrompt: effectiveSystemPrompt,
-                    userPrompt: userPrompt,
-                    model: model,
-                    logCategory: "postproc",
-                    maxOutputTokens: options.maxOutputTokens
-                ),
-                wasTruncated: false
+                text: chatGPTResult.text,
+                wasTruncated: chatGPTResult.wasTruncated
             )
         case .openAI:
             response = try await cleanWithOpenAI(systemPrompt: effectiveSystemPrompt, userPrompt: userPrompt, model: model, config: config, options: options)
@@ -192,7 +193,7 @@ enum TranscriptCleanupClient {
                 options: options
             )
         case .ollama:
-            response = try await cleanWithOllama(systemPrompt: effectiveSystemPrompt, userPrompt: userPrompt, model: model, config: config)
+            response = try await cleanWithOllama(systemPrompt: effectiveSystemPrompt, userPrompt: userPrompt, model: model, config: config, options: options)
         case .lmStudio:
             guard let requestURL = MeetingSummaryClient.resolveLMStudioURL(config: cleanupConfig(config, model: model)) else {
                 throw TranscriptCleanupError.missingConfiguration("Invalid LM Studio URL: \(config.lmStudioURL)")
@@ -356,7 +357,8 @@ enum TranscriptCleanupClient {
         systemPrompt: String,
         userPrompt: String,
         model: String,
-        config: AppConfig
+        config: AppConfig,
+        options: TranscriptCleanupRequestOptions
     ) async throws -> TranscriptCleanupRawResponse {
         let baseURL = resolveConfiguredOllamaURL(config: config)
         guard let baseURL else {
@@ -370,7 +372,7 @@ enum TranscriptCleanupClient {
                 ["role": "user", "content": userPrompt],
             ],
             "stream": false,
-            "options": ["num_predict": defaultMaxOutputTokens],
+            "options": ["num_predict": options.maxOutputTokens ?? defaultMaxOutputTokens],
         ]
         var request = URLRequest(url: chatURL)
         request.timeoutInterval = requestTimeout
@@ -459,7 +461,7 @@ enum TranscriptCleanupClient {
     ) async throws -> TranscriptCleanupRawResponse {
         let body: [String: Any] = [
             "model": model,
-            "max_tokens": defaultMaxOutputTokens,
+            "max_tokens": options.maxOutputTokens ?? defaultMaxOutputTokens,
             "system": systemPrompt,
             "messages": [["role": "user", "content": userPrompt]],
         ]

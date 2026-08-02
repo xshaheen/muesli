@@ -130,6 +130,10 @@ enum MeetingSummaryClient {
     private static let defaultOllamaModel = "qwen3.5"
     private static let defaultSummaryMaxOutputTokens = 2500
     private static let titlePromptCharacterLimit = 6_000
+    // A long meeting on a reasoning model runs well past URLSession's 60s default,
+    // which would fail the request and burn a retry before the model ever answers.
+    private static let openAISummaryTimeout: TimeInterval = 300
+    private static let openRouterSummaryTimeout: TimeInterval = 300
     private static let ollamaSummaryTimeout: TimeInterval = 300
     private static let ollamaTitleTimeout: TimeInterval = 120
     private static let lmStudioSummaryTimeout: TimeInterval = 300
@@ -529,6 +533,7 @@ enum MeetingSummaryClient {
         ]
 
         var request = URLRequest(url: openAIURL)
+        request.timeoutInterval = openAISummaryTimeout
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -589,6 +594,7 @@ enum MeetingSummaryClient {
         ]
 
         var request = URLRequest(url: openRouterURL)
+        request.timeoutInterval = openRouterSummaryTimeout
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
