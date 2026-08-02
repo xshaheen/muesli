@@ -229,6 +229,14 @@ final class FloatingMeetingTranscriptPanelController {
     private let onOpenNotes: () -> Void
     private let onDismiss: () -> Void
     private var hostingView: FirstMouseHostingView<FloatingMeetingTranscriptPanelView>?
+    /// The user-positioned origin persisted in config; nil until the user first drags
+    /// the panel. The panel is user-positioned, not pill-attached: once moved, every
+    /// show reuses this origin and the pill's position stops mattering.
+    var savedOriginProvider: (() -> CGPoint?)?
+    var onUserMovedPanel: ((CGPoint) -> Void)?
+    private var isProgrammaticMove = false
+    private var userMoveSaveWorkItem: DispatchWorkItem?
+    private var windowMoveObserver: NSObjectProtocol?
     private var outsideClickMonitor: Any?
     /// The transcript's own window.
     ///
@@ -298,6 +306,13 @@ final class FloatingMeetingTranscriptPanelController {
     /// step re-runs the clamped placement math, which a fixed child-window offset
     /// cannot express (a bottom-edge pill pins the panel to the screen, not to itself).
     func show(beside indicatorFrame: NSRect, in visibleFrame: NSRect) {
+        if let saved = savedFrameOnAnAttachedScreen() {
+            Self.logger.notice("place saved=\(NSStringFromRect(saved), privacy: .public)")
+            show(at: saved)
+            return
+        }
+        // First-ever show: beside the pill is a sensible starting point. From the
+        // first drag onward the user owns the position.
         let placement = FloatingMeetingTranscriptPlacement.placement(
             beside: indicatorFrame,
             visibleFrame: visibleFrame,
@@ -307,6 +322,22 @@ final class FloatingMeetingTranscriptPanelController {
         let placementDescription = "beside=\(NSStringFromRect(indicatorFrame)) visible=\(NSStringFromRect(visibleFrame)) -> \(NSStringFromRect(placement.frame)) side=\(placement.side)"
         Self.logger.notice("place \(placementDescription, privacy: .public)")
         show(at: placement.frame)
+    }
+
+    /// The saved origin as a full panel frame, clamped into the display that holds it;
+    /// nil when the user has never moved the panel or that display is gone.
+    private func savedFrameOnAnAttachedScreen() -> NSRect? {
+        guard let origin = savedOriginProvider?() else { return nil }
+        let size = FloatingMeetingTranscriptPlacement.panelSize
+        let frame = NSRect(origin: origin, size: size)
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        guard let visible = NSScreen.screens.first(where: { $0.frame.contains(center) })?.visibleFrame
+            ?? NSScreen.screens.first(where: { $0.frame.intersects(frame) })?.visibleFrame
+        else { return nil }
+        let inset = FloatingMeetingTranscriptPlacement.screenInset
+        let x = min(max(frame.origin.x, visible.minX + inset), max(visible.minX + inset, visible.maxX - inset - size.width))
+        let y = min(max(frame.origin.y, visible.minY + inset), max(visible.minY + inset, visible.maxY - inset - size.height))
+        return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 
     /// Shows the transcript at a screen frame of its own.
@@ -321,7 +352,10 @@ final class FloatingMeetingTranscriptPanelController {
             window.contentView = hostingView
         }
         hostingView.isHidden = false
+        isProgrammaticMove = true
         window.setFrame(screenFrame, display: true)
+        isProgrammaticMove = false
+        installMoveObserverIfNeeded(for: window)
         model.isPresented = true
         // orderFront, never makeKey: a floating panel that takes focus during a call
         // swallows the keystrokes meant for Zoom. Chat asks for key explicitly.
@@ -367,6 +401,9 @@ final class FloatingMeetingTranscriptPanelController {
 
     func close() {
         releaseChatFocus()
+        userMoveSaveWorkItem?.cancel()
+        if let windowMoveObserver { NotificationCenter.default.removeObserver(windowMoveObserver) }
+        windowMoveObserver = nil
         model.isPresented = false
         window?.orderOut(nil)
         window?.contentView = nil
@@ -388,6 +425,29 @@ final class FloatingMeetingTranscriptPanelController {
             window.orderOut(nil)
             window.orderFront(nil)
         }
+    }
+
+    private func installMoveObserverIfNeeded(for window: NSWindow) {
+        guard windowMoveObserver == nil else { return }
+        windowMoveObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.windowDidMove() }
+        }
+    }
+
+    private func windowDidMove() {
+        guard !isProgrammaticMove, let window, window.isVisible else { return }
+        // performDrag streams moves with no end event; debounce to one save per drop.
+        userMoveSaveWorkItem?.cancel()
+        let origin = window.frame.origin
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.onUserMovedPanel?(origin)
+        }
+        userMoveSaveWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: workItem)
     }
 
     func containsMouseLocation() -> Bool {
@@ -478,6 +538,19 @@ final class FloatingMeetingTranscriptPanelController {
     }
 }
 
+/// Lets the user drag the panel by its header: mouseDown hands the event to the
+/// window's native drag loop. Sits behind the header's controls, so buttons win.
+private struct PanelWindowDragHandle: NSViewRepresentable {
+    final class DragView: NSView {
+        override func mouseDown(with event: NSEvent) {
+            window?.performDrag(with: event)
+        }
+    }
+
+    func makeNSView(context: Context) -> DragView { DragView() }
+    func updateNSView(_ nsView: DragView, context: Context) {}
+}
+
 private struct FloatingMeetingTranscriptPanelView: View {
     let model: FloatingMeetingTranscriptModel
     let onHoverChanged: (Bool) -> Void
@@ -509,6 +582,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
         if model.isPresented {
             VStack(spacing: 0) {
                 header
+                    .background(PanelWindowDragHandle())
                 Divider().background(MuesliTheme.surfaceBorder)
                 if model.isChatOpen, let context = model.chatContext {
                     MeetingChatView(

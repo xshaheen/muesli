@@ -1146,6 +1146,9 @@ struct AppConfig: Codable {
     var indicatorAnchor: IndicatorAnchor = .midTrailing
     var dashboardWindowFrame: WindowFrame? = nil
     var indicatorOrigin: CGPointCodable? = nil
+    /// Bottom-left origin the user last dragged the floating transcript panel to.
+    /// The panel is user-positioned, not pill-attached; nil means never moved.
+    var meetingPanelOrigin: CGPointCodable? = nil
     var openAIAPIKey: String = ""
     var openRouterAPIKey: String = ""
     var openAIModel: String = ""
@@ -1272,6 +1275,7 @@ struct AppConfig: Codable {
         case indicatorAnchor = "indicator_anchor"
         case dashboardWindowFrame = "dashboard_window_frame"
         case indicatorOrigin = "indicator_origin"
+        case meetingPanelOrigin = "meeting_panel_origin"
         case openAIAPIKey = "openai_api_key"
         case openRouterAPIKey = "openrouter_api_key"
         case openAIModel = "openai_model"
@@ -1426,6 +1430,7 @@ struct AppConfig: Codable {
             ?? ((try? c.decodeIfPresent(CGPointCodable.self, forKey: .indicatorOrigin)) != nil ? .custom : .midTrailing)
         dashboardWindowFrame = try? c.decode(WindowFrame.self, forKey: .dashboardWindowFrame)
         indicatorOrigin = try? c.decode(CGPointCodable.self, forKey: .indicatorOrigin)
+        meetingPanelOrigin = try? c.decode(CGPointCodable.self, forKey: .meetingPanelOrigin)
         openAIAPIKey = (try? c.decode(String.self, forKey: .openAIAPIKey)) ?? defaults.openAIAPIKey
         openRouterAPIKey = (try? c.decode(String.self, forKey: .openRouterAPIKey)) ?? defaults.openRouterAPIKey
         openAIModel = SummaryModelPreset.migratedFromGPT55(

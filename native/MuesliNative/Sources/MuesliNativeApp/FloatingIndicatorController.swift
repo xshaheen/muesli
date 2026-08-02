@@ -181,6 +181,9 @@ final class FloatingIndicatorController: NSObject {
     init(configStore: ConfigStore) {
         self.configStore = configStore
         super.init()
+        meetingTranscriptPanel.savedOriginProvider = { [weak self] in
+            self?.configStore.load().meetingPanelOrigin.map { CGPoint(x: $0.x, y: $0.y) }
+        }
         // Display attach/detach moves windows without the app's involvement: macOS
         // constrains them onto whatever screens remain, leaving the pill and the
         // transcript wherever they landed until the next state change. Re-resolve
@@ -210,6 +213,23 @@ final class FloatingIndicatorController: NSObject {
     }
 
     var onStopToggleDictation: (() -> Void)?
+
+    /// Persists the user's panel position; wired by MuesliController to config.
+    var onMeetingPanelPositionSaved: ((CGPoint) -> Void)? {
+        get { meetingTranscriptPanel.onUserMovedPanel }
+        set { meetingTranscriptPanel.onUserMovedPanel = newValue }
+    }
+
+    /// Menu-bar toggle: shows the transcript at the user's saved position (or beside
+    /// the pill on first use) regardless of hover state, or hides a visible one.
+    func toggleMeetingTranscriptPanel() {
+        if meetingTranscriptPanel.isVisible {
+            hideMeetingTranscript()
+        } else {
+            isMeetingTranscriptManuallyDismissed = false
+            showMeetingTranscript()
+        }
+    }
 
     var currentFrame: NSRect? {
         indicatorScreenFrame
@@ -546,24 +566,6 @@ final class FloatingIndicatorController: NSObject {
         meetingTranscriptPanel.show(beside: indicatorFrame, in: visibleFrame)
     }
 
-    /// Keeps the panel beside the pill by following the pill's window.
-    ///
-    /// The panel is an independent window; didMove/didResize fire for every frame of
-    /// an animated move, for manual drags of the window, and for system-originated
-    /// relocations (display changes, constraint moves) alike, and each step re-runs
-    /// the clamped placement math — which a child window's fixed-offset translation
-    /// cannot express, and which is exactly what broke beside a bottom-edge pill.
-    private var lastFollowedPillFrame: NSRect?
-    private var pillWindowObservers: [NSObjectProtocol] = []
-
-    private func followPillWindowIfNeeded() {
-        guard let panel, meetingTranscriptPanel.isVisible, !isDragging else { return }
-        let frame = panel.frame
-        guard frame != lastFollowedPillFrame else { return }
-        lastFollowedPillFrame = frame
-        guard let visibleFrame = Self.screenVisibleFrame(intersecting: frame) else { return }
-        meetingTranscriptPanel.show(beside: frame, in: visibleFrame)
-    }
 
     private func hideMeetingTranscript(reset: Bool = false) {
         // Nothing to resize. The transcript owns its window, so showing and hiding it
@@ -1209,9 +1211,6 @@ final class FloatingIndicatorController: NSObject {
         isComputerUseCursorMode = false
         computerUseCursorReturnFrame = nil
         lastAppliedIndicatorFrame = nil
-        lastFollowedPillFrame = nil
-        pillWindowObservers.forEach(NotificationCenter.default.removeObserver)
-        pillWindowObservers = []
         loadingSpinner = nil
         // The transcript window goes down with the pill below, so the latch suppressing
         // its re-show has nothing left to suppress.
@@ -1597,18 +1596,6 @@ final class FloatingIndicatorController: NSObject {
         panel.becomesKeyOnlyIfNeeded = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
-        pillWindowObservers = [
-            NotificationCenter.default.addObserver(
-                forName: NSWindow.didMoveNotification,
-                object: panel,
-                queue: .main
-            ) { [weak self] _ in self?.followPillWindowIfNeeded() },
-            NotificationCenter.default.addObserver(
-                forName: NSWindow.didResizeNotification,
-                object: panel,
-                queue: .main
-            ) { [weak self] _ in self?.followPillWindowIfNeeded() },
-        ]
 
         let containerView = NSView(frame: NSRect(origin: .zero, size: panel.frame.size))
         containerView.wantsLayer = true

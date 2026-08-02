@@ -630,6 +630,11 @@ final class MuesliController: NSObject {
                 $0.indicatorOrigin = CGPointCodable(x: center.x, y: center.y)
             }
         }
+        indicator.onMeetingPanelPositionSaved = { [weak self] origin in
+            self?.updateConfig {
+                $0.meetingPanelOrigin = CGPointCodable(x: origin.x, y: origin.y)
+            }
+        }
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
@@ -4747,6 +4752,10 @@ final class MuesliController: NSObject {
                 meetingRecordingHotkeyMonitor.cancelToggleMode()
             }
         }
+    }
+
+    @objc func toggleMeetingTranscriptPanel() {
+        indicator.toggleMeetingTranscriptPanel()
     }
 
     @objc func toggleMeetingRecordingPause() {
