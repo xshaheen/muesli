@@ -228,10 +228,18 @@ public final class DictationStore {
         ] {
             _ = sqlite3_exec(db, sql, nil, nil, nil)
         }
-        // A cleaned transcript must never outlive the raw text it was derived from.
-        // Enforcing that here rather than in each UPDATE means no existing statement
-        // changes and no future one has to remember: SQLite clears the column
-        // whenever raw_transcript actually changes.
+        // A cleaned transcript -- and the state marking notes as summarised from it
+        // -- must never outlive the raw text it was derived from. Enforcing that
+        // here rather than in each UPDATE means no existing statement changes and
+        // no future one has to remember: SQLite clears the column whenever
+        // raw_transcript actually changes.
+        //
+        // Dropping `cleaned` back to `raw` in the same statement is what makes the
+        // invalidation whole. Notes marked `cleaned` summarise text the user has
+        // just replaced, so presenting them as settled is wrong, and the state also
+        // hides the meeting from meetingsAwaitingNotesRegeneration -- which would
+        // strand those stale notes permanently. `user` survives untouched: a
+        // hand-edited note is theirs regardless of what the transcript does.
         //
         // `IS NOT` (not `!=`) so a NULL on either side compares correctly, and the
         // guard matters -- upsertSyncedMeeting re-assigns raw_transcript on every
@@ -241,13 +249,21 @@ public final class DictationStore {
         //
         // Scoped to `meetings`: meeting_resume_snapshots has its own raw_transcript
         // and no cleaned column.
+        //
+        // Renamed rather than edited in place: `IF NOT EXISTS` is a no-op against a
+        // database that already installed the first version, which would keep the
+        // old cleared-column-only body forever.
+        try exec("DROP TRIGGER IF EXISTS meetings_clear_cleaned_transcript", db: db)
         try exec(
             """
-            CREATE TRIGGER IF NOT EXISTS meetings_clear_cleaned_transcript
+            CREATE TRIGGER IF NOT EXISTS meetings_clear_cleaned_transcript_v2
             AFTER UPDATE OF raw_transcript ON meetings
             WHEN new.raw_transcript IS NOT old.raw_transcript
             BEGIN
-                UPDATE meetings SET cleaned_transcript = '' WHERE id = new.id;
+                UPDATE meetings
+                SET cleaned_transcript = '',
+                    notes_source = CASE WHEN notes_source = 'cleaned' THEN 'raw' ELSE notes_source END
+                WHERE id = new.id;
             END;
             """,
             db: db
@@ -2603,6 +2619,12 @@ public final class DictationStore {
         }
     }
 
+    /// Replaces notes with a re-summarization the user asked for.
+    ///
+    /// Marks `notes_source = 'cleaned'` when a cleaned transcript exists, because
+    /// the user just re-summarized over it: these notes are settled. Without that,
+    /// the meeting stays a regeneration candidate and the retry sweep would later
+    /// overwrite what they asked for.
     public func updateMeetingSummary(
         id: Int64,
         title: String,
@@ -2616,7 +2638,7 @@ public final class DictationStore {
         defer { sqlite3_close(db) }
         let sql = """
         UPDATE meetings
-        SET title = ?, formatted_notes = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, updated_at = ?, sync_dirty = 1
+        SET title = ?, formatted_notes = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, notes_source = CASE WHEN cleaned_transcript <> '' THEN 'cleaned' ELSE notes_source END, updated_at = ?, sync_dirty = 1
         WHERE id = ? AND deleted_at IS NULL
         """
         var statement: OpaquePointer?

@@ -275,6 +275,7 @@ final class MuesliController: NSObject {
     private static let maxDictionarySuggestions = 50
     private static let maxDictionarySuggestionPromptQueue = 10
     private static let dictionarySuggestionLogger = Logger(subsystem: "com.muesli.native", category: "DictionarySuggestion")
+    private static let meetingCleanupLogger = Logger(subsystem: "com.muesli.native", category: "meeting-cleanup")
     private static let pendingDictionaryCorrectionAccessibilityEnableKey = "dictionaryCorrectionPrompts.pendingAccessibilityEnable"
     private static let pendingDictionaryCorrectionAccessibilityRequestedAtKey = "dictionaryCorrectionPrompts.pendingAccessibilityRequestedAt"
     private static let pendingDictionaryCorrectionAccessibilityRequestProcessIDKey = "dictionaryCorrectionPrompts.pendingAccessibilityRequestProcessID"
@@ -6329,6 +6330,9 @@ final class MuesliController: NSObject {
             // Leaves notes_source at raw, so the next launch sweep tries again.
             // Cleanup itself runs once, so without that retry a single failure would
             // strand the meeting with raw-derived notes forever.
+            Self.meetingCleanupLogger.error(
+                "Notes regeneration failed for meeting \(meetingID, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
             return
         }
 

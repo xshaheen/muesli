@@ -3216,6 +3216,38 @@ struct DictationStoreTests {
         #expect(try store.meeting(id: id)?.cleanedTranscript == "[10:00:00] Speaker 1: primary key")
     }
 
+    @Test("a database carrying the first trigger version gets the current body")
+    func migrationReplacesFirstTriggerVersion() throws {
+        // `CREATE TRIGGER IF NOT EXISTS` is a no-op against a name that already
+        // exists, so without the drop every database installed before the rename
+        // would keep clearing only the column and leave notes_source stale.
+        let (store, url) = try makeStoreWithURL()
+        try rawExec(url, """
+        DROP TRIGGER IF EXISTS meetings_clear_cleaned_transcript_v2;
+        CREATE TRIGGER meetings_clear_cleaned_transcript
+        AFTER UPDATE OF raw_transcript ON meetings
+        WHEN new.raw_transcript IS NOT old.raw_transcript
+        BEGIN
+            UPDATE meetings SET cleaned_transcript = '' WHERE id = new.id;
+        END;
+        """)
+
+        try store.migrateIfNeeded()
+
+        let id = try makeCleanedMeeting(store)
+        let meeting = try #require(try store.meeting(id: id))
+        #expect(try store.storeRegeneratedMeetingNotes(
+            id: id,
+            formattedNotes: "notes mentioning primary key",
+            expectedCleanedTranscript: meeting.cleanedTranscript,
+            expectedManualNotes: meeting.manualNotes
+        ))
+
+        try store.updateMeetingTranscript(id: id, rawTranscript: "rewritten after the upgrade")
+
+        #expect(try store.meeting(id: id)?.notesSource == .raw)
+    }
+
     @Test("storing a cleaned transcript leaves the raw one byte-identical")
     func storingCleanedLeavesRawIntact() throws {
         let store = try makeStore()
@@ -3372,6 +3404,43 @@ struct DictationStoreTests {
         #expect(try store.meeting(id: id)?.notesSource == .user)
     }
 
+    @Test("editing the transcript takes regenerated notes back to raw-derived")
+    func transcriptEditResetsCleanedNotesSource() throws {
+        // Those notes summarise text the user has just replaced. Left marked
+        // cleaned they would be presented as settled and the retry sweep would
+        // skip the meeting, stranding the stale summary permanently.
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+        let meeting = try #require(try store.meeting(id: id))
+        #expect(try store.storeRegeneratedMeetingNotes(
+            id: id,
+            formattedNotes: "notes mentioning primary key",
+            expectedCleanedTranscript: meeting.cleanedTranscript,
+            expectedManualNotes: meeting.manualNotes
+        ))
+        #expect(try store.meeting(id: id)?.notesSource == .cleaned)
+
+        try store.updateMeetingTranscript(id: id, rawTranscript: "the user rewrote the whole thing")
+
+        let after = try #require(try store.meeting(id: id))
+        #expect(after.cleanedTranscript.isEmpty)
+        #expect(after.notesSource == .raw)
+    }
+
+    @Test("a user's own notes stay theirs when the transcript is edited")
+    func transcriptEditPreservesUserNotesSource() throws {
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+        try store.updateMeetingNotes(id: id, formattedNotes: "what the user wrote")
+
+        try store.updateMeetingTranscript(id: id, rawTranscript: "a different transcript")
+
+        let after = try #require(try store.meeting(id: id))
+        #expect(after.cleanedTranscript.isEmpty)
+        #expect(after.notesSource == .user)
+        #expect(after.formattedNotes == "what the user wrote")
+    }
+
     @Test("regeneration is dropped when the transcript it read is gone")
     func regenerationRejectedAfterTranscriptEdit() throws {
         let store = try makeStore()
@@ -3440,6 +3509,64 @@ struct DictationStoreTests {
 
         #expect(pending.contains { $0.id == regenerated } == false)
         #expect(pending.contains { $0.id == edited } == false)
+    }
+
+    @Test("a re-summarize over a cleaned transcript settles the notes")
+    func reSummarizeOverCleanedTranscriptMarksNotesCleaned() throws {
+        // The user asked for this summary, and it was built from the cleaned text.
+        // Left at raw the meeting stays a candidate and the sweep overwrites it.
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+        let meeting = try #require(try store.meeting(id: id))
+
+        try store.updateMeetingSummary(
+            id: id,
+            title: "Standup",
+            formattedNotes: "## Decisions\n- ship it",
+            selectedTemplateID: "stand-up",
+            selectedTemplateName: "Stand-Up",
+            selectedTemplateKind: .builtin,
+            selectedTemplatePrompt: "## Decisions"
+        )
+
+        #expect(try store.meeting(id: id)?.notesSource == .cleaned)
+        #expect(try store.storeRegeneratedMeetingNotes(
+            id: id,
+            formattedNotes: "what the sweep would have written",
+            expectedCleanedTranscript: meeting.cleanedTranscript,
+            expectedManualNotes: meeting.manualNotes
+        ) == false)
+        #expect(try store.meeting(id: id)?.formattedNotes == "## Decisions\n- ship it")
+        #expect(try store.meetingsAwaitingNotesRegeneration().contains { $0.id == id } == false)
+    }
+
+    @Test("a re-summarize with no cleaned transcript leaves the notes raw-derived")
+    func reSummarizeWithoutCleanedTranscriptStaysRaw() throws {
+        // Nothing was cleaned, so there is no cleanup to call settled -- and a
+        // cleanup landing later must still be able to regenerate.
+        let store = try makeStore()
+        let id = try store.insertMeeting(
+            title: "Never cleaned",
+            calendarEventID: nil,
+            startTime: Date(timeIntervalSince1970: 1_775_817_600),
+            endTime: Date(timeIntervalSince1970: 1_775_821_200),
+            rawTranscript: "raw only",
+            formattedNotes: "notes",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+
+        try store.updateMeetingSummary(
+            id: id,
+            title: "Standup",
+            formattedNotes: "## Decisions\n- ship it",
+            selectedTemplateID: "stand-up",
+            selectedTemplateName: "Stand-Up",
+            selectedTemplateKind: .builtin,
+            selectedTemplatePrompt: "## Decisions"
+        )
+
+        #expect(try store.meeting(id: id)?.notesSource == .raw)
     }
 
     @Test("a meeting with no cleaned transcript is not a regeneration candidate")
