@@ -2267,9 +2267,33 @@ final class MuesliController: NSObject {
         await transcriptionCoordinator.configurePostProcessor(
             backend: selectedPostProcessorBackend,
             option: option ?? runtimePostProcessorOption(),
-            systemPrompt: config.postProcessorSystemPrompt,
+            systemPrompt: Self.systemPromptWithSpeakerVocabulary(
+                config.postProcessorSystemPrompt,
+                customWords: config.customWords
+            ),
             config: config
         )
+    }
+
+    /// Appends the user's dictionary to the cleanup prompt as restoration targets.
+    ///
+    /// The literal matcher can only fix spans that already contain the term; a
+    /// transliterated one — «ريفا كتير» for "refactor" — never matches it. The model
+    /// can make that phonetic leap, but only if it knows the speaker's vocabulary.
+    static func systemPromptWithSpeakerVocabulary(_ systemPrompt: String, customWords: [CustomWord]) -> String {
+        let terms = customWords
+            .map { ($0.replacement?.isEmpty == false ? $0.replacement! : $0.word) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !terms.isEmpty else { return systemPrompt }
+        let capped = terms.prefix(80).joined(separator: ", ")
+        return systemPrompt + """
+
+
+        Speaker vocabulary — terms this user dictates often. When a garbled or \
+        transliterated span plausibly matches one of these, restore it to this exact \
+        spelling: \(capped)
+        """
     }
 
     func setPostProcessorEnabled(_ enabled: Bool) {
@@ -2941,6 +2965,7 @@ final class MuesliController: NSObject {
 
     func addCustomWord(_ word: CustomWord) {
         updateConfig { $0.customWords.append(word) }
+        refreshPostProcessorPromptAfterDictionaryChange()
     }
 
     func addDictionarySuggestion(_ suggestion: DictionarySuggestion) {
@@ -3024,6 +3049,7 @@ final class MuesliController: NSObject {
             config.dictionarySuggestions.removeAll { $0.key == key }
             config.dismissedDictionarySuggestionKeys.removeAll { $0 == key }
         }
+        refreshPostProcessorPromptAfterDictionaryChange()
         logDictionarySuggestion("accept \(dictionarySuggestionLogMetadata(suggestion))")
     }
 
@@ -3138,10 +3164,18 @@ final class MuesliController: NSObject {
             guard let index = config.customWords.firstIndex(where: { $0.id == word.id }) else { return }
             config.customWords[index] = word
         }
+        refreshPostProcessorPromptAfterDictionaryChange()
     }
 
     func removeCustomWord(id: UUID) {
         updateConfig { $0.customWords.removeAll { $0.id == id } }
+        refreshPostProcessorPromptAfterDictionaryChange()
+    }
+
+    /// The dictionary rides inside the cleanup prompt as restoration vocabulary, so
+    /// editing it must reconfigure the post-processor the same way a preset change does.
+    private func refreshPostProcessorPromptAfterDictionaryChange() {
+        Task { await configureTranscriptCleanupForRuntime() }
     }
 
     @discardableResult
