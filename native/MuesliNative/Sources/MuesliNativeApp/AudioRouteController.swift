@@ -153,6 +153,7 @@ extension DictationAudioRouting {
             defaultInputDeviceID: nil,
             defaultInputDeviceName: nil,
             builtInInputDeviceID: nil,
+            builtInInputDeviceName: nil,
             systemDefaultInputIsBuiltIn: systemDefaultInputIsBuiltInForDictation()
         )
     }
@@ -366,6 +367,7 @@ final class DictationAudioRouteController: DictationAudioRouting {
             defaultInputDeviceID: current.defaultInputDeviceID,
             defaultInputDeviceName: current.defaultInputDeviceID.flatMap { current.inputDeviceNamesByID[$0] },
             builtInInputDeviceID: current.builtInInputDeviceID,
+            builtInInputDeviceName: current.builtInInputDeviceID.flatMap { current.inputDeviceNamesByID[$0] },
             systemDefaultInputIsBuiltIn: current.systemDefaultInputIsBuiltIn
         )
     }

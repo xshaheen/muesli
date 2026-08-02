@@ -17,6 +17,7 @@ struct MeetingMicRouteDiagnosticsSnapshot: Codable, Equatable {
     let defaultInputDeviceID: AudioObjectID?
     let defaultInputDeviceName: String?
     let builtInInputDeviceID: AudioObjectID?
+    let builtInInputDeviceName: String?
     let systemDefaultInputIsBuiltIn: Bool
 }
 

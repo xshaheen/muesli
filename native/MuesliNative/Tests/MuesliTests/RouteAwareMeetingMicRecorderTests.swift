@@ -92,6 +92,7 @@ struct RouteAwareMeetingMicRecorderTests {
             defaultInputDeviceID: 90,
             defaultInputDeviceName: "Headset Mic",
             builtInInputDeviceID: 82,
+            builtInInputDeviceName: "MacBook Microphone",
             systemDefaultInputIsBuiltIn: false
         )
         let recorder = RouteAwareMeetingMicRecorder(

@@ -185,6 +185,9 @@ final class MeetingSession {
     private let micChunkHealthTracker = MeetingTranscriptChunkHealthTracker()
     private let systemChunkHealthTracker = MeetingTranscriptChunkHealthTracker()
     private let micHealthTracker = MeetingMicHealthTracker()
+    /// Confined to `chunkRotationQueue`, which serialises every health callback.
+    private var micFailoverPolicy = MeetingMicFailoverPolicy()
+    private var lastMicFailoverEvaluationAt: Date?
     private let chunkRotationQueue = DispatchQueue(label: "MuesliNative.MeetingSession.chunkRotation")
     private let pausedDisplayLock = OSAllocatedUnfairLock(initialState: false)
     private var chunkTimingTracker = MeetingChunkTimingTracker()
@@ -192,6 +195,9 @@ final class MeetingSession {
     private var systemChunkRecorder: PCMChunkRecorder?
     var onProgress: ((MeetingProcessingStage) -> Void)?
     var onMicHealthChanged: ((MeetingMicHealthSnapshot) -> Void)?
+    /// Live input-route facts for silent-mic failover. Read on the chunk
+    /// rotation queue, so it must not block on CoreAudio.
+    var meetingInputRouteProvider: (() -> MeetingMicRouteDiagnosticsSnapshot?)?
     /// System audio capture died mid-meeting and could not be rebuilt. Called on
     /// a background thread; the owner is responsible for surfacing it.
     var onSystemAudioCaptureFailure: ((Error) -> Void)?
@@ -1039,6 +1045,56 @@ final class MeetingSession {
         onSystemAudioCaptureFailure?(error)
     }
 
+    /// A microphone that delivers pure digital silence while the meeting is
+    /// clearly audible (idle Bluetooth headset, lid-closed built-in, another app
+    /// holding the device) loses the whole "You" track. One automatic handoff to
+    /// a different input is worth more than a banner nobody reads mid-meeting.
+    ///
+    /// Runs on `chunkRotationQueue`, which owns `micFailoverPolicy`. Returns a
+    /// refreshed snapshot only when a decision was recorded.
+    private func applyMicFailoverIfNeededOnQueue(
+        _ health: MeetingMicHealthSnapshot,
+        now: Date
+    ) -> MeetingMicHealthSnapshot? {
+        guard health.sustainedZeroMicWhileSystemActive, !micFailoverPolicy.hasAttemptedFailover else { return nil }
+        // System audio callbacks arrive continuously; re-deciding on each one
+        // would query the route cache dozens of times a second for nothing.
+        if let lastMicFailoverEvaluationAt, now.timeIntervalSince(lastMicFailoverEvaluationAt) < 1 { return nil }
+        lastMicFailoverEvaluationAt = now
+        guard let routeSnapshot = meetingInputRouteProvider?() else { return nil }
+
+        let route = MeetingMicFailoverRoute(
+            routeSnapshot: routeSnapshot,
+            currentDeviceID: meetingMicRecorder.preferredInputDeviceID
+        )
+        switch micFailoverPolicy.evaluate(sustainedZeroMic: true, route: route, now: now) {
+        case .wait:
+            return nil
+        case .noFallback(let record):
+            let silent = Self.failoverDeviceDescription(id: record.silentDeviceID, name: record.silentDeviceName)
+            fputs("[meeting] mic silent on \(silent); no distinct fallback input available\n", stderr)
+            Self.logger.warning("Meeting mic silent with no fallback input available")
+            return micHealthTracker.recordFailover(record, now: now)
+        case .switchInput(let record):
+            guard let fallbackDeviceID = record.fallbackDeviceID else { return nil }
+            let silent = Self.failoverDeviceDescription(id: record.silentDeviceID, name: record.silentDeviceName)
+            let fallback = Self.failoverDeviceDescription(id: fallbackDeviceID, name: record.fallbackDeviceName)
+            fputs("[meeting] mic silent on \(silent); switching capture to \(fallback)\n", stderr)
+            Self.logger.warning("Meeting mic failover switching capture to a fallback input")
+            // The route-aware recorder treats a new preferred device as a
+            // mid-recording handoff: it starts the candidate, waits for real
+            // samples, and only then retires the silent one.
+            meetingMicRecorder.preferredInputDeviceID = fallbackDeviceID
+            return micHealthTracker.recordFailover(record, now: now)
+        }
+    }
+
+    private static func failoverDeviceDescription(id: AudioObjectID?, name: String?) -> String {
+        let identifier = id.map(String.init) ?? "system-default"
+        guard let name else { return identifier }
+        return "\(identifier) (\(name))"
+    }
+
     private func enqueueRealtimeMicSamples(_ rawSamples: [Int16]) {
         guard !rawSamples.isEmpty else { return }
 
@@ -1070,8 +1126,10 @@ final class MeetingSession {
         chunkRotationQueue.async { [weak self] in
             guard let self, self.isRecording, !self.isPaused else { return }
 
-            let healthSnapshot = self.micHealthTracker.noteSystemSamples(samples)
-            self.onMicHealthChanged?(healthSnapshot)
+            let now = Date()
+            let healthSnapshot = self.micHealthTracker.noteSystemSamples(samples, now: now)
+            let failoverSnapshot = self.applyMicFailoverIfNeededOnQueue(healthSnapshot, now: now)
+            self.onMicHealthChanged?(failoverSnapshot ?? healthSnapshot)
             self.retainedRecordingWriter?.appendSystem(samples)
             self.systemChunkRecorder?.append(samples)
             self.systemChunkTimingTracker.append(sampleCount: samples.count)

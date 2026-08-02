@@ -5375,6 +5375,12 @@ final class MuesliController: NSObject {
             )
             let transcriptGeneration = UUID()
             meetingSession.previousMeetingNotes = previousMeetingNotes
+            // Silent-mic failover needs current device names and IDs, not the
+            // snapshot taken at meeting start. Reading the routing controller's
+            // cache is lock-only work, so it is safe off the main actor.
+            meetingSession.meetingInputRouteProvider = { [routeController = dictationAudioRoutingController] in
+                routeController.meetingInputRouteSnapshot()
+            }
 
             do {
                 preparingMeetingSession = meetingSession
