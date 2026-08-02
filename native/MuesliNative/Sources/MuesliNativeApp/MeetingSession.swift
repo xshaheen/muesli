@@ -192,6 +192,9 @@ final class MeetingSession {
     private var systemChunkRecorder: PCMChunkRecorder?
     var onProgress: ((MeetingProcessingStage) -> Void)?
     var onMicHealthChanged: ((MeetingMicHealthSnapshot) -> Void)?
+    /// System audio capture died mid-meeting and could not be rebuilt. Called on
+    /// a background thread; the owner is responsible for surfacing it.
+    var onSystemAudioCaptureFailure: ((Error) -> Void)?
     var manualNotesProvider: (() async -> String?)?
     var liveTitleProvider: (() async -> String?)?
     /// Formatted notes of the predecessor meeting when this session records a
@@ -296,6 +299,7 @@ final class MeetingSession {
             systemVadController = nil
             meetingMicRecorder.onRawPCMSamples = nil
             systemAudioRecorder.onPCMSamples = nil
+            systemAudioRecorder.onSystemAudioFailure = nil
             retainedRecordingWriter?.cancel()
             retainedRecordingWriter = nil
             rawMicChunkRecorder?.cancel()
@@ -310,7 +314,7 @@ final class MeetingSession {
                 systemChunkTimingTracker.discard()
             }
             meetingMicRecorder.cancel()
-            if let url = systemAudioRecorder.stop() {
+            if let url = await systemAudioRecorder.stop() {
                 try? FileManager.default.removeItem(at: url)
             }
             systemChunkCollector.cancelAll()
@@ -517,8 +521,15 @@ final class MeetingSession {
         meetingMicRecorder.onRawPCMSamples = nil
         meetingMicRecorder.cancel()
         systemAudioRecorder.onPCMSamples = nil
-        if let url = systemAudioRecorder.stop() {
-            try? FileManager.default.removeItem(at: url)
+        systemAudioRecorder.onSystemAudioFailure = nil
+        // `discard()` is called from synchronous UI paths, so the system-audio
+        // teardown runs detached; its callbacks are already unhooked above and
+        // the only remaining work is deleting the abandoned temp file.
+        let audioRecorderToStop = systemAudioRecorder
+        Task {
+            if let url = await audioRecorderToStop.stop() {
+                try? FileManager.default.removeItem(at: url)
+            }
         }
         micChunkCollector.cancelAll()
         systemChunkCollector.cancelAll()
@@ -543,6 +554,7 @@ final class MeetingSession {
         systemVadController = nil
         meetingMicRecorder.onRawPCMSamples = nil
         systemAudioRecorder.onPCMSamples = nil
+        systemAudioRecorder.onSystemAudioFailure = nil
         let (meetingStart, lastChunkTiming, lastRawMicURL, lastSystemChunkTiming, lastSystemChunkURL) = chunkRotationQueue.sync { () -> (Date, MeetingChunkTimingSnapshot?, URL?, MeetingChunkTimingSnapshot?, URL?) in
             isRecording = false
             setPausedStateOnQueue(false)
@@ -569,7 +581,7 @@ final class MeetingSession {
         }
 
         // Stop system audio
-        let systemAudioURL = systemAudioRecorder.stop()
+        let systemAudioURL = await systemAudioRecorder.stop()
 
         if usesUnifiedNemotronTranscript {
             async let micRetirement: Void = micChunkCollector.waitUntilRetired()
@@ -1014,6 +1026,17 @@ final class MeetingSession {
         systemAudioRecorder.onPCMSamples = { [weak self] samples in
             self?.enqueueRealtimeSystemSamples(samples)
         }
+        systemAudioRecorder.onSystemAudioFailure = { [weak self] error in
+            self?.handleSystemAudioCaptureFailure(error)
+        }
+    }
+
+    /// The meeting keeps recording the mic side, so the failure has to be
+    /// surfaced rather than silently ending the "Others" track.
+    private func handleSystemAudioCaptureFailure(_ error: Error) {
+        fputs("[meeting] system audio capture stopped: \(error.localizedDescription)\n", stderr)
+        Self.logger.error("System audio capture stopped mid-meeting: \(error.localizedDescription, privacy: .public)")
+        onSystemAudioCaptureFailure?(error)
     }
 
     private func enqueueRealtimeMicSamples(_ rawSamples: [Int16]) {

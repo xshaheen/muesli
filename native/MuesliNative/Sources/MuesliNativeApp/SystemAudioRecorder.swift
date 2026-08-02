@@ -7,8 +7,19 @@ import os
 
 final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing, SystemAudioDiagnosticsProviding {
     var onPCMSamples: (([Int16]) -> Void)?
+    /// Never fired by this backend — SCStream is created without a delegate, so
+    /// there is no mid-capture failure signal to forward.
+    var onSystemAudioFailure: ((Error) -> Void)?
 
+    /// Guards `stream` and `startFailed`: `startStream()` assigns from the
+    /// startup task while `stop()` and `cleanupFailedStart()` read from the
+    /// caller's thread.
+    private let streamStateQueue = DispatchQueue(label: "com.muesli.system-audio.stream-state")
     private var stream: SCStream?
+    /// Set when a start attempt gave up. `SCStream.startCapture()` is not
+    /// cancellation-aware, so a late-completing start must stop its own stream
+    /// instead of publishing it.
+    private var startFailed = false
     private var outputFile: FileHandle?
     private var outputURL: URL?
     private var totalBytesWritten = 0
@@ -85,6 +96,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
         totalBytesWritten = 0
         isRecording = true
         isPaused = false
+        streamStateQueue.sync { self.startFailed = false }
 
         do {
             try await withThrowingTaskGroup(of: Void.self) { group in
@@ -109,31 +121,31 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
             }
         } catch {
             fputs("[system-audio] SCStream start failed: \(error)\n", stderr)
-            cleanupFailedStart()
+            await cleanupFailedStart()
             throw error
         }
     }
 
-    func stop() -> URL? {
+    func stop() async -> URL? {
         guard isRecording || outputFile != nil || outputURL != nil else { return nil }
         isRecording = false
         isPaused = false
 
-        if let stream {
-            let semaphore = DispatchSemaphore(value: 0)
-            Task {
-                try? await stream.stopCapture()
-                semaphore.signal()
-            }
-            _ = semaphore.wait(timeout: .now() + 3)
+        let activeStream = streamStateQueue.sync { () -> SCStream? in
+            let current = self.stream
+            self.stream = nil
+            return current
         }
-        stream = nil
+        if let activeStream {
+            try? await activeStream.stopCapture()
+        }
 
         // Finalize WAV on the sample-handler queue so a callback that is already
         // past the isRecording gate finishes its write before the header rewrite
         // and close — otherwise it corrupts the header or writes to a closed file.
         let writtenBytes = sampleHandlerQueue.sync { () -> Int in
             onPCMSamples = nil
+            onSystemAudioFailure = nil
             let bytes = totalBytesWritten
             if let file = outputFile {
                 let header = WavWriter.header(dataSize: bytes)
@@ -194,7 +206,17 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
         let stream = SCStream(filter: filter, configuration: config, delegate: nil)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleHandlerQueue)
         try await stream.startCapture()
-        self.stream = stream
+
+        let published = streamStateQueue.sync { () -> Bool in
+            guard !self.startFailed else { return false }
+            self.stream = stream
+            return true
+        }
+        guard published else {
+            // The startup timeout already fired and gave up on this attempt.
+            try? await stream.stopCapture()
+            return
+        }
     }
 
     // MARK: - SCStreamOutput
@@ -321,15 +343,28 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
         }
     }
 
-    private func cleanupFailedStart() {
+    private func cleanupFailedStart() async {
         isRecording = false
         isPaused = false
-        stream = nil
+
+        // A timed-out start can still be inside `startCapture()`, and whatever it
+        // started must be stopped — dropping the reference leaves a live capture
+        // (recording indicator lit, self retained) for the rest of the session.
+        let orphanedStream = streamStateQueue.sync { () -> SCStream? in
+            self.startFailed = true
+            let current = self.stream
+            self.stream = nil
+            return current
+        }
+        if let orphanedStream {
+            try? await orphanedStream.stopCapture()
+        }
 
         // A start that timed out can leave the stream delivering buffers, so close
         // on the sample-handler queue for the same reason stop() does.
         sampleHandlerQueue.sync {
             onPCMSamples = nil
+            onSystemAudioFailure = nil
             if let file = outputFile {
                 file.closeFile()
             }
