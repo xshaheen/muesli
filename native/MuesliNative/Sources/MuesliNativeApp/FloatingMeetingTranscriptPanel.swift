@@ -4,30 +4,108 @@ import SwiftUI
 
 enum FloatingMeetingTranscriptPlacement {
     static let panelSize = NSSize(width: 360, height: 320)
-    static let gap: CGFloat = 0
+    /// Keeps the panel off the pill rather than flush against it.
+    ///
+    /// Non-zero is safe for the hover bridge: leaving the pill schedules a delayed exit
+    /// that re-tests the pointer against both frames when it fires, and entering the panel
+    /// cancels it, so a pointer crossing 8pt reads as neither having left.
+    static let gap: CGFloat = 8
     static let screenInset: CGFloat = 8
 
-    static func frame(
+    enum Side {
+        case left
+        case right
+    }
+
+    struct Placement: Equatable {
+        let frame: NSRect
+        let side: Side
+    }
+
+    /// Places the panel beside the pill, keeping the side it was last placed on.
+    ///
+    /// Side selection is a width threshold, and the panel is 360pt wide: without memory a
+    /// pill nudged a few points across that threshold throws the panel more than its own
+    /// width across the screen. `preferredSide` is only overruled once it stops fitting.
+    static func placement(
         beside indicatorFrame: NSRect,
         panelSize: NSSize = panelSize,
-        visibleFrame: NSRect
-    ) -> NSRect {
+        visibleFrame: NSRect,
+        preferredSide: Side? = nil
+    ) -> Placement {
         let availableOnLeft = indicatorFrame.minX - visibleFrame.minX
         let availableOnRight = visibleFrame.maxX - indicatorFrame.maxX
-        let prefersLeft = availableOnLeft >= panelSize.width + gap || availableOnLeft >= availableOnRight
-        let proposedX = prefersLeft
+        // Fitting means fitting *unclamped*: the panel wants its gap from the pill and its
+        // inset from the screen edge, so a side that cannot give both is not a fit.
+        let required = panelSize.width + gap + screenInset
+        let side = resolvedSide(
+            preferred: preferredSide,
+            fitsLeft: availableOnLeft >= required,
+            fitsRight: availableOnRight >= required,
+            availableOnLeft: availableOnLeft,
+            availableOnRight: availableOnRight
+        )
+        let proposedX = side == .left
             ? indicatorFrame.minX - gap - panelSize.width
             : indicatorFrame.maxX + gap
         let minX = visibleFrame.minX + screenInset
         let maxX = max(minX, visibleFrame.maxX - screenInset - panelSize.width)
         let minY = visibleFrame.minY + screenInset
         let maxY = max(minY, visibleFrame.maxY - screenInset - panelSize.height)
-        return NSRect(
+        var frame = NSRect(
             x: min(max(proposedX, minX), maxX),
             y: min(max(indicatorFrame.midY - panelSize.height / 2, minY), maxY),
             width: panelSize.width,
             height: panelSize.height
         )
+        if frame.intersects(indicatorFrame) {
+            // No side of the screen can hold the panel, so the horizontal clamp has slid it
+            // over the pill -- the only control the user has during a call. Step above or
+            // below instead, whichever direction has the room.
+            let below = indicatorFrame.minY - gap - panelSize.height
+            let above = indicatorFrame.maxY + gap
+            if below >= minY {
+                frame.origin.y = below
+            } else if above <= maxY {
+                frame.origin.y = above
+            } else {
+                let roomBelow = indicatorFrame.minY - minY
+                let roomAbove = visibleFrame.maxY - screenInset - indicatorFrame.maxY
+                frame.origin.y = roomBelow >= roomAbove ? minY : maxY
+            }
+        }
+        return Placement(frame: frame, side: side)
+    }
+
+    /// Placement with no memory, for callers with no side to thread through.
+    static func frame(
+        beside indicatorFrame: NSRect,
+        panelSize: NSSize = panelSize,
+        visibleFrame: NSRect
+    ) -> NSRect {
+        placement(
+            beside: indicatorFrame,
+            panelSize: panelSize,
+            visibleFrame: visibleFrame
+        ).frame
+    }
+
+    private static func resolvedSide(
+        preferred: Side?,
+        fitsLeft: Bool,
+        fitsRight: Bool,
+        availableOnLeft: CGFloat,
+        availableOnRight: CGFloat
+    ) -> Side {
+        if let preferred {
+            let stillFits = preferred == .left ? fitsLeft : fitsRight
+            if stillFits { return preferred }
+        }
+        if fitsLeft { return .left }
+        if fitsRight { return .right }
+        // Neither side fits. Hold the side already in use rather than swapping between two
+        // equally bad options every time the pill moves a few points.
+        return preferred ?? (availableOnLeft >= availableOnRight ? .left : .right)
     }
 }
 
@@ -157,6 +235,11 @@ final class FloatingMeetingTranscriptPanelController {
     /// to undo it, and edge-clamping fed back into the indicator's position -- a whole
     /// class of bug that simply does not exist once the two are separate windows.
     private var window: NSPanel?
+    /// The side of the pill the panel last landed on.
+    ///
+    /// Held across hide/show so the panel stays put while the pill moves and resizes
+    /// within a meeting; cleared on reset, where a new session should place it fresh.
+    private(set) var placementSide: FloatingMeetingTranscriptPlacement.Side?
 
     init(
         onHoverChanged: @escaping (Bool) -> Void,
@@ -201,6 +284,18 @@ final class FloatingMeetingTranscriptPanelController {
 
     func setPaused(_ paused: Bool) {
         model.isPaused = paused
+    }
+
+    /// Shows the transcript beside the pill, on the side it is already using when that
+    /// side still fits. Preferred over `show(at:)`, which cannot remember anything.
+    func show(beside indicatorFrame: NSRect, in visibleFrame: NSRect) {
+        let placement = FloatingMeetingTranscriptPlacement.placement(
+            beside: indicatorFrame,
+            visibleFrame: visibleFrame,
+            preferredSide: placementSide
+        )
+        placementSide = placement.side
+        show(at: placement.frame)
     }
 
     /// Shows the transcript at a screen frame of its own.
@@ -253,6 +348,7 @@ final class FloatingMeetingTranscriptPanelController {
     func reset() {
         hide()
         model.reset()
+        placementSide = nil
     }
 
     func close() {
@@ -262,6 +358,7 @@ final class FloatingMeetingTranscriptPanelController {
         window?.contentView = nil
         window = nil
         hostingView = nil
+        placementSide = nil
     }
 
     /// Single place every teardown path goes through, so no route can skip the resign step.

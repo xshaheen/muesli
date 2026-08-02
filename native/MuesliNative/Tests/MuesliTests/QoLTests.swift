@@ -299,8 +299,9 @@ struct FloatingMeetingTranscriptTests {
             visibleFrame: screen
         )
 
-        #expect(leftFrame.maxX == trailingIndicator.minX)
-        #expect(rightFrame.minX == leadingIndicator.maxX)
+        let gap = FloatingMeetingTranscriptPlacement.gap
+        #expect(leftFrame.maxX == trailingIndicator.minX - gap)
+        #expect(rightFrame.minX == leadingIndicator.maxX + gap)
         #expect(screen.insetBy(dx: 8, dy: 8).contains(leftFrame))
         #expect(screen.insetBy(dx: 8, dy: 8).contains(rightFrame))
     }
