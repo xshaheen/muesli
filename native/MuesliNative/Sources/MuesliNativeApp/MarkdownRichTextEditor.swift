@@ -163,6 +163,9 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
         }
 
         func perform(_ command: MarkdownEditorCommand.Kind, in textView: NSTextView) {
+            // Keep the command out of the undo group the user's last keystrokes are
+            // still coalescing into, so one Cmd+Z undoes the formatting alone.
+            textView.breakUndoCoalescing()
             switch command {
             case .heading:
                 applyHeading(in: textView)
@@ -320,6 +323,12 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
             let removeHeading = ranges.allSatisfy { range in
                 range.length > 0 && lineIsHeading(storage: storage, range: range)
             }
+            // Attribute-only edits still have to be announced to the text view, or
+            // NSTextView never registers them and Cmd+Z skips past the heading.
+            guard textView.shouldChangeText(
+                inRanges: ranges.map { NSValue(range: $0) },
+                replacementStrings: nil
+            ) else { return }
             isApplying = true
             for range in ranges {
                 if removeHeading {
@@ -332,6 +341,9 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
                     ], range: range)
                 }
             }
+            // Inside the isApplying window on purpose: textDidChange must stay quiet
+            // here so perform() serializes and publishes exactly once.
+            textView.didChangeText()
             isApplying = false
         }
 
@@ -346,12 +358,14 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
             }
             guard let storage = textView.textStorage else { return }
             let shouldUnbold = selectionIsBold(in: storage, range: selectedRange)
+            guard textView.shouldChangeText(in: selectedRange, replacementString: nil) else { return }
             isApplying = true
             storage.enumerateAttribute(.font, in: selectedRange) { value, range, _ in
                 let currentFont = value as? NSFont ?? bodyFont
                 let replacement = shouldUnbold ? regularVersion(of: currentFont) : boldVersion(of: currentFont)
                 storage.addAttribute(.font, value: replacement, range: range)
             }
+            textView.didChangeText()
             isApplying = false
         }
 
@@ -363,17 +377,28 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
                 return prefix + removingListPrefix(from: existingLine)
             }
 
+            // One undo group for the whole command: undoing a bullet applied to five
+            // selected lines should not take five Cmd+Z presses.
+            let undoManager = textView.undoManager
+            let needsGrouping = ranges.count > 1
             isApplying = true
+            if needsGrouping { undoManager?.beginUndoGrouping() }
             var totalDelta = 0
             for (range, replacement) in zip(ranges, replacements).reversed() {
+                guard textView.shouldChangeText(in: range, replacementString: replacement) else { continue }
                 textView.replaceCharacters(in: range, with: replacement)
-                totalDelta += replacement.count - range.length
+                textView.didChangeText()
+                totalDelta += (replacement as NSString).length - range.length
             }
+            if needsGrouping { undoManager?.endUndoGrouping() }
             isApplying = false
 
             guard let firstRange = ranges.first, let lastRange = ranges.last else { return }
             if ranges.count == 1 {
-                textView.setSelectedRange(NSRange(location: firstRange.location + replacements[0].count, length: 0))
+                // Ranges are UTF-16, so the caret offset has to be too — Character
+                // counts leave the caret short on lines containing emoji.
+                let replacementLength = (replacements[0] as NSString).length
+                textView.setSelectedRange(NSRange(location: firstRange.location + replacementLength, length: 0))
             } else {
                 let originalEnd = lastRange.location + lastRange.length
                 textView.setSelectedRange(NSRange(location: firstRange.location, length: originalEnd + totalDelta - firstRange.location))
@@ -417,7 +442,10 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
             let full = textView.string as NSString
             guard full.length > 0 else { return [NSRange(location: 0, length: 0)] }
             return full.paragraphRanges(for: selectedRange).map { range in
-                NSRange(location: range.location, length: max(range.length - 1, 0))
+                // The last paragraph of a string that does not end in a newline has no
+                // terminator to strip — assuming one drops its final character from
+                // heading/bullet application and leaves the caret one short.
+                NSRange(location: range.location, length: range.length - full.paragraphTerminatorLength(endingAt: range))
             }
         }
 
@@ -553,6 +581,18 @@ private extension Array where Element == NSValue {
 }
 
 private extension NSString {
+    /// UTF-16 length of the paragraph terminator closing `range`, or 0 when the
+    /// range ends at the end of a string with no trailing newline.
+    func paragraphTerminatorLength(endingAt range: NSRange) -> Int {
+        guard range.length > 0 else { return 0 }
+        let last = character(at: range.upperBound - 1)
+        guard last == 0x000A || last == 0x000D || last == 0x2029 else { return 0 }
+        if last == 0x000A, range.length > 1, character(at: range.upperBound - 2) == 0x000D {
+            return 2
+        }
+        return 1
+    }
+
     func paragraphRanges(for range: NSRange) -> [NSRange] {
         let safeRange = NSRange(location: min(range.location, length), length: min(range.length, max(length - range.location, 0)))
         let paragraphRange = self.paragraphRange(for: safeRange)
