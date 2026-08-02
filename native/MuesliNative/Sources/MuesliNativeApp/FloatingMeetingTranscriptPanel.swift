@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import SwiftUI
+import os
 
 enum FloatingMeetingTranscriptPlacement {
     static let panelSize = NSSize(width: 360, height: 320)
@@ -222,6 +223,7 @@ private final class FirstMouseHostingView<Content: View>: NSHostingView<Content>
 
 @MainActor
 final class FloatingMeetingTranscriptPanelController {
+    private static let logger = Logger(subsystem: "com.muesli.native", category: "transcript-panel")
     private let model = FloatingMeetingTranscriptModel()
     private let onHoverChanged: (Bool) -> Void
     private let onOpenNotes: () -> Void
@@ -288,22 +290,20 @@ final class FloatingMeetingTranscriptPanelController {
 
     /// Shows the transcript beside the pill, on the side it is already using when that
     /// side still fits. Preferred over `show(at:)`, which cannot remember anything.
-    func show(beside indicatorFrame: NSRect, in visibleFrame: NSRect) {
+    func show(beside indicatorFrame: NSRect, in visibleFrame: NSRect, attachedTo anchor: NSWindow? = nil) {
         let placement = FloatingMeetingTranscriptPlacement.placement(
             beside: indicatorFrame,
             visibleFrame: visibleFrame,
             preferredSide: placementSide
         )
         placementSide = placement.side
-        fputs(
-            "[transcript-panel] place beside=\(indicatorFrame) visible=\(visibleFrame) -> \(placement.frame) side=\(placement.side)\n",
-            stderr
-        )
-        show(at: placement.frame)
+        let placementDescription = "beside=\(NSStringFromRect(indicatorFrame)) visible=\(NSStringFromRect(visibleFrame)) -> \(NSStringFromRect(placement.frame)) side=\(placement.side) attached=\(anchor != nil)"
+        Self.logger.notice("place \(placementDescription, privacy: .public)")
+        show(at: placement.frame, attachedTo: anchor)
     }
 
     /// Shows the transcript at a screen frame of its own.
-    func show(at screenFrame: NSRect) {
+    func show(at screenFrame: NSRect, attachedTo anchor: NSWindow? = nil) {
         let hostingView = hostingView ?? makeHostingView()
         self.hostingView = hostingView
 
@@ -319,6 +319,27 @@ final class FloatingMeetingTranscriptPanelController {
         // orderFront, never makeKey: a floating panel that takes focus during a call
         // swallows the keystrokes meant for Zoom. Chat asks for key explicitly.
         window.orderFront(nil)
+        attach(window, to: anchor)
+    }
+
+    /// Makes the pill's window own the panel as a child window.
+    ///
+    /// Placement math runs once, at show time; after that AppKit moves the two
+    /// together through drags, display reconfigurations, Space switches, and system
+    /// constraint moves. No re-placement code path can leave the panel beside a
+    /// stale pill frame, because nothing needs to re-place it at all.
+    private func attach(_ window: NSWindow, to anchor: NSWindow?) {
+        guard window.parent !== anchor else { return }
+        window.parent?.removeChildWindow(window)
+        anchor?.addChildWindow(window, ordered: .above)
+    }
+
+    /// Detach before ordering out: removing a child window while hidden is fine,
+    /// but hiding one while attached leaves the parent link driving a window the
+    /// controller believes is gone.
+    private func detach() {
+        guard let window else { return }
+        window.parent?.removeChildWindow(window)
     }
 
     private func makeWindow() -> NSPanel {
@@ -334,6 +355,9 @@ final class FloatingMeetingTranscriptPanelController {
         window.hasShadow = true
         window.hidesOnDeactivate = false
         window.isMovableByWindowBackground = false
+        // Match the pill: without this the pill follows a Space switch or a
+        // full-screen meeting while the panel stays behind on the old Space.
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.becomesKeyOnlyIfNeeded = true
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         return window
@@ -346,6 +370,7 @@ final class FloatingMeetingTranscriptPanelController {
         releaseChatFocus()
         model.isPresented = false
         hostingView?.isHidden = true
+        detach()
         window?.orderOut(nil)
     }
 
@@ -358,6 +383,7 @@ final class FloatingMeetingTranscriptPanelController {
     func close() {
         releaseChatFocus()
         model.isPresented = false
+        detach()
         window?.orderOut(nil)
         window?.contentView = nil
         window = nil
@@ -374,9 +400,13 @@ final class FloatingMeetingTranscriptPanelController {
             // resignKey is only a notification hook -- neither it nor orderBack reassigns
             // NSApp.keyWindow, so the panel kept the keyboard after chat closed. Ordering
             // out and straight back in makes AppKit hand key status to another window
-            // while the panel stays on screen.
+            // while the panel stays on screen. Detach around the dance: ordering an
+            // attached child in and out fights the parent link.
+            let parent = window.parent
+            parent?.removeChildWindow(window)
             window.orderOut(nil)
             window.orderFront(nil)
+            parent?.addChildWindow(window, ordered: .above)
         }
     }
 

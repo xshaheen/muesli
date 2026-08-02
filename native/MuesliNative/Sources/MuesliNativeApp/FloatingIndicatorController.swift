@@ -202,7 +202,7 @@ final class FloatingIndicatorController: NSObject {
         screenRelayoutWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             guard let self, panel != nil, !isDragging, !isComputerUseCursorMode else { return }
-            fputs("[indicator] screens changed; re-resolving pill and transcript\n", stderr)
+            Self.logger.notice("screens changed; re-resolving pill and transcript")
             setState(state, config: configStore.load())
         }
         screenRelayoutWorkItem = workItem
@@ -542,8 +542,10 @@ final class FloatingIndicatorController: NSObject {
             indicatorFrame = frameForState(state, config: configStore.load())
         }
         guard let visibleFrame = Self.screenVisibleFrame(intersecting: indicatorFrame) else { return }
-        fputs("[transcript-panel] show source=\(source) pill=\(indicatorFrame)\n", stderr)
-        meetingTranscriptPanel.show(beside: indicatorFrame, in: visibleFrame)
+        Self.logger.notice("transcript show source=\(source, privacy: .public) pill=\(NSStringFromRect(indicatorFrame), privacy: .public)")
+        // Attached to the pill's window: AppKit keeps the two moving together, so a
+        // pill move that never runs our re-placement code cannot strand the panel.
+        meetingTranscriptPanel.show(beside: indicatorFrame, in: visibleFrame, attachedTo: panel)
     }
 
     private func hideMeetingTranscript(reset: Bool = false) {
