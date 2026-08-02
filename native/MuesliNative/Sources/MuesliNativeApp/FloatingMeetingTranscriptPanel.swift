@@ -290,20 +290,27 @@ final class FloatingMeetingTranscriptPanelController {
 
     /// Shows the transcript beside the pill, on the side it is already using when that
     /// side still fits. Preferred over `show(at:)`, which cannot remember anything.
-    func show(beside indicatorFrame: NSRect, in visibleFrame: NSRect, attachedTo anchor: NSWindow? = nil) {
+    /// Places the panel beside the pill and remembers the chosen side.
+    ///
+    /// The panel is an independent window: the pill's controller re-invokes this from
+    /// its window's didMove/didResize notifications, so the panel follows the live
+    /// pill through moves, animations, and system-originated relocations — and every
+    /// step re-runs the clamped placement math, which a fixed child-window offset
+    /// cannot express (a bottom-edge pill pins the panel to the screen, not to itself).
+    func show(beside indicatorFrame: NSRect, in visibleFrame: NSRect) {
         let placement = FloatingMeetingTranscriptPlacement.placement(
             beside: indicatorFrame,
             visibleFrame: visibleFrame,
             preferredSide: placementSide
         )
         placementSide = placement.side
-        let placementDescription = "beside=\(NSStringFromRect(indicatorFrame)) visible=\(NSStringFromRect(visibleFrame)) -> \(NSStringFromRect(placement.frame)) side=\(placement.side) attached=\(anchor != nil)"
+        let placementDescription = "beside=\(NSStringFromRect(indicatorFrame)) visible=\(NSStringFromRect(visibleFrame)) -> \(NSStringFromRect(placement.frame)) side=\(placement.side)"
         Self.logger.notice("place \(placementDescription, privacy: .public)")
-        show(at: placement.frame, attachedTo: anchor)
+        show(at: placement.frame)
     }
 
     /// Shows the transcript at a screen frame of its own.
-    func show(at screenFrame: NSRect, attachedTo anchor: NSWindow? = nil) {
+    func show(at screenFrame: NSRect) {
         let hostingView = hostingView ?? makeHostingView()
         self.hostingView = hostingView
 
@@ -319,27 +326,6 @@ final class FloatingMeetingTranscriptPanelController {
         // orderFront, never makeKey: a floating panel that takes focus during a call
         // swallows the keystrokes meant for Zoom. Chat asks for key explicitly.
         window.orderFront(nil)
-        attach(window, to: anchor)
-    }
-
-    /// Makes the pill's window own the panel as a child window.
-    ///
-    /// Placement math runs once, at show time; after that AppKit moves the two
-    /// together through drags, display reconfigurations, Space switches, and system
-    /// constraint moves. No re-placement code path can leave the panel beside a
-    /// stale pill frame, because nothing needs to re-place it at all.
-    private func attach(_ window: NSWindow, to anchor: NSWindow?) {
-        guard window.parent !== anchor else { return }
-        window.parent?.removeChildWindow(window)
-        anchor?.addChildWindow(window, ordered: .above)
-    }
-
-    /// Detach before ordering out: removing a child window while hidden is fine,
-    /// but hiding one while attached leaves the parent link driving a window the
-    /// controller believes is gone.
-    private func detach() {
-        guard let window else { return }
-        window.parent?.removeChildWindow(window)
     }
 
     private func makeWindow() -> NSPanel {
@@ -370,7 +356,6 @@ final class FloatingMeetingTranscriptPanelController {
         releaseChatFocus()
         model.isPresented = false
         hostingView?.isHidden = true
-        detach()
         window?.orderOut(nil)
     }
 
@@ -383,7 +368,6 @@ final class FloatingMeetingTranscriptPanelController {
     func close() {
         releaseChatFocus()
         model.isPresented = false
-        detach()
         window?.orderOut(nil)
         window?.contentView = nil
         window = nil
@@ -400,13 +384,9 @@ final class FloatingMeetingTranscriptPanelController {
             // resignKey is only a notification hook -- neither it nor orderBack reassigns
             // NSApp.keyWindow, so the panel kept the keyboard after chat closed. Ordering
             // out and straight back in makes AppKit hand key status to another window
-            // while the panel stays on screen. Detach around the dance: ordering an
-            // attached child in and out fights the parent link.
-            let parent = window.parent
-            parent?.removeChildWindow(window)
+            // while the panel stays on screen.
             window.orderOut(nil)
             window.orderFront(nil)
-            parent?.addChildWindow(window, ordered: .above)
         }
     }
 

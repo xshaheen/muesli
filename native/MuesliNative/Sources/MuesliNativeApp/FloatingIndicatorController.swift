@@ -542,21 +542,27 @@ final class FloatingIndicatorController: NSObject {
             indicatorFrame = frameForState(state, config: configStore.load())
         }
         guard let visibleFrame = Self.screenVisibleFrame(intersecting: indicatorFrame) else { return }
-        // Attaching to a pill whose frame animation is still in flight would let the
-        // remaining delta drag the freshly placed panel. Settle the pill on its target
-        // first; the non-animated path retargets any running animation at zero duration.
-        // Safe from recursion: the panel is not visible yet, so applyIndicatorFrame's
-        // re-show branch cannot re-enter this method.
-        if !meetingTranscriptPanel.isVisible,
-           let settled = lastAppliedIndicatorFrame,
-           let pill = panel,
-           pill.frame != settled {
-            applyIndicatorFrame(settled, animated: false)
-        }
         Self.logger.notice("transcript show source=\(source, privacy: .public) pill=\(NSStringFromRect(indicatorFrame), privacy: .public)")
-        // Attached to the pill's window: AppKit keeps the two moving together, so a
-        // pill move that never runs our re-placement code cannot strand the panel.
-        meetingTranscriptPanel.show(beside: indicatorFrame, in: visibleFrame, attachedTo: panel)
+        meetingTranscriptPanel.show(beside: indicatorFrame, in: visibleFrame)
+    }
+
+    /// Keeps the panel beside the pill by following the pill's window.
+    ///
+    /// The panel is an independent window; didMove/didResize fire for every frame of
+    /// an animated move, for manual drags of the window, and for system-originated
+    /// relocations (display changes, constraint moves) alike, and each step re-runs
+    /// the clamped placement math — which a child window's fixed-offset translation
+    /// cannot express, and which is exactly what broke beside a bottom-edge pill.
+    private var lastFollowedPillFrame: NSRect?
+    private var pillWindowObservers: [NSObjectProtocol] = []
+
+    private func followPillWindowIfNeeded() {
+        guard let panel, meetingTranscriptPanel.isVisible, !isDragging else { return }
+        let frame = panel.frame
+        guard frame != lastFollowedPillFrame else { return }
+        lastFollowedPillFrame = frame
+        guard let visibleFrame = Self.screenVisibleFrame(intersecting: frame) else { return }
+        meetingTranscriptPanel.show(beside: frame, in: visibleFrame)
     }
 
     private func hideMeetingTranscript(reset: Bool = false) {
@@ -579,12 +585,7 @@ final class FloatingIndicatorController: NSObject {
         guard let panel, let contentView else { return .zero }
         let local = NSRect(origin: .zero, size: indicatorFrame.size)
         lastAppliedIndicatorFrame = indicatorFrame
-        // Never animate the pill while the transcript is attached as its child window:
-        // AppKit translates children by every step of a parent animation, so the panel
-        // would be dragged off the placement this method sets right afterwards — by the
-        // pill's whole move delta. Snapping is the invariant that keeps them glued.
-        let animatesFrame = animated && !meetingTranscriptPanel.isVisible
-        if animatesFrame {
+        if animated {
             // The animator retargets an animation already in flight for the same property;
             // the plain setter cannot, which is what the branch below has to work around.
             panel.animator().setFrame(indicatorFrame, display: true)
@@ -1208,6 +1209,9 @@ final class FloatingIndicatorController: NSObject {
         isComputerUseCursorMode = false
         computerUseCursorReturnFrame = nil
         lastAppliedIndicatorFrame = nil
+        lastFollowedPillFrame = nil
+        pillWindowObservers.forEach(NotificationCenter.default.removeObserver)
+        pillWindowObservers = []
         loadingSpinner = nil
         // The transcript window goes down with the pill below, so the latch suppressing
         // its re-show has nothing left to suppress.
@@ -1592,6 +1596,19 @@ final class FloatingIndicatorController: NSObject {
         panel.isMovableByWindowBackground = false
         panel.becomesKeyOnlyIfNeeded = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+
+        pillWindowObservers = [
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didMoveNotification,
+                object: panel,
+                queue: .main
+            ) { [weak self] _ in self?.followPillWindowIfNeeded() },
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didResizeNotification,
+                object: panel,
+                queue: .main
+            ) { [weak self] _ in self?.followPillWindowIfNeeded() },
+        ]
 
         let containerView = NSView(frame: NSRect(origin: .zero, size: panel.frame.size))
         containerView.wantsLayer = true
