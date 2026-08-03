@@ -1,5 +1,6 @@
 import Testing
 import CloudKit
+import Darwin
 import Foundation
 import MuesliCore
 import SQLite3
@@ -134,6 +135,127 @@ struct DictationStoreTests {
     func migration() throws {
         let store = try makeStore()
         try store.migrateIfNeeded() // idempotent
+    }
+
+    @Test("database initialization failures close their SQLite handles")
+    func databaseInitializationFailureClosesHandle() throws {
+        let store = DictationStore(databaseURL: URL(fileURLWithPath: "/dev/null"))
+        let descriptorCountBefore = openDescriptorCount(for: "/dev/null")
+
+        for _ in 0..<32 {
+            #expect(throws: Error.self) {
+                try store.migrateIfNeeded()
+            }
+        }
+
+        let descriptorCountAfter = openDescriptorCount(for: "/dev/null")
+        #expect(descriptorCountAfter == descriptorCountBefore)
+    }
+
+    private func openDescriptorCount(for path: String) -> Int {
+        (0..<getdtablesize()).reduce(into: 0) { count, descriptor in
+            var pathBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            let result = pathBuffer.withUnsafeMutableBufferPointer { buffer in
+                fcntl(descriptor, F_GETPATH, buffer.baseAddress)
+            }
+            if result == 0, String(cString: pathBuffer) == path {
+                count += 1
+            }
+        }
+    }
+
+    @Test("meeting list projection applies preview precedence and bounds source text")
+    func meetingListProjectionBoundsPreview() throws {
+        let store = try makeStore()
+        let now = Date()
+        let raw = "raw " + String(repeating: "r", count: 2_000)
+        let formatted = "formatted " + String(repeating: "f", count: 2_000)
+        let manual = "manual " + String(repeating: "m", count: 2_000)
+        let cleaned = "cleaned " + String(repeating: "c", count: 2_000)
+
+        let completedID = try store.insertMeeting(
+            title: "Completed",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: raw,
+            formattedNotes: formatted,
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        try store.updateMeetingManualNotes(id: completedID, manualNotes: manual)
+
+        let failedID = try store.insertMeeting(
+            title: "Failed",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: raw,
+            formattedNotes: formatted,
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        try store.updateMeetingManualNotes(id: failedID, manualNotes: manual)
+        try store.updateMeetingStatus(id: failedID, status: .failed)
+
+        let cleanedID = try store.insertMeeting(
+            title: "Cleaned",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: raw,
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        #expect(try store.storeCleanedMeetingTranscript(
+            id: cleanedID,
+            cleanedTranscript: cleaned,
+            expectedRawTranscript: raw
+        ))
+
+        let rawID = try store.insertMeeting(
+            title: "Raw",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: raw,
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil,
+            source: .iOS
+        )
+
+        let folderID = try store.createFolder(name: "Projected")
+        let followUpID = try store.createLiveMeeting(
+            title: "Follow-up",
+            calendarEventID: nil,
+            startTime: now,
+            folderID: folderID,
+            followUpToID: completedID
+        )
+
+        let rowsByID = Dictionary(uniqueKeysWithValues: try store.recentMeetingList().map { ($0.id, $0) })
+        #expect(rowsByID[completedID]?.preview == String(formatted.prefix(MeetingListRecord.previewCharacterLimit)))
+        #expect(rowsByID[failedID]?.preview == String(manual.prefix(MeetingListRecord.previewCharacterLimit)))
+        #expect(rowsByID[cleanedID]?.preview == String(cleaned.prefix(MeetingListRecord.previewCharacterLimit)))
+        #expect(rowsByID[rawID]?.preview == String(raw.prefix(MeetingListRecord.previewCharacterLimit)))
+        #expect(rowsByID.values.allSatisfy { $0.preview.count <= MeetingListRecord.previewCharacterLimit })
+        #expect(rowsByID[failedID]?.status == .failed)
+        #expect(rowsByID[rawID]?.source == .iOS)
+
+        let folderRows = try store.recentMeetingList(folderID: folderID)
+        #expect(folderRows.map(\.id) == [followUpID])
+        #expect(folderRows.first?.folderID == folderID)
+        #expect(folderRows.first?.followUpToID == completedID)
+        #expect(folderRows.first?.status == .recording)
+
+        let iPhoneRows = try store.recentMeetingList(origin: .fromIPhone)
+        #expect(iPhoneRows.map(\.id) == [rawID])
+
+        let fullRecord = try #require(try store.meeting(id: rawID))
+        #expect(fullRecord.rawTranscript == raw)
+        #expect(fullRecord.rawTranscript.count > MeetingListRecord.previewCharacterLimit)
     }
 
     @Test("migration replaces calendar event uniqueness with occurrence lookup")

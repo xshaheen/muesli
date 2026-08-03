@@ -131,16 +131,18 @@ struct MeetingsNavigationTests {
         )
     }
 
-    @Test("selectedMeeting resolves the selected row only")
-    func selectedMeetingUsesExplicitSelection() {
+    @Test("selectedMeeting requires the full document record")
+    func selectedMeetingUsesFullDocumentRecord() {
         let appState = AppState()
-        let first = makeMeeting(id: 101, title: "First")
         let second = makeMeeting(id: 202, title: "Second")
-        appState.meetingRows = [first, second]
+        appState.meetingRows = [makeMeetingList(id: 202, title: "Second")]
 
         #expect(appState.selectedMeeting == nil)
 
         appState.selectedMeetingID = 202
+        #expect(appState.selectedMeeting == nil)
+
+        appState.selectedMeetingRecord = second
         #expect(appState.selectedMeeting?.id == 202)
         #expect(appState.selectedMeeting?.title == "Second")
     }
@@ -148,14 +150,39 @@ struct MeetingsNavigationTests {
     @Test("selectedMeeting falls back to the stored document record outside the browser slice")
     func selectedMeetingUsesStoredRecordWhenNotInRows() {
         let appState = AppState()
-        let visible = makeMeeting(id: 101, title: "Visible")
         let selected = makeMeeting(id: 202, title: "Selected Outside Slice")
-        appState.meetingRows = [visible]
+        appState.meetingRows = [makeMeetingList(id: 101, title: "Visible")]
         appState.selectedMeetingID = 202
         appState.selectedMeetingRecord = selected
 
         #expect(appState.selectedMeeting?.id == 202)
         #expect(appState.selectedMeeting?.title == "Selected Outside Slice")
+    }
+
+    @Test("dashboard projection keeps document selection fully hydrated")
+    func dashboardProjectionLoadsFullSelectedMeeting() throws {
+        let store = try makeStore()
+        let transcript = "full transcript " + String(repeating: "x", count: 2_000)
+        let now = Date()
+        let meetingID = try store.insertMeeting(
+            title: "Projected",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: transcript,
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        let controller = makeController(dictationStore: store)
+        controller.appState.selectedMeetingID = meetingID
+
+        controller.syncAppState()
+
+        let listRow = try #require(controller.appState.meetingRows.first { $0.id == meetingID })
+        #expect(listRow.preview.count == MeetingListRecord.previewCharacterLimit)
+        #expect(controller.appState.selectedMeeting?.rawTranscript == transcript)
+        #expect(controller.meeting(id: meetingID)?.rawTranscript == transcript)
     }
 
     @Test("showMeetingDocument enters meetings document route and records selection")
@@ -1263,6 +1290,21 @@ struct MeetingsNavigationTests {
             selectedTemplatePrompt: ""
         )
     }
+
+    private func makeMeetingList(id: Int64, title: String) -> MeetingListRecord {
+        MeetingListRecord(
+            id: id,
+            title: title,
+            startTime: "2026-03-24 10:00",
+            durationSeconds: 1800,
+            folderID: nil,
+            savedRecordingPath: nil,
+            status: .completed,
+            source: .meeting,
+            followUpToID: nil,
+            preview: "Summary"
+        )
+    }
 }
 
 @Suite("Meeting browser logic")
@@ -1360,7 +1402,7 @@ struct MeetingBrowserLogicTests {
         return formatter.string(from: date)
     }
 
-    private func makeMeeting(id: Int64, daysAgo: Int, title: String) -> MeetingRecord {
+    private func makeMeeting(id: Int64, daysAgo: Int, title: String) -> MeetingListRecord {
         let now = Date(timeIntervalSince1970: 1_710_000_000)
         let calendar = Calendar(identifier: .gregorian)
         return makeMeeting(
@@ -1370,23 +1412,18 @@ struct MeetingBrowserLogicTests {
         )
     }
 
-    private func makeMeeting(id: Int64, rawDate: String, title: String) -> MeetingRecord {
-        MeetingRecord(
+    private func makeMeeting(id: Int64, rawDate: String, title: String) -> MeetingListRecord {
+        MeetingListRecord(
             id: id,
             title: title,
             startTime: rawDate,
             durationSeconds: 1800,
-            rawTranscript: "Transcript",
-            formattedNotes: "## Summary",
-            wordCount: 42,
             folderID: nil,
-            calendarEventID: nil,
-            micAudioPath: nil,
-            systemAudioPath: nil,
-            selectedTemplateID: MeetingTemplates.autoID,
-            selectedTemplateName: "Auto",
-            selectedTemplateKind: .auto,
-            selectedTemplatePrompt: ""
+            savedRecordingPath: nil,
+            status: .completed,
+            source: .meeting,
+            followUpToID: nil,
+            preview: "Summary"
         )
     }
 }

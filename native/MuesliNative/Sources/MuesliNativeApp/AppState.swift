@@ -101,7 +101,7 @@ struct ActiveMeetingAudioWarning: Equatable {
 final class AppState {
     // Dashboard data
     var dictationRows: [DictationRecord] = []
-    var meetingRows: [MeetingRecord] = []
+    var meetingRows: [MeetingListRecord] = []
     var totalMeetingCount: Int = 0
     var meetingCountsByFolder: [Int64: Int] = [:]
     var directMeetingCountsByFolder: [Int64: Int] = [:]
@@ -209,9 +209,6 @@ final class AppState {
     // Computed
     var selectedMeeting: MeetingRecord? {
         guard let id = selectedMeetingID else { return nil }
-        if let row = meetingRows.first(where: { $0.id == id }) {
-            return row
-        }
         guard selectedMeetingRecord?.id == id else { return nil }
         return selectedMeetingRecord
     }

@@ -273,6 +273,49 @@ public enum MeetingNotesSource: String, Codable, Sendable {
     case user
 }
 
+/// The bounded subset of a meeting needed by the history browser.
+///
+/// Full transcripts, notes, prompts, and captured context deliberately stay out
+/// of this type so refreshing the dashboard cannot hydrate large meeting blobs.
+public struct MeetingListRecord: Identifiable, Equatable, Sendable {
+    public static let previewCharacterLimit = 512
+
+    public let id: Int64
+    public let title: String
+    public let startTime: String
+    public let durationSeconds: Double
+    public let folderID: Int64?
+    public let savedRecordingPath: String?
+    public let status: MeetingStatus
+    public let source: MeetingSource
+    public let followUpToID: Int64?
+    public let preview: String
+
+    public init(
+        id: Int64,
+        title: String,
+        startTime: String,
+        durationSeconds: Double,
+        folderID: Int64?,
+        savedRecordingPath: String?,
+        status: MeetingStatus,
+        source: MeetingSource,
+        followUpToID: Int64?,
+        preview: String
+    ) {
+        self.id = id
+        self.title = title
+        self.startTime = startTime
+        self.durationSeconds = durationSeconds
+        self.folderID = folderID
+        self.savedRecordingPath = savedRecordingPath
+        self.status = status
+        self.source = source
+        self.followUpToID = followUpToID
+        self.preview = preview
+    }
+}
+
 public struct MeetingRecord: Identifiable, Codable, Sendable {
     public let id: Int64
     public let title: String

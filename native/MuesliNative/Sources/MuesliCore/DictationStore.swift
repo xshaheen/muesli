@@ -54,6 +54,23 @@ public final class DictationStore {
     private static let meetingColumns = """
     id, title, start_time, duration_seconds, raw_transcript, formatted_notes, word_count, folder_id, calendar_event_id, mic_audio_path, system_audio_path, saved_recording_path, meeting_status, manual_notes, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source, follow_up_to_id, follow_up_to_record_name, calendar_occurrence_key, calendar_source, calendar_id, calendar_series_id, calendar_occurrence_start, cleaned_transcript, visual_context, previous_meeting_notes, notes_source
     """
+    private static let meetingListColumns = """
+    id, title, start_time, duration_seconds, folder_id, saved_recording_path,
+    meeting_status, source, follow_up_to_id,
+    SUBSTR(
+        CASE
+            WHEN TRIM(COALESCE(manual_notes, '')) <> '' AND meeting_status <> 'completed'
+                THEN manual_notes
+            WHEN COALESCE(formatted_notes, '') <> ''
+                THEN formatted_notes
+            WHEN TRIM(COALESCE(cleaned_transcript, '')) <> ''
+                THEN cleaned_transcript
+            ELSE COALESCE(raw_transcript, '')
+        END,
+        1,
+        \(MeetingListRecord.previewCharacterLimit)
+    )
+    """
 
     public init() {
         self.databaseURL = MuesliPaths.defaultDatabaseURL()
@@ -651,6 +668,65 @@ public final class DictationStore {
         var rows: [MeetingRecord] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             rows.append(makeMeetingRecord(statement))
+        }
+        return rows
+    }
+
+    /// Recent meetings projected to the metadata and bounded preview rendered by
+    /// the dashboard. Detail views must load `meeting(id:)` instead.
+    public func recentMeetingList(
+        limit: Int? = nil,
+        folderID: Int64? = nil,
+        origin: RecordOriginFilter = .all
+    ) throws -> [MeetingListRecord] {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+
+        let originCondition: String
+        switch origin {
+        case .all:
+            originCondition = ""
+        case .thisMac:
+            originCondition = " AND LOWER(TRIM(COALESCE(source, ''))) <> 'ios'"
+        case .fromIPhone:
+            originCondition = " AND LOWER(TRIM(COALESCE(source, ''))) = 'ios'"
+        }
+
+        var sql: String
+        if folderID != nil {
+            sql = """
+                WITH RECURSIVE folder_tree(id) AS (
+                    SELECT id FROM meeting_folders WHERE id = ?
+                    UNION
+                    SELECT mf.id FROM meeting_folders mf
+                    JOIN folder_tree ft ON mf.parent_id = ft.id
+                )
+                SELECT \(Self.meetingListColumns) FROM meetings
+                WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at IS NULL\(originCondition)
+                ORDER BY id DESC
+                """
+        } else {
+            sql = "SELECT \(Self.meetingListColumns) FROM meetings WHERE deleted_at IS NULL\(originCondition) ORDER BY id DESC"
+        }
+        if limit != nil { sql += " LIMIT ?" }
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        var bindIndex: Int32 = 1
+        if let folderID {
+            sqlite3_bind_int64(statement, bindIndex, folderID)
+            bindIndex += 1
+        }
+        if let limit {
+            sqlite3_bind_int(statement, bindIndex, Int32(limit))
+        }
+
+        var rows: [MeetingListRecord] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            rows.append(makeMeetingListRecord(statement))
         }
         return rows
     }
@@ -3903,6 +3979,30 @@ public final class DictationStore {
         )
     }
 
+    private func makeMeetingListRecord(_ statement: OpaquePointer?) -> MeetingListRecord {
+        let folderID = sqlite3_column_type(statement, 4) == SQLITE_NULL
+            ? nil
+            : sqlite3_column_int64(statement, 4)
+        let savedRecordingPath = optionalStringColumn(statement, index: 5)
+        let status = MeetingStatus(rawValue: stringColumn(statement, index: 6)) ?? .completed
+        let source = MeetingSource(rawValue: stringColumn(statement, index: 7)) ?? .meeting
+        let followUpToID = sqlite3_column_type(statement, 8) == SQLITE_NULL
+            ? nil
+            : sqlite3_column_int64(statement, 8)
+        return MeetingListRecord(
+            id: sqlite3_column_int64(statement, 0),
+            title: stringColumn(statement, index: 1),
+            startTime: stringColumn(statement, index: 2),
+            durationSeconds: sqlite3_column_double(statement, 3),
+            folderID: folderID,
+            savedRecordingPath: savedRecordingPath,
+            status: status,
+            source: source,
+            followUpToID: followUpToID,
+            preview: stringColumn(statement, index: 9)
+        )
+    }
+
     private func makeMeetingRecord(_ statement: OpaquePointer?) -> MeetingRecord {
         let folderID: Int64? = sqlite3_column_type(statement, 7) == SQLITE_NULL ? nil : sqlite3_column_int64(statement, 7)
         let calendarEventID: String? = sqlite3_column_type(statement, 8) == SQLITE_NULL ? nil : stringColumn(statement, index: 8)
@@ -3973,6 +4073,12 @@ public final class DictationStore {
             withIntermediateDirectories: true
         )
         var db: OpaquePointer?
+        var initialized = false
+        defer {
+            if !initialized, let db {
+                sqlite3_close(db)
+            }
+        }
         if sqlite3_open(databaseURL.path, &db) != SQLITE_OK {
             throw lastError(db)
         }
@@ -3985,6 +4091,7 @@ public final class DictationStore {
         if sqlite3_exec(db, "PRAGMA journal_mode=WAL", nil, nil, nil) != SQLITE_OK {
             throw lastError(db)
         }
+        initialized = true
         return db
     }
 

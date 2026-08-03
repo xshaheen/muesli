@@ -873,9 +873,6 @@ final class MuesliController: NSObject {
     }
 
     func meeting(id: Int64) -> MeetingRecord? {
-        if let row = appState.meetingRows.first(where: { $0.id == id }) {
-            return row
-        }
         return try? dictationStore.meeting(id: id)
     }
 
@@ -1104,7 +1101,7 @@ final class MuesliController: NSObject {
         )) ?? []
         appState.dictationRows = rows
         appState.hasMoreDictations = rows.count >= appState.dictationPageSize
-        appState.meetingRows = (try? dictationStore.recentMeetings(
+        appState.meetingRows = (try? dictationStore.recentMeetingList(
             limit: 200,
             folderID: appState.selectedFolderID,
             origin: appState.meetingOriginFilter
@@ -1115,8 +1112,7 @@ final class MuesliController: NSObject {
         appState.meetingCountsByFolder = counts.byFolder
         appState.directMeetingCountsByFolder = counts.directByFolder
         if let selectedMeetingID = appState.selectedMeetingID {
-            appState.selectedMeetingRecord = appState.meetingRows.first(where: { $0.id == selectedMeetingID })
-                ?? meeting(id: selectedMeetingID)
+            appState.selectedMeetingRecord = meeting(id: selectedMeetingID)
         } else {
             appState.selectedMeetingRecord = nil
         }
@@ -4693,11 +4689,19 @@ final class MuesliController: NSObject {
     }
 
     func canDeleteMeeting(_ meeting: MeetingRecord) -> Bool {
-        guard meeting.id != activeMeetingID else { return false }
-        if staleLiveMeetingRecoveryFailures.contains(meeting.id) {
+        canDeleteMeeting(id: meeting.id, status: meeting.status)
+    }
+
+    func canDeleteMeeting(_ meeting: MeetingListRecord) -> Bool {
+        canDeleteMeeting(id: meeting.id, status: meeting.status)
+    }
+
+    private func canDeleteMeeting(id: Int64, status: MeetingStatus) -> Bool {
+        guard id != activeMeetingID else { return false }
+        if staleLiveMeetingRecoveryFailures.contains(id) {
             return true
         }
-        switch meeting.status {
+        switch status {
         case .recording, .processing:
             return false
         case .completed, .noteOnly, .failed:

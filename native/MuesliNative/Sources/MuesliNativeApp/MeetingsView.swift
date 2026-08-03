@@ -29,13 +29,13 @@ enum MeetingBrowserSort: Hashable {
 }
 
 struct MeetingBrowserPresentation {
-    let meetings: [MeetingRecord]
+    let meetings: [MeetingListRecord]
     let meetingIDsWithFollowUps: Set<Int64>
 }
 
 enum MeetingBrowserLogic {
     static func availableFilters(
-        for meetings: [MeetingRecord],
+        for meetings: [MeetingListRecord],
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> [MeetingBrowserFilter] {
@@ -55,12 +55,12 @@ enum MeetingBrowserLogic {
     }
 
     static func filteredMeetings(
-        from meetings: [MeetingRecord],
+        from meetings: [MeetingListRecord],
         filter: MeetingBrowserFilter,
         sort: MeetingBrowserSort,
         now: Date = Date(),
         calendar: Calendar = .current
-    ) -> [MeetingRecord] {
+    ) -> [MeetingListRecord] {
         presentation(
             from: meetings,
             filter: filter,
@@ -71,7 +71,7 @@ enum MeetingBrowserLogic {
     }
 
     static func presentation(
-        from meetings: [MeetingRecord],
+        from meetings: [MeetingListRecord],
         filter: MeetingBrowserFilter,
         sort: MeetingBrowserSort,
         now: Date = Date(),
@@ -79,7 +79,7 @@ enum MeetingBrowserLogic {
     ) -> MeetingBrowserPresentation {
         let threshold = threshold(for: filter, now: now, calendar: calendar)
         var meetingIDsWithFollowUps = Set<Int64>()
-        var filtered: [MeetingRecord] = []
+        var filtered: [MeetingListRecord] = []
 
         for meeting in meetings {
             if let followUpToID = meeting.followUpToID {
@@ -128,7 +128,7 @@ enum MeetingBrowserLogic {
         }
     }
 
-    private static func isAfterThreshold(_ meeting: MeetingRecord, threshold: Date?) -> Bool {
+    private static func isAfterThreshold(_ meeting: MeetingListRecord, threshold: Date?) -> Bool {
         guard let threshold else { return true }
         guard let date = parseDate(meeting.startTime) else { return false }
         return date >= threshold
@@ -196,7 +196,7 @@ struct MeetingsView: View {
     @State private var selectedFilter: MeetingBrowserFilter = .all
     @State private var selectedSort: MeetingBrowserSort = .newestFirst
 
-    private var scopedMeetings: [MeetingRecord] {
+    private var scopedMeetings: [MeetingListRecord] {
         appState.meetingRows
     }
 
