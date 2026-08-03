@@ -121,7 +121,9 @@ struct RouteAwareMeetingMicRecorderTests {
             handoffTimeoutScheduler: disabledMeetingMicHandoffTimeoutScheduler
         )
         var samples: [[Int16]] = []
+        var handoffResults: [MeetingMicHandoffResult] = []
         recorder.onRawPCMSamples = { samples.append($0) }
+        recorder.onHandoffResult = { handoffResults.append($0) }
 
         try recorder.start()
         recorder.preferredInputDeviceID = 91
@@ -130,12 +132,14 @@ struct RouteAwareMeetingMicRecorderTests {
         system.onRawPCMSamples?([1])
         #expect(recorder.activeRecorderKindForDebug() == .systemDefault)
         #expect(system.stopCalls == 0)
+        #expect(handoffResults.isEmpty)
 
         appScoped.onRawPCMSamples?([2])
         try await waitUntil { recorder.activeRecorderKindForDebug() == .appScoped }
         try await waitUntil { samples == [[1], [2]] }
 
         #expect(samples == [[1], [2]])
+        #expect(handoffResults == [.completed(preferredInputDeviceID: 91)])
         #expect(system.stopCalls == 1)
         #expect(system.cancelCalls == 1)
     }
@@ -152,7 +156,9 @@ struct RouteAwareMeetingMicRecorderTests {
             handoffTimeoutScheduler: disabledMeetingMicHandoffTimeoutScheduler
         )
         var samples: [[Int16]] = []
+        var handoffResults: [MeetingMicHandoffResult] = []
         recorder.onRawPCMSamples = { samples.append($0) }
+        recorder.onHandoffResult = { handoffResults.append($0) }
 
         try recorder.start()
         recorder.preferredInputDeviceID = 91
@@ -162,6 +168,14 @@ struct RouteAwareMeetingMicRecorderTests {
         #expect(recorder.activeRecorderKindForDebug() == .systemDefault)
         #expect(system.stopCalls == 0)
         #expect(samples == [[7]])
+        #expect(handoffResults.count == 1)
+        if let firstResult = handoffResults.first,
+           case .failed(let deviceID, let reason) = firstResult {
+            #expect(deviceID == 91)
+            #expect(reason.contains("test error 1"))
+        } else {
+            Issue.record("Expected a failed microphone handoff result")
+        }
     }
 
     @Test("active recorder failure rebuilds the same route and recovers on first buffer")
@@ -317,7 +331,9 @@ struct RouteAwareMeetingMicRecorderTests {
             handoffTimeoutScheduler: timeoutScheduler.schedule
         )
         var samples: [[Int16]] = []
+        var handoffResults: [MeetingMicHandoffResult] = []
         recorder.onRawPCMSamples = { samples.append($0) }
+        recorder.onHandoffResult = { handoffResults.append($0) }
 
         try recorder.start()
         recorder.preferredInputDeviceID = 92
@@ -331,6 +347,9 @@ struct RouteAwareMeetingMicRecorderTests {
 
         #expect(samples == [[7]])
         #expect(recorder.activeRecorderKindForDebug() == .systemDefault)
+        #expect(handoffResults == [
+            .failed(preferredInputDeviceID: 92, reason: "The selected microphone did not produce audio.")
+        ])
     }
 
     @Test("rapid route changes reject late callbacks from superseded recorders")
@@ -346,7 +365,9 @@ struct RouteAwareMeetingMicRecorderTests {
             handoffTimeoutScheduler: disabledMeetingMicHandoffTimeoutScheduler
         )
         var samples: [[Int16]] = []
+        var handoffResults: [MeetingMicHandoffResult] = []
         recorder.onRawPCMSamples = { samples.append($0) }
+        recorder.onHandoffResult = { handoffResults.append($0) }
 
         try recorder.start()
         recorder.preferredInputDeviceID = 91
@@ -363,6 +384,13 @@ struct RouteAwareMeetingMicRecorderTests {
 
         #expect(samples == [[2], [3]])
         #expect(system.stopCalls == 1)
+        #expect(handoffResults == [
+            .failed(
+                preferredInputDeviceID: 91,
+                reason: "The microphone handoff was superseded by a newer route."
+            ),
+            .completed(preferredInputDeviceID: 92)
+        ])
     }
 
     @Test("pause cancels a pending handoff and resume starts a fresh replacement")

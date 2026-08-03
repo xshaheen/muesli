@@ -190,6 +190,7 @@ final class MeetingSession {
     private let micHealthTracker = MeetingMicHealthTracker()
     /// Confined to `chunkRotationQueue`, which serialises every health callback.
     private var micFailoverPolicy = MeetingMicFailoverPolicy()
+    private var micFailoverAttemptTracker = MeetingMicFailoverAttemptTracker()
     private var lastMicFailoverEvaluationAt: Date?
     private let chunkRotationQueue = DispatchQueue(label: "MuesliNative.MeetingSession.chunkRotation")
     private let pausedDisplayLock = OSAllocatedUnfairLock(initialState: false)
@@ -309,6 +310,7 @@ final class MeetingSession {
             systemVadController?.stop()
             systemVadController = nil
             meetingMicRecorder.onRawPCMSamples = nil
+            (meetingMicRecorder as? MeetingMicHandoffReporting)?.onHandoffResult = nil
             systemAudioRecorder.onPCMSamples = nil
             systemAudioRecorder.onSystemAudioFailure = nil
             retainedRecordingWriter?.cancel()
@@ -548,6 +550,7 @@ final class MeetingSession {
         rawRecorder?.cancel()
         systemRecorder?.cancel()
         meetingMicRecorder.onRawPCMSamples = nil
+        (meetingMicRecorder as? MeetingMicHandoffReporting)?.onHandoffResult = nil
         meetingMicRecorder.cancel()
         systemAudioRecorder.onPCMSamples = nil
         systemAudioRecorder.onSystemAudioFailure = nil
@@ -582,6 +585,7 @@ final class MeetingSession {
         systemVadController?.stop()
         systemVadController = nil
         meetingMicRecorder.onRawPCMSamples = nil
+        (meetingMicRecorder as? MeetingMicHandoffReporting)?.onHandoffResult = nil
         systemAudioRecorder.onPCMSamples = nil
         systemAudioRecorder.onSystemAudioFailure = nil
         let (meetingStart, lastChunkTiming, lastRawMicURL, lastSystemChunkTiming, lastSystemChunkURL) = chunkRotationQueue.sync { () -> (Date, MeetingChunkTimingSnapshot?, URL?, MeetingChunkTimingSnapshot?, URL?) in
@@ -1054,6 +1058,11 @@ final class MeetingSession {
         meetingMicRecorder.onRawPCMSamples = { [weak self] samples in
             self?.enqueueRealtimeMicSamples(samples)
         }
+        (meetingMicRecorder as? MeetingMicHandoffReporting)?.onHandoffResult = { [weak self] result in
+            self?.chunkRotationQueue.async { [weak self] in
+                self?.handleMicHandoffResultOnQueue(result)
+            }
+        }
         systemAudioRecorder.onPCMSamples = { [weak self] samples in
             self?.enqueueRealtimeSystemSamples(samples)
         }
@@ -1104,14 +1113,28 @@ final class MeetingSession {
             guard let fallbackDeviceID = record.fallbackDeviceID else { return nil }
             let silent = Self.failoverDeviceDescription(id: record.silentDeviceID, name: record.silentDeviceName)
             let fallback = Self.failoverDeviceDescription(id: fallbackDeviceID, name: record.fallbackDeviceName)
-            fputs("[meeting] mic silent on \(silent); switching capture to \(fallback)\n", stderr)
-            Self.logger.warning("Meeting mic failover switching capture to a fallback input")
+            fputs("[meeting] mic silent on \(silent); attempting capture switch to \(fallback)\n", stderr)
+            Self.logger.warning("Meeting mic failover attempting capture switch to a fallback input")
             // The route-aware recorder treats a new preferred device as a
             // mid-recording handoff: it starts the candidate, waits for real
             // samples, and only then retires the silent one.
+            micFailoverAttemptTracker.begin(record)
             meetingMicRecorder.preferredInputDeviceID = fallbackDeviceID
-            return micHealthTracker.recordFailover(record, now: now)
+            return nil
         }
+    }
+
+    private func handleMicHandoffResultOnQueue(_ result: MeetingMicHandoffResult) {
+        guard let record = micFailoverAttemptTracker.resolve(result) else { return }
+        let snapshot = micHealthTracker.recordFailover(record)
+        if record.didSwitchInput {
+            fputs("[meeting] microphone handoff completed after replacement produced audio\n", stderr)
+            Self.logger.info("Meeting mic failover completed")
+        } else {
+            fputs("[meeting] microphone handoff failed: \(record.handoffErrorDescription ?? "unknown error")\n", stderr)
+            Self.logger.error("Meeting mic failover failed")
+        }
+        onMicHealthChanged?(snapshot)
     }
 
     private static func failoverDeviceDescription(id: AudioObjectID?, name: String?) -> String {

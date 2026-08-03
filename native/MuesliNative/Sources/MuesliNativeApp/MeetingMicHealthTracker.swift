@@ -34,8 +34,25 @@ struct MeetingMicFailoverRecord: Codable, Equatable {
     let fallbackDeviceID: AudioObjectID?
     let fallbackDeviceName: String?
     let decidedAt: Date
+    let handoffErrorDescription: String?
 
-    var didSwitchInput: Bool { fallbackDeviceID != nil }
+    init(
+        silentDeviceID: AudioObjectID?,
+        silentDeviceName: String?,
+        fallbackDeviceID: AudioObjectID?,
+        fallbackDeviceName: String?,
+        decidedAt: Date,
+        handoffErrorDescription: String? = nil
+    ) {
+        self.silentDeviceID = silentDeviceID
+        self.silentDeviceName = silentDeviceName
+        self.fallbackDeviceID = fallbackDeviceID
+        self.fallbackDeviceName = fallbackDeviceName
+        self.decidedAt = decidedAt
+        self.handoffErrorDescription = handoffErrorDescription
+    }
+
+    var didSwitchInput: Bool { fallbackDeviceID != nil && handoffErrorDescription == nil }
 
     /// Nil unless the input actually moved, so a plain detection never claims a
     /// switch happened.
@@ -47,11 +64,26 @@ struct MeetingMicFailoverRecord: Codable, Equatable {
     /// Shown while the mic is still reading zeros: after a completed switch this
     /// has to admit the fallback did not help, not just announce the switch.
     var stillSilentMessage: String {
+        if handoffErrorDescription != nil {
+            return "\(silentSubject) is silent — switching to \(fallbackSubject) failed. "
+                + "This meeting transcript may miss your side."
+        }
         guard didSwitchInput else {
             return "\(silentSubject) is silent. This meeting transcript may miss your side."
         }
         return "\(silentSubject) was silent — switched to \(fallbackSubject), which is also silent. "
             + "This meeting transcript may miss your side."
+    }
+
+    func recordingHandoffFailure(_ reason: String) -> MeetingMicFailoverRecord {
+        MeetingMicFailoverRecord(
+            silentDeviceID: silentDeviceID,
+            silentDeviceName: silentDeviceName,
+            fallbackDeviceID: fallbackDeviceID,
+            fallbackDeviceName: fallbackDeviceName,
+            decidedAt: decidedAt,
+            handoffErrorDescription: reason
+        )
     }
 
     private var silentSubject: String {
@@ -64,6 +96,30 @@ struct MeetingMicFailoverRecord: Codable, Equatable {
 
     static func quote(_ name: String) -> String {
         "\u{201C}\(name)\u{201D}"
+    }
+}
+
+/// Correlates the recorder's asynchronous handoff result with the one
+/// automatic failover selected by the meeting policy.
+struct MeetingMicFailoverAttemptTracker {
+    private(set) var pending: MeetingMicFailoverRecord?
+
+    mutating func begin(_ record: MeetingMicFailoverRecord) {
+        pending = record
+    }
+
+    mutating func resolve(_ result: MeetingMicHandoffResult) -> MeetingMicFailoverRecord? {
+        guard let pending else { return nil }
+        switch result {
+        case .completed(let deviceID):
+            guard deviceID == pending.fallbackDeviceID else { return nil }
+            self.pending = nil
+            return pending
+        case .failed(let deviceID, let reason):
+            guard deviceID == pending.fallbackDeviceID else { return nil }
+            self.pending = nil
+            return pending.recordingHandoffFailure(reason)
+        }
     }
 }
 

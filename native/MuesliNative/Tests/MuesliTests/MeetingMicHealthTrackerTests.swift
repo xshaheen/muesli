@@ -392,6 +392,53 @@ struct MeetingMicFailoverPolicyTests {
     }
 }
 
+@Suite("MeetingMicFailoverAttemptTracker")
+struct MeetingMicFailoverAttemptTrackerTests {
+    @Test("does not report a switch until the requested input produces audio")
+    func completionConfirmsTheRequestedInput() throws {
+        var tracker = MeetingMicFailoverAttemptTracker()
+        let record = failoverRecord()
+
+        tracker.begin(record)
+        #expect(tracker.resolve(.completed(preferredInputDeviceID: 99)) == nil)
+        #expect(tracker.pending == record)
+
+        let resolution = tracker.resolve(.completed(preferredInputDeviceID: 82))
+        let resolved = try #require(resolution)
+        #expect(resolved.didSwitchInput)
+        #expect(resolved.handoffErrorDescription == nil)
+        #expect(tracker.pending == nil)
+    }
+
+    @Test("failed handoff preserves the attempted fallback without claiming a switch")
+    func failureDoesNotClaimSwitch() throws {
+        var tracker = MeetingMicFailoverAttemptTracker()
+        tracker.begin(failoverRecord())
+
+        let resolution = tracker.resolve(.failed(
+            preferredInputDeviceID: 82,
+            reason: "No audio arrived"
+        ))
+        let resolved = try #require(resolution)
+
+        #expect(!resolved.didSwitchInput)
+        #expect(resolved.handoffErrorDescription == "No audio arrived")
+        #expect(resolved.switchedMessage == nil)
+        #expect(resolved.stillSilentMessage.contains("switching to MacBook Pro Microphone failed"))
+        #expect(tracker.pending == nil)
+    }
+
+    private func failoverRecord() -> MeetingMicFailoverRecord {
+        MeetingMicFailoverRecord(
+            silentDeviceID: 91,
+            silentDeviceName: "AirPods",
+            fallbackDeviceID: 82,
+            fallbackDeviceName: "MacBook Pro Microphone",
+            decidedAt: Date()
+        )
+    }
+}
+
 private extension MeetingMicFailoverDecision {
     var switchRecord: MeetingMicFailoverRecord? {
         guard case .switchInput(let record) = self else { return nil }
