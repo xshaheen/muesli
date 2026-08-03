@@ -496,6 +496,22 @@ enum MeetingSummaryClient {
         return next < line.endIndex && line[next].isWhitespace
     }
 
+    static func openAISummaryBody(instructions: String, userPrompt: String, model: String) -> [String: Any] {
+        [
+            "model": model,
+            // /v1/responses persists responses server-side unless told not to —
+            // `store` defaults to true there, unlike /v1/chat/completions.
+            "store": false,
+            "input": [
+                ["role": "system", "content": instructions],
+                ["role": "user", "content": userPrompt],
+            ],
+            "reasoning": ["effort": SummaryModelPreset.reasoningEffort(for: model) ?? "low"],
+            "text": ["verbosity": "low"],
+            "max_output_tokens": defaultSummaryMaxOutputTokens,
+        ]
+    }
+
     private static func summarizeWithOpenAI(
         transcript: String,
         meetingTitle: String,
@@ -521,16 +537,7 @@ enum MeetingSummaryClient {
             previousMeetingNotes: previousMeetingNotes
         )
         let model = config.openAIModel.isEmpty ? defaultOpenAIModel : config.openAIModel
-        let body: [String: Any] = [
-            "model": model,
-            "input": [
-                ["role": "system", "content": instructions],
-                ["role": "user", "content": userPrompt],
-            ],
-            "reasoning": ["effort": SummaryModelPreset.reasoningEffort(for: model) ?? "low"],
-            "text": ["verbosity": "low"],
-            "max_output_tokens": defaultSummaryMaxOutputTokens,
-        ]
+        let body = openAISummaryBody(instructions: instructions, userPrompt: userPrompt, model: model)
 
         var request = URLRequest(url: openAIURL)
         request.timeoutInterval = openAISummaryTimeout
