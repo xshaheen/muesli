@@ -222,6 +222,22 @@ struct MeetingChatConversationTests {
         registry.forget(meetingID: 2)
     }
 
+    @Test("the registry evicts the least recently used conversation at capacity")
+    func registryEvictsLeastRecentlyUsedConversation() {
+        let registry = MeetingChatConversations()
+        let conversations = (1 ... 10).map { meetingID in
+            registry.conversation(for: Int64(meetingID))
+        }
+
+        // Reading the oldest conversation makes meeting 2 the least recently used.
+        #expect(registry.conversation(for: 1) === conversations[0])
+
+        _ = registry.conversation(for: 11)
+
+        #expect(registry.conversation(for: 1) === conversations[0])
+        #expect(registry.conversation(for: 2) !== conversations[1])
+    }
+
     // MARK: - The user's own notes as context
 
     @Test("the user's notes reach the model alongside the transcript")

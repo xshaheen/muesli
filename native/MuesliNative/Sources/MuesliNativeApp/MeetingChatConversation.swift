@@ -164,23 +164,43 @@ final class MeetingChatConversation {
 final class MeetingChatConversations {
     static let shared = MeetingChatConversations()
 
+    private static let capacity = 10
     private var byMeeting: [Int64: MeetingChatConversation] = [:]
+    private var meetingIDsByRecency: [Int64] = []
 
     func conversation(for meetingID: Int64) -> MeetingChatConversation {
-        if let existing = byMeeting[meetingID] { return existing }
+        if let existing = byMeeting[meetingID] {
+            markRecentlyUsed(meetingID)
+            return existing
+        }
+
+        if byMeeting.count >= Self.capacity,
+           let leastRecentlyUsedMeetingID = meetingIDsByRecency.first {
+            byMeeting.removeValue(forKey: leastRecentlyUsedMeetingID)
+            meetingIDsByRecency.removeFirst()
+        }
+
         let created = MeetingChatConversation()
         byMeeting[meetingID] = created
+        meetingIDsByRecency.append(meetingID)
         return created
     }
 
     func forget(meetingID: Int64) {
         byMeeting.removeValue(forKey: meetingID)
+        meetingIDsByRecency.removeAll { $0 == meetingID }
     }
 
     /// For bulk deletion. Clearing every meeting must also clear the questions and answers
     /// about them, which otherwise stay resident until the app quits.
     func forgetAll() {
         byMeeting.removeAll()
+        meetingIDsByRecency.removeAll()
+    }
+
+    private func markRecentlyUsed(_ meetingID: Int64) {
+        meetingIDsByRecency.removeAll { $0 == meetingID }
+        meetingIDsByRecency.append(meetingID)
     }
 }
 
