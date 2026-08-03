@@ -8061,7 +8061,6 @@ final class MuesliController: NSObject {
             computerUseCommandStartedAt = nil
             pendingComputerUseStopSessionID = nil
             pendingComputerUseStopStartedAt = nil
-            indicator.isToggleDictation = false
             computerUseHotkeyMonitor.cancelToggleMode()
             setState(.idle)
             meetingMonitor.resumeAfterCooldown()
