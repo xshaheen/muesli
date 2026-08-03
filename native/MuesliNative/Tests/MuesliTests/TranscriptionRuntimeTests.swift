@@ -39,6 +39,90 @@ struct SpeechTranscriptionResultTests {
     }
 }
 
+@Suite("Transcription result cleanup")
+struct TranscriptionResultCleanupTests {
+    private let segment = SpeechSegment(start: 1, end: 2, text: "Hello world")
+
+    @Test("replacement clears segments only when aggregate text changes")
+    func replacementSegmentInvariant() {
+        let result = SpeechTranscriptionResult(text: "Hello world", segments: [segment])
+
+        let changed = TranscriptionResultCleanup.replacingText(in: result, with: "Clean world")
+        let unchanged = TranscriptionResultCleanup.replacingText(in: result, with: result.text)
+
+        #expect(changed.text == "Clean world")
+        #expect(changed.segments.isEmpty)
+        #expect(unchanged.segments.count == 1)
+    }
+
+    @Test("filler cleanup clears segments when aggregate text changes")
+    func changedFillerTextClearsSegments() {
+        let result = SpeechTranscriptionResult(text: "Um hello world", segments: [segment])
+
+        let cleaned = TranscriptionResultCleanup.removeFillers(result)
+
+        #expect(cleaned.text == "Hello world")
+        #expect(cleaned.segments.isEmpty)
+    }
+
+    @Test("filler cleanup retains segments when aggregate text is unchanged")
+    func unchangedFillerTextRetainsSegments() {
+        let result = SpeechTranscriptionResult(text: "Hello world", segments: [segment])
+
+        let cleaned = TranscriptionResultCleanup.removeFillers(result)
+
+        #expect(cleaned.text == result.text)
+        #expect(cleaned.segments.count == 1)
+    }
+
+    @Test("artifact cleanup clears segments when aggregate text changes")
+    func changedArtifactTextClearsSegments() {
+        let result = SpeechTranscriptionResult(
+            text: "Hello [blank_audio] world",
+            segments: [segment]
+        )
+
+        let cleaned = TranscriptionResultCleanup.removeArtifacts(result)
+
+        #expect(cleaned.text == "Hello world")
+        #expect(cleaned.segments.isEmpty)
+    }
+
+    @Test("artifact cleanup retains segments when aggregate text is unchanged")
+    func unchangedArtifactTextRetainsSegments() {
+        let result = SpeechTranscriptionResult(text: "Hello world", segments: [segment])
+
+        let cleaned = TranscriptionResultCleanup.removeArtifacts(result)
+
+        #expect(cleaned.text == result.text)
+        #expect(cleaned.segments.count == 1)
+    }
+
+    @Test("meeting cleanup keeps numeric-only speech")
+    func meetingCleanupKeepsNumericSpeech() {
+        for text in ["42", "1.7", "50%", "١٢", "Ⅻ"] {
+            let result = SpeechTranscriptionResult(text: text, segments: [segment])
+
+            let cleaned = TranscriptionResultCleanup.cleanMeetingTranscript(result)
+
+            #expect(cleaned.text == text)
+            #expect(cleaned.segments.count == 1)
+        }
+    }
+
+    @Test("meeting cleanup rejects punctuation-only output")
+    func meetingCleanupRejectsPunctuationOnlyOutput() {
+        for text in [".", "...", "?!", "—"] {
+            let result = SpeechTranscriptionResult(text: text, segments: [segment])
+
+            let cleaned = TranscriptionResultCleanup.cleanMeetingTranscript(result)
+
+            #expect(cleaned.text.isEmpty)
+            #expect(cleaned.segments.isEmpty)
+        }
+    }
+}
+
 @Suite("Inference serialization gate")
 struct InferenceGateTests {
 
@@ -212,23 +296,25 @@ struct TranscriptionEngineArtifactsFilterTests {
         #expect(TranscriptionEngineArtifactsFilter.apply("[blank_audio]") == "")
     }
 
-    @Test("bare digits and punctuation are non-speech artifacts")
+    @Test("punctuation and symbols are non-speech artifacts")
     func nonSpeechArtifacts() {
-        // Nemotron 3.5's silence hallucination on meeting chunks.
-        #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("1.7..."))
         #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("."))
         #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("..."))
-        // Accepted tradeoff for meeting chunks: a bare short number is eaten too.
-        #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("42"))
+        #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("?!"))
+        #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("—"))
     }
 
-    @Test("real speech is never a non-speech artifact")
+    @Test("letters and Unicode numbers are never non-speech artifacts")
     func realSpeechIsKept() {
         #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("ok"))
         #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("مرحبا"))
         #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("1.7 يعني"))
         #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact(""))
-        // Longer numeric strings (dates, phone fragments) are past the cap.
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("42"))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("1.7..."))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("50%"))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("١٢"))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("Ⅻ"))
         #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("2026-08-03"))
     }
 

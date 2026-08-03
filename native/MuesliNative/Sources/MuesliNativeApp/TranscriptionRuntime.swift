@@ -13,6 +13,37 @@ struct SpeechTranscriptionResult: Sendable {
     let segments: [SpeechSegment]
 }
 
+/// Keeps aggregate text and timed segments from describing different transcripts.
+/// Cleanup transforms cannot losslessly retime or rewrite arbitrary backend
+/// segments, so any effective text change invalidates those segments.
+struct TranscriptionResultCleanup {
+    static func removeFillers(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
+        replacingText(in: result, with: FillerWordFilter.apply(result.text))
+    }
+
+    static func removeArtifacts(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
+        replacingText(in: result, with: TranscriptionEngineArtifactsFilter.apply(result.text))
+    }
+
+    static func cleanMeetingTranscript(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
+        let cleaned = removeFillers(removeArtifacts(result))
+        guard !TranscriptionEngineArtifactsFilter.isNonSpeechArtifact(cleaned.text) else {
+            return SpeechTranscriptionResult(text: "", segments: [])
+        }
+        return cleaned
+    }
+
+    static func replacingText(
+        in result: SpeechTranscriptionResult,
+        with filteredText: String
+    ) -> SpeechTranscriptionResult {
+        SpeechTranscriptionResult(
+            text: filteredText,
+            segments: filteredText == result.text ? result.segments : []
+        )
+    }
+}
+
 actor TranscriptionCoordinator {
     typealias DiarizerModelLoader = @Sendable (DiarizerRuntimePolicy) async throws -> DiarizerModels
     typealias VADLoader = @Sendable () async throws -> VadManager
@@ -1018,8 +1049,7 @@ actor TranscriptionCoordinator {
     }
 
     private func removeFillers(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
-        let filtered = FillerWordFilter.apply(result.text)
-        return SpeechTranscriptionResult(text: filtered, segments: result.segments)
+        TranscriptionResultCleanup.removeFillers(result)
     }
 
     private func removeFillersWithLogging(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
@@ -1035,20 +1065,15 @@ actor TranscriptionCoordinator {
     }
 
     private func cleanMeetingTranscript(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
-        let cleaned = removeFillers(removeArtifacts(result))
-        // A whole meeting chunk decoding to bare digits/punctuation ("1.7...", ".")
-        // is the silence hallucination that slips past VAD on low-level noise.
-        // Meeting-only: a dictation of "1.7" is legitimate and never reaches here.
-        if TranscriptionEngineArtifactsFilter.isNonSpeechArtifact(cleaned.text) {
-            fputs("[muesli-native] dropped non-speech chunk artifact: \"\(cleaned.text)\"\n", stderr)
-            return SpeechTranscriptionResult(text: "", segments: [])
+        let cleaned = TranscriptionResultCleanup.cleanMeetingTranscript(result)
+        if !result.text.isEmpty, cleaned.text.isEmpty {
+            fputs("[muesli-native] dropped non-speech chunk artifact: \"\(result.text)\"\n", stderr)
         }
         return cleaned
     }
 
     private func removeArtifacts(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
-        let filtered = TranscriptionEngineArtifactsFilter.apply(result.text)
-        return SpeechTranscriptionResult(text: filtered, segments: filtered.isEmpty ? [] : result.segments)
+        TranscriptionResultCleanup.removeArtifacts(result)
     }
 
     private func postProcessDictationIfNeeded(
@@ -1141,11 +1166,7 @@ actor TranscriptionCoordinator {
                 cleanupOutputText: trimmed,
                 elapsedMs: elapsedMs
             )
-            return SpeechTranscriptionResult(
-                text: trimmed,
-                // Original ASR segments describe pre-cleanup text. Keep them only for debug diagnostics.
-                segments: Qwen3PostProcessorLogging.isVerboseEnabled && !trimmed.isEmpty ? result.segments : []
-            )
+            return TranscriptionResultCleanup.replacingText(in: result, with: trimmed)
         } catch {
             Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor failed, falling back: \(error)")
             TranscriptCleanupDebugLogger.append(
@@ -1204,10 +1225,7 @@ actor TranscriptionCoordinator {
                 cleanupOutputText: trimmed,
                 elapsedMs: elapsedMs
             )
-            return SpeechTranscriptionResult(
-                text: trimmed,
-                segments: Qwen3PostProcessorLogging.isVerboseEnabled && !trimmed.isEmpty ? result.segments : []
-            )
+            return TranscriptionResultCleanup.replacingText(in: result, with: trimmed)
         } catch {
             Gemma4LiteRTLogging.log("Gemma cleanup failed, falling back: \(error)")
             TranscriptCleanupDebugLogger.append(
@@ -1268,10 +1286,7 @@ actor TranscriptionCoordinator {
                 cleanupOutputText: trimmed,
                 elapsedMs: elapsedMs
             )
-            return SpeechTranscriptionResult(
-                text: trimmed,
-                segments: Qwen3PostProcessorLogging.isVerboseEnabled && !trimmed.isEmpty ? result.segments : []
-            )
+            return TranscriptionResultCleanup.replacingText(in: result, with: trimmed)
         } catch TranscriptCleanupError.rejectedOutput {
             Qwen3PostProcessorLogging.logVerbose("\(postProcessorSnapshot.backend.label) post-processor output rejected, falling back")
             TranscriptCleanupDebugLogger.append(
@@ -1312,7 +1327,7 @@ actor TranscriptionCoordinator {
     private func applyCustomWords(_ result: SpeechTranscriptionResult, customWords: [CustomWord]) -> SpeechTranscriptionResult {
         guard !customWords.isEmpty, !result.text.isEmpty else { return result }
         let correctedText = CustomWordMatcher.apply(text: result.text, customWords: customWords)
-        return SpeechTranscriptionResult(text: correctedText, segments: result.segments)
+        return TranscriptionResultCleanup.replacingText(in: result, with: correctedText)
     }
 
     /// `vocabulary` is only honoured by backends that accept recognizer conditioning;

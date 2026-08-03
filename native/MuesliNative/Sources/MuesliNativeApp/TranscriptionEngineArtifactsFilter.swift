@@ -16,15 +16,15 @@ struct TranscriptionEngineArtifactsFilter {
         #"(?i)\bif a word is unclear,?\s*use the most likely word that fits well within the context of the overall sentence(?:\s+transcription)?\.?"#,
     ]
 
-    /// True for output that is hallucinated filler rather than speech: short text
-    /// with no letters in any script — bare digits and punctuation ("1.7...", ".").
-    /// Nemotron 3.5 emits exactly this on silent or noise-only meeting chunks that
-    /// slip past VAD. Meeting paths only: a dictation of "1.7" is legitimate and
-    /// must never be eaten, so dictation cleanup does not consult this.
+    /// True for punctuation/symbol-only output that is hallucinated filler rather
+    /// than speech. Numbers in every Unicode numeric category are meaningful
+    /// transcript content, even when no letters accompany them.
     static func isNonSpeechArtifact(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.count <= 8 else { return false }
-        return trimmed.unicodeScalars.allSatisfy { !CharacterSet.letters.contains($0) }
+        guard !trimmed.isEmpty else { return false }
+        return trimmed.unicodeScalars.allSatisfy { scalar in
+            !CharacterSet.letters.contains(scalar) && scalar.properties.numericType == nil
+        }
     }
 
     /// Removes known engine control tokens and non-speech annotations, then strips

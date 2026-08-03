@@ -69,6 +69,34 @@ struct MeetingStreamingPartialSessionTests {
         #expect(!collector.all.contains { $0.localizedCaseInsensitiveContains("blank_audio") })
     }
 
+    @Test("publishes numeric-only live captions")
+    func publishesNumericOnlyLiveCaptions() async throws {
+        let engine = ScriptedPartialEngine(script: ["42", "50%"])
+        let session = MeetingStreamingPartialSession(engine: engine, label: "You")
+        let collector = PartialCollector()
+        session.onPartialUpdate = { collector.record($0) }
+        await session.connect()
+
+        session.enqueue(samples(chunkCount: 2))
+
+        #expect(await waitUntil { collector.latest == "50%" })
+        #expect(collector.all == ["50%"])
+    }
+
+    @Test("suppresses punctuation-only live captions")
+    func suppressesPunctuationOnlyLiveCaptions() async throws {
+        let engine = ScriptedPartialEngine(script: ["..."])
+        let session = MeetingStreamingPartialSession(engine: engine, label: "You")
+        let collector = PartialCollector()
+        session.onPartialUpdate = { collector.record($0) }
+        await session.connect()
+
+        session.enqueue(samples(chunkCount: 1))
+
+        #expect(await waitUntil { collector.latest == "" })
+        #expect(!collector.all.contains { !$0.isEmpty })
+    }
+
     @Test("buffers sub-chunk sample batches until a feed interval is available")
     func buffersSubChunkBatches() async throws {
         let engine = ScriptedPartialEngine(script: ["hello"])
