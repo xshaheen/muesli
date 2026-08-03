@@ -4128,7 +4128,8 @@ final class MuesliController: NSObject {
                     at: recordingURL,
                     backend: backend,
                     cohereLanguage: self.config.resolvedCohereLanguage,
-                    indicASRLanguage: self.config.resolvedIndicASRLanguage
+                    indicASRLanguage: self.config.resolvedIndicASRLanguage,
+                    customWords: self.config.customWords
                 )
                 let rawTranscript = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !rawTranscript.isEmpty else {

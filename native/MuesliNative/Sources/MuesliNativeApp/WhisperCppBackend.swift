@@ -88,16 +88,39 @@ actor WhisperKitTranscriber {
     }
 
     /// Transcribe a 16kHz mono WAV file.
-    func transcribe(wavURL: URL) async throws -> (text: String, processingTime: Double) {
+    ///
+    /// `vocabulary` conditions the decoder on the user's dictionary via Whisper's initial
+    /// prompt. Prompt tokens sit before the start-of-transcript token, so WhisperKit strips
+    /// them from the result — but the model can still echo them when it hallucinates on
+    /// near-silent audio, which is why the prompt stays a bare term list.
+    func transcribe(wavURL: URL, vocabulary: AsrVocabularyPrompt? = nil) async throws -> (text: String, processingTime: Double) {
         guard let whisperKit else { throw TranscriberError.notLoaded }
 
         let start = CFAbsoluteTimeGetCurrent()
-        let results = try await whisperKit.transcribe(audioPath: wavURL.path)
+        let results: [TranscriptionResult] = try await whisperKit.transcribe(
+            audioPath: wavURL.path,
+            decodeOptions: decodeOptions(for: vocabulary, whisperKit: whisperKit)
+        )
         let elapsed = CFAbsoluteTimeGetCurrent() - start
 
         let text = results.map(\.text).joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return (text: text, processingTime: elapsed)
+    }
+
+    /// nil keeps WhisperKit's own defaults, which is what the unbiased path used before.
+    private func decodeOptions(for vocabulary: AsrVocabularyPrompt?, whisperKit: WhisperKit) -> DecodingOptions? {
+        guard let vocabulary else { return nil }
+        guard let tokenizer = whisperKit.tokenizer else {
+            fputs("[whisperkit] vocabulary biasing skipped: tokenizer unavailable\n", stderr)
+            return nil
+        }
+        // Leading space matches Whisper's prompt convention: its BPE merges are space-prefixed,
+        // so an unprefixed first term tokenizes differently from the same word mid-sentence.
+        let promptTokens = tokenizer.encode(text: " " + vocabulary.text)
+        guard !promptTokens.isEmpty else { return nil }
+        fputs("[whisperkit] vocabulary biasing: \(vocabulary.termCount) terms, \(promptTokens.count) prompt tokens\n", stderr)
+        return DecodingOptions(promptTokens: promptTokens)
     }
 
     /// Run a short silent transcription to trigger CoreML compilation.

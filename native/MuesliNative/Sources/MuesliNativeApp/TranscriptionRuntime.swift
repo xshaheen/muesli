@@ -713,7 +713,14 @@ actor TranscriptionCoordinator {
                 fputs("[muesli-native] VAD check failed, transcribing anyway: \(error)\n", stderr)
             }
         }
-        var result = try await route(url: url, backend: backend, cohereLanguage: cohereLanguage, indicASRLanguage: indicASRLanguage)
+        let dictionary = Self.decodeCustomWords(customWords)
+        var result = try await route(
+            url: url,
+            backend: backend,
+            cohereLanguage: cohereLanguage,
+            indicASRLanguage: indicASRLanguage,
+            vocabulary: AsrVocabularyPrompt.build(customWords: dictionary)
+        )
         result = removeArtifacts(result)
         if !result.text.isEmpty {
             Qwen3PostProcessorLogging.logVerbose("Dictation raw transcript after artifact cleanup: \(result.text)")
@@ -725,7 +732,7 @@ actor TranscriptionCoordinator {
             postProcessorSnapshot: postProcessorSnapshot,
             appContext: appContext
         ) ?? removeFillersWithLogging(result)
-        let final = applyCustomWords(result, customWords: customWords)
+        let final = applyCustomWords(result, customWords: dictionary)
         if !final.text.isEmpty {
             Qwen3PostProcessorLogging.logVerbose("Dictation final transcript: \(final.text)")
         }
@@ -736,17 +743,26 @@ actor TranscriptionCoordinator {
         at url: URL,
         backend: BackendOption,
         cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
-        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage
+        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
+        customWords: [CustomWord] = []
     ) async throws -> SpeechTranscriptionResult {
         // Meetings intentionally skip Qwen/custom-word post-processing. Keep deterministic artifact/filler cleanup only.
-        cleanMeetingTranscript(try await route(url: url, backend: backend, cohereLanguage: cohereLanguage, indicASRLanguage: indicASRLanguage))
+        // ASR-stage vocabulary biasing is separate: it conditions the recognizer instead of rewriting its output.
+        cleanMeetingTranscript(try await route(
+            url: url,
+            backend: backend,
+            cohereLanguage: cohereLanguage,
+            indicASRLanguage: indicASRLanguage,
+            vocabulary: AsrVocabularyPrompt.build(customWords: customWords)
+        ))
     }
 
     func transcribeMeetingChunk(
         at url: URL,
         backend: BackendOption,
         cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
-        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage
+        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
+        customWords: [CustomWord] = []
     ) async throws -> SpeechTranscriptionResult {
         // Meeting chunks intentionally skip Qwen/custom-word post-processing for reconciliation.
         // Run VAD to skip silent chunks (prevents hallucinations)
@@ -762,7 +778,13 @@ actor TranscriptionCoordinator {
                 fputs("[muesli-native] VAD check failed, transcribing anyway: \(error)\n", stderr)
             }
         }
-        return cleanMeetingTranscript(try await route(url: url, backend: backend, cohereLanguage: cohereLanguage, indicASRLanguage: indicASRLanguage))
+        return cleanMeetingTranscript(try await route(
+            url: url,
+            backend: backend,
+            cohereLanguage: cohereLanguage,
+            indicASRLanguage: indicASRLanguage,
+            vocabulary: AsrVocabularyPrompt.build(customWords: customWords)
+        ))
     }
 
     func diarizeSystemAudio(at url: URL) async throws -> DiarizationResult? {
@@ -1080,27 +1102,34 @@ actor TranscriptionCoordinator {
         }
     }
 
-    private func applyCustomWords(_ result: SpeechTranscriptionResult, customWords: [[String: Any]]) -> SpeechTranscriptionResult {
-        guard !customWords.isEmpty, !result.text.isEmpty else { return result }
-        let entries = customWords.compactMap { dict -> CustomWord? in
+    /// The dictation entry point receives the dictionary as plain dictionaries from the
+    /// controller; decode once so ASR-stage biasing and post-hoc matching share the entries.
+    private static func decodeCustomWords(_ customWords: [[String: Any]]) -> [CustomWord] {
+        customWords.compactMap { dict -> CustomWord? in
             guard let word = dict["word"] as? String else { return nil }
             let threshold = dict["matchingThreshold"] as? Double ?? 0.85
             return CustomWord(word: word, replacement: dict["replacement"] as? String, matchingThreshold: threshold)
         }
-        guard !entries.isEmpty else { return result }
-        let correctedText = CustomWordMatcher.apply(text: result.text, customWords: entries)
+    }
+
+    private func applyCustomWords(_ result: SpeechTranscriptionResult, customWords: [CustomWord]) -> SpeechTranscriptionResult {
+        guard !customWords.isEmpty, !result.text.isEmpty else { return result }
+        let correctedText = CustomWordMatcher.apply(text: result.text, customWords: customWords)
         return SpeechTranscriptionResult(text: correctedText, segments: result.segments)
     }
 
+    /// `vocabulary` is only honoured by backends that accept recognizer conditioning;
+    /// the rest still rely on post-hoc `CustomWordMatcher` repair.
     private func route(
         url: URL,
         backend: BackendOption,
         cohereLanguage: CohereTranscribeLanguage,
-        indicASRLanguage: IndicASRLanguage
+        indicASRLanguage: IndicASRLanguage,
+        vocabulary: AsrVocabularyPrompt? = nil
     ) async throws -> SpeechTranscriptionResult {
         switch backend.backend {
         case "whisper":
-            return try await transcribeWithWhisperKit(url: url)
+            return try await transcribeWithWhisperKit(url: url, vocabulary: vocabulary)
         case "nemotron35":
             return try await transcribeWithNemotron35(url: url)
         case "qwen":
@@ -1136,9 +1165,9 @@ actor TranscriptionCoordinator {
 
     // MARK: - WhisperKit (Whisper on ANE/GPU via CoreML)
 
-    private func transcribeWithWhisperKit(url: URL) async throws -> SpeechTranscriptionResult {
+    private func transcribeWithWhisperKit(url: URL, vocabulary: AsrVocabularyPrompt? = nil) async throws -> SpeechTranscriptionResult {
         fputs("[muesli-native] transcribing with WhisperKit: \(url.lastPathComponent)\n", stderr)
-        let result = try await whisperTranscriber.transcribe(wavURL: url)
+        let result = try await whisperTranscriber.transcribe(wavURL: url, vocabulary: vocabulary)
         fputs("[muesli-native] WhisperKit result: \(result.text.prefix(80)) (took \(String(format: "%.3f", result.processingTime))s)\n", stderr)
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return SpeechTranscriptionResult(

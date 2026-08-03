@@ -636,7 +636,8 @@ final class MeetingSession {
                         at: lastSystemChunkURL,
                         backend: currentBackend(),
                         cohereLanguage: config.resolvedCohereLanguage,
-                        indicASRLanguage: config.resolvedIndicASRLanguage
+                        indicASRLanguage: config.resolvedIndicASRLanguage,
+                        customWords: config.customWords
                     )
                     let normalizedSegments = normalizeSystemTranscription(
                         result: result,
@@ -934,7 +935,8 @@ final class MeetingSession {
                     at: chunkURL,
                     backend: backend,
                     cohereLanguage: config.resolvedCohereLanguage,
-                    indicASRLanguage: config.resolvedIndicASRLanguage
+                    indicASRLanguage: config.resolvedIndicASRLanguage,
+                    customWords: config.customWords
                 )
                 if !result.text.isEmpty {
                     fputs("[meeting] system chunk transcribed: \"\(String(result.text.prefix(60)))...\"\n", stderr)
@@ -1198,7 +1200,8 @@ final class MeetingSession {
                 at: url,
                 backend: currentBackend(),
                 cohereLanguage: config.resolvedCohereLanguage,
-                indicASRLanguage: config.resolvedIndicASRLanguage
+                indicASRLanguage: config.resolvedIndicASRLanguage,
+                customWords: config.customWords
             )
             if !result.text.isEmpty {
                 fputs("[meeting] mic chunk transcribed (raw): \"\(String(result.text.prefix(60)))...\"\n", stderr)
@@ -1305,7 +1308,8 @@ final class MeetingSession {
                         at: segmentURL,
                         backend: currentBackend(),
                         cohereLanguage: config.resolvedCohereLanguage,
-                        indicASRLanguage: config.resolvedIndicASRLanguage
+                        indicASRLanguage: config.resolvedIndicASRLanguage,
+                        customWords: config.customWords
                     )
                     repairedSegments.append(contentsOf: normalizeSystemTranscription(
                         result: result,
@@ -1337,7 +1341,8 @@ final class MeetingSession {
                 at: systemAudioURL,
                 backend: currentBackend(),
                 cohereLanguage: config.resolvedCohereLanguage,
-                indicASRLanguage: config.resolvedIndicASRLanguage
+                indicASRLanguage: config.resolvedIndicASRLanguage,
+                customWords: config.customWords
             )
             return normalizeSystemTranscription(
                 result: result,
