@@ -212,6 +212,26 @@ struct TranscriptionEngineArtifactsFilterTests {
         #expect(TranscriptionEngineArtifactsFilter.apply("[blank_audio]") == "")
     }
 
+    @Test("bare digits and punctuation are non-speech artifacts")
+    func nonSpeechArtifacts() {
+        // Nemotron 3.5's silence hallucination on meeting chunks.
+        #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("1.7..."))
+        #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("."))
+        #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("..."))
+        // Accepted tradeoff for meeting chunks: a bare short number is eaten too.
+        #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("42"))
+    }
+
+    @Test("real speech is never a non-speech artifact")
+    func realSpeechIsKept() {
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("ok"))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("مرحبا"))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("1.7 يعني"))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact(""))
+        // Longer numeric strings (dates, phone fragments) are past the cap.
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("2026-08-03"))
+    }
+
     @Test("matching is case-insensitive")
     func caseInsensitive() {
         #expect(TranscriptionEngineArtifactsFilter.apply("[BLANK_AUDIO]") == "")

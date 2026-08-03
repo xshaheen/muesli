@@ -1035,7 +1035,15 @@ actor TranscriptionCoordinator {
     }
 
     private func cleanMeetingTranscript(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
-        removeFillers(removeArtifacts(result))
+        let cleaned = removeFillers(removeArtifacts(result))
+        // A whole meeting chunk decoding to bare digits/punctuation ("1.7...", ".")
+        // is the silence hallucination that slips past VAD on low-level noise.
+        // Meeting-only: a dictation of "1.7" is legitimate and never reaches here.
+        if TranscriptionEngineArtifactsFilter.isNonSpeechArtifact(cleaned.text) {
+            fputs("[muesli-native] dropped non-speech chunk artifact: \"\(cleaned.text)\"\n", stderr)
+            return SpeechTranscriptionResult(text: "", segments: [])
+        }
+        return cleaned
     }
 
     private func removeArtifacts(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {

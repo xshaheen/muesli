@@ -513,7 +513,10 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
     }
 
     private func receiveEnginePartial(_ text: String) {
-        let filteredText = TranscriptionEngineArtifactsFilter.apply(text)
+        let cleaned = TranscriptionEngineArtifactsFilter.apply(text)
+        // A growing partial that is still only digits/punctuation is the silence
+        // hallucination ("1.7..."); show nothing until real speech arrives.
+        let filteredText = TranscriptionEngineArtifactsFilter.isNonSpeechArtifact(cleaned) ? "" : cleaned
         let tail: String? = state.withLock { s in
             guard !s.isStopped, !s.isSuspended, !s.didFail,
                   s.activeInferenceRevision == s.lifecycleRevision else { return nil }
