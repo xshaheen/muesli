@@ -351,10 +351,23 @@ final class MeetingSession {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let engines = try await MeetingLiveCaptionModelStore.makeEngines(
-                    backend: backend,
-                    nemotronPromptId: self.config.resolvedNemotron35Language.promptId
-                )
+                let engines: (mic: MeetingStreamingPartialEngine, system: MeetingStreamingPartialEngine)
+                if backend == .nemotron35, #available(macOS 15, *) {
+                    // Borrow the coordinator's transcriber rather than loading a
+                    // second copy of the same weights for the meeting's lifetime.
+                    // A failed borrow falls back to a private instance.
+                    let shared = try? await self.transcriptionCoordinator.getLoadedNemotron35Transcriber()
+                    engines = try await MeetingLiveCaptionModelStore.makeEngines(
+                        backend: backend,
+                        nemotronPromptId: self.config.resolvedNemotron35Language.promptId,
+                        sharedNemotron35: shared
+                    )
+                } else {
+                    engines = try await MeetingLiveCaptionModelStore.makeEngines(
+                        backend: backend,
+                        nemotronPromptId: self.config.resolvedNemotron35Language.promptId
+                    )
+                }
                 guard self.chunkRotationQueue.sync(execute: { self.isRecording }),
                       self.partialSessionsStorage.withLock({ !$0.isShutDown }) else {
                     await engines.mic.shutdown()

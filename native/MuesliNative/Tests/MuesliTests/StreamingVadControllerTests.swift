@@ -39,6 +39,21 @@ private final class StreamingVadBoundaryProbe: @unchecked Sendable {
     }
 }
 
+/// Holds streaming VAD inference open so a test can build a backlog on purpose.
+private actor StreamingVadReleaseGate {
+    private var isOpen = false
+
+    func open() {
+        isOpen = true
+    }
+
+    func waitUntilOpen() async {
+        while !isOpen {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+}
+
 @Suite("StreamingVadController", .serialized)
 struct StreamingVadControllerTests {
     @Test("serializes streaming VAD processing to a single in-flight chunk")
@@ -57,17 +72,19 @@ struct StreamingVadControllerTests {
         )
 
         controller.start()
-        for _ in 0..<10 {
+        // Exactly the queue cap: this test asserts serialization, not overflow
+        // behavior — the cap's drop-oldest semantics have their own tests.
+        for _ in 0..<StreamingVadController.maxPendingChunks {
             controller.processAudio([Float](repeating: 0, count: VadManager.chunkSize))
         }
 
         let deadline = ContinuousClock.now + .seconds(2)
-        while await probe.processedCount < 10, ContinuousClock.now < deadline {
+        while await probe.processedCount < StreamingVadController.maxPendingChunks, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(20))
         }
         controller.stop()
 
-        #expect(await probe.processedCount == 10)
+        #expect(await probe.processedCount == StreamingVadController.maxPendingChunks)
         #expect(await probe.maxConcurrentCount == 1)
     }
 
@@ -221,5 +238,86 @@ struct StreamingVadControllerTests {
         controller.stop()
 
         #expect(await probe.processedCount == 4)
+    }
+
+    @Test("drops the oldest audio once the pending queue exceeds its cap")
+    func dropsOldestChunksBeyondBacklogCap() async throws {
+        let probe = StreamingVadTestProbe()
+        let gate = StreamingVadReleaseGate()
+        let controller = StreamingVadController(
+            minChunkDuration: 0,
+            maxChunkDuration: 3600,
+            makeInitialState: { VadStreamState.initial() },
+            processStreamChunk: { _, state in
+                await probe.processingStarted()
+                await gate.waitUntilOpen()
+                await probe.processingFinished()
+                return VadStreamResult(state: state, event: nil, probability: 0.0)
+            }
+        )
+
+        controller.start()
+        // The first chunk parks inside inference, so everything fed after it piles
+        // up in the pending queue exactly as it would behind a slow meeting.
+        controller.processAudio([Float](repeating: 0, count: VadManager.chunkSize))
+        let startedDeadline = ContinuousClock.now + .seconds(2)
+        while await probe.inFlightCount == 0, ContinuousClock.now < startedDeadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        let overflowCount = StreamingVadController.maxPendingChunks * 4
+        for _ in 0..<overflowCount {
+            controller.processAudio([Float](repeating: 0, count: VadManager.chunkSize))
+        }
+        await gate.open()
+
+        let expected = StreamingVadController.maxPendingChunks + 1
+        let finishedDeadline = ContinuousClock.now + .seconds(5)
+        while await probe.processedCount < expected, ContinuousClock.now < finishedDeadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        // Settle time to catch an over-cap queue that is still draining.
+        try? await Task.sleep(for: .milliseconds(100))
+        controller.stop()
+
+        #expect(await probe.processedCount == expected)
+    }
+
+    @Test("keeps every chunk when the backlog stays within the cap")
+    func keepsChunksWithinBacklogCap() async throws {
+        let probe = StreamingVadTestProbe()
+        let gate = StreamingVadReleaseGate()
+        let controller = StreamingVadController(
+            minChunkDuration: 0,
+            maxChunkDuration: 3600,
+            makeInitialState: { VadStreamState.initial() },
+            processStreamChunk: { _, state in
+                await probe.processingStarted()
+                await gate.waitUntilOpen()
+                await probe.processingFinished()
+                return VadStreamResult(state: state, event: nil, probability: 0.0)
+            }
+        )
+
+        controller.start()
+        controller.processAudio([Float](repeating: 0, count: VadManager.chunkSize))
+        let startedDeadline = ContinuousClock.now + .seconds(2)
+        while await probe.inFlightCount == 0, ContinuousClock.now < startedDeadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        for _ in 0..<StreamingVadController.maxPendingChunks {
+            controller.processAudio([Float](repeating: 0, count: VadManager.chunkSize))
+        }
+        await gate.open()
+
+        let expected = StreamingVadController.maxPendingChunks + 1
+        let finishedDeadline = ContinuousClock.now + .seconds(5)
+        while await probe.processedCount < expected, ContinuousClock.now < finishedDeadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        controller.stop()
+
+        #expect(await probe.processedCount == expected)
     }
 }

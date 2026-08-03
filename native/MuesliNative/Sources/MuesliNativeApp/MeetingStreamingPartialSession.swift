@@ -56,6 +56,32 @@ enum MeetingLiveCaptionModelStore {
         backend: MeetingLiveCaptionBackend,
         nemotronPromptId: Int32
     ) async throws -> (mic: MeetingStreamingPartialEngine, system: MeetingStreamingPartialEngine) {
+        try await makeEngines(backend: backend, nemotronPromptId: nemotronPromptId, borrowedTranscriber: nil)
+    }
+
+    /// - Parameter sharedNemotron35: The coordinator's already-loaded transcriber.
+    ///   Passing it avoids a second ~588 MB copy of the same model when Nemotron
+    ///   serves both dictation and live captions. The mic and system engines
+    ///   already share one transcriber between themselves, each carrying its own
+    ///   `StreamState`, so a third consumer is safe for the same reason. When nil,
+    ///   this owns a private instance and tears it down on failure.
+    @available(macOS 15, *)
+    static func makeEngines(
+        backend: MeetingLiveCaptionBackend,
+        nemotronPromptId: Int32,
+        sharedNemotron35: Nemotron35StreamingTranscriber?
+    ) async throws -> (mic: MeetingStreamingPartialEngine, system: MeetingStreamingPartialEngine) {
+        try await makeEngines(backend: backend, nemotronPromptId: nemotronPromptId, borrowedTranscriber: sharedNemotron35)
+    }
+
+    /// `Any?` because the transcriber type is macOS 15-gated and this core must
+    /// stay callable from the ungated Parakeet path; the cast happens inside the
+    /// availability branch.
+    private static func makeEngines(
+        backend: MeetingLiveCaptionBackend,
+        nemotronPromptId: Int32,
+        borrowedTranscriber: Any?
+    ) async throws -> (mic: MeetingStreamingPartialEngine, system: MeetingStreamingPartialEngine) {
         switch backend {
         case .parakeetRealtimeEOU:
             let mic = try await makeEngine(label: "You")
@@ -73,10 +99,20 @@ enum MeetingLiveCaptionModelStore {
                     userInfo: [NSLocalizedDescriptionKey: "Nemotron 3.5 requires macOS 15 or later."]
                 )
             }
-            let transcriber = Nemotron35StreamingTranscriber()
-            await transcriber.setPromptId(nemotronPromptId)
-            try await transcriber.loadModels()
-            let mic = Nemotron35MeetingPartialEngine(transcriber: transcriber, label: "You")
+            let transcriber: Nemotron35StreamingTranscriber
+            if let shared = borrowedTranscriber as? Nemotron35StreamingTranscriber {
+                transcriber = shared
+            } else {
+                transcriber = Nemotron35StreamingTranscriber()
+                await transcriber.setPromptId(nemotronPromptId)
+                try await transcriber.loadModels()
+            }
+            let ownsTranscriber = borrowedTranscriber == nil
+            let mic = Nemotron35MeetingPartialEngine(
+                transcriber: transcriber,
+                label: "You",
+                ownsTranscriber: ownsTranscriber
+            )
             let system = Nemotron35MeetingPartialEngine(transcriber: transcriber, label: "Others")
             do {
                 try await mic.prepare()
@@ -85,7 +121,11 @@ enum MeetingLiveCaptionModelStore {
             } catch {
                 await mic.shutdown()
                 await system.shutdown()
-                await transcriber.shutdown()
+                // A borrowed transcriber outlives this meeting; only the coordinator
+                // may release it, via its designated-backend reconcile.
+                if ownsTranscriber {
+                    await transcriber.shutdown()
+                }
                 throw error
             }
         }
@@ -150,14 +190,19 @@ private actor ParakeetEOUMeetingPartialEngine: MeetingStreamingPartialEngine {
 @available(macOS 15, *)
 private actor Nemotron35MeetingPartialEngine: MeetingStreamingPartialEngine {
     private let transcriber: Nemotron35StreamingTranscriber
+    /// Non-nil only when this engine created the transcriber. A transcriber
+    /// borrowed from the coordinator outlives the meeting, so releasing it here
+    /// would unload a model that dictation still depends on.
+    private let ownedTranscriber: Nemotron35StreamingTranscriber?
     private let label: String
     private var streamState: Nemotron35StreamingTranscriber.StreamState?
     private var sampleBuffer: [Float] = []
     private var transcript = ""
     private var partialHandler: (@Sendable (String) -> Void)?
 
-    init(transcriber: Nemotron35StreamingTranscriber, label: String) {
+    init(transcriber: Nemotron35StreamingTranscriber, label: String, ownsTranscriber: Bool = false) {
         self.transcriber = transcriber
+        self.ownedTranscriber = ownsTranscriber ? transcriber : nil
         self.label = label
     }
 
@@ -211,6 +256,12 @@ private actor Nemotron35MeetingPartialEngine: MeetingStreamingPartialEngine {
         transcript = ""
         streamState = nil
         partialHandler = nil
+        // Only the engine that created the transcriber unloads it; otherwise a
+        // meeting's live captions would leave ~588 MB resident for the session.
+        // The paired engine may still have a chunk in flight and would see
+        // `.notLoaded`, which its session already treats as a dormancy error at
+        // teardown time.
+        await ownedTranscriber?.shutdown()
         fputs("[meeting-partials] \(label) Nemotron 3.5 session stopped\n", stderr)
     }
 }

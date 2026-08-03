@@ -23,6 +23,17 @@ public enum DictationStoreError: Error, LocalizedError {
     }
 }
 
+/// A meeting reduced to the two columns the recording-cleanup paths read.
+public struct MeetingRecordingReference: Equatable, Sendable {
+    public let id: Int64
+    public let savedRecordingPath: String
+
+    public init(id: Int64, savedRecordingPath: String) {
+        self.id = id
+        self.savedRecordingPath = savedRecordingPath
+    }
+}
+
 public struct MeetingThreadNavigation: Equatable, Sendable {
     public let predecessorID: Int64?
     public let successorIDs: [Int64]
@@ -640,6 +651,41 @@ public final class DictationStore {
         var rows: [MeetingRecord] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             rows.append(makeMeetingRecord(statement))
+        }
+        return rows
+    }
+
+    /// Every meeting that still points at a saved recording file, id and path only.
+    ///
+    /// The recording-cleanup paths need nothing else, and hydrating full
+    /// `MeetingRecord`s for them pulls every transcript and notes blob in the
+    /// database into memory — hundreds of megabytes on a long history — to read
+    /// one nullable column.
+    public func meetingRecordingReferences() throws -> [MeetingRecordingReference] {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+
+        let sql = """
+        SELECT id, saved_recording_path
+        FROM meetings
+        WHERE deleted_at IS NULL
+          AND saved_recording_path IS NOT NULL
+          AND TRIM(saved_recording_path) <> ''
+        ORDER BY id DESC
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var rows: [MeetingRecordingReference] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let path = optionalStringColumn(statement, index: 1) else { continue }
+            rows.append(MeetingRecordingReference(
+                id: sqlite3_column_int64(statement, 0),
+                savedRecordingPath: path
+            ))
         }
         return rows
     }

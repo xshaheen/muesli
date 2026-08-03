@@ -751,6 +751,10 @@ final class MuesliController: NSObject {
                         self.config.resolvedNemotron35Language.promptId
                     )
                 }
+                // Designate before preloading so a startup that warms a dictation
+                // model and a different meeting model does not unload one of them.
+                await self.applyDesignatedTranscriptionBackends()
+                await self.transcriptionCoordinator.startMemoryPressureMonitoring()
                 let dictationBackend = self.selectedBackend
                 guard await self.prepareDictationBackend(dictationBackend) else { return }
                 await self.preloadOptionalTranscriptionResources(
@@ -1399,6 +1403,7 @@ final class MuesliController: NSObject {
         appState.isChatGPTAuthenticated = chatGPTAuth.isAuthenticated
         syncCalendarMonitor()
         syncMeetingDetectionMonitor()
+        updateDesignatedTranscriptionBackends()
         updateMeetingNotificationVisibility()
         syncDictationRecorderWarmup(intent: .idlePrewarm(.configChange))
         if !wasICloudSyncEnabled && config.iCloudSyncEnabled {
@@ -2143,6 +2148,35 @@ final class MuesliController: NSObject {
             dictationBackendReadiness = .failed
             return false
         }
+    }
+
+    /// Tells the coordinator which backends are still spoken for, so it can release
+    /// the models behind selections the user has moved on from.
+    ///
+    /// Routed through every config change rather than the individual selection
+    /// handlers: the dictation model, the meeting model, the live-caption model and
+    /// the meetings-enabled switch all land here, and an unchanged designation is a
+    /// no-op on the coordinator side.
+    private func updateDesignatedTranscriptionBackends() {
+        Task { [weak self] in
+            await self?.applyDesignatedTranscriptionBackends()
+        }
+    }
+
+    private func applyDesignatedTranscriptionBackends() async {
+        let includesMeetings = config.resolvedOnboardingUseCase.includesMeetings
+        // Parakeet EOU live captions load their own model outside the coordinator,
+        // so only a Nemotron selection designates a coordinator-held backend.
+        let usesSharedLiveCaptionModel = includesMeetings
+            && config.enableLiveStreamingPartials
+            && config.resolvedMeetingLiveCaptionBackend == .nemotron35
+        await transcriptionCoordinator.setDesignatedBackends(
+            dictation: selectedBackend.backend,
+            meetingTranscription: includesMeetings ? selectedMeetingTranscriptionBackend.backend : nil,
+            meetingLiveCaption: usesSharedLiveCaptionModel
+                ? BackendOption.nemotron35Multilingual.backend
+                : nil
+        )
     }
 
     private func preloadOptionalTranscriptionResources(
@@ -6656,13 +6690,13 @@ final class MuesliController: NSObject {
 
     @discardableResult
     private func cleanupOrphanedMeetingWaveformCacheFiles() -> Bool {
-        let meetings: [MeetingRecord]
+        let references: [MeetingRecordingReference]
         do {
-            meetings = try dictationStore.recentMeetings(limit: nil)
+            references = try dictationStore.meetingRecordingReferences()
         } catch {
             return false
         }
-        let recordingURLs = meetings.compactMap { savedRecordingURL(from: $0.savedRecordingPath) }
+        let recordingURLs = references.compactMap { savedRecordingURL(from: $0.savedRecordingPath) }
         let result = RecordingWaveformCacheFiles.sweepOrphanedCachedWaveforms(
             retainedRecordingURLs: recordingURLs,
             supportDirectory: configStore.supportDirectory()
@@ -6715,10 +6749,10 @@ final class MuesliController: NSObject {
     private func shouldDeleteSavedMeetingRecording(at path: String, excluding meetingID: Int64) throws -> Bool {
         guard let url = savedRecordingURL(from: path) else { return false }
         let targetPath = url.standardizedFileURL.path
-        let meetings = try dictationStore.recentMeetings(limit: nil)
-        return !meetings.contains { meeting in
-            guard meeting.id != meetingID,
-                  let otherURL = savedRecordingURL(from: meeting.savedRecordingPath) else {
+        let references = try dictationStore.meetingRecordingReferences()
+        return !references.contains { reference in
+            guard reference.id != meetingID,
+                  let otherURL = savedRecordingURL(from: reference.savedRecordingPath) else {
                 return false
             }
             return otherURL.standardizedFileURL.path == targetPath

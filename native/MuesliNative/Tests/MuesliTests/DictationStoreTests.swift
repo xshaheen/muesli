@@ -420,6 +420,66 @@ struct DictationStoreTests {
         #expect(inserted?.savedRecordingPath == "/tmp/meeting.wav")
     }
 
+    @Test("recording references project only meetings that still hold a recording")
+    func recordingReferencesProjectOnlyMeetingsWithRecordings() throws {
+        let store = try makeStore()
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+
+        func insert(title: String, savedRecordingPath: String?) throws -> Int64 {
+            try store.insertMeeting(
+                title: title,
+                calendarEventID: nil,
+                startTime: start,
+                endTime: start.addingTimeInterval(60),
+                rawTranscript: "Transcript",
+                formattedNotes: "Notes",
+                micAudioPath: nil,
+                systemAudioPath: nil,
+                savedRecordingPath: savedRecordingPath
+            )
+        }
+
+        let withRecording = try insert(title: "Kept", savedRecordingPath: "/tmp/kept.wav")
+        _ = try insert(title: "No recording", savedRecordingPath: nil)
+        _ = try insert(title: "Blank recording", savedRecordingPath: "   ")
+        let deleted = try insert(title: "Deleted", savedRecordingPath: "/tmp/deleted.wav")
+        try store.deleteMeeting(id: deleted)
+
+        let references = try store.meetingRecordingReferences()
+
+        #expect(references == [MeetingRecordingReference(id: withRecording, savedRecordingPath: "/tmp/kept.wav")])
+    }
+
+    @Test("recording references report every meeting sharing one recording file")
+    func recordingReferencesReportSharedRecordingFiles() throws {
+        let store = try makeStore()
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+
+        func insert(title: String) throws -> Int64 {
+            try store.insertMeeting(
+                title: title,
+                calendarEventID: nil,
+                startTime: start,
+                endTime: start.addingTimeInterval(60),
+                rawTranscript: "Transcript",
+                formattedNotes: "Notes",
+                micAudioPath: nil,
+                systemAudioPath: nil,
+                savedRecordingPath: "/tmp/shared.wav"
+            )
+        }
+
+        let first = try insert(title: "First")
+        let second = try insert(title: "Second")
+
+        let references = try store.meetingRecordingReferences()
+
+        // The delete path decides whether a file is still referenced by another
+        // meeting, so both rows have to survive the projection.
+        #expect(Set(references.map(\.id)) == [first, second])
+        #expect(references.allSatisfy({ $0.savedRecordingPath == "/tmp/shared.wav" }))
+    }
+
     @Test("meeting source is persisted")
     func meetingSourcePersists() throws {
         let store = try makeStore()

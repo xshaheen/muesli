@@ -60,6 +60,15 @@ actor TranscriptionCoordinator {
     private let diarizerDiagnostics: DiarizerPreloadDiagnostics
     private var activeBackend: String?
 
+    /// Backends whose models are (or may be) resident. Every load path records
+    /// itself here so `reconcileBackendResidency` knows what there is to free.
+    private var loadedBackends: Set<String> = []
+    /// Transcriptions and loads currently running, keyed by backend identifier.
+    /// Guards against a reconcile interleaving with an awaited inference.
+    private var backendsInFlight: [String: Int] = [:]
+    private var backendDesignation = TranscriptionBackendResidencyPolicy.Designation()
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+
     init(
         diarizerModelLoader: @escaping DiarizerModelLoader = { policy in
             try await DiarizerModels.download(configuration: policy.modelConfiguration)
@@ -96,7 +105,9 @@ actor TranscriptionCoordinator {
     ) async throws -> Nemotron35StreamingTranscriber {
         let transcriber = nemotron35Transcriber
         await transcriber.setPromptId(nemotron35PromptId)
-        try await transcriber.loadModels(progress: progress)
+        try await withBackendInFlight(BackendOption.nemotron35Multilingual.backend) {
+            try await transcriber.loadModels(progress: progress)
+        }
         return transcriber
     }
 
@@ -110,12 +121,14 @@ actor TranscriptionCoordinator {
     }
 
     func unloadNemotron35Transcriber() async {
+        loadedBackends.remove(BackendOption.nemotron35Multilingual.backend)
         if #available(macOS 15, *), let transcriber = _nemotron35Transcriber as? Nemotron35StreamingTranscriber {
             await transcriber.shutdown()
         }
     }
 
     func unloadGemma4LiteRTTranscriber() async {
+        loadedBackends.remove(BackendOption.gemma4E2BLiteRT.backend)
         if #available(macOS 15, *), let transcriber = _gemma4LiteRTTranscriber as? Gemma4LiteRTTranscriber {
             await transcriber.shutdown()
             _gemma4LiteRTTranscriber = nil
@@ -195,6 +208,10 @@ actor TranscriptionCoordinator {
         } else if backend.llmBackend != nil {
             postProcessorModelId = TranscriptCleanupClient.configuredModel(for: backend, config: config)
         }
+
+        // Moving off Gemma cleanup drops the only claim on its engine when ASR uses
+        // something else, so the switch itself is what releases those ~1.4 GB.
+        await reconcileBackendResidency(reason: "cleanup backend changed")
     }
 
     private struct PostProcPairLogEntry: Encodable {
@@ -293,6 +310,18 @@ actor TranscriptionCoordinator {
         }
         try Task.checkCancellation()
 
+        try await withBackendInFlight(Self.residencyIdentifier(for: backend)) {
+            try await loadBackendModels(backend: backend, progress: progress)
+        }
+
+        await preloadPostProcessorIfNeeded(enabled: enablePostProcessor, transcriptionBackend: backend)
+        await reconcileBackendResidency(reason: "after preloading \(backend.backend)")
+    }
+
+    private func loadBackendModels(
+        backend: BackendOption,
+        progress: ((Double, String?) -> Void)? = nil
+    ) async throws {
         switch backend.backend {
         case "fluidaudio":
             let version: AsrModelVersion = backend.model.contains("v2") ? .v2 : .v3
@@ -358,8 +387,6 @@ actor TranscriptionCoordinator {
                 NSLocalizedDescriptionKey: "Unknown transcription backend: \(backend.backend)",
             ])
         }
-
-        await preloadPostProcessorIfNeeded(enabled: enablePostProcessor, transcriptionBackend: backend)
     }
 
     func preloadMeetingHelpers(trigger: DiarizerPreloadTrigger = .unspecified) async {
@@ -574,7 +601,10 @@ actor TranscriptionCoordinator {
             case .local:
                 try await qwen3PostProcessor.prepare()
             case .gemma4LiteRT:
-                try await gemma4LiteRTTranscriber.prepare()
+                let transcriber = gemma4LiteRTTranscriber
+                try await withBackendInFlight(BackendOption.gemma4E2BLiteRT.backend) {
+                    try await transcriber.prepare()
+                }
             default:
                 return
             }
@@ -586,6 +616,151 @@ actor TranscriptionCoordinator {
             } else {
                 Gemma4LiteRTLogging.log("Gemma cleanup preload failed: \(error)")
             }
+        }
+    }
+
+    // MARK: - Backend residency
+
+    /// Declares which backends the app still needs, then frees the rest.
+    ///
+    /// All three slots are pushed together so a startup that preloads a dictation
+    /// model and a different meeting model does not unload one while designating
+    /// the other. `meetingLiveCaption` is the identifier of the ASR backend behind
+    /// the live-caption engine, or nil when live captions are off or served by a
+    /// model the coordinator does not own (Parakeet EOU).
+    func setDesignatedBackends(
+        dictation: String?,
+        meetingTranscription: String?,
+        meetingLiveCaption: String?
+    ) async {
+        let updated = TranscriptionBackendResidencyPolicy.Designation(
+            dictation: dictation,
+            meetingTranscription: meetingTranscription,
+            meetingLiveCaption: meetingLiveCaption,
+            postProcessor: backendDesignation.postProcessor
+        )
+        guard updated != backendDesignation else { return }
+        backendDesignation = updated
+        await reconcileBackendResidency(reason: "selection changed")
+    }
+
+    /// Releases every loaded backend that no longer serves a designated slot.
+    ///
+    /// Returns the identifiers actually unloaded so callers, notably the memory
+    /// pressure handler, can report what the reclaim bought.
+    @discardableResult
+    func reconcileBackendResidency(reason: String) async -> [String] {
+        var designation = backendDesignation
+        // The Gemma engine serves transcription and cleanup from one instance, so
+        // a cleanup selection designates it even when ASR uses something else.
+        designation.postProcessor = postProcessorBackend.isGemma4LiteRT
+            ? BackendOption.gemma4E2BLiteRT.backend
+            : nil
+        backendDesignation.postProcessor = designation.postProcessor
+
+        let unloadable = TranscriptionBackendResidencyPolicy.backendsToUnload(
+            loaded: loadedBackends,
+            designation: designation,
+            inFlight: Set(backendsInFlight.keys)
+        )
+        for identifier in unloadable {
+            await unloadBackend(identifier)
+            fputs("[coordinator] unloading \(identifier): no longer designated (\(reason))\n", stderr)
+        }
+        return unloadable
+    }
+
+    /// Every wrapper here releases its models and reloads lazily, so the shared
+    /// `let` transcribers are shut down in place rather than discarded.
+    private func unloadBackend(_ identifier: String) async {
+        loadedBackends.remove(identifier)
+        switch identifier {
+        case "fluidaudio":
+            await fluidTranscriber.shutdown()
+        case "whisper":
+            await whisperTranscriber.shutdown()
+        case "sensevoice":
+            await senseVoiceTranscriber.shutdown()
+        case "nemotron35":
+            await unloadNemotron35Transcriber()
+        case "gemma4-litert":
+            await unloadGemma4LiteRTTranscriber()
+        case "qwen":
+            if #available(macOS 15, *), let transcriber = _qwen3Transcriber as? Qwen3AsrTranscriber {
+                await transcriber.shutdown()
+                _qwen3Transcriber = nil
+            }
+        case "cohere":
+            if #available(macOS 15, *), let transcriber = _cohereTranscriber as? CohereTranscribeTranscriber {
+                await transcriber.shutdown()
+                _cohereTranscriber = nil
+            }
+        case "indicasr":
+            if #available(macOS 15, *), let transcriber = _indicASRTranscriber as? IndicASRTranscriber {
+                await transcriber.shutdown()
+                _indicASRTranscriber = nil
+            }
+        default:
+            break
+        }
+    }
+
+    /// `route` falls through to FluidAudio for anything it does not recognise, so
+    /// residency has to be booked against the backend that actually holds models.
+    private static func residencyIdentifier(for backend: BackendOption) -> String {
+        explicitlyRoutedBackendIdentifiers.contains(backend.backend) ? backend.backend : "fluidaudio"
+    }
+
+    /// Marks `identifier` busy for the duration of `body`, so a reconcile running
+    /// in the window where this actor is suspended cannot unload it mid-flight.
+    private func withBackendInFlight<T>(
+        _ identifier: String,
+        _ body: () async throws -> T
+    ) async rethrows -> T {
+        loadedBackends.insert(identifier)
+        backendsInFlight[identifier, default: 0] += 1
+        defer {
+            let remaining = (backendsInFlight[identifier] ?? 1) - 1
+            if remaining > 0 {
+                backendsInFlight[identifier] = remaining
+            } else {
+                backendsInFlight.removeValue(forKey: identifier)
+            }
+        }
+        return try await body()
+    }
+
+    // MARK: - Memory pressure
+
+    /// Frees non-designated backends and idle cleanup models when macOS reports
+    /// pressure. Deliberately minimal: no UI, no config, no new policy — it just
+    /// runs the reclaim paths that already exist, earlier than they otherwise would.
+    func startMemoryPressureMonitoring() {
+        guard memoryPressureSource == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: DispatchQueue.global(qos: .utility)
+        )
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            Task { await self.handleMemoryPressureEvent() }
+        }
+        memoryPressureSource = source
+        source.resume()
+    }
+
+    private func handleMemoryPressureEvent() async {
+        guard let event = memoryPressureSource?.data else { return }
+        let level = event.contains(.critical) ? "critical" : "warning"
+        let unloadedBackends = await reconcileBackendResidency(reason: "memory pressure (\(level))")
+        let unloadedCleanup = await unloadIdlePostProcessorModels(
+            reason: "under memory pressure (\(level))"
+        )
+        let freed = unloadedBackends + unloadedCleanup
+        if freed.isEmpty {
+            fputs("[coordinator] memory pressure \(level): nothing releasable\n", stderr)
+        } else {
+            fputs("[coordinator] memory pressure \(level): freed \(freed.joined(separator: ", "))\n", stderr)
         }
     }
 
@@ -653,12 +828,17 @@ actor TranscriptionCoordinator {
     /// Deliberately not keyed to the selected backend: switching from a local model
     /// to a hosted one leaves the old weights in memory with nothing else to free
     /// them. Both lazy-load again on the next cleanup call.
-    private func unloadIdlePostProcessorModels() async {
+    /// - Parameter reason: Log suffix. Defaults to the idle-timer phrasing; the
+    ///   memory pressure handler passes its own so the log does not claim a
+    ///   countdown that never elapsed.
+    @discardableResult
+    private func unloadIdlePostProcessorModels(reason: String? = nil) async -> [String] {
         // `idleUnloadTask` is deliberately left alone: a reschedule can land between
         // this task waking and running, and clearing the handle here would orphan
         // that newer timer beyond the reach of cancelIdleUnload().
-        guard isPostProcessorIdle, #available(macOS 15, *) else { return }
-        let minutes = postProcessorIdleUnloadMinutes
+        guard isPostProcessorIdle, #available(macOS 15, *) else { return [] }
+        let context = reason ?? "after \(postProcessorIdleUnloadMinutes) idle min"
+        var unloaded: [String] = []
 
         // `isPostProcessorIdle` is re-read after each await: a dictation can start
         // while this is suspended, and unloading underneath it would cost that one
@@ -667,7 +847,8 @@ actor TranscriptionCoordinator {
            await postProcessor.isLoaded,
            isPostProcessorIdle {
             await postProcessor.shutdown()
-            fputs("[postproc] unloaded local GGUF cleanup model after \(minutes) idle min\n", stderr)
+            unloaded.append("local GGUF cleanup model")
+            fputs("[postproc] unloaded local GGUF cleanup model \(context)\n", stderr)
         }
 
         if PostProcessorIdleUnloadPolicy.canUnloadGemma4Engine(activeTranscriptionBackend: activeBackend),
@@ -676,8 +857,11 @@ actor TranscriptionCoordinator {
            isPostProcessorIdle {
             await gemma4.shutdown()
             _gemma4LiteRTTranscriber = nil
-            fputs("[postproc] unloaded Gemma 4 cleanup engine after \(minutes) idle min\n", stderr)
+            loadedBackends.remove(BackendOption.gemma4E2BLiteRT.backend)
+            unloaded.append("Gemma 4 cleanup engine")
+            fputs("[postproc] unloaded Gemma 4 cleanup engine \(context)\n", stderr)
         }
+        return unloaded
     }
 
     private func currentPostProcessorSnapshot() -> PostProcessorSnapshot {
@@ -811,6 +995,9 @@ actor TranscriptionCoordinator {
 
     func shutdown() async {
         cancelIdleUnload()
+        memoryPressureSource?.cancel()
+        memoryPressureSource = nil
+        loadedBackends.removeAll()
         await fluidTranscriber.shutdown()
         await whisperTranscriber.shutdown()
         await senseVoiceTranscriber.shutdown()
@@ -978,12 +1165,14 @@ actor TranscriptionCoordinator {
         }
         do {
             let transcriber = gemma4LiteRTTranscriber
-            try await transcriber.prepare()
-            let cleanup = try await transcriber.cleanTranscript(
-                result.text,
-                systemPrompt: postProcessorSnapshot.systemPrompt,
-                appContext: appContext
-            )
+            let cleanup = try await withBackendInFlight(BackendOption.gemma4E2BLiteRT.backend) {
+                try await transcriber.prepare()
+                return try await transcriber.cleanTranscript(
+                    result.text,
+                    systemPrompt: postProcessorSnapshot.systemPrompt,
+                    appContext: appContext
+                )
+            }
             let elapsedMs = cleanup.processingTime * 1000
             let trimmed = cleanup.text.trimmingCharacters(in: .whitespacesAndNewlines)
             Qwen3PostProcessorLogging.logVerbose(
@@ -1126,6 +1315,24 @@ actor TranscriptionCoordinator {
         cohereLanguage: CohereTranscribeLanguage,
         indicASRLanguage: IndicASRLanguage,
         vocabulary: AsrVocabularyPrompt? = nil
+    ) async throws -> SpeechTranscriptionResult {
+        try await withBackendInFlight(Self.residencyIdentifier(for: backend)) {
+            try await routeToBackend(
+                url: url,
+                backend: backend,
+                cohereLanguage: cohereLanguage,
+                indicASRLanguage: indicASRLanguage,
+                vocabulary: vocabulary
+            )
+        }
+    }
+
+    private func routeToBackend(
+        url: URL,
+        backend: BackendOption,
+        cohereLanguage: CohereTranscribeLanguage,
+        indicASRLanguage: IndicASRLanguage,
+        vocabulary: AsrVocabularyPrompt?
     ) async throws -> SpeechTranscriptionResult {
         switch backend.backend {
         case "whisper":
