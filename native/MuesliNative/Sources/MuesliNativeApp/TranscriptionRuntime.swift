@@ -166,6 +166,37 @@ actor TranscriptionCoordinator {
         }
     }
 
+    /// Awaited by model deletion so files are not removed while the transcriber
+    /// still maps them. Routed like residency, so Parakeet variants land on the
+    /// shared FluidAudio transcriber.
+    ///
+    /// The shared Whisper and FluidAudio wrappers hold one sibling at a time, so
+    /// deleting a variant the wrapper is not holding must not shut down the
+    /// resident one — the deleted files were never mapped by it.
+    func unloadTranscriber(for option: BackendOption) async {
+        let identifier = Self.residencyIdentifier(for: option)
+        switch identifier {
+        case "whisper":
+            guard await whisperTranscriber.currentLoadedModelName() == option.model else { return }
+        case "fluidaudio":
+            guard let version = await fluidTranscriber.currentLoadedVersion(),
+                  option.model.contains(version == .v2 ? "v2" : "v3") else { return }
+        default:
+            break
+        }
+        await unloadBackend(identifier)
+    }
+
+    /// Awaited by post-processor model deletion: releases the GGUF weights before
+    /// their files disappear. A processor bound to a different model keeps its
+    /// weights — `reconfigure` already released the old ones when it switched.
+    func unloadLocalPostProcessorModel(ifUsing url: URL) async {
+        guard postProcessorModelURL == url else { return }
+        if #available(macOS 15, *), let postProcessor = _qwen3PostProcessor as? Qwen3PostProcessor {
+            await postProcessor.shutdown()
+        }
+    }
+
     @available(macOS 15, *)
     private var qwen3Transcriber: Qwen3AsrTranscriber {
         if _qwen3Transcriber == nil {

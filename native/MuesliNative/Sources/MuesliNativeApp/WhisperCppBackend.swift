@@ -19,6 +19,12 @@ actor WhisperKitTranscriber {
         }
     }
 
+    /// The model currently resident, if any. Model deletion consults this so
+    /// removing one Whisper variant's files never unloads a resident sibling.
+    func currentLoadedModelName() -> String? {
+        whisperKit == nil ? nil : loadedModel
+    }
+
     /// Load a WhisperKit CoreML model. Downloads from HuggingFace if not cached.
     func loadModel(modelName: String, progress: ((Double, String?) -> Void)? = nil) async throws {
         if loadedModel == modelName, whisperKit != nil { return }

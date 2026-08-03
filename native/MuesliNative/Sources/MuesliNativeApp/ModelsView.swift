@@ -1210,11 +1210,17 @@ struct ModelsView: View {
                 controller.setPostProcessorEnabled(false)
             }
         }
+        // Cleared up front so the card cannot offer "Set Active" for a model
+        // whose files are about to disappear.
         downloadedPostProcModels.remove(option.id)
         let plan = ModelDeletionPlan.postProcessor(option)
         Task {
-            // Post-processor deletion has always been best effort.
+            // Release the loaded GGUF before its files disappear; deletion
+            // stays best effort. The re-scan afterwards reconciles anything
+            // that interleaved with the pending deletion (e.g. a re-download).
+            await controller.transcriptionCoordinator.unloadLocalPostProcessorModel(ifUsing: option.modelURL)
             try? await ModelDeletionExecutor.execute(plan)
+            checkDownloadedPostProcModels()
         }
     }
 
@@ -1306,7 +1312,7 @@ struct ModelsView: View {
         let deletionPlan = ModelDeletionPlan.backend(option)
         Task {
             do {
-                await controller.transcriptionCoordinator.unloadNemotron35Transcriber()
+                await controller.transcriptionCoordinator.unloadTranscriber(for: option)
                 try await ModelDeletionExecutor.execute(deletionPlan)
                 downloadedModels.remove(option.model)
                 nemotron35UpdateAvailable = false
@@ -1334,9 +1340,10 @@ struct ModelsView: View {
         let deletionPlan = ModelDeletionPlan.backend(option)
         Task {
             do {
-                if option.backend == "gemma4-litert" {
-                    await controller.transcriptionCoordinator.unloadGemma4LiteRTTranscriber()
-                }
+                // Release the transcriber's file mappings (and RAM) before
+                // deleting the files it maps; shutdown serializes behind any
+                // in-flight transcription on that backend.
+                await controller.transcriptionCoordinator.unloadTranscriber(for: option)
                 try await ModelDeletionExecutor.execute(deletionPlan)
                 _ = downloadedModels.remove(option.model)
             } catch {
