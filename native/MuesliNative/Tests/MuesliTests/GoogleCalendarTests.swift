@@ -48,6 +48,78 @@ struct GoogleCalendarTests {
         #expect(verified == true)
     }
 
+    // MARK: - Authentication retry
+
+    @Test("calendar list forces token refresh after a 401")
+    func calendarListForcesTokenRefreshAfter401() async throws {
+        let oldToken = "old-list-\(UUID().uuidString)"
+        let newToken = "new-list-\(UUID().uuidString)"
+        let auth = StubGoogleCalendarAuth(validToken: oldToken, refreshedToken: newToken)
+        let recorder = GoogleCalendarRequestRecorder()
+
+        GoogleCalendarURLProtocol.register(tokens: [oldToken, newToken]) { request in
+            recorder.append(request)
+            let statusCode = request.value(forHTTPHeaderField: "Authorization") == "Bearer \(oldToken)"
+                ? 401
+                : 200
+            let body = statusCode == 200
+                ? #"{"items":[{"id":"primary","summary":"Primary","primary":true}]}"#.data(using: .utf8)!
+                : Data()
+            return try Self.response(statusCode: statusCode, request: request, body: body)
+        }
+        defer { GoogleCalendarURLProtocol.remove(tokens: [oldToken, newToken]) }
+
+        let client = GoogleCalendarClient(auth: auth, session: Self.stubbedSession())
+        let calendars = try await client.fetchCalendarList()
+
+        #expect(calendars.map(\.id) == ["primary"])
+        #expect(auth.validAccessTokenCallCount == 1)
+        #expect(auth.forceRefreshAccessTokenCallCount == 1)
+        #expect(recorder.authorizationHeaders == ["Bearer \(oldToken)", "Bearer \(newToken)"])
+    }
+
+    @Test("event fetch forces token refresh after a 401")
+    func eventFetchForcesTokenRefreshAfter401() async throws {
+        let oldToken = "old-events-\(UUID().uuidString)"
+        let newToken = "new-events-\(UUID().uuidString)"
+        let auth = StubGoogleCalendarAuth(validToken: oldToken, refreshedToken: newToken)
+        let recorder = GoogleCalendarRequestRecorder()
+
+        GoogleCalendarURLProtocol.register(tokens: [oldToken, newToken]) { request in
+            recorder.append(request)
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/users/me/calendarList") {
+                let body = #"{"items":[{"id":"primary","summary":"Primary","primary":true}]}"#.data(using: .utf8)!
+                return try Self.response(statusCode: 200, request: request, body: body)
+            }
+
+            let statusCode = request.value(forHTTPHeaderField: "Authorization") == "Bearer \(oldToken)"
+                ? 401
+                : 200
+            let body = statusCode == 200
+                ? #"{"items":[],"nextSyncToken":"sync-1"}"#.data(using: .utf8)!
+                : Data()
+            return try Self.response(statusCode: statusCode, request: request, body: body)
+        }
+        defer { GoogleCalendarURLProtocol.remove(tokens: [oldToken, newToken]) }
+
+        let client = GoogleCalendarClient(auth: auth, session: Self.stubbedSession())
+        let result = try await client.fetchUpcomingEvents(
+            daysAhead: 1,
+            now: date("2026-04-10T10:00:00Z")
+        )
+
+        #expect(result.events.isEmpty)
+        #expect(result.wasComplete)
+        #expect(auth.validAccessTokenCallCount == 2)
+        #expect(auth.forceRefreshAccessTokenCallCount == 1)
+        #expect(recorder.authorizationHeaders == [
+            "Bearer \(oldToken)",
+            "Bearer \(oldToken)",
+            "Bearer \(newToken)",
+        ])
+    }
+
     // MARK: - Event JSON parsing
 
     @Test("parses timed event from Google Calendar API response")
@@ -497,4 +569,136 @@ struct GoogleCalendarTests {
         return f.date(from: iso)!
     }
 
+    private static func stubbedSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GoogleCalendarURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+
+    nonisolated private static func response(
+        statusCode: Int,
+        request: URLRequest,
+        body: Data
+    ) throws -> (HTTPURLResponse, Data) {
+        let response = try #require(HTTPURLResponse(
+            url: request.url!,
+            statusCode: statusCode,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        ))
+        return (response, body)
+    }
+
+}
+
+@MainActor
+private final class StubGoogleCalendarAuth: GoogleCalendarAuthenticating {
+    private let validToken: String
+    private let refreshedToken: String
+
+    private(set) var validAccessTokenCallCount = 0
+    private(set) var forceRefreshAccessTokenCallCount = 0
+
+    init(validToken: String, refreshedToken: String) {
+        self.validToken = validToken
+        self.refreshedToken = refreshedToken
+    }
+
+    func validAccessToken() async throws -> String {
+        validAccessTokenCallCount += 1
+        return validToken
+    }
+
+    func forceRefreshAccessToken() async throws -> String {
+        forceRefreshAccessTokenCallCount += 1
+        return refreshedToken
+    }
+}
+
+private final class GoogleCalendarRequestRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests: [URLRequest] = []
+
+    func append(_ request: URLRequest) {
+        lock.lock()
+        requests.append(request)
+        lock.unlock()
+    }
+
+    var authorizationHeaders: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return requests.compactMap { $0.value(forHTTPHeaderField: "Authorization") }
+    }
+}
+
+private final class GoogleCalendarURLProtocol: URLProtocol, @unchecked Sendable {
+    typealias Handler = @Sendable (URLRequest) throws -> (HTTPURLResponse, Data)
+
+    private static let registry = HandlerRegistry()
+
+    static func register(tokens: [String], handler: @escaping Handler) {
+        registry.register(tokens: tokens, handler: handler)
+    }
+
+    static func remove(tokens: [String]) {
+        registry.remove(tokens: tokens)
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "www.googleapis.com"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard
+            let authorization = request.value(forHTTPHeaderField: "Authorization"),
+            authorization.hasPrefix("Bearer "),
+            let handler = Self.registry.handler(for: String(authorization.dropFirst("Bearer ".count)))
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.userAuthenticationRequired))
+            return
+        }
+
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+
+    private final class HandlerRegistry: @unchecked Sendable {
+        private let lock = NSLock()
+        private var handlers: [String: Handler] = [:]
+
+        func register(tokens: [String], handler: @escaping Handler) {
+            lock.lock()
+            for token in tokens {
+                handlers[token] = handler
+            }
+            lock.unlock()
+        }
+
+        func remove(tokens: [String]) {
+            lock.lock()
+            for token in tokens {
+                handlers.removeValue(forKey: token)
+            }
+            lock.unlock()
+        }
+
+        func handler(for token: String) -> Handler? {
+            lock.lock()
+            defer { lock.unlock() }
+            return handlers[token]
+        }
+    }
 }

@@ -86,7 +86,8 @@ enum GoogleCalendarClientError: Error, LocalizedError {
 
 @MainActor
 final class GoogleCalendarClient {
-    private let auth = GoogleCalendarAuthManager.shared
+    private let auth: any GoogleCalendarAuthenticating
+    private let session: URLSession
 
     private static let baseURL = "https://www.googleapis.com/calendar/v3"
     private static let primaryCalendarID = "primary"
@@ -136,6 +137,16 @@ final class GoogleCalendarClient {
     /// so calendars added in the Google web UI get picked up automatically.
     private var cachedCalendarList: [GoogleCalendarSummary] = []
     private var upcomingEventsFetchGeneration = 0
+
+    init() {
+        auth = GoogleCalendarAuthManager.shared
+        session = .shared
+    }
+
+    init(auth: any GoogleCalendarAuthenticating, session: URLSession) {
+        self.auth = auth
+        self.session = session
+    }
 
     /// Fetch upcoming events from every Google calendar the user can read,
     /// minus any in `disabledCalendarIDs`. Refreshes the calendar list on each
@@ -286,7 +297,7 @@ final class GoogleCalendarClient {
             var request = URLRequest(url: components.url!)
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
 
             if statusCode == 410 {
@@ -309,7 +320,7 @@ final class GoogleCalendarClient {
 
             if statusCode == 401 && !tokenRetried {
                 tokenRetried = true
-                token = try await auth.validAccessToken()
+                token = try await auth.forceRefreshAccessToken()
                 continue
             }
 
@@ -383,12 +394,12 @@ final class GoogleCalendarClient {
             var request = URLRequest(url: components.url!)
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
 
             if statusCode == 401 && !tokenRetried {
                 tokenRetried = true
-                token = try await auth.validAccessToken()
+                token = try await auth.forceRefreshAccessToken()
                 continue
             }
 
