@@ -9,9 +9,9 @@ struct MeetingRecordingWriterTests {
     @Test("streaming writer merges mic and system samples incrementally")
     func writerMergesIncrementally() throws {
         let writer = try MeetingRecordingWriter()
-        writer.appendMic([1000, 2000, 3000, 4000])
-        writer.appendSystem([3000, -2000])
-        writer.appendSystem([500, 1500])
+        writer.appendMic([1000, 2000, 3000, 4000], atSampleOffset: 0)
+        writer.appendSystem([3000, -2000], atSampleOffset: 0)
+        writer.appendSystem([500, 1500], atSampleOffset: 2)
 
         let tempURL = try #require(writer.stop())
         let samples = try readMonoPCM16WAVSamples(from: tempURL)
@@ -22,7 +22,7 @@ struct MeetingRecordingWriterTests {
     @Test("streaming writer flushes single-track tail on stop")
     func writerFlushesSingleTrackTail() throws {
         let writer = try MeetingRecordingWriter()
-        writer.appendMic([1200, -800, 400])
+        writer.appendMic([1200, -800, 400], atSampleOffset: 0)
 
         let tempURL = try #require(writer.stop())
         let samples = try readMonoPCM16WAVSamples(from: tempURL)
@@ -33,9 +33,9 @@ struct MeetingRecordingWriterTests {
     @Test("pause boundary prevents unmatched samples from mixing across pause")
     func pauseBoundaryFlushesPendingSamples() throws {
         let writer = try MeetingRecordingWriter()
-        writer.appendMic([1000, 3000])
+        writer.appendMic([1000, 3000], atSampleOffset: 0)
         writer.markPauseBoundary()
-        writer.appendSystem([5000, 7000])
+        writer.appendSystem([5000, 7000], atSampleOffset: 2)
 
         let tempURL = try #require(writer.stop())
         let samples = try readMonoPCM16WAVSamples(from: tempURL)
@@ -43,29 +43,55 @@ struct MeetingRecordingWriterTests {
         #expect(samples == [1000, 3000, 5000, 7000])
     }
 
-    @Test("a stalled stream drains the other side's surplus instead of buffering it")
-    func writerBoundsOneSidedBacklog() throws {
+    @Test("a stream resuming after the bounded stall window keeps its true offset")
+    func resumedStreamDoesNotMixAgainstOldBacklog() throws {
         let writer = try MeetingRecordingWriter()
-        // 4s of mic against a dead system stream: 1s past the 3s imbalance bound.
-        writer.appendMic([Int16](repeating: 1000, count: 64_000))
-        writer.appendSystem([3000, 3000])
+        // Slightly over 4s of mic against a stalled system stream drains more
+        // than 1s of mic-only audio while retaining at most a 3s window.
+        writer.appendMic([Int16](repeating: 1000, count: 64_002), atSampleOffset: 0)
+        // The resumed system callback belongs at 4s, where it overlaps the
+        // current mic samples, not at the 1s write cursor left by the drain.
+        writer.appendSystem([3000, 3000], atSampleOffset: 64_000)
 
         let tempURL = try #require(writer.stop())
         let samples = try readMonoPCM16WAVSamples(from: tempURL)
 
-        #expect(samples.count == 64_000)
-        // The first second was written mic-only, so the system pair mixes at 1s
-        // rather than being back-dated onto the start of the meeting.
+        #expect(samples.count == 64_002)
         #expect(samples[15_999] == 1000)
-        #expect(samples[16_000] == 2000)
-        #expect(samples[16_001] == 2000)
-        #expect(samples[16_002] == 1000)
+        #expect(samples[16_000] == 1000)
+        #expect(samples[63_999] == 1000)
+        #expect(samples[64_000] == 2000)
+        #expect(samples[64_001] == 2000)
+    }
+
+    @Test("timeline excludes paused wall time from retained recording offsets")
+    func timelineExcludesPausedWallTime() {
+        let second: UInt64 = 1_000_000_000
+        var timeline = MeetingRecordingTimeline()
+        timeline.start(at: second)
+
+        let firstStart = timeline.sampleStartOffset(
+            for: .mic,
+            sampleCount: 16_000,
+            callbackUptimeNanoseconds: 2 * second
+        )
+        timeline.pause(at: 2 * second)
+        timeline.resume(at: 12 * second)
+        let resumedStart = timeline.sampleStartOffset(
+            for: .mic,
+            sampleCount: 16_000,
+            callbackUptimeNanoseconds: 13 * second
+        )
+
+        #expect(firstStart == 0)
+        #expect(resumedStart == 16_000)
+        #expect(timeline.sampleOffset(at: 13 * second) == 32_000)
     }
 
     @Test("persistTemporaryRecording moves the temp wav when WAV is selected")
     func persistTemporaryRecordingMovesWAVFile() async throws {
         let writer = try MeetingRecordingWriter()
-        writer.appendSystem([1200, -800, 400])
+        writer.appendSystem([1200, -800, 400], atSampleOffset: 0)
         let tempURL = try #require(writer.stop())
         let supportDirectory = makeTemporaryDirectory()
         let startedAt = Date(timeIntervalSince1970: 1_711_000_000)
@@ -87,7 +113,7 @@ struct MeetingRecordingWriterTests {
     @Test("persistTemporaryRecording transcodes to M4A by default")
     func persistTemporaryRecordingTranscodesToM4AByDefault() async throws {
         let writer = try MeetingRecordingWriter()
-        writer.appendSystem(Array(repeating: Int16(1200), count: 16_000))
+        writer.appendSystem(Array(repeating: Int16(1200), count: 16_000), atSampleOffset: 0)
         let tempURL = try #require(writer.stop())
         let supportDirectory = makeTemporaryDirectory()
         let startedAt = Date(timeIntervalSince1970: 1_711_000_000)

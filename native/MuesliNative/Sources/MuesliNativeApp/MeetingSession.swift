@@ -177,6 +177,9 @@ final class MeetingSession {
     private var rawMicChunkRecorder: PCMChunkRecorder?
     private var retainedRecordingWriter: MeetingRecordingWriter?
     private var retainedRecordingWriterError: Error?
+    /// Converts callback delivery times to retained-recording sample offsets.
+    /// Confined to `chunkRotationQueue` with the writer itself.
+    private var retainedRecordingTimeline = MeetingRecordingTimeline()
     /// VAD controller for speech-boundary chunk rotation
     private var vadController: StreamingVadController?
     private var systemVadController: StreamingVadController?
@@ -279,6 +282,7 @@ final class MeetingSession {
     func start() async throws {
         let vadManager = await transcriptionCoordinator.getVadManager()
         let now = Date()
+        let recordingStartUptime = DispatchTime.now().uptimeNanoseconds
         diagnostics = MeetingSessionDiagnostics(title: title, startedAt: now)
 
         // AEC must be loaded before audio pipeline starts (streaming mode)
@@ -286,6 +290,7 @@ final class MeetingSession {
 
         chunkRotationQueue.sync {
             startTime = now
+            retainedRecordingTimeline.start(at: recordingStartUptime)
             chunkTimingTracker.start()
             systemChunkTimingTracker.start()
             isRecording = true
@@ -316,6 +321,7 @@ final class MeetingSession {
                 isRecording = false
                 setPausedStateOnQueue(false)
                 startTime = nil
+                retainedRecordingTimeline.reset()
                 chunkTimingTracker.discard()
                 systemChunkTimingTracker.discard()
             }
@@ -479,11 +485,13 @@ final class MeetingSession {
     }
 
     func pause() {
+        let pauseUptime = DispatchTime.now().uptimeNanoseconds
         let shouldPause = chunkRotationQueue.sync { () -> Bool in
             guard isRecording, !isPaused else { return false }
             appendFlushedStreamingMicOnQueue()
             rotateChunkOnQueue()
             rotateSystemChunkOnQueue()
+            retainedRecordingTimeline.pause(at: pauseUptime)
             retainedRecordingWriter?.markPauseBoundary()
             neuralAec.resetForStreaming()
             setPausedStateOnQueue(true)
@@ -499,8 +507,10 @@ final class MeetingSession {
     }
 
     func resume() {
+        let resumeUptime = DispatchTime.now().uptimeNanoseconds
         let shouldResume = chunkRotationQueue.sync { () -> Bool in
             guard isRecording, isPaused else { return false }
+            retainedRecordingTimeline.resume(at: resumeUptime)
             setPausedStateOnQueue(false)
             resumePartialSessions()
             return true
@@ -1112,13 +1122,19 @@ final class MeetingSession {
 
     private func enqueueRealtimeMicSamples(_ rawSamples: [Int16]) {
         guard !rawSamples.isEmpty else { return }
+        let callbackUptime = DispatchTime.now().uptimeNanoseconds
 
         chunkRotationQueue.async { [weak self] in
             guard let self, self.isRecording, !self.isPaused else { return }
 
             let healthSnapshot = self.micHealthTracker.noteRawMicSamples(rawSamples)
             self.onMicHealthChanged?(healthSnapshot)
-            self.retainedRecordingWriter?.appendMic(rawSamples)
+            let recordingOffset = self.retainedRecordingTimeline.sampleStartOffset(
+                for: .mic,
+                sampleCount: rawSamples.count,
+                callbackUptimeNanoseconds: callbackUptime
+            )
+            self.retainedRecordingWriter?.appendMic(rawSamples, atSampleOffset: recordingOffset)
 
             let floatSamples = rawSamples.map { Float($0) / 32767.0 }
 
@@ -1137,6 +1153,7 @@ final class MeetingSession {
 
     private func enqueueRealtimeSystemSamples(_ samples: [Int16]) {
         guard !samples.isEmpty else { return }
+        let callbackUptime = DispatchTime.now().uptimeNanoseconds
 
         chunkRotationQueue.async { [weak self] in
             guard let self, self.isRecording, !self.isPaused else { return }
@@ -1145,7 +1162,12 @@ final class MeetingSession {
             let healthSnapshot = self.micHealthTracker.noteSystemSamples(samples, now: now)
             let failoverSnapshot = self.applyMicFailoverIfNeededOnQueue(healthSnapshot, now: now)
             self.onMicHealthChanged?(failoverSnapshot ?? healthSnapshot)
-            self.retainedRecordingWriter?.appendSystem(samples)
+            let recordingOffset = self.retainedRecordingTimeline.sampleStartOffset(
+                for: .system,
+                sampleCount: samples.count,
+                callbackUptimeNanoseconds: callbackUptime
+            )
+            self.retainedRecordingWriter?.appendSystem(samples, atSampleOffset: recordingOffset)
             self.systemChunkRecorder?.append(samples)
             self.systemChunkTimingTracker.append(sampleCount: samples.count)
 

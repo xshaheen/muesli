@@ -29,6 +29,94 @@ enum MeetingRecordingFileFormat: String, CaseIterable, Sendable {
     }
 }
 
+/// Maps callback delivery times onto the gapless retained-recording timeline.
+/// Mutated only on `MeetingSession.chunkRotationQueue`; callback timestamps are
+/// captured before dispatch so queue latency cannot move audio later in time.
+struct MeetingRecordingTimeline {
+    enum Source {
+        case mic
+        case system
+    }
+
+    private static let sampleRate = 16_000.0
+    private static let nanosecondsPerSecond = 1_000_000_000.0
+
+    private var startedAt: UInt64?
+    private var pausedAt: UInt64?
+    private var excludedPauseNanoseconds: UInt64 = 0
+    private var micEndOffset = 0
+    private var systemEndOffset = 0
+
+    mutating func start(at uptimeNanoseconds: UInt64) {
+        startedAt = uptimeNanoseconds
+        pausedAt = nil
+        excludedPauseNanoseconds = 0
+        micEndOffset = 0
+        systemEndOffset = 0
+    }
+
+    mutating func pause(at uptimeNanoseconds: UInt64) {
+        guard startedAt != nil, pausedAt == nil else { return }
+        pausedAt = uptimeNanoseconds
+        // Both sources resume from the same boundary. This prevents an
+        // unmatched pre-pause tail from being paired with post-resume audio.
+        let boundaryOffset = max(
+            sampleOffset(at: uptimeNanoseconds),
+            max(micEndOffset, systemEndOffset)
+        )
+        micEndOffset = boundaryOffset
+        systemEndOffset = boundaryOffset
+    }
+
+    mutating func resume(at uptimeNanoseconds: UInt64) {
+        guard let pausedAt else { return }
+        if uptimeNanoseconds > pausedAt {
+            excludedPauseNanoseconds += uptimeNanoseconds - pausedAt
+        }
+        self.pausedAt = nil
+    }
+
+    mutating func reset() {
+        self = MeetingRecordingTimeline()
+    }
+
+    mutating func sampleStartOffset(
+        for source: Source,
+        sampleCount: Int,
+        callbackUptimeNanoseconds: UInt64
+    ) -> Int {
+        guard sampleCount > 0 else { return sampleOffset(at: callbackUptimeNanoseconds) }
+
+        let callbackEndOffset = sampleOffset(at: callbackUptimeNanoseconds)
+        let proposedStart = max(callbackEndOffset - sampleCount, 0)
+        let previousEnd = source == .mic ? micEndOffset : systemEndOffset
+        // Preserve every delivered sample when callback scheduling jitter makes
+        // two adjacent buffers' wall-clock ranges overlap. Positive gaps remain
+        // explicit, which is what keeps a stream resuming after a stall aligned.
+        let resolvedStart = max(proposedStart, previousEnd)
+        let resolvedEnd = resolvedStart + sampleCount
+        if source == .mic {
+            micEndOffset = resolvedEnd
+        } else {
+            systemEndOffset = resolvedEnd
+        }
+        return resolvedStart
+    }
+
+    func sampleOffset(at uptimeNanoseconds: UInt64) -> Int {
+        guard let startedAt else { return 0 }
+        let effectiveNow = pausedAt.map { min(uptimeNanoseconds, $0) } ?? uptimeNanoseconds
+        guard effectiveNow > startedAt else { return 0 }
+        let elapsedNanoseconds = effectiveNow - startedAt
+        let activeNanoseconds = elapsedNanoseconds > excludedPauseNanoseconds
+            ? elapsedNanoseconds - excludedPauseNanoseconds
+            : 0
+        return Int(
+            (Double(activeNanoseconds) * Self.sampleRate / Self.nanosecondsPerSecond).rounded(.down)
+        )
+    }
+}
+
 final class MeetingRecordingWriter {
     private final class ExportSessionBox: @unchecked Sendable {
         let session: AVAssetExportSession
@@ -38,12 +126,25 @@ final class MeetingRecordingWriter {
         }
     }
 
+    private struct TimedSamples {
+        let startOffset: Int
+        let samples: [Int16]
+
+        var endOffset: Int { startOffset + samples.count }
+    }
+
+    private struct SourceState {
+        var observedThrough = 0
+        var segments: [TimedSamples] = []
+    }
+
     private struct State {
         var fileHandle: FileHandle?
         var fileURL: URL?
         var bytesWritten: Int = 0
-        var pendingMic: [Int16] = []
-        var pendingSystem: [Int16] = []
+        var writeOffset = 0
+        var mic = SourceState()
+        var system = SourceState()
     }
 
     private let lock = OSAllocatedUnfairLock(initialState: State())
@@ -73,12 +174,12 @@ final class MeetingRecordingWriter {
         }
     }
 
-    func appendMic(_ samples: [Int16]) {
-        append(samples, toMic: true)
+    func appendMic(_ samples: [Int16], atSampleOffset sampleOffset: Int) {
+        append(samples, atSampleOffset: sampleOffset, toMic: true)
     }
 
-    func appendSystem(_ samples: [Int16]) {
-        append(samples, toMic: false)
+    func appendSystem(_ samples: [Int16], atSampleOffset sampleOffset: Int) {
+        append(samples, atSampleOffset: sampleOffset, toMic: false)
     }
 
     func stop() -> URL? {
@@ -154,43 +255,77 @@ final class MeetingRecordingWriter {
         return destinationURL
     }
 
-    private func append(_ samples: [Int16], toMic: Bool) {
+    private func append(_ samples: [Int16], atSampleOffset sampleOffset: Int, toMic: Bool) {
         guard !samples.isEmpty else { return }
         lock.withLock { state in
+            let writeOffset = state.writeOffset
             if toMic {
-                state.pendingMic.append(contentsOf: samples)
+                append(samples, atSampleOffset: sampleOffset, to: &state.mic, writeOffset: writeOffset)
             } else {
-                state.pendingSystem.append(contentsOf: samples)
+                append(samples, atSampleOffset: sampleOffset, to: &state.system, writeOffset: writeOffset)
             }
             writeMixedSamples(state: &state, flushAll: false)
         }
     }
 
-    private func writeMixedSamples(state: inout State, flushAll: Bool) {
-        let pendingCount = max(state.pendingMic.count, state.pendingSystem.count)
-        let matchedCount = min(state.pendingMic.count, state.pendingSystem.count)
-        let availableCount: Int
-        if flushAll {
-            availableCount = pendingCount
-        } else if pendingCount - matchedCount > Self.maxPendingImbalance {
-            // Drain the surplus against silence so the stalled side stays
-            // time-aligned when (or if) it comes back.
-            availableCount = pendingCount - Self.maxPendingImbalance
-        } else {
-            availableCount = matchedCount
+    private func append(
+        _ samples: [Int16],
+        atSampleOffset sampleOffset: Int,
+        to source: inout SourceState,
+        writeOffset: Int
+    ) {
+        let requestedStart = max(sampleOffset, 0)
+        let requestedEnd = requestedStart + samples.count
+        source.observedThrough = max(source.observedThrough, requestedEnd)
+
+        // The file is written incrementally and cannot be rewritten. A callback
+        // delayed past the bounded retention window may overlap data already on
+        // disk, so retain only its still-writable tail.
+        let retainedStart = max(requestedStart, writeOffset)
+        guard retainedStart < requestedEnd else { return }
+        var retainedSamples = Array(samples.dropFirst(retainedStart - requestedStart))
+
+        // Capture callbacks for a source are ordered. Trim any small timestamp
+        // overlap rather than duplicating samples when callback scheduling
+        // jitter puts the next buffer slightly before the previous buffer's end.
+        if let previous = source.segments.last, retainedStart < previous.endOffset {
+            let overlap = min(previous.endOffset - retainedStart, retainedSamples.count)
+            retainedSamples.removeFirst(overlap)
         }
-        guard availableCount > 0 else { return }
+        guard !retainedSamples.isEmpty else { return }
 
-        let mixedSamples = Self.mix(
-            mic: Array(state.pendingMic.prefix(availableCount)),
-            system: Array(state.pendingSystem.prefix(availableCount))
-        )
-        state.pendingMic.removeFirst(min(availableCount, state.pendingMic.count))
-        state.pendingSystem.removeFirst(min(availableCount, state.pendingSystem.count))
+        let adjustedStart = requestedEnd - retainedSamples.count
+        source.segments.append(TimedSamples(startOffset: adjustedStart, samples: retainedSamples))
+    }
 
-        let pcmData = mixedSamples.withUnsafeBufferPointer { Data(buffer: $0) }
-        state.fileHandle?.write(pcmData)
-        state.bytesWritten += pcmData.count
+    private func writeMixedSamples(state: inout State, flushAll: Bool) {
+        let furthestObserved = max(state.mic.observedThrough, state.system.observedThrough)
+        let availableThrough: Int
+        if flushAll {
+            availableThrough = furthestObserved
+        } else {
+            let bothSourcesObservedThrough = min(state.mic.observedThrough, state.system.observedThrough)
+            let boundedSingleSourceThrough = furthestObserved - Self.maxPendingImbalance
+            availableThrough = max(bothSourcesObservedThrough, boundedSingleSourceThrough)
+        }
+        guard availableThrough > state.writeOffset else { return }
+
+        while state.writeOffset < availableThrough {
+            let blockEnd = min(availableThrough, state.writeOffset + 4_096)
+            let mixedSamples = Self.mix(
+                from: state.writeOffset,
+                through: blockEnd,
+                mic: state.mic.segments,
+                system: state.system.segments
+            )
+            let pcmData = mixedSamples.withUnsafeBufferPointer { Data(buffer: $0) }
+            state.fileHandle?.write(pcmData)
+            state.bytesWritten += pcmData.count
+            state.writeOffset = blockEnd
+        }
+
+        state.mic.segments.removeAll { $0.endOffset <= state.writeOffset }
+        state.system.segments.removeAll { $0.endOffset <= state.writeOffset }
     }
 
     private static func fileNamePrefix(for date: Date, title: String) -> String {
@@ -211,22 +346,35 @@ final class MeetingRecordingWriter {
         return slug.isEmpty ? timestamp : "\(timestamp)-\(slug)"
     }
 
-    private static func mix(mic: [Int16], system: [Int16]) -> [Int16] {
-        let maxCount = max(mic.count, system.count)
-        var output = [Int16]()
-        output.reserveCapacity(maxCount)
+    private static func mix(
+        from startOffset: Int,
+        through endOffset: Int,
+        mic: [TimedSamples],
+        system: [TimedSamples]
+    ) -> [Int16] {
+        let count = endOffset - startOffset
+        var sums = [Int](repeating: 0, count: count)
+        var contributors = [UInt8](repeating: 0, count: count)
 
-        for index in 0..<maxCount {
-            let hasMic = index < mic.count
-            let hasSystem = index < system.count
-            let micValue = hasMic ? Int(mic[index]) : 0
-            let systemValue = hasSystem ? Int(system[index]) : 0
-            let contributors = (hasMic ? 1 : 0) + (hasSystem ? 1 : 0)
-            let averaged = contributors == 0 ? 0 : (micValue + systemValue) / contributors
-            output.append(Int16(clamping: averaged))
+        for segments in [mic, system] {
+            for segment in segments {
+                let overlapStart = max(startOffset, segment.startOffset)
+                let overlapEnd = min(endOffset, segment.endOffset)
+                guard overlapStart < overlapEnd else { continue }
+
+                for offset in overlapStart..<overlapEnd {
+                    let outputIndex = offset - startOffset
+                    let sourceIndex = offset - segment.startOffset
+                    sums[outputIndex] += Int(segment.samples[sourceIndex])
+                    contributors[outputIndex] += 1
+                }
+            }
         }
 
-        return output
+        return sums.indices.map { index in
+            guard contributors[index] > 0 else { return 0 }
+            return Int16(clamping: sums[index] / Int(contributors[index]))
+        }
     }
 
     private static func transcodeWAVToM4AAsync(sourceURL: URL, destinationURL: URL) async throws {
