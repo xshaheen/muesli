@@ -91,6 +91,24 @@ final class MeetingChunkCollector {
     }
 }
 
+enum MeetingStreamingTranscriptResolver {
+    static func resolve(
+        durableSegments: [SpeechSegment],
+        authoritativeStreamingText: String?,
+        prefersStreamingTranscript: Bool,
+        start: TimeInterval,
+        end: TimeInterval
+    ) -> [SpeechSegment] {
+        guard (durableSegments.isEmpty || prefersStreamingTranscript),
+              let authoritativeStreamingText else { return durableSegments }
+        return [SpeechSegment(
+            start: start,
+            end: max(end, start + 0.1),
+            text: authoritativeStreamingText
+        )]
+    }
+}
+
 struct MeetingSessionResult {
     let title: String
     let originalTitle: String
@@ -455,9 +473,13 @@ final class MeetingSession {
     ) -> [SpeechSegment] {
         let prefersStreamingTranscript = config.enableLiveStreamingPartials
             && config.resolvedMeetingLiveCaptionBackend == .nemotron35
-        guard (segments.isEmpty || prefersStreamingTranscript),
-              let text = partialSession?.pendingSegmentText(id: segmentID) else { return segments }
-        return [SpeechSegment(start: start, end: max(end, start + 0.1), text: text)]
+        return MeetingStreamingTranscriptResolver.resolve(
+            durableSegments: segments,
+            authoritativeStreamingText: partialSession?.pendingSegmentText(id: segmentID),
+            prefersStreamingTranscript: prefersStreamingTranscript,
+            start: start,
+            end: end
+        )
     }
 
     private func suspendPartialSessions() {

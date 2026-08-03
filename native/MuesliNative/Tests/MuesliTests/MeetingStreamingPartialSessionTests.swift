@@ -339,6 +339,82 @@ struct MeetingStreamingPartialSessionTests {
         #expect(await waitUntil { collector.latest == "c4 c5 c6" })
         #expect(engine.processCalls == MeetingStreamingPartialSession.maxQueuedChunks)
     }
+
+    @Test("backpressure makes only the affected segment non-authoritative")
+    func backpressureInvalidatesAffectedSegmentAndRecovers() async throws {
+        let engine = EchoPartialEngine()
+        let session = MeetingStreamingPartialSession(engine: engine, label: "You")
+        let collector = PartialCollector()
+        session.onPartialUpdate = { collector.record($0) }
+        await session.connect()
+
+        session.enqueue(samples(chunkCount: 7))
+        #expect(await waitUntil { collector.latest == "c0 c0 c0" })
+
+        let discontinuousSegmentID = UUID()
+        session.markSegmentBoundary(id: discontinuousSegmentID)
+        #expect(session.pendingSegmentText(id: discontinuousSegmentID) == nil)
+        // Lossy text remains useful for display even though it cannot replace durable ASR.
+        #expect(collector.latest == "c0 c0 c0")
+        session.commitSegment(id: discontinuousSegmentID)
+
+        session.enqueue(samples(chunkCount: 1, marker: 1))
+        #expect(await waitUntil { collector.latest == " c1" })
+        let continuousSegmentID = UUID()
+        session.markSegmentBoundary(id: continuousSegmentID)
+        #expect(session.pendingSegmentText(id: continuousSegmentID) == "c1")
+    }
+
+    @Test("a discontinuous streaming segment retains nonempty durable ASR")
+    func discontinuousSegmentRetainsDurableASR() {
+        let durable = [SpeechSegment(start: 3, end: 4, text: "complete durable text")]
+
+        let resolved = MeetingStreamingTranscriptResolver.resolve(
+            durableSegments: durable,
+            authoritativeStreamingText: nil,
+            prefersStreamingTranscript: true,
+            start: 3,
+            end: 4
+        )
+
+        #expect(resolved.count == 1)
+        #expect(resolved.first?.start == 3)
+        #expect(resolved.first?.end == 4)
+        #expect(resolved.first?.text == "complete durable text")
+    }
+
+    @Test("an empty durable result stays empty when streaming audio was discontinuous")
+    func discontinuousSegmentDoesNotInventEmptyDurableFallback() {
+        let resolved = MeetingStreamingTranscriptResolver.resolve(
+            durableSegments: [],
+            authoritativeStreamingText: nil,
+            prefersStreamingTranscript: true,
+            start: 3,
+            end: 4
+        )
+
+        #expect(resolved.isEmpty)
+    }
+
+    @Test("finish rejects a tail with post-boundary dropped audio")
+    func finishRejectsDiscontinuousTail() async throws {
+        let engine = EchoPartialEngine()
+        let session = MeetingStreamingPartialSession(engine: engine, label: "You")
+        let collector = PartialCollector()
+        session.onPartialUpdate = { collector.record($0) }
+        await session.connect()
+
+        session.enqueue(samples(chunkCount: 1))
+        #expect(await waitUntil { collector.latest == "c0" })
+        let completedSegmentID = UUID()
+        session.markSegmentBoundary(id: completedSegmentID)
+        session.commitSegment(id: completedSegmentID)
+
+        session.enqueue(samples(chunkCount: 7, marker: 2))
+        #expect(await waitUntil { engine.processCalls == 4 })
+
+        #expect(await session.finish() == nil)
+    }
 }
 
 private final class ScriptedPartialEngine: MeetingStreamingPartialEngine, @unchecked Sendable {

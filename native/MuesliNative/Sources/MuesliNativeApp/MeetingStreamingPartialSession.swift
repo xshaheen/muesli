@@ -291,16 +291,30 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
     private struct PendingSegment {
         let id: UUID
         let prefixLength: Int
+        let sequence: UInt64
         var isCommitted = false
+    }
+
+    private struct BufferedSegmentRange {
+        var sampleCount: Int
+        let sequence: UInt64
+    }
+
+    private struct QueuedChunk {
+        let samples: [Float]
+        let segmentSequences: Set<UInt64>
     }
 
     private struct State {
         var sampleBuffer: [Float] = []
-        var chunkQueue: [[Float]] = []
+        var sampleBufferRanges: [BufferedSegmentRange] = []
+        var chunkQueue: [QueuedChunk] = []
         var isDraining = false
         var engineText = ""
         var committedPrefixLength = 0
         var pendingSegments: [PendingSegment] = []
+        var currentSegmentSequence: UInt64 = 0
+        var discontinuousSegmentSequences: Set<UInt64> = []
         var isStopped = false
         var isSuspended = false
         var didFail = false
@@ -309,6 +323,7 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
         var isPublicationScheduled = false
         var lifecycleRevision: UInt64 = 0
         var activeInferenceRevision: UInt64?
+        var activeInferenceSegmentSequences: Set<UInt64> = []
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
 
@@ -330,12 +345,31 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
         let shouldStartDrain = state.withLock { s -> Bool in
             guard !s.isStopped, !s.isSuspended, !s.didFail else { return false }
             s.sampleBuffer.append(contentsOf: samples)
+            Self.appendBufferedRange(
+                sampleCount: samples.count,
+                sequence: s.currentSegmentSequence,
+                to: &s.sampleBufferRanges
+            )
             while s.sampleBuffer.count >= Self.feedSamples {
-                s.chunkQueue.append(Array(s.sampleBuffer.prefix(Self.feedSamples)))
+                let segmentSequences = Self.consumeBufferedRanges(
+                    sampleCount: Self.feedSamples,
+                    from: &s.sampleBufferRanges
+                )
+                s.chunkQueue.append(QueuedChunk(
+                    samples: Array(s.sampleBuffer.prefix(Self.feedSamples)),
+                    segmentSequences: segmentSequences
+                ))
                 s.sampleBuffer.removeFirst(Self.feedSamples)
             }
             if s.chunkQueue.count > Self.maxQueuedChunks {
-                s.chunkQueue.removeFirst(s.chunkQueue.count - Self.maxQueuedChunks)
+                let droppedCount = s.chunkQueue.count - Self.maxQueuedChunks
+                for chunk in s.chunkQueue.prefix(droppedCount) {
+                    for sequence in chunk.segmentSequences where sequence == s.currentSegmentSequence
+                        || s.pendingSegments.contains(where: { $0.sequence == sequence }) {
+                        s.discontinuousSegmentSequences.insert(sequence)
+                    }
+                }
+                s.chunkQueue.removeFirst(droppedCount)
             }
             guard !s.chunkQueue.isEmpty, !s.isDraining else { return false }
             s.isDraining = true
@@ -350,7 +384,12 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
 
     func markSegmentBoundary(id: UUID) {
         state.withLock { s in
-            s.pendingSegments.append(PendingSegment(id: id, prefixLength: s.engineText.count))
+            s.pendingSegments.append(PendingSegment(
+                id: id,
+                prefixLength: s.engineText.count,
+                sequence: s.currentSegmentSequence
+            ))
+            s.currentSegmentSequence &+= 1
         }
     }
 
@@ -359,6 +398,10 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
             guard !s.isStopped, !s.didFail,
                   let segmentIndex = s.pendingSegments.firstIndex(where: { $0.id == id }) else { return nil }
             let segment = s.pendingSegments[segmentIndex]
+            guard !s.discontinuousSegmentSequences.contains(segment.sequence) else { return nil }
+            guard !s.sampleBufferRanges.contains(where: { $0.sequence == segment.sequence }),
+                  !s.chunkQueue.contains(where: { $0.segmentSequences.contains(segment.sequence) }),
+                  !s.activeInferenceSegmentSequences.contains(segment.sequence) else { return nil }
             let previousPrefixLength = segmentIndex > 0
                 ? s.pendingSegments[segmentIndex - 1].prefixLength
                 : s.committedPrefixLength
@@ -384,6 +427,7 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
                     s.committedPrefixLength,
                     min(first.prefixLength, s.engineText.count)
                 )
+                s.discontinuousSegmentSequences.remove(first.sequence)
                 s.pendingSegments.removeFirst()
                 didAdvance = true
             }
@@ -403,9 +447,12 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
             s.isSuspended = true
             s.lifecycleRevision &+= 1
             s.sampleBuffer.removeAll(keepingCapacity: true)
+            s.sampleBufferRanges.removeAll(keepingCapacity: true)
             s.chunkQueue.removeAll(keepingCapacity: true)
             s.committedPrefixLength = s.engineText.count
             s.pendingSegments.removeAll(keepingCapacity: true)
+            s.currentSegmentSequence &+= 1
+            s.discontinuousSegmentSequences.removeAll(keepingCapacity: true)
         }
         publishImmediately("")
     }
@@ -422,8 +469,20 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
         let shouldDrain = state.withLock { s -> Bool in
             guard !s.isStopped, !s.isSuspended, !s.didFail else { return false }
             if !s.sampleBuffer.isEmpty {
-                s.sampleBuffer.append(contentsOf: repeatElement(0, count: Self.feedSamples - s.sampleBuffer.count))
-                s.chunkQueue.append(s.sampleBuffer)
+                let paddingCount = Self.feedSamples - s.sampleBuffer.count
+                s.sampleBuffer.append(contentsOf: repeatElement(0, count: paddingCount))
+                Self.appendBufferedRange(
+                    sampleCount: paddingCount,
+                    sequence: s.currentSegmentSequence,
+                    to: &s.sampleBufferRanges
+                )
+                s.chunkQueue.append(QueuedChunk(
+                    samples: s.sampleBuffer,
+                    segmentSequences: Self.consumeBufferedRanges(
+                        sampleCount: s.sampleBuffer.count,
+                        from: &s.sampleBufferRanges
+                    )
+                ))
                 s.sampleBuffer.removeAll(keepingCapacity: true)
             }
             guard !s.chunkQueue.isEmpty, !s.isDraining else { return false }
@@ -464,6 +523,7 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
             }
         }
         return state.withLock { s in
+            guard !s.discontinuousSegmentSequences.contains(s.currentSegmentSequence) else { return nil }
             let text = visibleTail(for: s).trimmingCharacters(in: .whitespacesAndNewlines)
             return text.isEmpty ? nil : text
         }
@@ -474,12 +534,15 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
             s.isStopped = true
             s.lifecycleRevision &+= 1
             s.sampleBuffer.removeAll()
+            s.sampleBufferRanges.removeAll()
             s.chunkQueue.removeAll()
             s.engineText = ""
             s.committedPrefixLength = 0
             s.pendingSegments.removeAll()
+            s.discontinuousSegmentSequences.removeAll()
             s.pendingPublicationTail = nil
             s.activeInferenceRevision = nil
+            s.activeInferenceSegmentSequences.removeAll()
         }
         publishImmediately("")
         Task { await engine.shutdown() }
@@ -493,8 +556,10 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
                     return nil
                 }
                 let revision = s.lifecycleRevision
+                let chunk = s.chunkQueue.removeFirst()
                 s.activeInferenceRevision = revision
-                return (s.chunkQueue.removeFirst(), revision)
+                s.activeInferenceSegmentSequences = chunk.segmentSequences
+                return (chunk.samples, revision)
             }
             guard let work else { return }
 
@@ -503,6 +568,7 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
                 state.withLock { s in
                     if s.activeInferenceRevision == work.revision {
                         s.activeInferenceRevision = nil
+                        s.activeInferenceSegmentSequences.removeAll()
                     }
                 }
             } catch {
@@ -523,6 +589,9 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
             if filteredText.count < s.committedPrefixLength {
                 s.committedPrefixLength = 0
                 s.pendingSegments.removeAll()
+                s.discontinuousSegmentSequences = s.discontinuousSegmentSequences.contains(
+                    s.currentSegmentSequence
+                ) ? [s.currentSegmentSequence] : []
             }
             s.engineText = filteredText
             return visibleTail(for: s)
@@ -538,15 +607,49 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
             s.lifecycleRevision &+= 1
             s.isDraining = false
             s.sampleBuffer.removeAll()
+            s.sampleBufferRanges.removeAll()
             s.chunkQueue.removeAll()
             s.engineText = ""
             s.committedPrefixLength = 0
             s.pendingSegments.removeAll()
+            s.discontinuousSegmentSequences.removeAll()
             s.activeInferenceRevision = nil
+            s.activeInferenceSegmentSequences.removeAll()
         }
         fputs("[meeting-partials] \(label) session dormant after error: \(error)\n", stderr)
         publishImmediately("")
         Task { await engine.shutdown() }
+    }
+
+    private static func appendBufferedRange(
+        sampleCount: Int,
+        sequence: UInt64,
+        to ranges: inout [BufferedSegmentRange]
+    ) {
+        guard sampleCount > 0 else { return }
+        if ranges.last?.sequence == sequence {
+            ranges[ranges.count - 1].sampleCount += sampleCount
+        } else {
+            ranges.append(BufferedSegmentRange(sampleCount: sampleCount, sequence: sequence))
+        }
+    }
+
+    private static func consumeBufferedRanges(
+        sampleCount: Int,
+        from ranges: inout [BufferedSegmentRange]
+    ) -> Set<UInt64> {
+        var remaining = sampleCount
+        var sequences: Set<UInt64> = []
+        while remaining > 0, !ranges.isEmpty {
+            let consumed = min(remaining, ranges[0].sampleCount)
+            sequences.insert(ranges[0].sequence)
+            ranges[0].sampleCount -= consumed
+            remaining -= consumed
+            if ranges[0].sampleCount == 0 {
+                ranges.removeFirst()
+            }
+        }
+        return sequences
     }
 
     /// Core ML may produce partials faster than SwiftUI can lay out a long live
