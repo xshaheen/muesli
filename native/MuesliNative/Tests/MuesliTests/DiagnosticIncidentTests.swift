@@ -174,6 +174,20 @@ struct DiagnosticIncidentTests {
         #expect(incident.telemetryParameters["diagnostic.error_code"] == nil)
     }
 
+    @Test("meeting system audio failure is a degraded result")
+    func meetingSystemAudioFailureIsDegraded() {
+        let incident = DiagnosticIncident(
+            kind: .meetingSystemAudioCaptureFailed,
+            severity: .warning,
+            stage: .meetingSystemAudioCapture,
+            error: NSError(domain: "SCStreamErrorDomain", code: -1),
+            metadata: metadata
+        )
+
+        #expect(incident.userImpact == .degradedResult)
+        #expect(incident.telemetryParameters["diagnostic.stage"] == "meeting_system_audio_capture")
+    }
+
     @Test("domain fallback covers Swift enum style diagnostic errors")
     func domainFallbackCoversSwiftEnumErrors() {
         let meaning = DiagnosticErrorCatalog.meaning(

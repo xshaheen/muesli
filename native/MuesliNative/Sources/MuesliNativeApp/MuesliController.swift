@@ -363,6 +363,7 @@ final class MuesliController: NSObject {
     private var activeMeetingID: Int64?
     private var liveMeetingTranscriptGeneration: UUID?
     private var activeMeetingAudioWarning: ActiveMeetingAudioWarning?
+    private var activeMeetingAudioWarningState = ActiveMeetingAudioWarningState()
     private var liveMeetingTitleCache: [Int64: String] = [:]
     private var liveManualNotesCache: [Int64: String] = [:]
     private var liveManualNotesLastPersistedAt: [Int64: Date] = [:]
@@ -4985,6 +4986,7 @@ final class MuesliController: NSObject {
             )
             activeMeetingID = meetingID
             activeMeetingAudioWarning = nil
+            activeMeetingAudioWarningState.reset()
             syncAppState()
             if openDocument {
                 showMeetingDocument(id: meetingID)
@@ -5154,6 +5156,7 @@ final class MuesliController: NSObject {
         // REUSE the existing row — do NOT call createLiveMeeting.
         activeMeetingID = meetingID
         activeMeetingAudioWarning = nil
+        activeMeetingAudioWarningState.reset()
         syncAppState()
 
         armMeetingAutoStop(
@@ -5628,6 +5631,20 @@ final class MuesliController: NSObject {
                                 promptUser: false
                             )
                         }
+                    }
+                }
+                meetingSession.onSystemAudioCaptureFailure = { [weak self] error in
+                    Task { @MainActor in
+                        guard let self,
+                              self.activeMeetingID == meetingID || self.meetingStartMeetingID == meetingID else { return }
+                        self.updateActiveMeetingSystemAudioFailure(meetingID: meetingID)
+                        self.recordDiagnosticIncident(
+                            kind: .meetingSystemAudioCaptureFailed,
+                            severity: .warning,
+                            stage: .meetingSystemAudioCapture,
+                            error: error,
+                            promptUser: false
+                        )
                     }
                 }
                 try await meetingSession.start()
@@ -6106,9 +6123,18 @@ final class MuesliController: NSObject {
     }
 
     private func updateActiveMeetingAudioWarning(meetingID: Int64, health: MeetingMicHealthSnapshot) {
-        let nextWarning = health.warningMessage.map {
-            ActiveMeetingAudioWarning(meetingID: meetingID, message: $0)
-        }
+        activeMeetingAudioWarningState.updateMicrophone(message: health.warningMessage)
+        let nextWarning = activeMeetingAudioWarningState.resolvedWarning(meetingID: meetingID)
+        guard activeMeetingAudioWarning != nextWarning else { return }
+        activeMeetingAudioWarning = nextWarning
+        syncAppState()
+    }
+
+    private func updateActiveMeetingSystemAudioFailure(meetingID: Int64) {
+        activeMeetingAudioWarningState.recordSystemAudioFailure(
+            message: "System audio capture stopped. Muesli is still recording your microphone, but other participants may be missing."
+        )
+        let nextWarning = activeMeetingAudioWarningState.resolvedWarning(meetingID: meetingID)
         guard activeMeetingAudioWarning != nextWarning else { return }
         activeMeetingAudioWarning = nextWarning
         syncAppState()

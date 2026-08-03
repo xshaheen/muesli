@@ -96,6 +96,30 @@ struct ActiveMeetingAudioWarning: Equatable {
     let message: String
 }
 
+struct ActiveMeetingAudioWarningState {
+    private(set) var microphoneMessage: String?
+    private(set) var systemAudioFailureMessage: String?
+
+    mutating func updateMicrophone(message: String?) {
+        microphoneMessage = message
+    }
+
+    mutating func recordSystemAudioFailure(message: String) {
+        systemAudioFailureMessage = message
+    }
+
+    mutating func reset() {
+        microphoneMessage = nil
+        systemAudioFailureMessage = nil
+    }
+
+    func resolvedWarning(meetingID: Int64) -> ActiveMeetingAudioWarning? {
+        (systemAudioFailureMessage ?? microphoneMessage).map {
+            ActiveMeetingAudioWarning(meetingID: meetingID, message: $0)
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class AppState {

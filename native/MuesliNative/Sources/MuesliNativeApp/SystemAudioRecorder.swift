@@ -5,21 +5,168 @@ import ScreenCaptureKit
 import MuesliCore
 import os
 
-final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing, SystemAudioDiagnosticsProviding {
+enum SystemAudioStartupError: LocalizedError, Equatable {
+    case timedOut
+
+    var errorDescription: String? {
+        "Timed out while starting system audio capture"
+    }
+}
+
+private final class SystemAudioStartupGate<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Error>?
+    private var deadlineWorkItem: DispatchWorkItem?
+    private var isFinished = false
+    private var isCancelled = false
+
+    func install(_ continuation: CheckedContinuation<Value, Error>) -> Bool {
+        lock.lock()
+        if isCancelled {
+            isFinished = true
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return false
+        }
+        guard !isFinished, self.continuation == nil else {
+            lock.unlock()
+            return false
+        }
+        self.continuation = continuation
+        lock.unlock()
+        return true
+    }
+
+    @discardableResult
+    func resolve(_ result: Result<Value, Error>) -> Bool {
+        lock.lock()
+        guard !isFinished, let continuation else {
+            lock.unlock()
+            return false
+        }
+        isFinished = true
+        self.continuation = nil
+        let deadlineWorkItem = self.deadlineWorkItem
+        self.deadlineWorkItem = nil
+        lock.unlock()
+
+        deadlineWorkItem?.cancel()
+        continuation.resume(with: result)
+        return true
+    }
+
+    func arm(timeout: TimeInterval) {
+        let workItem = DispatchWorkItem { [self] in
+            resolve(.failure(SystemAudioStartupError.timedOut))
+        }
+        lock.lock()
+        guard !isFinished, continuation != nil else {
+            lock.unlock()
+            return
+        }
+        deadlineWorkItem = workItem
+        lock.unlock()
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(
+            deadline: .now() + timeout,
+            execute: workItem
+        )
+    }
+
+    func cancel() {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
+        isCancelled = true
+        let continuation = self.continuation
+        self.continuation = nil
+        let deadlineWorkItem = self.deadlineWorkItem
+        self.deadlineWorkItem = nil
+        if continuation != nil {
+            isFinished = true
+        }
+        lock.unlock()
+
+        deadlineWorkItem?.cancel()
+        continuation?.resume(throwing: CancellationError())
+    }
+}
+
+enum SystemAudioStartupDeadline {
+    static func wait<Value>(
+        timeout: TimeInterval,
+        start: @escaping () async throws -> Value,
+        onLateSuccess: @escaping (Value) async -> Void,
+        onLateFailure: @escaping (Error) async -> Void = { _ in }
+    ) async throws -> Value {
+        let gate = SystemAudioStartupGate<Value>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard gate.install(continuation) else { return }
+                Task {
+                    do {
+                        let value = try await start()
+                        if !gate.resolve(.success(value)) {
+                            await onLateSuccess(value)
+                        }
+                    } catch {
+                        if !gate.resolve(.failure(error)) {
+                            await onLateFailure(error)
+                        }
+                    }
+                }
+                gate.arm(timeout: timeout)
+                if Task.isCancelled {
+                    gate.cancel()
+                }
+            }
+        } onCancel: {
+            gate.cancel()
+        }
+    }
+}
+
+struct SystemAudioCaptureFailureGate {
+    private(set) var isActive = false
+    private var didReportFailure = false
+
+    mutating func activate() {
+        isActive = true
+        didReportFailure = false
+    }
+
+    mutating func deactivate() {
+        isActive = false
+    }
+
+    mutating func shouldReportUnexpectedStop() -> Bool {
+        guard isActive, !didReportFailure else { return false }
+        didReportFailure = true
+        return true
+    }
+}
+
+final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, SystemAudioCapturing, SystemAudioDiagnosticsProviding {
     var onPCMSamples: (([Int16]) -> Void)?
-    /// Never fired by this backend — SCStream is created without a delegate, so
-    /// there is no mid-capture failure signal to forward.
     var onSystemAudioFailure: ((Error) -> Void)?
 
     /// Guards `stream` and `startFailed`: `startStream()` assigns from the
     /// startup task while `stop()` and `cleanupFailedStart()` read from the
     /// caller's thread.
     private let streamStateQueue = DispatchQueue(label: "com.muesli.system-audio.stream-state")
+    /// The stream currently inside `startCapture()`. Delegate failure can arrive
+    /// before that async call returns, so retain its identity and error until the
+    /// caller atomically promotes it to `stream`.
+    private var startingStream: SCStream?
+    private var startingStreamStopError: Error?
     private var stream: SCStream?
+    private var startGeneration: UInt64 = 0
     /// Set when a start attempt gave up. `SCStream.startCapture()` is not
     /// cancellation-aware, so a late-completing start must stop its own stream
     /// instead of publishing it.
     private var startFailed = false
+    private var failureGate = SystemAudioCaptureFailureGate()
     private var outputFile: FileHandle?
     private var outputURL: URL?
     private var totalBytesWritten = 0
@@ -96,32 +243,65 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
         totalBytesWritten = 0
         isRecording = true
         isPaused = false
-        streamStateQueue.sync { self.startFailed = false }
+        let generation = streamStateQueue.sync { () -> UInt64 in
+            self.startGeneration &+= 1
+            self.startFailed = false
+            return self.startGeneration
+        }
 
         do {
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask { [weak self] in
-                    guard let self else { return }
-                    try await self.startStream()
-                    fputs("[system-audio] SCStream capture started\n", stderr)
+            let startedStream = try await SystemAudioStartupDeadline.wait(timeout: 5) { [weak self] in
+                guard let self else { throw CancellationError() }
+                return try await self.makeStartedStream(generation: generation)
+            } onLateSuccess: { [weak self] stream in
+                // `startCapture()` ignores task cancellation. If the deadline or
+                // caller wins first, tear down a capture that completes later.
+                self?.streamStateQueue.sync {
+                    guard self?.startGeneration == generation,
+                          self?.startingStream === stream else { return }
+                    self?.startingStream = nil
+                    self?.startingStreamStopError = nil
                 }
-                group.addTask {
-                    try await Task.sleep(for: .seconds(5))
-                    throw NSError(domain: "SystemAudio", code: 3, userInfo: [
-                        NSLocalizedDescriptionKey: "Timed out while starting system audio capture",
-                    ])
+                try? await stream.stopCapture()
+            } onLateFailure: { [weak self] _ in
+                self?.streamStateQueue.sync {
+                    guard self?.startGeneration == generation else { return }
+                    self?.startingStream = nil
+                    self?.startingStreamStopError = nil
                 }
-
-                guard let _ = try await group.next() else {
-                    throw NSError(domain: "SystemAudio", code: 4, userInfo: [
-                        NSLocalizedDescriptionKey: "System audio startup ended unexpectedly",
-                    ])
-                }
-                group.cancelAll()
             }
+            if Task.isCancelled {
+                streamStateQueue.sync {
+                    guard self.startGeneration == generation,
+                          self.startingStream === startedStream else { return }
+                    self.startingStream = nil
+                    self.startingStreamStopError = nil
+                }
+                try? await startedStream.stopCapture()
+                throw CancellationError()
+            }
+            let publicationError = streamStateQueue.sync { () -> Error? in
+                guard self.startGeneration == generation,
+                      self.startingStream === startedStream else { return CancellationError() }
+                self.startingStream = nil
+                if let error = self.startingStreamStopError {
+                    self.startingStreamStopError = nil
+                    self.startFailed = true
+                    return error
+                }
+                guard !self.startFailed else { return CancellationError() }
+                self.stream = startedStream
+                self.failureGate.activate()
+                return nil
+            }
+            if let publicationError {
+                try? await startedStream.stopCapture()
+                throw publicationError
+            }
+            fputs("[system-audio] SCStream capture started\n", stderr)
         } catch {
             fputs("[system-audio] SCStream start failed: \(error)\n", stderr)
-            await cleanupFailedStart()
+            await cleanupFailedStart(generation: generation)
             throw error
         }
     }
@@ -132,6 +312,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
         isPaused = false
 
         let activeStream = streamStateQueue.sync { () -> SCStream? in
+            self.failureGate.deactivate()
             let current = self.stream
             self.stream = nil
             return current
@@ -177,7 +358,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
 
     // MARK: - SCStream setup
 
-    private func startStream() async throws {
+    private func makeStartedStream(generation: UInt64) async throws -> SCStream {
         // Get shareable content (required to create a filter)
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
 
@@ -203,20 +384,27 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
         config.channelCount = Self.channels
         config.excludesCurrentProcessAudio = true
 
-        let stream = SCStream(filter: filter, configuration: config, delegate: nil)
+        let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleHandlerQueue)
-        try await stream.startCapture()
-
-        let published = streamStateQueue.sync { () -> Bool in
-            guard !self.startFailed else { return false }
-            self.stream = stream
+        let mayStart = streamStateQueue.sync { () -> Bool in
+            guard self.startGeneration == generation, !self.startFailed else { return false }
+            self.startingStream = stream
+            self.startingStreamStopError = nil
             return true
         }
-        guard published else {
-            // The startup timeout already fired and gave up on this attempt.
-            try? await stream.stopCapture()
-            return
+        guard mayStart else { throw CancellationError() }
+        do {
+            try await stream.startCapture()
+        } catch {
+            streamStateQueue.sync {
+                guard self.startGeneration == generation,
+                      self.startingStream === stream else { return }
+                self.startingStream = nil
+                self.startingStreamStopError = nil
+            }
+            throw error
         }
+        return stream
     }
 
     // MARK: - SCStreamOutput
@@ -343,22 +531,38 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
         }
     }
 
-    private func cleanupFailedStart() async {
-        isRecording = false
-        isPaused = false
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        let shouldReport = streamStateQueue.sync { () -> Bool in
+            if self.startingStream === stream {
+                if !self.startFailed, self.startingStreamStopError == nil {
+                    self.startingStreamStopError = error
+                }
+                return false
+            }
+            guard self.stream === stream else { return false }
+            return self.failureGate.shouldReportUnexpectedStop()
+        }
+        guard shouldReport else { return }
+        onSystemAudioFailure?(error)
+    }
 
+    private func cleanupFailedStart(generation: UInt64) async {
         // A timed-out start can still be inside `startCapture()`, and whatever it
         // started must be stopped — dropping the reference leaves a live capture
         // (recording indicator lit, self retained) for the rest of the session.
-        let orphanedStream = streamStateQueue.sync { () -> SCStream? in
+        let cleanup = streamStateQueue.sync { () -> (isCurrent: Bool, stream: SCStream?) in
+            guard self.startGeneration == generation else { return (false, nil) }
             self.startFailed = true
+            self.failureGate.deactivate()
             let current = self.stream
             self.stream = nil
-            return current
+            if self.startingStream == nil {
+                self.startingStreamStopError = nil
+            }
+            return (true, current)
         }
-        if let orphanedStream {
-            try? await orphanedStream.stopCapture()
-        }
+        guard cleanup.isCurrent else { return }
+        isPaused = false
 
         // A start that timed out can leave the stream delivering buffers, so close
         // on the sample-handler queue for the same reason stop() does.
@@ -376,5 +580,12 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SystemAudioCapturing,
             try? FileManager.default.removeItem(at: outputURL)
         }
         outputURL = nil
+        // Keep concurrent `start()` calls excluded until this attempt's shared
+        // file state has been closed. The orphaned stream can stop afterward.
+        isRecording = false
+
+        if let orphanedStream = cleanup.stream {
+            try? await orphanedStream.stopCapture()
+        }
     }
 }
