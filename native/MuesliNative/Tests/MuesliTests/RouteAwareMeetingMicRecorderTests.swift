@@ -137,6 +137,9 @@ struct RouteAwareMeetingMicRecorderTests {
         appScoped.onRawPCMSamples?([2])
         try await waitUntil { recorder.activeRecorderKindForDebug() == .appScoped }
         try await waitUntil { samples == [[1], [2]] }
+        // The old recorder retires on the cleanup queue after promotion, so its
+        // stop/cancel land asynchronously.
+        try await waitUntil { system.stopCalls == 1 && system.cancelCalls == 1 }
 
         #expect(samples == [[1], [2]])
         #expect(handoffResults == [.completed(preferredInputDeviceID: 91)])
@@ -497,6 +500,62 @@ struct RouteAwareMeetingMicRecorderTests {
         #expect(samples == [[9]])
         #expect(pending.stopCalls == 1)
         #expect(pending.cancelCalls == 1)
+    }
+
+    @Test("stop reports a still-pending handoff as failed")
+    func stopReportsPendingHandoffAsFailed() async throws {
+        let system = FakeMeetingMicRecorder(kind: .systemDefaultStreaming)
+        let appScoped = FakeMeetingMicRecorder(kind: .appScopedAudioQueue)
+        let recorder = RouteAwareMeetingMicRecorder(
+            systemDefaultRecorder: system,
+            appScopedRecorder: appScoped,
+            handoffTimeout: 1,
+            handoffTimeoutScheduler: disabledMeetingMicHandoffTimeoutScheduler
+        )
+        var handoffResults: [MeetingMicHandoffResult] = []
+        recorder.onHandoffResult = { handoffResults.append($0) }
+
+        try recorder.start()
+        recorder.preferredInputDeviceID = 91
+        try await waitUntil { appScoped.startCalls == 1 }
+
+        _ = recorder.stop()
+
+        #expect(handoffResults.count == 1)
+        if case .failed(let deviceID, let reason)? = handoffResults.first {
+            #expect(deviceID == 91)
+            #expect(reason.contains("stopped"))
+        } else {
+            Issue.record("Expected a failed microphone handoff result after stop")
+        }
+    }
+
+    @Test("cancel reports a still-pending handoff as failed")
+    func cancelReportsPendingHandoffAsFailed() async throws {
+        let system = FakeMeetingMicRecorder(kind: .systemDefaultStreaming)
+        let appScoped = FakeMeetingMicRecorder(kind: .appScopedAudioQueue)
+        let recorder = RouteAwareMeetingMicRecorder(
+            systemDefaultRecorder: system,
+            appScopedRecorder: appScoped,
+            handoffTimeout: 1,
+            handoffTimeoutScheduler: disabledMeetingMicHandoffTimeoutScheduler
+        )
+        var handoffResults: [MeetingMicHandoffResult] = []
+        recorder.onHandoffResult = { handoffResults.append($0) }
+
+        try recorder.start()
+        recorder.preferredInputDeviceID = 91
+        try await waitUntil { appScoped.startCalls == 1 }
+
+        recorder.cancel()
+
+        #expect(handoffResults.count == 1)
+        if case .failed(let deviceID, let reason)? = handoffResults.first {
+            #expect(deviceID == 91)
+            #expect(reason.contains("stopped"))
+        } else {
+            Issue.record("Expected a failed microphone handoff result after cancel")
+        }
     }
 
     @Test("discard remains correct when first-buffer promotion is already queued")

@@ -309,6 +309,7 @@ final class RouteAwareMeetingMicRecorder: MeetingMicRecording, MeetingMicHandoff
             return (children.0, children.1, takeUnusedSeedRecorders())
         }
         cancelAsync(resources.pending)
+        reportAbandonedHandoff(resources.pending)
         cancelAsync(resources.unused)
         let url = resources.active?.recorder.stop()
         resources.active?.recorder.cancel()
@@ -332,6 +333,7 @@ final class RouteAwareMeetingMicRecorder: MeetingMicRecording, MeetingMicHandoff
         }
         cancelAsync(resources.0)
         cancelAsync(resources.1)
+        reportAbandonedHandoff(resources.1)
         cancelAsync(resources.2)
     }
 
@@ -544,6 +546,17 @@ final class RouteAwareMeetingMicRecorder: MeetingMicRecording, MeetingMicHandoff
 
     private func reportHandoff(_ result: MeetingMicHandoffResult) {
         lock.withLock { $0.onHandoffResultStorage }?(result)
+    }
+
+    /// A handoff still pending when recording ends must resolve like every
+    /// other outcome — a failover decided seconds before stop would otherwise
+    /// vanish from the persisted meeting diagnostics.
+    private func reportAbandonedHandoff(_ pending: Child?) {
+        guard let pending else { return }
+        reportHandoff(.failed(
+            preferredInputDeviceID: pending.deviceID,
+            reason: "Recording stopped before the microphone handoff completed."
+        ))
     }
 
     private static func kind(for deviceID: AudioObjectID?) -> ActiveRecorderKind {

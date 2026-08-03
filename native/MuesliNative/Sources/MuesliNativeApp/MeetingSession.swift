@@ -301,7 +301,6 @@ final class MeetingSession {
     func start() async throws {
         let vadManager = await transcriptionCoordinator.getVadManager()
         let now = Date()
-        let recordingStartUptime = DispatchTime.now().uptimeNanoseconds
         diagnostics = MeetingSessionDiagnostics(title: title, startedAt: now)
 
         // AEC must be loaded before audio pipeline starts (streaming mode)
@@ -309,7 +308,10 @@ final class MeetingSession {
 
         chunkRotationQueue.sync {
             startTime = now
-            retainedRecordingTimeline.start(at: recordingStartUptime)
+            // The timeline origin must be stamped after the AEC preload (seconds on
+            // first launch), or every retained recording opens with that much
+            // zero-fill and drifts off the transcript clock.
+            retainedRecordingTimeline.start(at: DispatchTime.now().uptimeNanoseconds)
             chunkTimingTracker.start()
             systemChunkTimingTracker.start()
             isRecording = true
@@ -607,7 +609,6 @@ final class MeetingSession {
         systemVadController?.stop()
         systemVadController = nil
         meetingMicRecorder.onRawPCMSamples = nil
-        (meetingMicRecorder as? MeetingMicHandoffReporting)?.onHandoffResult = nil
         systemAudioRecorder.onPCMSamples = nil
         systemAudioRecorder.onSystemAudioFailure = nil
         let (meetingStart, lastChunkTiming, lastRawMicURL, lastSystemChunkTiming, lastSystemChunkURL) = chunkRotationQueue.sync { () -> (Date, MeetingChunkTimingSnapshot?, URL?, MeetingChunkTimingSnapshot?, URL?) in
@@ -627,6 +628,12 @@ final class MeetingSession {
             return (meetingStart, lastChunkTiming, lastRawMicURL, lastSystemChunkTiming, lastSystemChunkURL)
         }
         let rawStreamingMicURL = meetingMicRecorder.stop()
+        // The recorder reports a still-pending mic handoff as failed during
+        // stop(); the handler hops through the chunk queue, so drain it before
+        // tearing the callback down or a failover decided moments before the
+        // meeting ended would be missing from the persisted diagnostics.
+        chunkRotationQueue.sync {}
+        (meetingMicRecorder as? MeetingMicHandoffReporting)?.onHandoffResult = nil
         let retainedRecordingURL = retainedRecordingWriter?.stop()
         retainedRecordingWriter = nil
         defer {
@@ -1156,6 +1163,9 @@ final class MeetingSession {
             fputs("[meeting] microphone handoff failed: \(record.handoffErrorDescription ?? "unknown error")\n", stderr)
             Self.logger.error("Meeting mic failover failed")
         }
+        // A handoff resolved during stop() still belongs in the diagnostics
+        // above, but the meeting UI is tearing down — no banner.
+        guard isRecording else { return }
         onMicHealthChanged?(snapshot)
     }
 
