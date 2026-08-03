@@ -388,4 +388,23 @@ struct MeetingTranscriptCleanupTests {
             isChatGPTAuthenticated: false
         ) == false)
     }
+
+    @Test("reconcile reports when it auto-revokes previously granted consent")
+    func reconcileReportsAutoRevocation() {
+        var config = AppConfig()
+        config.postProcessorBackend = TranscriptCleanupBackendOption.hosted(.ollama).backend
+        #expect(MeetingTranscriptCleanupPolicy.grantConsent(for: .hosted(.ollama), config: &config))
+
+        // Consent still matches its destination: nothing to revoke.
+        #expect(MeetingTranscriptCleanupPolicy.reconcileConsent(in: &config) == false)
+        #expect(config.enableMeetingTranscriptCleanup)
+
+        // Destination changed under the granted consent: revokes and says so.
+        config.ollamaURL = "http://192.168.1.50:11434"
+        #expect(MeetingTranscriptCleanupPolicy.reconcileConsent(in: &config))
+        #expect(config.enableMeetingTranscriptCleanup == false)
+
+        // Already revoked: nothing further to report.
+        #expect(MeetingTranscriptCleanupPolicy.reconcileConsent(in: &config) == false)
+    }
 }

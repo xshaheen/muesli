@@ -1344,7 +1344,11 @@ final class MuesliController: NSObject {
             config.postProcessorBackend = TranscriptCleanupBackendOption.local.backend
             config.enablePostProcessor = false
         }
-        MeetingTranscriptCleanupPolicy.reconcileConsent(in: &config)
+        if MeetingTranscriptCleanupPolicy.reconcileConsent(in: &config) {
+            Self.meetingCleanupLogger.notice(
+                "Meeting transcript cleanup consent auto-revoked: backend or destination changed since consent was granted"
+            )
+        }
         let configuredMeetingTranscriptionBackend = BackendOption.all.first(where: {
             $0.backend == config.meetingTranscriptionBackend && $0.model == config.meetingTranscriptionModel
         })
@@ -6541,8 +6545,13 @@ final class MuesliController: NSObject {
     /// a regeneration that failed or was interrupted -- the app quit between the two
     /// writes, or the summary call errored. Bounded per launch so a persistently
     /// failing meeting cannot spin.
+    ///
+    /// Deliberately not gated on `enableMeetingTranscriptCleanup`: the sweep sends
+    /// nothing to the cleanup destination — it summarizes an already-stored cleaned
+    /// transcript through the same summary backend every meeting uses, restoring
+    /// notes/transcript consistency. Gating it here meant an auto-revoked consent
+    /// (backend switch) stranded half-finished regenerations forever.
     func resumePendingMeetingNotesRegeneration(limit: Int = 5) {
-        guard config.enableMeetingTranscriptCleanup else { return }
         guard let pending = try? dictationStore.meetingsAwaitingNotesRegeneration(limit: limit),
               !pending.isEmpty else { return }
         Task { [weak self] in

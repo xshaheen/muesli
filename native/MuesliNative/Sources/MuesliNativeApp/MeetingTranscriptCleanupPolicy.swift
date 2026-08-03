@@ -140,12 +140,17 @@ enum MeetingTranscriptCleanupPolicy {
     }
 
     /// Keeps the persisted toggle honest after any config mutation or decode.
-    static func reconcileConsent(in config: inout AppConfig) {
+    /// Returns true when it revoked consent the user had previously granted, so
+    /// callers can surface that the toggle turned itself off.
+    @discardableResult
+    static func reconcileConsent(in config: inout AppConfig) -> Bool {
         let backend = TranscriptCleanupBackendOption.resolved(config.postProcessorBackend)
         guard hasCurrentConsent(for: backend, config: config) else {
+            let hadConsent = config.enableMeetingTranscriptCleanup
             revokeConsent(in: &config)
-            return
+            return hadConsent
         }
+        return false
     }
 
     private static func normalizedDestination(_ url: URL) -> String? {
