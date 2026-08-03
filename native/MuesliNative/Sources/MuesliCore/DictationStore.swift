@@ -731,6 +731,25 @@ public final class DictationStore {
         return rows
     }
 
+    /// One meeting projected to list metadata. For callers that render a badge
+    /// or banner from a row that is still growing — hydrating the full record
+    /// there re-reads the accumulating transcript on every refresh.
+    public func meetingListRecord(id: Int64) throws -> MeetingListRecord? {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+
+        let sql = "SELECT \(Self.meetingListColumns) FROM meetings WHERE id = ? AND deleted_at IS NULL"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, id)
+
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return makeMeetingListRecord(statement)
+    }
+
     /// Every meeting that still points at a saved recording file, id and path only.
     ///
     /// The recording-cleanup paths need nothing else, and hydrating full

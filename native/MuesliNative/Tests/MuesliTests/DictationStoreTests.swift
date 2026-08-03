@@ -243,6 +243,15 @@ struct DictationStoreTests {
         let fullRecord = try #require(try store.meeting(id: rawID))
         #expect(fullRecord.rawTranscript == raw)
         #expect(fullRecord.rawTranscript.count > MeetingListRecord.previewCharacterLimit)
+
+        let liveRow = try #require(try store.meetingListRecord(id: followUpID))
+        #expect(liveRow.title == "Follow-up")
+        #expect(liveRow.status == .recording)
+        #expect(liveRow.folderID == folderID)
+        #expect(try store.meetingListRecord(id: -1) == nil)
+
+        try store.deleteMeeting(id: rawID)
+        #expect(try store.meetingListRecord(id: rawID) == nil)
     }
 
     @Test("migration replaces calendar event uniqueness with occurrence lookup")

@@ -221,7 +221,7 @@ struct MeetingsView: View {
         return controller.meeting(id: id)
     }
 
-    private var activeLiveMeeting: MeetingRecord? {
+    private var activeLiveMeeting: MeetingListRecord? {
         controller.activeLiveMeetingRecord()
     }
 
@@ -684,7 +684,7 @@ struct MeetingsView: View {
     }
 
     @ViewBuilder
-    private func activeMeetingBanner(_ meeting: MeetingRecord) -> some View {
+    private func activeMeetingBanner(_ meeting: MeetingListRecord) -> some View {
         HStack(spacing: MuesliTheme.spacing12) {
             HStack(spacing: 8) {
                 Circle()
@@ -771,12 +771,12 @@ struct MeetingsView: View {
         )
     }
 
-    private func activeMeetingStatusText(for meeting: MeetingRecord) -> String {
+    private func activeMeetingStatusText(for meeting: MeetingListRecord) -> String {
         guard meeting.status == .recording else { return "Finalizing notes" }
         return appState.isMeetingRecordingPaused ? "Recording paused" : "Recording now"
     }
 
-    private func activeMeetingStatusColor(for meeting: MeetingRecord) -> Color {
+    private func activeMeetingStatusColor(for meeting: MeetingListRecord) -> Color {
         guard meeting.status == .recording else { return MuesliTheme.accent }
         return appState.isMeetingRecordingPaused ? MuesliTheme.transcribing : MuesliTheme.recording
     }

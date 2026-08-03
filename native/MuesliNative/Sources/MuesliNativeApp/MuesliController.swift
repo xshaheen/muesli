@@ -4714,12 +4714,15 @@ final class MuesliController: NSObject {
         }
     }
 
-    func activeLiveMeetingRecord() -> MeetingRecord? {
+    func activeLiveMeetingRecord() -> MeetingListRecord? {
         guard let activeMeetingID,
               isMeetingRecording() || isStartingMeetingRecording else {
             return nil
         }
-        return meeting(id: activeMeetingID)
+        // Projected, not `meeting(id:)`: the browser re-reads this on every body
+        // evaluation while recording, and the full row grows with the live
+        // transcript.
+        return try? dictationStore.meetingListRecord(id: activeMeetingID)
     }
 
     func clearMeetingHistory() {
