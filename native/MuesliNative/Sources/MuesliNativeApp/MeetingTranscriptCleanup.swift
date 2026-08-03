@@ -103,7 +103,9 @@ enum MeetingTranscriptCleanup {
         backend: TranscriptCleanupBackendOption,
         isChatGPTAuthenticated: Bool
     ) -> Bool {
-        guard config.enableMeetingTranscriptCleanup else { return false }
+        guard MeetingTranscriptCleanupPolicy.hasCurrentConsent(for: backend, config: config) else {
+            return false
+        }
         guard MeetingTranscriptCleanupPolicy.isEligible(backend) else { return false }
         return TranscriptCleanupClient.hasRequiredSettings(
             for: backend,

@@ -465,6 +465,7 @@ final class MuesliController: NSObject {
             loadedPostProcessorBackend = .local
             loadedConfig.postProcessorBackend = loadedPostProcessorBackend.backend
             loadedConfig.enablePostProcessor = false
+            MeetingTranscriptCleanupPolicy.reconcileConsent(in: &loadedConfig)
             configStore.save(loadedConfig)
         }
         self.runtime = runtime
@@ -1346,6 +1347,7 @@ final class MuesliController: NSObject {
             config.postProcessorBackend = TranscriptCleanupBackendOption.local.backend
             config.enablePostProcessor = false
         }
+        MeetingTranscriptCleanupPolicy.reconcileConsent(in: &config)
         let configuredMeetingTranscriptionBackend = BackendOption.all.first(where: {
             $0.backend == config.meetingTranscriptionBackend && $0.model == config.meetingTranscriptionModel
         })
@@ -2361,11 +2363,20 @@ final class MuesliController: NSObject {
     /// Refuses to turn on for a backend that cannot serve it, rather than leaving a
     /// switch that reads as enabled while every meeting silently skips cleanup.
     func setMeetingTranscriptCleanupEnabled(_ enabled: Bool) {
-        guard !enabled || MeetingTranscriptCleanupPolicy.isEligible(selectedPostProcessorBackend) else {
-            updateConfig { $0.enableMeetingTranscriptCleanup = false }
+        guard enabled else {
+            updateConfig { MeetingTranscriptCleanupPolicy.revokeConsent(in: &$0) }
             return
         }
-        updateConfig { $0.enableMeetingTranscriptCleanup = enabled }
+        guard MeetingTranscriptCleanupPolicy.isEligible(selectedPostProcessorBackend) else {
+            updateConfig { MeetingTranscriptCleanupPolicy.revokeConsent(in: &$0) }
+            return
+        }
+        updateConfig {
+            MeetingTranscriptCleanupPolicy.grantConsent(
+                for: selectedPostProcessorBackend,
+                config: &$0
+            )
+        }
     }
 
     func preloadExperimentalTranscriptionFeatures() {

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Where a cleanup backend actually processes the transcript.
@@ -15,6 +16,8 @@ enum MeetingCleanupLocality: Equatable {
 
 /// Whether meeting cleanup can run at all, and what the user must be told.
 enum MeetingTranscriptCleanupPolicy {
+
+    private static let consentFingerprintVersion = "v1"
 
     /// Backends that cannot serve meeting cleanup.
     ///
@@ -79,6 +82,97 @@ enum MeetingTranscriptCleanupPolicy {
         case nil:
             return "Configure a cleanup backend to see where transcripts would be sent."
         }
+    }
+
+    /// A non-reversible identity for the backend and exact resolved request URL.
+    ///
+    /// Hashing avoids persisting credentials if a custom URL embeds them. The
+    /// backend remains part of the identity even when two providers share a host,
+    /// because selecting a provider is itself part of the user's consent.
+    static func consentFingerprint(
+        for backend: TranscriptCleanupBackendOption,
+        config: AppConfig
+    ) -> String? {
+        guard isEligible(backend),
+              let destination = TranscriptCleanupClient.resolvedMeetingCleanupDestinationURL(
+                for: backend,
+                config: config
+              ),
+              let normalizedDestination = normalizedDestination(destination) else {
+            return nil
+        }
+        let material = "\(consentFingerprintVersion)|\(backend.backend)|\(normalizedDestination)"
+        return SHA256.hash(data: Data(material.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    @discardableResult
+    static func grantConsent(
+        for backend: TranscriptCleanupBackendOption,
+        config: inout AppConfig
+    ) -> Bool {
+        guard let fingerprint = consentFingerprint(for: backend, config: config) else {
+            revokeConsent(in: &config)
+            return false
+        }
+        config.enableMeetingTranscriptCleanup = true
+        config.meetingTranscriptCleanupConsentFingerprint = fingerprint
+        return true
+    }
+
+    static func revokeConsent(in config: inout AppConfig) {
+        config.enableMeetingTranscriptCleanup = false
+        config.meetingTranscriptCleanupConsentFingerprint = nil
+    }
+
+    static func hasCurrentConsent(
+        for backend: TranscriptCleanupBackendOption,
+        config: AppConfig
+    ) -> Bool {
+        guard config.enableMeetingTranscriptCleanup,
+              let stored = config.meetingTranscriptCleanupConsentFingerprint,
+              !stored.isEmpty,
+              let current = consentFingerprint(for: backend, config: config) else {
+            return false
+        }
+        return stored == current
+    }
+
+    /// Keeps the persisted toggle honest after any config mutation or decode.
+    static func reconcileConsent(in config: inout AppConfig) {
+        let backend = TranscriptCleanupBackendOption.resolved(config.postProcessorBackend)
+        guard hasCurrentConsent(for: backend, config: config) else {
+            revokeConsent(in: &config)
+            return
+        }
+    }
+
+    private static func normalizedDestination(_ url: URL) -> String? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              let host = components.host?.lowercased() else {
+            return nil
+        }
+        components.scheme = scheme
+        components.host = host
+        components.fragment = nil
+        if (scheme == "http" && components.port == 80)
+            || (scheme == "https" && components.port == 443) {
+            components.port = nil
+        }
+        while components.path.count > 1 && components.path.hasSuffix("/") {
+            components.path.removeLast()
+        }
+        if let queryItems = components.queryItems {
+            components.queryItems = queryItems.sorted {
+                if $0.name == $1.name {
+                    return ($0.value ?? "") < ($1.value ?? "")
+                }
+                return $0.name < $1.name
+            }
+        }
+        return components.string
     }
 
     private static func locality(

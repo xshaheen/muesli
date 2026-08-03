@@ -38,7 +38,7 @@ struct ChatGPTResponsesResult {
 }
 
 enum ChatGPTResponsesClient {
-    private static let whamURL = URL(string: "https://chatgpt.com/backend-api/wham/responses")!
+    static let whamURL = URL(string: "https://chatgpt.com/backend-api/wham/responses")!
     private static let requestTimeout: TimeInterval = 120
 
     static func respond(

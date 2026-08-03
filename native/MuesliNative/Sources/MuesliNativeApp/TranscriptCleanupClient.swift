@@ -173,6 +173,34 @@ enum TranscriptCleanupClient {
         }
     }
 
+    /// The exact HTTP destination used for a meeting-cleanup request.
+    ///
+    /// Consent is bound to this resolved URL, not the user's raw setting: default
+    /// endpoints and shorthand base URLs must resolve exactly as the request path
+    /// does or an equivalent spelling would unnecessarily revoke consent.
+    static func resolvedMeetingCleanupDestinationURL(
+        for backend: TranscriptCleanupBackendOption,
+        config: AppConfig
+    ) -> URL? {
+        switch backend.llmBackend {
+        case .some(.chatGPT):
+            return ChatGPTResponsesClient.whamURL
+        case .some(.openAI):
+            return openAIResponsesURL
+        case .some(.openRouter):
+            return openRouterURL
+        case .some(.ollama):
+            return resolveConfiguredOllamaURL(config: config)?.appendingPathComponent("api/chat")
+        case .some(.lmStudio):
+            return MeetingSummaryClient.resolveLMStudioURL(config: config)
+        case .some(.customLLM):
+            let format = CustomLLMFormat(rawValue: config.customLLMFormat) ?? .openAI
+            return resolveConfiguredCustomLLMURL(config: config, format: format)
+        case nil, .some(_):
+            return nil
+        }
+    }
+
     static func clean(
         text: String,
         systemPrompt: String,

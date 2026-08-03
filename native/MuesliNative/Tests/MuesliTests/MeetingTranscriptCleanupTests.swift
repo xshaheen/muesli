@@ -356,7 +356,11 @@ struct MeetingTranscriptCleanupTests {
     @Test("cleanup is skipped when the backend has no credentials")
     func unconfiguredBackendSkipsCleanup() {
         var config = AppConfig()
-        config.enableMeetingTranscriptCleanup = true
+        config.postProcessorBackend = TranscriptCleanupBackendOption.hosted(.openAI).backend
+        #expect(MeetingTranscriptCleanupPolicy.grantConsent(
+            for: .hosted(.openAI),
+            config: &config
+        ))
         config.openAIAPIKey = ""
 
         let enabled = MeetingTranscriptCleanup.isEnabled(
@@ -366,5 +370,22 @@ struct MeetingTranscriptCleanupTests {
         )
 
         #expect(enabled == (ProcessInfo.processInfo.environment["OPENAI_API_KEY"] != nil))
+    }
+
+    @Test("cleanup is skipped when consent belongs to another destination")
+    func staleDestinationConsentSkipsCleanup() {
+        var config = AppConfig()
+        config.postProcessorBackend = TranscriptCleanupBackendOption.hosted(.ollama).backend
+        #expect(MeetingTranscriptCleanupPolicy.grantConsent(
+            for: .hosted(.ollama),
+            config: &config
+        ))
+        config.ollamaURL = "http://192.168.1.50:11434"
+
+        #expect(MeetingTranscriptCleanup.isEnabled(
+            config: config,
+            backend: .hosted(.ollama),
+            isChatGPTAuthenticated: false
+        ) == false)
     }
 }

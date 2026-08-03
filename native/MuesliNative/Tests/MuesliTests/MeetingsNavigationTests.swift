@@ -1155,6 +1155,42 @@ struct MeetingsNavigationTests {
         #expect(controller.appState.config.postProcessorBackend == TranscriptCleanupBackendOption.local.backend)
     }
 
+    @Test("changing the meeting cleanup destination requires renewed consent")
+    func changingMeetingCleanupDestinationRequiresRenewedConsent() {
+        let controller = makeController()
+        controller.selectPostProcessorBackend(.hosted(.ollama))
+        controller.updateConfig { $0.ollamaURL = "http://localhost:11434" }
+        controller.setMeetingTranscriptCleanupEnabled(true)
+
+        #expect(controller.config.enableMeetingTranscriptCleanup)
+        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint != nil)
+
+        controller.updateConfig { $0.ollamaURL = "http://192.168.1.50:11434" }
+
+        #expect(controller.config.enableMeetingTranscriptCleanup == false)
+        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint == nil)
+
+        controller.setMeetingTranscriptCleanupEnabled(true)
+
+        #expect(controller.config.enableMeetingTranscriptCleanup)
+        #expect(MeetingTranscriptCleanupPolicy.hasCurrentConsent(
+            for: .hosted(.ollama),
+            config: controller.config
+        ))
+    }
+
+    @Test("changing the meeting cleanup backend requires renewed consent")
+    func changingMeetingCleanupBackendRequiresRenewedConsent() {
+        let controller = makeController()
+        controller.selectPostProcessorBackend(.hosted(.ollama))
+        controller.setMeetingTranscriptCleanupEnabled(true)
+
+        controller.selectPostProcessorBackend(.hosted(.openAI))
+
+        #expect(controller.config.enableMeetingTranscriptCleanup == false)
+        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint == nil)
+    }
+
     @Test("startup repairs a persisted Gemma dictation and cleanup conflict")
     func startupRepairsPersistedGemmaConflict() {
         let configStore = ConfigStore(supportDirectory: makeSupportDirectory())

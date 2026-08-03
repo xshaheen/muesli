@@ -1049,7 +1049,12 @@ struct SettingsView: View {
                     ?? MeetingTranscriptCleanupPolicy.disclosure(for: backend, config: appState.config),
                 controlWidth: meetingControlWidth
             ) {
-                settingsSwitch(isOn: appState.config.enableMeetingTranscriptCleanup && eligible) { newValue in
+                settingsSwitch(
+                    isOn: MeetingTranscriptCleanupPolicy.hasCurrentConsent(
+                        for: backend,
+                        config: appState.config
+                    ) && eligible
+                ) { newValue in
                     controller.setMeetingTranscriptCleanupEnabled(newValue)
                 }
                 .disabled(!eligible)

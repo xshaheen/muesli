@@ -1196,6 +1196,9 @@ struct AppConfig: Codable {
     /// configured endpoint it may send the full transcript of a private
     /// conversation to a third party.
     var enableMeetingTranscriptCleanup: Bool = false
+    /// SHA-256 identity of the backend and resolved destination the user approved.
+    /// Nil means there is no consent, including configs saved before this field.
+    var meetingTranscriptCleanupConsentFingerprint: String?
     var postProcessorBackend: String = TranscriptCleanupBackendOption.local.backend
     /// Minutes of dictation-cleanup inactivity before an on-device cleanup model is
     /// released from memory. 0 keeps it resident for the life of the process.
@@ -1319,6 +1322,7 @@ struct AppConfig: Codable {
         case disabledCalendarIDs = "disabled_calendar_ids"
         case enablePostProcessor = "enable_post_processor"
         case enableMeetingTranscriptCleanup = "enable_meeting_transcript_cleanup"
+        case meetingTranscriptCleanupConsentFingerprint = "meeting_transcript_cleanup_consent_fingerprint"
         case postProcessorBackend = "post_processor_backend"
         case postProcessorIdleUnloadMinutes = "post_processor_idle_unload_minutes"
         case activePostProcessorId = "active_post_processor_id"
@@ -1496,6 +1500,10 @@ struct AppConfig: Codable {
         enablePostProcessor = (try? c.decode(Bool.self, forKey: .enablePostProcessor)) ?? defaults.enablePostProcessor
         enableMeetingTranscriptCleanup = (try? c.decode(Bool.self, forKey: .enableMeetingTranscriptCleanup))
             ?? defaults.enableMeetingTranscriptCleanup
+        meetingTranscriptCleanupConsentFingerprint = try? c.decode(
+            String.self,
+            forKey: .meetingTranscriptCleanupConsentFingerprint
+        )
         postProcessorBackend = TranscriptCleanupBackendOption
             .resolved(try? c.decode(String.self, forKey: .postProcessorBackend))
             .backend
@@ -1545,6 +1553,7 @@ struct AppConfig: Codable {
         contributionBuyMeCoffeeClicked = (try? c.decode(Bool.self, forKey: .contributionBuyMeCoffeeClicked)) ?? defaults.contributionBuyMeCoffeeClicked
         contributionTweetClicked = (try? c.decode(Bool.self, forKey: .contributionTweetClicked)) ?? defaults.contributionTweetClicked
         contributionLinkedInClicked = (try? c.decode(Bool.self, forKey: .contributionLinkedInClicked)) ?? defaults.contributionLinkedInClicked
+        MeetingTranscriptCleanupPolicy.reconcileConsent(in: &self)
     }
 
     var resolvedCohereLanguage: CohereTranscribeLanguage {

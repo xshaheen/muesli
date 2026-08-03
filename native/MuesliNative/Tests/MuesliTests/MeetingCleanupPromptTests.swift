@@ -197,14 +197,52 @@ struct MeetingCleanupPromptTests {
         #expect(config.enableMeetingTranscriptCleanup == false)
     }
 
+    @Test("legacy cleanup consent without a destination fingerprint fails closed")
+    func legacyConsentWithoutFingerprintFailsClosed() throws {
+        let json = Data(#"{"enable_meeting_transcript_cleanup": true,"post_processor_backend":"ollama"}"#.utf8)
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: json)
+
+        #expect(config.enableMeetingTranscriptCleanup == false)
+        #expect(config.meetingTranscriptCleanupConsentFingerprint == nil)
+    }
+
     @Test("the setting round-trips through encoding")
     func settingRoundTrips() throws {
         var config = AppConfig()
-        config.enableMeetingTranscriptCleanup = true
+        config.postProcessorBackend = TranscriptCleanupBackendOption.hosted(.ollama).backend
+        #expect(MeetingTranscriptCleanupPolicy.grantConsent(
+            for: .hosted(.ollama),
+            config: &config
+        ))
 
         let data = try JSONEncoder().encode(config)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
 
         #expect(decoded.enableMeetingTranscriptCleanup)
+        #expect(MeetingTranscriptCleanupPolicy.hasCurrentConsent(
+            for: .hosted(.ollama),
+            config: decoded
+        ))
+    }
+
+    @Test("equivalent endpoint spellings keep the same consent fingerprint")
+    func consentFingerprintNormalizesDestination() {
+        var first = AppConfig()
+        first.ollamaURL = "HTTPS://EXAMPLE.COM:443/"
+        var second = first
+        second.ollamaURL = "https://example.com"
+
+        let firstFingerprint = MeetingTranscriptCleanupPolicy.consentFingerprint(
+            for: .hosted(.ollama),
+            config: first
+        )
+        let secondFingerprint = MeetingTranscriptCleanupPolicy.consentFingerprint(
+            for: .hosted(.ollama),
+            config: second
+        )
+
+        #expect(firstFingerprint != nil)
+        #expect(firstFingerprint == secondFingerprint)
     }
 }
