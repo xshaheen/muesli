@@ -182,13 +182,14 @@ enum ChatGPTResponsesClient {
                     "content": [["type": "input_text", "text": message.content]],
                 ] as [String: Any])
             case .assistant:
-                // Replayed assistant turns are *input* to the next request, so they use the
-                // easy-input-message form like any other turn. `output_text` belongs to
-                // complete response output items, which carry id/status fields we do not
-                // have; sending it here can get the request rejected.
+                // Assistant-role content must be `output_text` even when replayed as
+                // input — the live API rejects `input_text` here with 400 "Invalid
+                // value: 'input_text'. Supported values are: 'output_text' and
+                // 'refusal'." (observed 03-08-2026). No id/status fields are needed
+                // in the easy-input-message form.
                 input.append([
                     "role": "assistant",
-                    "content": [["type": "input_text", "text": message.content]],
+                    "content": [["type": "output_text", "text": message.content]],
                 ] as [String: Any])
             }
         }

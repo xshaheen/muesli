@@ -133,21 +133,30 @@ struct MeetingChatView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(turn.role == .user ? MuesliTheme.surfaceSelected : MuesliTheme.backgroundRaised)
             )
+            // The copy affordance only shows on hover; clicking the bubble itself
+            // copies too, so the answer is grabbable without hunting for the button.
+            .onTapGesture {
+                if turn.role == .assistant { copyTurn(turn.displayText) }
+            }
             .frame(maxWidth: .infinity, alignment: turn.role == .user ? .trailing : .leading)
             if turn.role == .assistant { Spacer(minLength: 32) }
+        }
+    }
+
+    private func copyTurn(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copiedTurnText = text
+        Task {
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            if copiedTurnText == text { copiedTurnText = nil }
         }
     }
 
     /// Copying one answer, rather than making the user select it by hand.
     private func copyButton(for text: String) -> some View {
         Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
-            copiedTurnText = text
-            Task {
-                try? await Task.sleep(nanoseconds: 1_400_000_000)
-                if copiedTurnText == text { copiedTurnText = nil }
-            }
+            copyTurn(text)
         } label: {
             HStack(spacing: 3) {
                 Image(systemName: copiedTurnText == text ? "checkmark" : "doc.on.doc")

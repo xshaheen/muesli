@@ -60,12 +60,12 @@ struct ChatGPTResponsesMessagesTests {
         #expect(entries.map { text($0) } == ["first question", "first answer", "follow-up"])
     }
 
-    @Test("replayed turns all use input_text, including assistant history")
-    func replayedTurnsUseInputText() {
-        // Replayed assistant turns are input to the next request, so they take the
-        // easy-input-message form. `output_text` belongs to complete response output items,
-        // which carry id/status fields we do not have — sending it can get the whole
-        // request rejected, and this is the default backend.
+    @Test("user turns use input_text and assistant history uses output_text")
+    func replayedTurnsUseRoleMatchedContentTypes() {
+        // The live API requires assistant-role content to be `output_text` even when
+        // replayed as input: sending `input_text` fails with 400 "Invalid value:
+        // 'input_text'. Supported values are: 'output_text' and 'refusal'."
+        // (observed 03-08-2026 on the default ChatGPT backend).
         let body = ChatGPTResponsesClient.requestBody(
             messages: [
                 ChatGPTResponsesMessage(role: .user, content: "q"),
@@ -76,8 +76,7 @@ struct ChatGPTResponsesMessagesTests {
 
         let entries = inputEntries(body)
         #expect(contentType(entries[0]) == "input_text")
-        #expect(contentType(entries[1]) == "input_text")
-        #expect(entries.compactMap { contentType($0) }.contains("output_text") == false)
+        #expect(contentType(entries[1]) == "output_text")
     }
 
     @Test("two-prompt form produces the same body as its two-message equivalent")
