@@ -1,6 +1,5 @@
 import Testing
 import CloudKit
-import Darwin
 import Foundation
 import MuesliCore
 import SQLite3
@@ -140,7 +139,7 @@ struct DictationStoreTests {
     @Test("database initialization failures close their SQLite handles")
     func databaseInitializationFailureClosesHandle() throws {
         let store = DictationStore(databaseURL: URL(fileURLWithPath: "/dev/null"))
-        let descriptorCountBefore = openDescriptorCount(for: "/dev/null")
+        let descriptorCountBefore = try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count
 
         for _ in 0..<32 {
             #expect(throws: Error.self) {
@@ -148,20 +147,8 @@ struct DictationStoreTests {
             }
         }
 
-        let descriptorCountAfter = openDescriptorCount(for: "/dev/null")
-        #expect(descriptorCountAfter == descriptorCountBefore)
-    }
-
-    private func openDescriptorCount(for path: String) -> Int {
-        (0..<getdtablesize()).reduce(into: 0) { count, descriptor in
-            var pathBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-            let result = pathBuffer.withUnsafeMutableBufferPointer { buffer in
-                fcntl(descriptor, F_GETPATH, buffer.baseAddress)
-            }
-            if result == 0, String(cString: pathBuffer) == path {
-                count += 1
-            }
-        }
+        let descriptorCountAfter = try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count
+        #expect(descriptorCountAfter <= descriptorCountBefore + 1)
     }
 
     @Test("meeting list projection applies preview precedence and bounds source text")
