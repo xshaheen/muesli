@@ -139,7 +139,7 @@ struct DictationStoreTests {
     @Test("database initialization failures close their SQLite handles")
     func databaseInitializationFailureClosesHandle() throws {
         let store = DictationStore(databaseURL: URL(fileURLWithPath: "/dev/null"))
-        let descriptorCountBefore = try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count
+        let descriptorCountBefore = try devNullDescriptorCount()
 
         for _ in 0..<32 {
             #expect(throws: Error.self) {
@@ -147,8 +147,24 @@ struct DictationStoreTests {
             }
         }
 
-        let descriptorCountAfter = try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count
+        let descriptorCountAfter = try devNullDescriptorCount()
         #expect(descriptorCountAfter <= descriptorCountBefore + 1)
+    }
+
+    /// Descriptors resolving to `/dev/null` — the probe's own database target.
+    /// A raw `/dev/fd` count also sees every file other concurrently running
+    /// suites open, which made this probe flaky under parallel execution;
+    /// nothing else in the test process opens `/dev/null`, so a leak of the 32
+    /// failed handles above still moves this count while neighbors cannot.
+    private func devNullDescriptorCount() throws -> Int {
+        var count = 0
+        for entry in try FileManager.default.contentsOfDirectory(atPath: "/dev/fd") {
+            guard let fd = Int32(entry) else { continue }
+            var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            guard fcntl(fd, F_GETPATH, &buffer) != -1 else { continue }
+            if String(cString: buffer) == "/dev/null" { count += 1 }
+        }
+        return count
     }
 
     @Test("meeting list projection applies preview precedence and bounds source text")
