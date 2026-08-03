@@ -293,6 +293,12 @@ actor Gemma4LiteRTTranscriber {
         }
     }
 
+    /// Whether the multi-GB engine is resident (or on its way in). Lets the idle
+    /// unload skip — and stay silent about — an engine that was never loaded.
+    var isLoaded: Bool {
+        engine != nil || isLoading
+    }
+
     func prepare(progress: ((Double, String?) -> Void)? = nil) async throws {
         if engine != nil { return }
         if isLoading {

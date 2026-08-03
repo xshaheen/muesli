@@ -357,6 +357,12 @@ actor Qwen3PostProcessor {
         loadTask = nil
     }
 
+    /// Whether the GGUF weights are resident (or on their way in). Lets the idle
+    /// unload skip — and stay silent about — a model that was never loaded.
+    var isLoaded: Bool {
+        manager != nil || loadTask != nil
+    }
+
     func prepare() async throws {
         _ = try await loadManager()
     }

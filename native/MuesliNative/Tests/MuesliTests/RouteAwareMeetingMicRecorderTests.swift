@@ -192,6 +192,9 @@ struct RouteAwareMeetingMicRecorderTests {
         try await waitUntil { samples == [[8, 9]] }
 
         #expect(samples == [[8, 9]])
+        // The failed child is retired one async hop after samples flow; under a
+        // loaded parallel run the immediate read raced it.
+        try await waitUntil { failed.stopCalls == 1 }
         #expect(failed.stopCalls == 1)
     }
 

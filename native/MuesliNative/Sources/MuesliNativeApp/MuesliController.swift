@@ -420,6 +420,9 @@ final class MuesliController: NSObject {
     private var isPresentingMeetingTerminationConfirmation = false
     private var isTerminatingAfterMeetingConfirmation = false
     private var backgroundMeetingProcessingCount = 0
+    /// Last meeting-residency value pushed to the coordinator, so the frequent
+    /// `syncAppState()` calls only cross the actor boundary when it actually flips.
+    private var isPostProcessorHeldForMeeting = false
     private var pendingMeetingCompletionNotification: PendingMeetingCompletionNotification?
     private var contributionMilestonePromptDismissedThisLaunch = false
     private var contributionMilestonePromptSeenIDsThisLaunch: Set<String> = []
@@ -1132,6 +1135,7 @@ final class MuesliController: NSObject {
         appState.activePostProcessor = PostProcessorOption.resolve(id: config.activePostProcessorId)
         appState.config = config
         appState.isMeetingRecording = isMeetingRecording()
+        updatePostProcessorMeetingResidency()
         appState.isMeetingRecordingPaused = isMeetingRecordingPaused()
         appState.isMeetingStarting = isStartingMeetingRecording
         appState.meetingStartStatus = meetingStartStatus
@@ -2340,6 +2344,20 @@ final class MuesliController: NSObject {
                 enabled: enabled,
                 transcriptionBackend: self.selectedBackend
             )
+        }
+    }
+
+    /// Keeps the on-device cleanup model loaded for as long as a meeting is
+    /// recording, starting, or still being processed in the background.
+    private func updatePostProcessorMeetingResidency() {
+        let held = isMeetingRecording()
+            || isStartingMeetingRecording
+            || backgroundMeetingProcessingCount > 0
+        guard held != isPostProcessorHeldForMeeting else { return }
+        isPostProcessorHeldForMeeting = held
+        Task { [weak self] in
+            guard let self else { return }
+            await self.transcriptionCoordinator.setMeetingActive(held)
         }
     }
 
@@ -6932,6 +6950,7 @@ final class MuesliController: NSObject {
     }
 
     private func beginMeetingActivity(reason: String) {
+        updatePostProcessorMeetingResidency()
         guard meetingActivity == nil else { return }
         meetingActivity = ProcessInfo.processInfo.beginActivity(
             options: [
@@ -6972,6 +6991,7 @@ final class MuesliController: NSObject {
     }
 
     private func endMeetingActivity() {
+        updatePostProcessorMeetingResidency()
         guard backgroundMeetingProcessingCount == 0,
               activeMeetingSession?.isRecording != true else { return }
         guard let activity = meetingActivity else { return }

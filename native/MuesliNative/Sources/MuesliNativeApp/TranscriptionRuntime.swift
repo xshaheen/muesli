@@ -136,6 +136,11 @@ actor TranscriptionCoordinator {
     private var postProcessorBackend: TranscriptCleanupBackendOption = .local
     private var postProcessorConfig: AppConfig = AppConfig()
 
+    private var postProcessorIdleUnloadMinutes = PostProcessorIdleUnloadPolicy.defaultIdleMinutes
+    private var isMeetingActive = false
+    private var postProcessorInvocationsInFlight = 0
+    private var idleUnloadTask: Task<Void, Never>?
+
     private struct PostProcessorSnapshot {
         let backend: TranscriptCleanupBackendOption
         let systemPrompt: String
@@ -173,6 +178,11 @@ actor TranscriptionCoordinator {
         postProcessorBackend = backend
         postProcessorSystemPrompt = systemPrompt
         postProcessorConfig = config
+        postProcessorIdleUnloadMinutes = PostProcessorIdleUnloadPolicy
+            .resolvedIdleMinutes(config.postProcessorIdleUnloadMinutes)
+        // A settings change restarts the countdown against the new value, and
+        // re-arms it for a model still resident from a previously selected backend.
+        scheduleIdleUnload()
 
         if backend == .gemma4LiteRT {
             postProcessorModelId = Gemma4LiteRTModelStore.repoID
@@ -568,12 +578,105 @@ actor TranscriptionCoordinator {
             default:
                 return
             }
+            // A preloaded model that never gets dictated into must still age out.
+            scheduleIdleUnload()
         } catch {
             if postProcessorBackend == .local {
                 Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor preload failed: \(error)")
             } else {
                 Gemma4LiteRTLogging.log("Gemma cleanup preload failed: \(error)")
             }
+        }
+    }
+
+    // MARK: - Post-processor idle unload
+
+    /// Pins the on-device cleanup model in memory for the duration of a meeting.
+    ///
+    /// A meeting is exactly when a reload hurts most: the user may dictate notes
+    /// into another app while it records, and the machine is already busy with ASR
+    /// and diarization. The countdown restarts once the meeting is finished.
+    func setMeetingActive(_ active: Bool) {
+        guard isMeetingActive != active else { return }
+        isMeetingActive = active
+        if active {
+            cancelIdleUnload()
+            fputs("[postproc] idle unload suspended while a meeting is active\n", stderr)
+        } else {
+            fputs("[postproc] meeting finished; idle unload countdown restarted\n", stderr)
+            scheduleIdleUnload()
+        }
+    }
+
+    private var isPostProcessorIdle: Bool {
+        postProcessorInvocationsInFlight == 0 && !isMeetingActive
+    }
+
+    private func beginPostProcessorInvocation() {
+        postProcessorInvocationsInFlight += 1
+        cancelIdleUnload()
+    }
+
+    private func endPostProcessorInvocation() {
+        postProcessorInvocationsInFlight = max(0, postProcessorInvocationsInFlight - 1)
+        scheduleIdleUnload()
+    }
+
+    private func cancelIdleUnload() {
+        idleUnloadTask?.cancel()
+        idleUnloadTask = nil
+    }
+
+    /// LSUIElement apps have their timers throttled by App Nap, so this may fire
+    /// late. A late unload only means the memory is held longer than asked, which is
+    /// the same state the app was already in, so no wakeup guarantee is needed.
+    private func scheduleIdleUnload() {
+        cancelIdleUnload()
+        guard postProcessorInvocationsInFlight == 0 else { return }
+        guard let delay = PostProcessorIdleUnloadPolicy.unloadDelaySeconds(
+            idleMinutes: postProcessorIdleUnloadMinutes,
+            isMeetingActive: isMeetingActive
+        ) else { return }
+        idleUnloadTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                // Cancelled by a new cleanup call, a meeting start, or a config change.
+                return
+            }
+            await self?.unloadIdlePostProcessorModels()
+        }
+    }
+
+    /// Releases whichever on-device cleanup model is still resident.
+    ///
+    /// Deliberately not keyed to the selected backend: switching from a local model
+    /// to a hosted one leaves the old weights in memory with nothing else to free
+    /// them. Both lazy-load again on the next cleanup call.
+    private func unloadIdlePostProcessorModels() async {
+        // `idleUnloadTask` is deliberately left alone: a reschedule can land between
+        // this task waking and running, and clearing the handle here would orphan
+        // that newer timer beyond the reach of cancelIdleUnload().
+        guard isPostProcessorIdle, #available(macOS 15, *) else { return }
+        let minutes = postProcessorIdleUnloadMinutes
+
+        // `isPostProcessorIdle` is re-read after each await: a dictation can start
+        // while this is suspended, and unloading underneath it would cost that one
+        // dictation its cleanup pass.
+        if let postProcessor = _qwen3PostProcessor as? Qwen3PostProcessor,
+           await postProcessor.isLoaded,
+           isPostProcessorIdle {
+            await postProcessor.shutdown()
+            fputs("[postproc] unloaded local GGUF cleanup model after \(minutes) idle min\n", stderr)
+        }
+
+        if PostProcessorIdleUnloadPolicy.canUnloadGemma4Engine(activeTranscriptionBackend: activeBackend),
+           let gemma4 = _gemma4LiteRTTranscriber as? Gemma4LiteRTTranscriber,
+           await gemma4.isLoaded,
+           isPostProcessorIdle {
+            await gemma4.shutdown()
+            _gemma4LiteRTTranscriber = nil
+            fputs("[postproc] unloaded Gemma 4 cleanup engine after \(minutes) idle min\n", stderr)
         }
     }
 
@@ -685,6 +788,7 @@ actor TranscriptionCoordinator {
     }
 
     func shutdown() async {
+        cancelIdleUnload()
         await fluidTranscriber.shutdown()
         await whisperTranscriber.shutdown()
         await senseVoiceTranscriber.shutdown()
@@ -753,16 +857,25 @@ actor TranscriptionCoordinator {
             Gemma4LiteRTLogging.log("Gemma cleanup skipped because Gemma is the transcription backend")
             return nil
         }
-        if postProcessorSnapshot.backend.isGemma4LiteRT {
-            return await postProcessDictationWithGemma4(
+        // Hosted backends hold nothing on this machine, so they run outside the
+        // residency window that the on-device models below need.
+        if postProcessorSnapshot.backend.llmBackend != nil {
+            return await postProcessDictationWithHostedBackend(
                 result,
                 backend: backend,
                 postProcessorSnapshot: postProcessorSnapshot,
                 appContext: appContext
             )
         }
-        if postProcessorSnapshot.backend.llmBackend != nil {
-            return await postProcessDictationWithHostedBackend(
+
+        // Every on-device cleanup call passes through here, which makes this the one
+        // place that knows the model is in use. Both paths lazy-load, so a call
+        // arriving after an idle unload transparently reloads the weights.
+        beginPostProcessorInvocation()
+        defer { endPostProcessorInvocation() }
+
+        if postProcessorSnapshot.backend.isGemma4LiteRT {
+            return await postProcessDictationWithGemma4(
                 result,
                 backend: backend,
                 postProcessorSnapshot: postProcessorSnapshot,

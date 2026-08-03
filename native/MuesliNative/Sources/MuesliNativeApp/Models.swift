@@ -1197,6 +1197,9 @@ struct AppConfig: Codable {
     /// conversation to a third party.
     var enableMeetingTranscriptCleanup: Bool = false
     var postProcessorBackend: String = TranscriptCleanupBackendOption.local.backend
+    /// Minutes of dictation-cleanup inactivity before an on-device cleanup model is
+    /// released from memory. 0 keeps it resident for the life of the process.
+    var postProcessorIdleUnloadMinutes: Int = PostProcessorIdleUnloadPolicy.defaultIdleMinutes
     var activePostProcessorId: String = PostProcessorOption.defaultOption.id
     var postProcessorChatGPTModel: String = ""
     var postProcessorOpenAIModel: String = ""
@@ -1317,6 +1320,7 @@ struct AppConfig: Codable {
         case enablePostProcessor = "enable_post_processor"
         case enableMeetingTranscriptCleanup = "enable_meeting_transcript_cleanup"
         case postProcessorBackend = "post_processor_backend"
+        case postProcessorIdleUnloadMinutes = "post_processor_idle_unload_minutes"
         case activePostProcessorId = "active_post_processor_id"
         case postProcessorChatGPTModel = "post_processor_chatgpt_model"
         case postProcessorOpenAIModel = "post_processor_openai_model"
@@ -1495,6 +1499,9 @@ struct AppConfig: Codable {
         postProcessorBackend = TranscriptCleanupBackendOption
             .resolved(try? c.decode(String.self, forKey: .postProcessorBackend))
             .backend
+        postProcessorIdleUnloadMinutes = PostProcessorIdleUnloadPolicy.resolvedIdleMinutes(
+            (try? c.decode(Int.self, forKey: .postProcessorIdleUnloadMinutes)) ?? defaults.postProcessorIdleUnloadMinutes
+        )
         activePostProcessorId = (try? c.decode(String.self, forKey: .activePostProcessorId)) ?? defaults.activePostProcessorId
         postProcessorChatGPTModel = SummaryModelPreset.supportedChatGPTModel(
             SummaryModelPreset.migratedFromGPT55(
