@@ -256,6 +256,7 @@ enum MeetingChatClient {
             "reasoning": ["effort": SummaryModelPreset.reasoningEffort(for: model) ?? "low"],
             "text": ["verbosity": "low"],
             "max_output_tokens": maxAnswerTokens,
+            "store": false,
         ]
     }
 

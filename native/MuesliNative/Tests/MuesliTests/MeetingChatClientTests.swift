@@ -44,7 +44,7 @@ struct MeetingChatClientTests {
 
     // MARK: - Wire formats
 
-    @Test("OpenAI Responses uses input and max_output_tokens")
+    @Test("OpenAI Responses uses input, max_output_tokens, and disables storage")
     func openAIResponsesShape() {
         // Regression guard: /v1/responses rejects the chat-completions token key.
         let body = MeetingChatClient.openAIResponsesBody(
@@ -56,6 +56,7 @@ struct MeetingChatClientTests {
         #expect(body["messages"] == nil)
         #expect(body["max_output_tokens"] != nil)
         #expect(body["max_completion_tokens"] == nil)
+        #expect(body["store"] as? Bool == false)
         #expect(roles(body, key: "input") == ["system", "user"])
     }
 
