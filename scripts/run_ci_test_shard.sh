@@ -35,6 +35,7 @@ case "${shard}" in
       FloatingIndicatorAnchorRestoreTests
       FloatingIndicatorDragTests
       FloatingIndicatorPlacementTests
+      FloatingIndicatorStyleTests
       FloatingMeetingChatTests
       FloatingMeetingTranscriptPlacementTests
       MarkdownRichTextEditorTests
@@ -107,6 +108,7 @@ case "${shard}" in
       SystemAudioRecorderTests
       MeetingMicFailoverAttemptTrackerTests
       MeetingMicFailoverPolicyTests
+      MeetingMicSessionRouteStateTests
       MeetingChatClientTests
       MeetingChatConversationTests
       MeetingChatRecipesTests
