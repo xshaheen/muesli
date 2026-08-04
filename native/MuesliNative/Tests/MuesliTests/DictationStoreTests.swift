@@ -468,6 +468,10 @@ struct DictationStoreTests {
         )
 
         #expect(record.calendarOccurrence == nil)
+        #expect(record.cleanedTranscript.isEmpty)
+        #expect(record.visualContext.isEmpty)
+        #expect(record.previousMeetingNotes.isEmpty)
+        #expect(record.notesSource == .raw)
     }
 
     @Test("MeetingRecord preserves a calendar occurrence through Codable")
@@ -498,6 +502,35 @@ struct DictationStoreTests {
         )
 
         #expect(decoded.calendarOccurrence == occurrence)
+    }
+
+    @Test("MeetingRecord preserves transcript cleanup state through Codable")
+    func meetingRecordCleanupStateCodableRoundTrip() throws {
+        let original = MeetingRecord(
+            id: 43,
+            title: "Customer follow-up",
+            startTime: "2026-04-10T15:00:00Z",
+            durationSeconds: 1800,
+            rawTranscript: "[10:00:00] Speaker 1: البرايمريكية",
+            formattedNotes: "## Summary",
+            wordCount: 3,
+            folderID: nil,
+            cleanedTranscript: "[10:00:00] Speaker 1: primary key",
+            visualContext: "MUES-42 was open in Safari",
+            previousMeetingNotes: "Agreed to revisit the migration",
+            notesSource: .cleaned
+        )
+
+        let decoded = try JSONDecoder().decode(
+            MeetingRecord.self,
+            from: JSONEncoder().encode(original)
+        )
+
+        #expect(decoded.rawTranscript == original.rawTranscript)
+        #expect(decoded.cleanedTranscript == original.cleanedTranscript)
+        #expect(decoded.visualContext == original.visualContext)
+        #expect(decoded.previousMeetingNotes == original.previousMeetingNotes)
+        #expect(decoded.notesSource == .cleaned)
     }
 
     @Test("migration adds template columns to legacy meeting schema")

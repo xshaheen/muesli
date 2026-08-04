@@ -198,12 +198,14 @@ struct MeetingDetailPayload: Encodable {
     let startTime: String
     let durationSeconds: Double
     let rawTranscript: String
+    let cleanedTranscript: String
     let formattedNotes: String
     let wordCount: Int
     let folderID: Int64?
     let status: String
     let manualNotes: String
     let notesState: String
+    let notesSource: String
     let calendarEventID: String?
     let micAudioPath: String?
     let systemAudioPath: String?
@@ -219,12 +221,14 @@ struct MeetingDetailPayload: Encodable {
         startTime = record.startTime
         durationSeconds = record.durationSeconds
         rawTranscript = record.rawTranscript
+        cleanedTranscript = record.cleanedTranscript
         formattedNotes = record.formattedNotes
         wordCount = record.wordCount
         folderID = record.folderID
         status = record.status.rawValue
         manualNotes = record.manualNotes
         notesState = record.notesState.rawValue
+        notesSource = record.notesSource.rawValue
         calendarEventID = record.calendarEventID
         micAudioPath = record.micAudioPath
         systemAudioPath = record.systemAudioPath

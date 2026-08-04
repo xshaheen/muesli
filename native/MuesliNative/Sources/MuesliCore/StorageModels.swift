@@ -435,6 +435,7 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         case startTime
         case durationSeconds
         case rawTranscript
+        case cleanedTranscript
         case formattedNotes
         case wordCount
         case folderID
@@ -452,6 +453,9 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         case source
         case followUpToID
         case followUpToRecordName
+        case visualContext
+        case previousMeetingNotes
+        case notesSource
     }
 
     public init(from decoder: Decoder) throws {
@@ -478,7 +482,11 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
             selectedTemplatePrompt: try c.decodeIfPresent(String.self, forKey: .selectedTemplatePrompt),
             source: (try? c.decode(MeetingSource.self, forKey: .source)) ?? .meeting,
             followUpToID: try c.decodeIfPresent(Int64.self, forKey: .followUpToID),
-            followUpToRecordName: try c.decodeIfPresent(String.self, forKey: .followUpToRecordName)
+            followUpToRecordName: try c.decodeIfPresent(String.self, forKey: .followUpToRecordName),
+            cleanedTranscript: (try? c.decode(String.self, forKey: .cleanedTranscript)) ?? "",
+            visualContext: (try? c.decode(String.self, forKey: .visualContext)) ?? "",
+            previousMeetingNotes: (try? c.decode(String.self, forKey: .previousMeetingNotes)) ?? "",
+            notesSource: (try? c.decode(MeetingNotesSource.self, forKey: .notesSource)) ?? .raw
         )
     }
 

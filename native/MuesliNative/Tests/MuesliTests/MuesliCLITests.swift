@@ -73,6 +73,28 @@ struct MuesliCLITests {
         #expect(detailPayload.selectedTemplatePrompt == "## Weekly Overview")
     }
 
+    @Test("meeting detail payload exposes raw and cleaned transcript state")
+    func meetingDetailPayloadIncludesCleanupState() {
+        let record = MeetingRecord(
+            id: 43,
+            title: "Customer follow-up",
+            startTime: "2026-03-22T11:00:00Z",
+            durationSeconds: 1800,
+            rawTranscript: "[10:00:00] Speaker 1: البرايمريكية",
+            formattedNotes: "## Summary",
+            wordCount: 3,
+            folderID: nil,
+            cleanedTranscript: "[10:00:00] Speaker 1: primary key",
+            notesSource: .cleaned
+        )
+
+        let detailPayload = MeetingDetailPayload(record)
+
+        #expect(detailPayload.rawTranscript == record.rawTranscript)
+        #expect(detailPayload.cleanedTranscript == record.cleanedTranscript)
+        #expect(detailPayload.notesSource == "cleaned")
+    }
+
     @Test("transcribe validation rejects unsupported file extensions")
     func transcribeRejectsUnsupportedExtension() {
         #expect(throws: Error.self) {
