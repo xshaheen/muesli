@@ -311,8 +311,8 @@ final class FloatingIndicatorController: NSObject {
         if isMeetingRecording {
             switch Self.meetingRecordingPillAction(
                 clickX: x,
-                pauseRegionMaxX: recordingPauseRegionMaxX(),
-                panelToggleRegion: panelToggleHitRegion(),
+                panelToggleRegionMaxX: panelToggleRegionMaxX(),
+                pauseRegion: pauseHitRegion(),
                 stopRegionMinX: stopHitRegionMinX()
             ) {
             case .togglePause: onToggleMeetingPause?()
@@ -336,49 +336,60 @@ final class FloatingIndicatorController: NSObject {
         case ignore
     }
 
-    /// Maps a click on the meeting pill to its control: pause on the left, the
-    /// panel toggle beside it, stop only in its own trailing region. The waveform
+    /// Maps a click on the meeting pill to its control: the panel toggle on the
+    /// left, pause beside it, stop only in its own trailing region. The waveform
     /// strip between them is display, not a control — a meeting must not stop
     /// because a click meant for a nearby control missed by a few points.
     static func meetingRecordingPillAction(
         clickX: CGFloat?,
-        pauseRegionMaxX: CGFloat,
-        panelToggleRegion: ClosedRange<CGFloat>?,
+        panelToggleRegionMaxX: CGFloat,
+        pauseRegion: ClosedRange<CGFloat>?,
         stopRegionMinX: CGFloat
     ) -> MeetingRecordingPillAction {
         guard let clickX else { return .ignore }
-        if clickX < pauseRegionMaxX { return .togglePause }
-        if let panelToggleRegion, panelToggleRegion.contains(clickX) { return .togglePanel }
+        if clickX < panelToggleRegionMaxX { return .togglePanel }
+        if let pauseRegion, pauseRegion.contains(clickX) { return .togglePause }
         if clickX >= stopRegionMinX { return .stop }
         return .ignore
     }
 
-    /// The panel toggle's hit region: the comfortable minimum width centred on the
-    /// glyph, stopping short of the pause region and the stop square.
-    private func panelToggleHitRegion() -> ClosedRange<CGFloat>? {
-        guard let panelToggleLayer, panelToggleLayer.superlayer != nil else { return nil }
-        let mid = panelToggleLayer.frame.midX
-        let lower = max(recordingPauseRegionMaxX(), mid - Self.minimumControlHitWidth / 2)
+    /// Where the panel toggle's hit region ends: it holds the pill's leftmost
+    /// slot, so everything left of this is the toggle.
+    private func panelToggleRegionMaxX() -> CGFloat {
+        guard let panelToggleLayer, panelToggleLayer.superlayer != nil else { return 0 }
+        let padded = panelToggleLayer.frame.midX + Self.minimumControlHitWidth / 2
+        guard let stopMinX = stopLayer?.frame.minX else { return padded }
+        return min(padded, stopMinX)
+    }
+
+    /// The pause control's hit region: the comfortable minimum width centred on the
+    /// glyph, stopping short of the panel toggle's region and the stop square.
+    private func pauseHitRegion() -> ClosedRange<CGFloat>? {
+        guard let iconLabel, !iconLabel.isHidden, iconLabel.frame.width > 0 else { return nil }
+        let mid = iconLabel.frame.midX
+        let lower = max(panelToggleRegionMaxX(), mid - Self.minimumControlHitWidth / 2)
         let upper = min(stopLayer?.frame.minX ?? .greatestFiniteMagnitude, mid + Self.minimumControlHitWidth / 2)
         guard lower < upper else { return nil }
         return lower...upper
     }
 
     /// Where the stop control's hit region begins: the comfortable minimum width
-    /// centred on the square, never reaching back into the panel toggle. Falls back
-    /// to the historical everything-right-of-pause behavior if the square is
-    /// somehow missing, so the pill can never lose its stop control.
+    /// centred on the square, never reaching back into the pause control. Falls
+    /// back to everything-right-of-the-leading-controls if the square is somehow
+    /// missing, so the pill can never lose its stop control.
     private func stopHitRegionMinX() -> CGFloat {
         guard let stopLayer, stopLayer.superlayer != nil else {
-            return recordingPauseRegionMaxX()
+            return pauseHitRegion()?.upperBound ?? panelToggleRegionMaxX()
         }
         return max(
-            panelToggleHitRegion()?.upperBound ?? recordingPauseRegionMaxX(),
+            pauseHitRegion()?.upperBound ?? panelToggleRegionMaxX(),
             stopLayer.frame.midX - Self.minimumControlHitWidth / 2
         )
     }
 
-    /// Where the leading control's hit region ends on a recording pill.
+    /// Where the leading ✕ control's hit region ends on a dictation recording pill.
+    /// (A meeting pill routes through `panelToggleRegionMaxX`/`pauseHitRegion`
+    /// instead — its leftmost control is the panel toggle, not the pause.)
     ///
     /// Derived from the chrome rather than fixed at 30pt: the glyph and the stop square
     /// are both laid out against the pill's width, so on a pill that is not 76pt wide a
@@ -1377,7 +1388,11 @@ final class FloatingIndicatorController: NSObject {
         let glyphSize = iconLabel.attributedStringValue.size()
         let width = max(controlSize, ceil(glyphSize.width) + 2)
         let height = max(controlSize, ceil(glyphSize.height))
-        let centerX = Self.recordingControlLeadingInset + controlSize / 2
+        // A meeting pill's pause sits in the second slot, after the panel toggle;
+        // dictation's ✕ has no toggle and stays leftmost.
+        let centerX = isMeetingRecording
+            ? Self.meetingPauseCenterX
+            : Self.recordingControlLeadingInset + controlSize / 2
         iconLabel.frame = NSRect(
             x: round(centerX - width / 2),
             y: round((size.height - height) / 2),
@@ -1439,9 +1454,8 @@ final class FloatingIndicatorController: NSObject {
         addPanelToggleLayer(in: size)
     }
 
-    /// The panel-toggle glyph a meeting pill carries between the waveform and the
-    /// stop square. Added and removed with the stop layer so the two cannot drift
-    /// apart across relayouts.
+    /// The panel-toggle glyph in a meeting pill's leftmost slot. Added and removed
+    /// with the stop layer so the two cannot drift apart across relayouts.
     private func addPanelToggleLayer(in size: NSSize) {
         removePanelToggleLayer()
         guard isMeetingRecording, let contentView else { return }
@@ -1462,9 +1476,11 @@ final class FloatingIndicatorController: NSObject {
     /// symbol images are template images, which draw black as raw layer contents.
     private static let panelToggleGlyphImage: NSImage? = {
         guard let symbol = NSImage(systemSymbolName: "captions.bubble", accessibilityDescription: "Show live transcript")?
-            // 8pt to match the pause glyph's 8pt semibold, so the two leading
-            // controls read at the same optical weight.
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 8, weight: .semibold))
+            // 7pt, below the pause glyph's 8pt: the bubble is a wide, filled shape
+            // (11x10 at 8pt against the pause bars' ~5pt of ink), so matching point
+            // sizes made it visually dominate the row. One point down lands both
+            // controls at the same optical weight.
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 7, weight: .semibold))
         else { return nil }
         return NSImage(size: symbol.size, flipped: false) { rect in
             symbol.draw(in: rect)
@@ -1484,11 +1500,14 @@ final class FloatingIndicatorController: NSObject {
     private static let recordingControlSize: CGFloat = 10
     private static let recordingControlLeadingInset: CGFloat = 7
     private static let panelToggleGlyphSize: CGFloat = 12
-    /// The panel toggle sits right after the pause control on the leading side:
-    /// [pause] [panel] [waveform] [stop]. The inset keeps the glyph's whole hit
-    /// region clear of the pause region, which ends at the pause glyph's centre
-    /// plus half the minimum hit width (12 + 18 = 30).
-    private static let panelToggleLeadingInset: CGFloat = 32
+    /// The panel toggle holds the meeting pill's leftmost slot:
+    /// [panel] [pause] [waveform] [stop].
+    private static let panelToggleLeadingInset: CGFloat = 7
+    /// Where the meeting pause glyph centres — the second slot, clear of the
+    /// toggle's hit region, which ends at the toggle's centre plus half the
+    /// minimum hit width (13 + 18 = 31). Dictation's ✕ has no toggle beside it
+    /// and keeps the plain leading inset.
+    private static let meetingPauseCenterX: CGFloat = 38
     /// The smallest region a pointer can comfortably aim at, used to pad the recording
     /// pill's 10pt leading control out to a clickable width.
     private static let minimumControlHitWidth: CGFloat = 36
@@ -1594,7 +1613,10 @@ final class FloatingIndicatorController: NSObject {
         guard state == .recording, isMeetingRecording else {
             return (frameWidth - totalWidth) / 2
         }
-        let leading = Self.panelToggleLeadingInset + Self.panelToggleGlyphSize / 2 + Self.minimumControlHitWidth / 2
+        // Clear of the *second* control's hit region — the pause, since the slot
+        // swap. Measuring from the toggle left the bars starting at x31, right on
+        // top of the pause glyph at x38, which read as two extra waveform dots.
+        let leading = Self.meetingPauseCenterX + Self.minimumControlHitWidth / 2
         let trailing = frameWidth - Self.stopSquareTrailingInset - Self.stopSquareSize / 2 - Self.minimumControlHitWidth / 2
         return leading + max(0, trailing - leading - totalWidth) / 2
     }

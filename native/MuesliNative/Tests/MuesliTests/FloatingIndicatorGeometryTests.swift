@@ -88,22 +88,22 @@ struct FloatingIndicatorDragTests {
     private let screen = NSRect(x: 0, y: 0, width: 1_440, height: 900)
     private let collapsed = NSSize(width: 44, height: 28)
 
-    @Test("meeting pill clicks map to pause, panel toggle, stop, and an inert waveform")
+    @Test("meeting pill clicks map to panel toggle, pause, stop, and an inert waveform")
     func meetingPillClickMapping() {
         typealias C = FloatingIndicatorController
-        // The 112pt pill's control order: [pause 0-30][panel 30-55][waveform 55-83][stop 83-112].
-        let panelRegion: ClosedRange<CGFloat> = 30...55
+        // The 112pt pill's control order: [panel 0-31][pause 31-56][waveform 56-83][stop 83-112].
+        let pauseRegion: ClosedRange<CGFloat> = 31...56
 
         // No location: never stop a meeting on a click we cannot place.
-        #expect(C.meetingRecordingPillAction(clickX: nil, pauseRegionMaxX: 30, panelToggleRegion: panelRegion, stopRegionMinX: 83) == .ignore)
-        #expect(C.meetingRecordingPillAction(clickX: 10, pauseRegionMaxX: 30, panelToggleRegion: panelRegion, stopRegionMinX: 83) == .togglePause)
-        #expect(C.meetingRecordingPillAction(clickX: 40, pauseRegionMaxX: 30, panelToggleRegion: panelRegion, stopRegionMinX: 83) == .togglePanel)
+        #expect(C.meetingRecordingPillAction(clickX: nil, panelToggleRegionMaxX: 31, pauseRegion: pauseRegion, stopRegionMinX: 83) == .ignore)
+        #expect(C.meetingRecordingPillAction(clickX: 10, panelToggleRegionMaxX: 31, pauseRegion: pauseRegion, stopRegionMinX: 83) == .togglePanel)
+        #expect(C.meetingRecordingPillAction(clickX: 40, panelToggleRegionMaxX: 31, pauseRegion: pauseRegion, stopRegionMinX: 83) == .togglePause)
         // The waveform strip is display, not a control.
-        #expect(C.meetingRecordingPillAction(clickX: 70, pauseRegionMaxX: 30, panelToggleRegion: panelRegion, stopRegionMinX: 83) == .ignore)
-        #expect(C.meetingRecordingPillAction(clickX: 85, pauseRegionMaxX: 30, panelToggleRegion: panelRegion, stopRegionMinX: 83) == .stop)
-        #expect(C.meetingRecordingPillAction(clickX: 108, pauseRegionMaxX: 30, panelToggleRegion: panelRegion, stopRegionMinX: 83) == .stop)
-        // Without the glyph laid out there is no toggle region; its span is inert, not stop.
-        #expect(C.meetingRecordingPillAction(clickX: 40, pauseRegionMaxX: 30, panelToggleRegion: nil, stopRegionMinX: 83) == .ignore)
+        #expect(C.meetingRecordingPillAction(clickX: 70, panelToggleRegionMaxX: 31, pauseRegion: pauseRegion, stopRegionMinX: 83) == .ignore)
+        #expect(C.meetingRecordingPillAction(clickX: 85, panelToggleRegionMaxX: 31, pauseRegion: pauseRegion, stopRegionMinX: 83) == .stop)
+        #expect(C.meetingRecordingPillAction(clickX: 108, panelToggleRegionMaxX: 31, pauseRegion: pauseRegion, stopRegionMinX: 83) == .stop)
+        // Without the pause laid out there is no pause region; its span is inert, not stop.
+        #expect(C.meetingRecordingPillAction(clickX: 40, panelToggleRegionMaxX: 31, pauseRegion: nil, stopRegionMinX: 83) == .ignore)
     }
 
     @Test("an unclamped pill saves the anchor where it was dropped")
