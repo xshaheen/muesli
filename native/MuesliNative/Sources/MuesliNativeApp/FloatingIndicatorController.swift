@@ -1379,7 +1379,7 @@ final class FloatingIndicatorController: NSObject {
         iconLabel.isHidden = false
         iconLabel.stringValue = recordingControlSymbol()
         iconLabel.textColor = .white.withAlphaComponent(isMeetingRecording ? 0.86 : 0.45)
-        iconLabel.font = NSFont.systemFont(ofSize: isMeetingRecording ? 8 : 7, weight: .semibold)
+        iconLabel.font = NSFont.systemFont(ofSize: isMeetingRecording ? 10 : 7, weight: .semibold)
         // Frame from the measured glyph, centred on the control point. A fixed
         // 10x10 box let the text field's font metrics decide where the glyph sat
         // inside it, which is why the pause bars floated off the row's centreline
@@ -1476,11 +1476,10 @@ final class FloatingIndicatorController: NSObject {
     /// symbol images are template images, which draw black as raw layer contents.
     private static let panelToggleGlyphImage: NSImage? = {
         guard let symbol = NSImage(systemSymbolName: "captions.bubble", accessibilityDescription: "Show live transcript")?
-            // 6pt, well below the pause glyph's 8pt: the bubble is a wide outline
-            // shape (11x10 at 8pt against the pause bars' ~5pt of ink), so matching
-            // point sizes made it visually dominate the row. Chosen from rendered
-            // side-by-side variants, not arithmetic.
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 6, weight: .semibold))
+            // Two points below the pause glyph's font size: the bubble is a wide
+            // outline shape, so matching point sizes made it visually dominate the
+            // row. Chosen from rendered side-by-side variants, not arithmetic.
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 8, weight: .semibold))
         else { return nil }
         return NSImage(size: symbol.size, flipped: false) { rect in
             symbol.draw(in: rect)
@@ -1531,10 +1530,11 @@ final class FloatingIndicatorController: NSObject {
         let centerX = panelToggleLeadingInset + panelToggleGlyphSize / 2
         return CGRect(
             x: round(centerX - imageSize.width / 2),
-            // One point above geometric centre: the symbol's bounding box includes
-            // the tail hanging below the bubble, so exact centring visibly sank
-            // the bubble's mass below the row every other glyph sits on.
-            y: round((size.height - imageSize.height) / 2 + 1),
+            // Above geometric centre: the symbol's bounding box includes the tail
+            // hanging below the bubble, so exact centring visibly sank the bubble's
+            // mass below the row every other glyph sits on. Not rounded — a half
+            // point is one whole pixel on the 2x displays this renders on.
+            y: (size.height - imageSize.height) / 2 + 1.5,
             width: imageSize.width,
             height: imageSize.height
         )
