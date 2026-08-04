@@ -729,8 +729,8 @@ private struct FloatingMeetingTranscriptPanelView: View {
 
     private var headerTitle: String {
         switch model.selectedTab {
-        case .transcript: return "Live transcript"
-        case .chat: return "Ask about this meeting"
+        case .transcript: return "Transcript"
+        case .chat: return "Chat"
         case .notes: return "My notes"
         }
     }
@@ -750,9 +750,9 @@ private struct FloatingMeetingTranscriptPanelView: View {
                 .fixedSize()
             // The tab strip sits immediately left of dismiss, right of the variable-width
             // status label, so its hit region is a fixed offset from the panel's right edge.
-            tabButton(.transcript, icon: "text.quote", help: "Live transcript")
+            tabButton(.transcript, icon: "text.quote", help: "Transcript")
             if model.isChatAvailable {
-                tabButton(.chat, icon: "bubble.left.and.text.bubble.right", help: "Ask about this meeting")
+                tabButton(.chat, icon: "bubble.left.and.text.bubble.right", help: "Chat")
             }
             if model.isNotesAvailable {
                 tabButton(.notes, icon: "note.text", help: "My notes")
