@@ -460,6 +460,8 @@ final class FloatingMeetingTranscriptPanelController {
         window = nil
         hostingView = nil
         placementSide = nil
+        keyReleaseWindow?.close()
+        keyReleaseWindow = nil
     }
 
     /// Single place every teardown path goes through, so no route can skip the resign step.
@@ -550,12 +552,41 @@ final class FloatingMeetingTranscriptPanelController {
         }
     }
 
+    /// An invisible offscreen panel that exists only to be made key and immediately
+    /// ordered out — the mechanism `resignPanelKey` bounces keyboard focus through.
+    private var keyReleaseWindow: NSPanel?
+
     /// Hands key status back without changing what the panel shows.
+    ///
+    /// Key status only moves when *some* window takes it — `resignKey` alone
+    /// reassigns nothing. Ordering the visible panel out and back did move it, but
+    /// unmapped the panel for a frame, so every click that left a typing tab blinked
+    /// the whole panel. Bouncing through an invisible window moves key status the
+    /// same way while the panel never leaves the screen: making the bounce window
+    /// key takes the keyboard off the panel, and ordering it out makes AppKit
+    /// reassign key past the panel (skipped as `becomesKeyOnlyIfNeeded`), handing
+    /// the keyboard back to the call.
     private func resignPanelKey() {
-        if let window = hostingView?.window, window.isKeyWindow {
-            window.orderOut(nil)
-            window.orderFront(nil)
+        guard let window = hostingView?.window, window.isKeyWindow else { return }
+        let bounce: NSPanel
+        if let keyReleaseWindow {
+            bounce = keyReleaseWindow
+        } else {
+            bounce = InteractiveFloatingPanel(
+                contentRect: NSRect(x: -10_000, y: -10_000, width: 1, height: 1),
+                styleMask: [.borderless, .nonactivatingPanel],
+                backing: .buffered,
+                defer: false
+            )
+            bounce.isOpaque = false
+            bounce.backgroundColor = .clear
+            bounce.hasShadow = false
+            bounce.alphaValue = 0
+            bounce.becomesKeyOnlyIfNeeded = true
+            keyReleaseWindow = bounce
         }
+        bounce.makeKeyAndOrderFront(nil)
+        bounce.orderOut(nil)
     }
 
     private func endOutsideClickDismissal() {
