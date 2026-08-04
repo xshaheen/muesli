@@ -1448,9 +1448,8 @@ final class FloatingIndicatorController: NSObject {
 
         let scale = contentView.window?.backingScaleFactor ?? 2
         let glyph = CALayer()
-        // The real chevron.up symbol, not a unicode stand-in: it reads as "raise
-        // the panel" and mirrors the chevron-down dismiss in the panel's header,
-        // where the same symbol family renders at the same weight.
+        // A captions bubble, not a directional caret: the control opens the live
+        // transcript, and this is the one glyph on the pill that says so.
         glyph.contents = Self.panelToggleGlyphImage?.layerContents(forContentsScale: scale)
         glyph.contentsGravity = .resizeAspect
         glyph.contentsScale = scale
@@ -1459,10 +1458,10 @@ final class FloatingIndicatorController: NSObject {
         panelToggleLayer = glyph
     }
 
-    /// White chevron.up at the pill's control weight, tinted once and reused —
+    /// White captions.bubble at the pill's control weight, tinted once and reused —
     /// symbol images are template images, which draw black as raw layer contents.
     private static let panelToggleGlyphImage: NSImage? = {
-        guard let symbol = NSImage(systemSymbolName: "chevron.up", accessibilityDescription: "Show live transcript")?
+        guard let symbol = NSImage(systemSymbolName: "captions.bubble", accessibilityDescription: "Show live transcript")?
             // 8pt to match the pause glyph's 8pt semibold, so the two leading
             // controls read at the same optical weight.
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 8, weight: .semibold))
