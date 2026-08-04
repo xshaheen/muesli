@@ -225,6 +225,53 @@ struct MeetingChatClientTests {
         }
     }
 
+    // MARK: - Transport privacy
+
+    @Test("307 and 308 redirects are rejected and remain failures", arguments: [307, 308])
+    func redirectResponsesAreRejected(statusCode: Int) async throws {
+        let sourceURL = URL(string: "http://127.0.0.1:11434/api/chat")!
+        let destinationURL = URL(string: "https://untrusted.example/upload")!
+        let delegate = MeetingChatClient.RedirectRejectingDelegate()
+        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+
+        let task = session.dataTask(with: sourceURL)
+        let response = try #require(
+            HTTPURLResponse(
+                url: sourceURL,
+                statusCode: statusCode,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Location": destinationURL.absoluteString]
+            )
+        )
+        let redirectedRequest = URLRequest(url: destinationURL)
+
+        let followed = await withCheckedContinuation { continuation in
+            delegate.urlSession(
+                session,
+                task: task,
+                willPerformHTTPRedirection: response,
+                newRequest: redirectedRequest
+            ) { request in
+                continuation.resume(returning: request)
+            }
+        }
+
+        #expect(followed == nil)
+
+        do {
+            try MeetingChatClient.validateHTTPResponse(response, data: Data(), backend: "Ollama")
+            Issue.record("Expected redirect status to fail validation")
+        } catch let error as MeetingChatError {
+            guard case let .backendFailed(backend, mappedStatusCode, _) = error else {
+                Issue.record("Expected backendFailed, got \(error)")
+                return
+            }
+            #expect(backend == "Ollama")
+            #expect(mappedStatusCode == statusCode)
+        }
+    }
+
     // MARK: - Errors
 
     @Test("chat errors never claim meeting notes failed")

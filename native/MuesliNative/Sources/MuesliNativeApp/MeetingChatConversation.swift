@@ -115,14 +115,16 @@ final class MeetingChatConversation {
         systemPrompt: String,
         manualNotes: String = ""
     ) -> [MeetingChatMessage] {
+        let system = systemContent(
+            transcript: transcript,
+            systemPrompt: systemPrompt,
+            manualNotes: manualNotes
+        )
         var messages: [MeetingChatMessage] = [
             MeetingChatMessage(
                 role: .system,
-                content: systemContent(
-                    transcript: transcript,
-                    systemPrompt: systemPrompt,
-                    manualNotes: manualNotes
-                )
+                content: system.content,
+                trimEligibleTailStart: system.trimEligibleTailStart
             )
         ]
         for turn in turns where turn.wasAnswered {
@@ -140,7 +142,7 @@ final class MeetingChatConversation {
         transcript: String,
         systemPrompt: String,
         manualNotes: String
-    ) -> String {
+    ) -> (content: String, trimEligibleTailStart: Int) {
         var content = systemPrompt
         // The user's own notes are what they chose to write down -- often the
         // decision or the action item the transcript only implies. Without them
@@ -153,9 +155,11 @@ final class MeetingChatConversation {
         }
         let body = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         if !body.isEmpty {
-            content += MeetingChatClient.transcriptSeparator + body
+            content += MeetingChatClient.transcriptSeparator
         }
-        return content
+        let trimEligibleTailStart = content.count
+        content += body
+        return (content, trimEligibleTailStart)
     }
 }
 

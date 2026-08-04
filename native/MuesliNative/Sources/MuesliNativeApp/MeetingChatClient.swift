@@ -10,10 +10,17 @@ struct MeetingChatMessage: Equatable {
 
     let role: Role
     let content: String
+    /// Character offset where the trim-eligible transcript tail begins.
+    ///
+    /// This stays out of provider payloads. It only gives the local budgeter an exact
+    /// boundary so user-authored notes remain fixed context even when a long transcript
+    /// must be shortened.
+    let trimEligibleTailStart: Int?
 
-    init(role: Role, content: String) {
+    init(role: Role, content: String, trimEligibleTailStart: Int? = nil) {
         self.role = role
         self.content = content
+        self.trimEligibleTailStart = trimEligibleTailStart
     }
 }
 
@@ -63,6 +70,28 @@ enum MeetingChatClient {
 
     private static let chatTimeout: TimeInterval = 120
     private static let maxAnswerTokens = 2048
+
+    /// Refuses every redirect so private meeting context cannot be forwarded to a host the
+    /// user did not configure. URLSession otherwise follows 307/308 while preserving the
+    /// POST body and credentials.
+    final class RedirectRejectingDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest,
+            completionHandler: @escaping (URLRequest?) -> Void
+        ) {
+            completionHandler(nil)
+        }
+    }
+
+    private static let redirectRejectingDelegate = RedirectRejectingDelegate()
+    private static let session = URLSession(
+        configuration: .default,
+        delegate: redirectRejectingDelegate,
+        delegateQueue: nil
+    )
 
     // MARK: - Context budget
 
@@ -131,7 +160,7 @@ enum MeetingChatClient {
         guard totalCharacters(messages) > limit else { return messages }
 
         var working = messages
-        let systemOriginal = working.first(where: { $0.role == .system })?.content
+        let systemOriginal = working.first(where: { $0.role == .system })
 
         // History first, then the transcript. Evicting history can free enough room that the
         // transcript needs no trimming at all, whereas trimming first would discard meeting
@@ -157,11 +186,8 @@ enum MeetingChatClient {
            let systemOriginal {
             let others = totalCharacters(working) - working[systemIndex].content.count
             let allowanceForSystem = limit - others
-            if allowanceForSystem > 0, systemOriginal.count > allowanceForSystem {
-                working[systemIndex] = MeetingChatMessage(
-                    role: .system,
-                    content: trimmedKeepingTail(systemOriginal, to: allowanceForSystem)
-                )
+            if allowanceForSystem > 0, systemOriginal.content.count > allowanceForSystem {
+                working[systemIndex] = trimmedKeepingTail(systemOriginal, to: allowanceForSystem)
             }
         }
 
@@ -183,6 +209,45 @@ enum MeetingChatClient {
     /// Separates the grounding instructions from the transcript inside the system message.
     /// Trimming splits here so the instructions always survive.
     static let transcriptSeparator = "\n\n---\n\n"
+
+    /// Trims a message using its explicit transcript boundary when available.
+    ///
+    /// System context assembled by `MeetingChatConversation` can include arbitrary user
+    /// notes, including separator-looking text. Carrying the boundary as metadata avoids
+    /// parsing user content to decide what may be discarded.
+    private static func trimmedKeepingTail(
+        _ message: MeetingChatMessage,
+        to limit: Int
+    ) -> MeetingChatMessage {
+        guard let tailStart = message.trimEligibleTailStart,
+              tailStart >= 0,
+              tailStart <= message.content.count
+        else {
+            return MeetingChatMessage(
+                role: message.role,
+                content: trimmedKeepingTail(message.content, to: limit)
+            )
+        }
+
+        guard message.content.count > limit, limit > 0 else { return message }
+
+        let boundary = message.content.index(message.content.startIndex, offsetBy: tailStart)
+        let fixedContext = String(message.content[..<boundary])
+        let transcript = String(message.content[boundary...])
+        let marker = "[earlier transcript trimmed]\n"
+        let keep = limit - fixedContext.count - marker.count
+
+        // Fixed context includes the grounding prompt and the user's notes. If it cannot
+        // fit, preserve it intact and let the caller reject the request as over budget.
+        guard keep > 0 else { return message }
+
+        let content = fixedContext + marker + String(transcript.suffix(keep))
+        return MeetingChatMessage(
+            role: message.role,
+            content: content,
+            trimEligibleTailStart: fixedContext.count + marker.count
+        )
+    }
 
     /// Trims the transcript, never the instructions.
     ///
@@ -449,8 +514,8 @@ enum MeetingChatClient {
         extract: (Data) throws -> String?
     ) async throws -> String {
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            try MeetingSummaryClient.validateHTTPResponse(response, data: data, backend: backend)
+            let (data, response) = try await session.data(for: request)
+            try validateHTTPResponse(response, data: data, backend: backend)
             guard let text = try extract(data), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw MeetingChatError.emptyResponse(backend: backend)
             }
@@ -460,6 +525,17 @@ enum MeetingChatClient {
         } catch {
             // Validation failures arrive as MeetingSummaryError, whose text talks about
             // meeting notes. Re-map so the user is told their question failed.
+            throw mappedTransportError(error, backend: backend)
+        }
+    }
+
+    /// Applies shared status validation, then maps summary-specific errors into the chat
+    /// domain. Kept visible to tests so redirect responses can be verified without making a
+    /// network request.
+    static func validateHTTPResponse(_ response: URLResponse, data: Data, backend: String) throws {
+        do {
+            try MeetingSummaryClient.validateHTTPResponse(response, data: data, backend: backend)
+        } catch {
             throw mappedTransportError(error, backend: backend)
         }
     }

@@ -296,6 +296,33 @@ struct MeetingChatConversationTests {
         #expect(request[0].content.contains("just my notes"))
     }
 
+    @Test("budgeting preserves all manual notes and trims only the transcript tail")
+    func budgetingPreservesManualNotes() throws {
+        let conversation = MeetingChatConversation()
+        let limit = MeetingChatClient.Budget.characters(forBackend: "ollama")
+        let notes = "KEEP-NOTES-BEFORE"
+            + MeetingChatClient.transcriptSeparator
+            + "KEEP-NOTES-AFTER"
+        let transcriptHead = "EARLIEST-TRANSCRIPT "
+            + String(repeating: "OLD-TRANSCRIPT ", count: limit / 4)
+        let transcriptTail = "NEWEST-TRANSCRIPT"
+        let request = conversation.requestMessages(
+            transcript: transcriptHead + transcriptTail,
+            systemPrompt: "GROUNDING-PROMPT",
+            manualNotes: notes
+        ) + [MeetingChatMessage(role: .user, content: "what changed?")]
+
+        let budgeted = try MeetingChatClient.budgetedMessages(request, backend: "ollama")
+        let system = try #require(budgeted.first)
+
+        #expect(system.content.contains("GROUNDING-PROMPT"))
+        #expect(system.content.contains("KEEP-NOTES-BEFORE"))
+        #expect(system.content.contains("KEEP-NOTES-AFTER"))
+        #expect(system.content.contains("NEWEST-TRANSCRIPT"))
+        #expect(system.content.contains("EARLIEST-TRANSCRIPT") == false)
+        #expect(system.content.contains("[earlier transcript trimmed]"))
+    }
+
     @Test("both prompts ask for markdown, because the view renders it")
     func promptsRequestMarkdown() {
         #expect(MeetingChatPrompts.live.contains("Markdown"))
