@@ -239,6 +239,26 @@ struct FloatingMeetingChatTests {
         #expect(model.chatTranscript.contains("hello"))
     }
 
+    @Test("chat's has-transcript gate tracks live chunks, prior transcript, and reset")
+    func chatHasTranscriptGate() {
+        // The chat tab's body gates on this flag instead of the growing transcript,
+        // so it must agree with the transcript's emptiness at every stage — a gate
+        // stuck false leaves the composer disabled while text is plainly visible.
+        let model = FloatingMeetingTranscriptModel()
+        model.chatContext = FloatingMeetingChatContext(meetingID: 1, priorTranscript: "", currentConfig: { AppConfig() }, isReady: { true })
+        #expect(!model.chatHasTranscript)
+
+        model.update(transcript: "[10:00:00] You: hello", partialYou: "", partialOthers: "")
+        #expect(model.chatHasTranscript)
+
+        model.reset()
+        #expect(!model.presentation.hasContent)
+
+        // A resumed meeting has something to ask about before any new speech.
+        model.chatContext = FloatingMeetingChatContext(meetingID: 1, priorTranscript: "[09:00:00] You: earlier", currentConfig: { AppConfig() }, isReady: { true })
+        #expect(model.chatHasTranscript)
+    }
+
     // MARK: - Cross-surface continuity
 
     @Test("a question asked in the panel is visible in the detail tab")

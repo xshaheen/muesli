@@ -117,6 +117,9 @@ final class LiveTranscriptPresentationModel {
     var partialYou = ""
     var partialOthers = ""
     var messages: [TranscriptChatMessage] = []
+    /// Flips at most once per session. Bodies that only need "is there anything yet"
+    /// observe this instead of `transcript`, whose every chunk would re-render them.
+    private(set) var hasContent = false
 
     func update(transcript: String, partialYou: String, partialOthers: String) {
         guard self.transcript != transcript ||
@@ -134,6 +137,12 @@ final class LiveTranscriptPresentationModel {
                 messages = TranscriptChatMessage.messages(from: transcript)
             }
             self.transcript = transcript
+            // Guarded write: an unconditional set would notify observers on every
+            // chunk, which is the exact churn this flag exists to absorb.
+            let nowHasContent = !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if hasContent != nowHasContent {
+                hasContent = nowHasContent
+            }
         }
         self.partialYou = partialYou
         self.partialOthers = partialOthers
@@ -144,6 +153,7 @@ final class LiveTranscriptPresentationModel {
         partialYou = ""
         partialOthers = ""
         messages = []
+        hasContent = false
     }
 }
 

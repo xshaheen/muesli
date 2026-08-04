@@ -12,12 +12,20 @@ import AppKit
 /// without branching on meeting state internally.
 struct MeetingChatView: View {
     @Bindable var conversation: MeetingChatConversation
-    let transcript: String
+    /// Resolved when a question is sent, never in `body`. During a recording the
+    /// transcript grows on every chunk, and a body that read it re-rendered this whole
+    /// surface — composer included — each time, which showed up as flicker in the
+    /// floating panel's chat tab. Send-time resolution also means a question always
+    /// reasons over the freshest text, not the copy from the last render.
+    let transcript: () -> String
+    /// The cheap, rarely-changing stand-in the body gates on instead of the transcript.
+    let hasTranscript: Bool
     let systemPrompt: String
     /// The user's own notes, sent alongside the transcript so answers reflect what
-    /// they thought worth writing down, not only what was said aloud.
-    var manualNotes: String = ""
-    let config: AppConfig
+    /// they thought worth writing down, not only what was said aloud. A closure for
+    /// the same reason `transcript` is: resolved per send, read nowhere in `body`.
+    var manualNotes: () -> String = { "" }
+    let config: () -> AppConfig
     /// Compact mode trims padding and type size for the floating panel.
     var isCompact: Bool = false
 
@@ -28,10 +36,6 @@ struct MeetingChatView: View {
 
     private var canSend: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !conversation.isSending
-    }
-
-    private var hasTranscript: Bool {
-        !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -261,10 +265,10 @@ struct MeetingChatView: View {
             await conversation.send(
                 displayText: recipe.name,
                 sentText: recipe.prompt,
-                transcript: transcript,
+                transcript: transcript(),
                 systemPrompt: systemPrompt,
-                manualNotes: manualNotes,
-                config: config
+                manualNotes: manualNotes(),
+                config: config()
             )
         }
     }
@@ -297,10 +301,10 @@ struct MeetingChatView: View {
         Task {
             await conversation.send(
                 displayText: question,
-                transcript: transcript,
+                transcript: transcript(),
                 systemPrompt: systemPrompt,
-                manualNotes: manualNotes,
-                config: config
+                manualNotes: manualNotes(),
+                config: config()
             )
         }
     }

@@ -172,6 +172,17 @@ final class FloatingMeetingTranscriptModel {
         )
     }
 
+    /// What the chat tab's body gates on. Reads `hasContent`, not the transcript
+    /// itself: a body read of the growing transcript re-rendered the chat surface on
+    /// every chunk — the panel's chat-tab flicker — while this flips at most once.
+    var chatHasTranscript: Bool {
+        if let prior = chatContext?.priorTranscript,
+           !prior.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        return presentation.hasContent
+    }
+
     func openChat() {
         guard isChatAvailable else { return }
         selectedTab = .chat
@@ -652,12 +663,17 @@ private struct FloatingMeetingTranscriptPanelView: View {
                 Divider().background(MuesliTheme.surfaceBorder)
                 switch model.selectedTab {
                 case .chat where model.chatContext != nil:
+                    // Send-time resolvers, not resolved values: reading the growing
+                    // transcript (or re-resolving notes/config) in this body rebuilt
+                    // the whole chat surface on every transcript chunk, which the
+                    // user saw as the chat tab flickering while people spoke.
                     MeetingChatView(
                         conversation: MeetingChatConversations.shared.conversation(for: model.chatContext!.meetingID),
-                        transcript: model.chatTranscript,
+                        transcript: { [model] in model.chatTranscript },
+                        hasTranscript: model.chatHasTranscript,
                         systemPrompt: MeetingChatSource.systemPrompt(isRecording: true),
-                        manualNotes: model.chatContext!.manualNotes(),
-                        config: model.chatContext!.currentConfig(),
+                        manualNotes: model.chatContext!.manualNotes,
+                        config: model.chatContext!.currentConfig,
                         isCompact: true
                     )
                 case .notes:

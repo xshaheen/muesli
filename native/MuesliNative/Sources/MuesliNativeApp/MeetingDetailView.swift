@@ -56,17 +56,25 @@ private struct LiveChatSection: View {
     let manualNotes: String
     let config: AppConfig
 
+    /// Fresh on every call: the send-time resolver below reaches through `appState`,
+    /// so a question asked minutes into the recording sees the transcript up to now.
+    private var currentTranscript: String {
+        MeetingChatSource.transcript(
+            for: meeting,
+            live: appState.liveMeetingTranscript,
+            isRecording: true
+        )
+    }
+
     var body: some View {
         MeetingChatView(
             conversation: conversation,
-            transcript: MeetingChatSource.transcript(
-                for: meeting,
-                live: appState.liveMeetingTranscript,
-                isRecording: true
-            ),
+            transcript: { currentTranscript },
+            hasTranscript: !currentTranscript
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             systemPrompt: MeetingChatSource.systemPrompt(isRecording: true),
-            manualNotes: manualNotes,
-            config: config
+            manualNotes: { manualNotes },
+            config: { config }
         )
     }
 }
@@ -488,14 +496,16 @@ struct MeetingDetailView: View {
                     if isChatAvailable {
                         MeetingChatView(
                             conversation: MeetingChatConversations.shared.conversation(for: meeting.id),
-                            transcript: MeetingChatSource.transcript(
+                            transcript: { MeetingChatSource.transcript(
                                 for: meeting,
                                 live: "",
                                 isRecording: false
-                            ),
+                            ) },
+                            hasTranscript: !meeting.displayTranscript
+                                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                             systemPrompt: MeetingChatSource.systemPrompt(isRecording: false),
-                            manualNotes: meeting.manualNotes,
-                            config: appState.config
+                            manualNotes: { meeting.manualNotes },
+                            config: { appState.config }
                         )
                         .opacity(documentMode == .chat ? 1 : 0)
                         .allowsHitTesting(documentMode == .chat)
