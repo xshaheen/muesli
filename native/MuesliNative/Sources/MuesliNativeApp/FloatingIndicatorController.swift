@@ -1439,8 +1439,10 @@ final class FloatingIndicatorController: NSObject {
         guard isMeetingRecording, let contentView else { return }
 
         let glyph = CATextLayer()
-        glyph.string = "\u{2630}"
-        glyph.fontSize = 8
+        // U+2303 UP ARROWHEAD: reads as "raise the panel", matching the panel's
+        // own chevron-down dismiss control.
+        glyph.string = "\u{2303}"
+        glyph.fontSize = 9
         glyph.alignmentMode = .center
         glyph.foregroundColor = NSColor.white.withAlphaComponent(0.7).cgColor
         glyph.contentsScale = contentView.window?.backingScaleFactor ?? 2
