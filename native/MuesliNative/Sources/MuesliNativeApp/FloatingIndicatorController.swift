@@ -312,11 +312,13 @@ final class FloatingIndicatorController: NSObject {
             switch Self.meetingRecordingPillAction(
                 clickX: x,
                 pauseRegionMaxX: recordingPauseRegionMaxX(),
-                panelToggleRegion: panelToggleHitRegion()
+                panelToggleRegion: panelToggleHitRegion(),
+                stopRegionMinX: stopHitRegionMinX()
             ) {
             case .togglePause: onToggleMeetingPause?()
             case .togglePanel: toggleMeetingTranscriptPanel()
             case .stop: onStopMeeting?()
+            case .ignore: break
             }
             return
         }
@@ -331,20 +333,24 @@ final class FloatingIndicatorController: NSObject {
         case togglePause
         case togglePanel
         case stop
+        case ignore
     }
 
-    /// Maps a click on the meeting pill to its control. The trailing side has
-    /// always stopped the recording; the panel toggle carves its own region out
-    /// of the middle, leaving pause on the left and stop everywhere else.
+    /// Maps a click on the meeting pill to its control: pause on the left, the
+    /// panel toggle beside it, stop only in its own trailing region. The waveform
+    /// strip between them is display, not a control — a meeting must not stop
+    /// because a click meant for a nearby control missed by a few points.
     static func meetingRecordingPillAction(
         clickX: CGFloat?,
         pauseRegionMaxX: CGFloat,
-        panelToggleRegion: ClosedRange<CGFloat>?
+        panelToggleRegion: ClosedRange<CGFloat>?,
+        stopRegionMinX: CGFloat
     ) -> MeetingRecordingPillAction {
-        guard let clickX else { return .stop }
+        guard let clickX else { return .ignore }
         if clickX < pauseRegionMaxX { return .togglePause }
         if let panelToggleRegion, panelToggleRegion.contains(clickX) { return .togglePanel }
-        return .stop
+        if clickX >= stopRegionMinX { return .stop }
+        return .ignore
     }
 
     /// The panel toggle's hit region: the comfortable minimum width centred on the
@@ -356,6 +362,20 @@ final class FloatingIndicatorController: NSObject {
         let upper = min(stopLayer?.frame.minX ?? .greatestFiniteMagnitude, mid + Self.minimumControlHitWidth / 2)
         guard lower < upper else { return nil }
         return lower...upper
+    }
+
+    /// Where the stop control's hit region begins: the comfortable minimum width
+    /// centred on the square, never reaching back into the panel toggle. Falls back
+    /// to the historical everything-right-of-pause behavior if the square is
+    /// somehow missing, so the pill can never lose its stop control.
+    private func stopHitRegionMinX() -> CGFloat {
+        guard let stopLayer, stopLayer.superlayer != nil else {
+            return recordingPauseRegionMaxX()
+        }
+        return max(
+            panelToggleHitRegion()?.upperBound ?? recordingPauseRegionMaxX(),
+            stopLayer.frame.midX - Self.minimumControlHitWidth / 2
+        )
     }
 
     /// Where the leading control's hit region ends on a recording pill.
@@ -1439,7 +1459,11 @@ final class FloatingIndicatorController: NSObject {
     private static let recordingControlSize: CGFloat = 10
     private static let recordingControlLeadingInset: CGFloat = 7
     private static let panelToggleGlyphSize: CGFloat = 10
-    private static let panelToggleTrailingInset: CGFloat = 22
+    /// The panel toggle sits right after the pause control on the leading side:
+    /// [pause] [panel] [waveform] [stop]. The inset keeps the glyph's whole hit
+    /// region clear of the pause region, which ends at the pause glyph's centre
+    /// plus half the minimum hit width (12 + 18 = 30).
+    private static let panelToggleLeadingInset: CGFloat = 32
     /// The smallest region a pointer can comfortably aim at, used to pad the recording
     /// pill's 10pt leading control out to a clickable width.
     private static let minimumControlHitWidth: CGFloat = 36
@@ -1455,7 +1479,7 @@ final class FloatingIndicatorController: NSObject {
 
     private static func panelToggleLayerFrame(in size: NSSize) -> CGRect {
         CGRect(
-            x: size.width - panelToggleGlyphSize - panelToggleTrailingInset,
+            x: panelToggleLeadingInset,
             y: floor((size.height - panelToggleGlyphSize) / 2) - 1,
             width: panelToggleGlyphSize,
             height: panelToggleGlyphSize
@@ -1497,7 +1521,7 @@ final class FloatingIndicatorController: NSObject {
         let barWidth: CGFloat = 3
         let barSpacing: CGFloat = 3
         let totalWidth = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barSpacing
-        let startX = (frameSize.width - totalWidth) / 2
+        let startX = waveformStartX(totalWidth: totalWidth, frameWidth: frameSize.width)
         let minHeight: CGFloat = 4
 
         for i in 0..<barCount {
@@ -1516,7 +1540,7 @@ final class FloatingIndicatorController: NSObject {
         let barWidth: CGFloat = 3
         let barSpacing: CGFloat = 3
         let totalWidth = CGFloat(barLayers.count) * barWidth + CGFloat(max(0, barLayers.count - 1)) * barSpacing
-        let startX = (frameSize.width - totalWidth) / 2
+        let startX = waveformStartX(totalWidth: totalWidth, frameWidth: frameSize.width)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for (i, bar) in barLayers.enumerated() {
@@ -1528,6 +1552,19 @@ final class FloatingIndicatorController: NSObject {
             bar.cornerRadius = barWidth / 2
         }
         CATransaction.commit()
+    }
+
+    /// Where the bars start. A meeting pill carries controls on both sides and an
+    /// inert waveform, so its bars centre in the gap between the panel toggle's hit
+    /// region and the stop square's — derived from the same constants the click map
+    /// uses, so the visible bars and the inert interval cannot drift apart.
+    private func waveformStartX(totalWidth: CGFloat, frameWidth: CGFloat) -> CGFloat {
+        guard state == .recording, isMeetingRecording else {
+            return (frameWidth - totalWidth) / 2
+        }
+        let leading = Self.panelToggleLeadingInset + Self.panelToggleGlyphSize / 2 + Self.minimumControlHitWidth / 2
+        let trailing = frameWidth - Self.stopSquareTrailingInset - Self.stopSquareSize / 2 - Self.minimumControlHitWidth / 2
+        return leading + max(0, trailing - leading - totalWidth) / 2
     }
 
     private func ensureWaveformAnimation(in frameSize: NSSize, mode: WaveformAnimationMode) {
@@ -2122,10 +2159,12 @@ final class FloatingIndicatorController: NSObject {
         case .idle:
             return isHovered ? NSSize(width: 220, height: 36) : Self.idleIndicatorSize
         case .preparing, .recording:
-            // A meeting pill carries a third control (the panel toggle) between the
-            // waveform and the stop square, so it needs the extra width.
+            // A meeting pill carries a third control (the panel toggle), and its
+            // waveform strip is inert — so the width must hold two full-size hit
+            // regions on the left, one on the right, and 27pt of bars that overlap
+            // none of them.
             if state == .recording, isMeetingRecording {
-                return NSSize(width: 96, height: 22)
+                return NSSize(width: 112, height: 22)
             }
             return NSSize(width: 76, height: 22)
         case .transcribing:
