@@ -169,7 +169,7 @@ final class FloatingIndicatorController: NSObject {
     var onCancelToggleDictation: (() -> Void)?
     var onPositionSaved: ((CGPoint) -> Void)?
     private var stopLayer: CALayer?
-    private var panelToggleLayer: CATextLayer?
+    private var panelToggleLayer: CALayer?
     private var transcribingTitle = "Transcribing"
     private var computerUseTranscriptText: String?
     private var loadingSpinner: NSProgressIndicator?
@@ -1438,18 +1438,32 @@ final class FloatingIndicatorController: NSObject {
         removePanelToggleLayer()
         guard isMeetingRecording, let contentView else { return }
 
-        let glyph = CATextLayer()
-        // U+2303 UP ARROWHEAD: reads as "raise the panel", matching the panel's
-        // own chevron-down dismiss control.
-        glyph.string = "\u{2303}"
-        glyph.fontSize = 9
-        glyph.alignmentMode = .center
-        glyph.foregroundColor = NSColor.white.withAlphaComponent(0.7).cgColor
-        glyph.contentsScale = contentView.window?.backingScaleFactor ?? 2
+        let scale = contentView.window?.backingScaleFactor ?? 2
+        let glyph = CALayer()
+        // The real chevron.up symbol, not a unicode stand-in: it reads as "raise
+        // the panel" and mirrors the chevron-down dismiss in the panel's header,
+        // where the same symbol family renders at the same weight.
+        glyph.contents = Self.panelToggleGlyphImage?.layerContents(forContentsScale: scale)
+        glyph.contentsGravity = .resizeAspect
+        glyph.contentsScale = scale
         glyph.frame = Self.panelToggleLayerFrame(in: size)
         contentView.layer?.addSublayer(glyph)
         panelToggleLayer = glyph
     }
+
+    /// White chevron.up at the pill's control weight, tinted once and reused —
+    /// symbol images are template images, which draw black as raw layer contents.
+    private static let panelToggleGlyphImage: NSImage? = {
+        guard let symbol = NSImage(systemSymbolName: "chevron.up", accessibilityDescription: "Show live transcript")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold))
+        else { return nil }
+        return NSImage(size: symbol.size, flipped: false) { rect in
+            symbol.draw(in: rect)
+            NSColor.white.withAlphaComponent(0.8).set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+    }()
 
     private func removePanelToggleLayer() {
         panelToggleLayer?.removeFromSuperlayer()
@@ -1460,7 +1474,7 @@ final class FloatingIndicatorController: NSObject {
     private static let stopSquareTrailingInset: CGFloat = 8
     private static let recordingControlSize: CGFloat = 10
     private static let recordingControlLeadingInset: CGFloat = 7
-    private static let panelToggleGlyphSize: CGFloat = 10
+    private static let panelToggleGlyphSize: CGFloat = 12
     /// The panel toggle sits right after the pause control on the leading side:
     /// [pause] [panel] [waveform] [stop]. The inset keeps the glyph's whole hit
     /// region clear of the pause region, which ends at the pause glyph's centre
@@ -1651,9 +1665,11 @@ final class FloatingIndicatorController: NSObject {
         let radius = frameSize.height / 2
         let themeHex = config.recordingColorHex
 
-        // During recording, hide frost and show solid accent. Otherwise frosted glass.
-        let isRecording = (state == .recording)
-        glassView?.isHidden = isRecording
+        // Frosted glass in every state. Recording used to hide the frost behind a
+        // near-solid accent fill, which made the meeting pill the one opaque slab in
+        // an otherwise translucent surface family — the accent now tints the same
+        // glass the idle pill and the transcript panel use.
+        glassView?.isHidden = false
         glassView?.frame = NSRect(origin: .zero, size: frameSize)
         glassView?.layer?.cornerRadius = radius
         glassView?.layer?.masksToBounds = true
@@ -1668,7 +1684,9 @@ final class FloatingIndicatorController: NSObject {
             tintAlpha = 0.62
             tintHex = "1e1e2e"
         case .recording:
-            tintAlpha = 0.85
+            // Low enough for the blur to read through, high enough that the white
+            // waveform and controls keep their contrast on bright backdrops.
+            tintAlpha = 0.6
             tintHex = themeHex
         case .transcribing:
             tintAlpha = 0.62
