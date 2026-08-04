@@ -88,6 +88,45 @@ struct MeetingRecordingWriterTests {
         #expect(timeline.sampleOffset(at: 13 * second) == 32_000)
     }
 
+    @Test("delayed capture starts the shared timeline at the first buffer, not the request")
+    func delayedCaptureUsesFirstBufferOrigin() {
+        let second: UInt64 = 1_000_000_000
+        let callbackDate = Date(timeIntervalSince1970: 110)
+        let origin = MeetingCaptureOrigin(
+            callbackEndUptimeNanoseconds: 11 * second,
+            callbackEndDate: callbackDate,
+            sampleCount: 16_000
+        )
+        var timeline = MeetingRecordingTimeline()
+
+        #expect(origin.uptimeNanoseconds == 10 * second)
+        #expect(origin.wallClockDate == Date(timeIntervalSince1970: 109))
+        let didStart = timeline.startIfNeeded(at: origin.uptimeNanoseconds)
+        #expect(didStart)
+
+        let systemStart = timeline.sampleStartOffset(
+            for: .system,
+            sampleCount: 16_000,
+            callbackUptimeNanoseconds: 11 * second
+        )
+        let micStart = timeline.sampleStartOffset(
+            for: .mic,
+            sampleCount: 16_000,
+            callbackUptimeNanoseconds: 13 * second
+        )
+        var systemTiming = MeetingChunkTimingTracker()
+        var micTiming = MeetingChunkTimingTracker()
+        systemTiming.start(atSampleIndex: Int64(systemStart))
+        micTiming.start(atSampleIndex: Int64(micStart))
+        systemTiming.append(sampleCount: 16_000)
+        micTiming.append(sampleCount: 16_000)
+
+        #expect(systemStart == 0)
+        #expect(micStart == 32_000)
+        #expect(systemTiming.finish()?.startTimeSeconds == 0)
+        #expect(micTiming.finish()?.startTimeSeconds == 2)
+    }
+
     @Test("persistTemporaryRecording moves the temp wav when WAV is selected")
     func persistTemporaryRecordingMovesWAVFile() async throws {
         let writer = try MeetingRecordingWriter()

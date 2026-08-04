@@ -392,6 +392,93 @@ struct MeetingMicFailoverPolicyTests {
     }
 }
 
+@Suite("Meeting mic session route override")
+struct MeetingMicSessionRouteStateTests {
+    @Test("unchanged route refresh preserves a pending or accepted fallback")
+    func unchangedRefreshPreservesFallback() {
+        var state = MeetingMicSessionRouteState(configuredDeviceID: 91)
+        let route = routeSnapshot(preferred: 91, defaultInput: 91, builtIn: 82)
+        state.beginFailover(to: 82, route: route)
+
+        let decision = state.reconcileConfiguredRoute(
+            deviceID: 91,
+            route: route,
+            explicitUserSelection: false
+        )
+
+        #expect(decision == .keepSessionOverride(82))
+        #expect(state.sessionOverrideDeviceID == 82)
+    }
+
+    @Test("explicit input selection clears the session fallback and resets eligibility")
+    func explicitSelectionClearsFallback() {
+        var state = MeetingMicSessionRouteState(configuredDeviceID: 91)
+        let route = routeSnapshot(preferred: 91, defaultInput: 91, builtIn: 82)
+        state.beginFailover(to: 82, route: route)
+
+        let decision = state.reconcileConfiguredRoute(
+            deviceID: 93,
+            route: routeSnapshot(preferred: 93, defaultInput: 91, builtIn: 82),
+            explicitUserSelection: true
+        )
+
+        #expect(decision == .applyConfigured(93, resetFailoverEligibility: true))
+        #expect(state.sessionOverrideDeviceID == nil)
+    }
+
+    @Test("fallback disappearance adopts the configured route and resets eligibility")
+    func fallbackDisappearanceClearsOverride() {
+        var state = MeetingMicSessionRouteState(configuredDeviceID: 91)
+        let route = routeSnapshot(preferred: 91, defaultInput: 91, builtIn: 82)
+        state.beginFailover(to: 82, route: route)
+
+        let decision = state.reconcileConfiguredRoute(
+            deviceID: 91,
+            route: routeSnapshot(preferred: 91, defaultInput: 91, builtIn: nil),
+            explicitUserSelection: false
+        )
+
+        #expect(decision == .applyConfigured(91, resetFailoverEligibility: true))
+        #expect(state.sessionOverrideDeviceID == nil)
+    }
+
+    @Test("materially new default route supersedes the session fallback")
+    func materialRouteChangeClearsOverride() {
+        var state = MeetingMicSessionRouteState(configuredDeviceID: nil)
+        let route = routeSnapshot(preferred: nil, defaultInput: 91, builtIn: 82)
+        state.beginFailover(to: 82, route: route)
+
+        let decision = state.reconcileConfiguredRoute(
+            deviceID: nil,
+            route: routeSnapshot(preferred: nil, defaultInput: 93, builtIn: 82),
+            explicitUserSelection: false
+        )
+
+        #expect(decision == .applyConfigured(nil, resetFailoverEligibility: true))
+        #expect(state.sessionOverrideDeviceID == nil)
+    }
+
+    private func routeSnapshot(
+        preferred: AudioObjectID?,
+        defaultInput: AudioObjectID?,
+        builtIn: AudioObjectID?
+    ) -> MeetingMicRouteDiagnosticsSnapshot {
+        MeetingMicRouteDiagnosticsSnapshot(
+            outputRouteKind: "headphoneLike",
+            outputIsAmbiguousBluetooth: false,
+            selectedInputDeviceUID: nil,
+            selectedInputDeviceResolved: true,
+            preferredInputDeviceID: preferred,
+            preferredInputDeviceName: nil,
+            defaultInputDeviceID: defaultInput,
+            defaultInputDeviceName: nil,
+            builtInInputDeviceID: builtIn,
+            builtInInputDeviceName: nil,
+            systemDefaultInputIsBuiltIn: defaultInput == builtIn
+        )
+    }
+}
+
 @Suite("MeetingMicFailoverAttemptTracker")
 struct MeetingMicFailoverAttemptTrackerTests {
     @Test("does not report a switch until the requested input produces audio")

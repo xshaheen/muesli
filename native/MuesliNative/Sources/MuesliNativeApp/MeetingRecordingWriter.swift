@@ -47,12 +47,20 @@ struct MeetingRecordingTimeline {
     private var micEndOffset = 0
     private var systemEndOffset = 0
 
-    mutating func start(at uptimeNanoseconds: UInt64) {
+    @discardableResult
+    mutating func startIfNeeded(at uptimeNanoseconds: UInt64) -> Bool {
+        guard startedAt == nil else { return false }
         startedAt = uptimeNanoseconds
         pausedAt = nil
         excludedPauseNanoseconds = 0
         micEndOffset = 0
         systemEndOffset = 0
+        return true
+    }
+
+    mutating func start(at uptimeNanoseconds: UInt64) {
+        reset()
+        _ = startIfNeeded(at: uptimeNanoseconds)
     }
 
     mutating func pause(at uptimeNanoseconds: UInt64) {
@@ -114,6 +122,29 @@ struct MeetingRecordingTimeline {
         return Int(
             (Double(activeNanoseconds) * Self.sampleRate / Self.nanosecondsPerSecond).rounded(.down)
         )
+    }
+}
+
+struct MeetingCaptureOrigin: Equatable {
+    private static let sampleRate = 16_000.0
+    private static let nanosecondsPerSecond = 1_000_000_000.0
+
+    let uptimeNanoseconds: UInt64
+    let wallClockDate: Date
+
+    init(
+        callbackEndUptimeNanoseconds: UInt64,
+        callbackEndDate: Date,
+        sampleCount: Int
+    ) {
+        let durationSeconds = Double(max(sampleCount, 0)) / Self.sampleRate
+        let durationNanoseconds = UInt64(
+            (durationSeconds * Self.nanosecondsPerSecond).rounded(.toNearestOrAwayFromZero)
+        )
+        uptimeNanoseconds = callbackEndUptimeNanoseconds > durationNanoseconds
+            ? callbackEndUptimeNanoseconds - durationNanoseconds
+            : 0
+        wallClockDate = callbackEndDate.addingTimeInterval(-durationSeconds)
     }
 }
 

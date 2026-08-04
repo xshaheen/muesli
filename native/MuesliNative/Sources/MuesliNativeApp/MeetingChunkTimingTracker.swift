@@ -19,8 +19,9 @@ struct MeetingChunkTimingTracker: Sendable {
     private var currentChunkStartSampleIndex: Int64?
     private var currentChunkSampleCount: Int64 = 0
 
-    mutating func start() {
-        currentChunkStartSampleIndex = 0
+    mutating func start(atSampleIndex startSampleIndex: Int64 = 0) {
+        guard currentChunkStartSampleIndex == nil else { return }
+        currentChunkStartSampleIndex = max(startSampleIndex, 0)
         currentChunkSampleCount = 0
     }
 

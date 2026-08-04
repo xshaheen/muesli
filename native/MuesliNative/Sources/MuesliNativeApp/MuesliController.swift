@@ -525,7 +525,7 @@ final class MuesliController: NSObject {
         }
         dictationAudioRoutingController.onMeetingPreferredInputDeviceChanged = { [weak self] deviceID in
             Task { @MainActor [weak self] in
-                self?.applyMeetingInputDevice(deviceID)
+                self?.applyMeetingInputDevice(deviceID, explicitUserSelection: false)
             }
         }
     }
@@ -1384,7 +1384,10 @@ final class MuesliController: NSObject {
         )
         if previousMeetingInputDeviceUID != config.meetingInputDeviceUID {
             dictationAudioRoutingController.selectedMeetingInputDeviceUID = config.meetingInputDeviceUID
-            applyMeetingInputDevice(dictationAudioRoutingController.preferredInputDeviceIDForMeeting())
+            applyMeetingInputDevice(
+                dictationAudioRoutingController.preferredInputDeviceIDForMeeting(),
+                explicitUserSelection: true
+            )
         }
     }
 
@@ -2040,10 +2043,19 @@ final class MuesliController: NSObject {
         updateConfig { $0.meetingInputDeviceUID = uid }
     }
 
-    private func applyMeetingInputDevice(_ deviceID: AudioObjectID?) {
-        preparingMeetingSession?.setPreferredMicrophoneInputDeviceID(deviceID)
+    private func applyMeetingInputDevice(
+        _ deviceID: AudioObjectID?,
+        explicitUserSelection: Bool = false
+    ) {
+        preparingMeetingSession?.setPreferredMicrophoneInputDeviceID(
+            deviceID,
+            explicitUserSelection: explicitUserSelection
+        )
         if activeMeetingSession !== preparingMeetingSession {
-            activeMeetingSession?.setPreferredMicrophoneInputDeviceID(deviceID)
+            activeMeetingSession?.setPreferredMicrophoneInputDeviceID(
+                deviceID,
+                explicitUserSelection: explicitUserSelection
+            )
         }
     }
 

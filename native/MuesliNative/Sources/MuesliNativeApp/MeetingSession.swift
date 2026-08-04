@@ -177,6 +177,97 @@ private enum MeetingTranscriptRecoveryResult {
     case replace([SpeechSegment])
 }
 
+struct MeetingMicSessionRouteState {
+    enum Reconciliation: Equatable {
+        case keepSessionOverride(AudioObjectID)
+        case applyConfigured(AudioObjectID?, resetFailoverEligibility: Bool)
+    }
+
+    private struct Signature: Equatable {
+        let configuredDeviceID: AudioObjectID?
+        let selectedInputDeviceUID: String?
+        let selectedInputDeviceResolved: Bool
+        let defaultInputDeviceID: AudioObjectID?
+        let builtInInputDeviceID: AudioObjectID?
+    }
+
+    private(set) var configuredDeviceID: AudioObjectID?
+    private(set) var sessionOverrideDeviceID: AudioObjectID?
+    private var failoverRouteSignature: Signature?
+
+    init(configuredDeviceID: AudioObjectID?) {
+        self.configuredDeviceID = configuredDeviceID
+    }
+
+    mutating func beginFailover(
+        to deviceID: AudioObjectID,
+        route: MeetingMicRouteDiagnosticsSnapshot
+    ) {
+        sessionOverrideDeviceID = deviceID
+        failoverRouteSignature = signature(configuredDeviceID: configuredDeviceID, route: route)
+    }
+
+    mutating func failoverDidFail(deviceID: AudioObjectID?) {
+        guard sessionOverrideDeviceID == deviceID else { return }
+        sessionOverrideDeviceID = nil
+        failoverRouteSignature = nil
+    }
+
+    mutating func reconcileConfiguredRoute(
+        deviceID: AudioObjectID?,
+        route: MeetingMicRouteDiagnosticsSnapshot?,
+        explicitUserSelection: Bool
+    ) -> Reconciliation {
+        let previousConfiguredDeviceID = configuredDeviceID
+        configuredDeviceID = deviceID
+
+        guard let overrideDeviceID = sessionOverrideDeviceID else {
+            return .applyConfigured(
+                deviceID,
+                resetFailoverEligibility: explicitUserSelection || previousConfiguredDeviceID != deviceID
+            )
+        }
+
+        let nextSignature = route.map { signature(configuredDeviceID: deviceID, route: $0) }
+        let fallbackStillAvailable = route.map { route in
+            overrideDeviceID == route.preferredInputDeviceID
+                || overrideDeviceID == route.defaultInputDeviceID
+                || overrideDeviceID == route.builtInInputDeviceID
+        } ?? true
+        let routeMateriallyChanged: Bool
+        if let failoverRouteSignature, let nextSignature {
+            routeMateriallyChanged = failoverRouteSignature != nextSignature
+        } else {
+            routeMateriallyChanged = false
+        }
+
+        guard !explicitUserSelection, fallbackStillAvailable, !routeMateriallyChanged else {
+            sessionOverrideDeviceID = nil
+            failoverRouteSignature = nil
+            return .applyConfigured(deviceID, resetFailoverEligibility: true)
+        }
+        return .keepSessionOverride(overrideDeviceID)
+    }
+
+    mutating func endSession() {
+        sessionOverrideDeviceID = nil
+        failoverRouteSignature = nil
+    }
+
+    private func signature(
+        configuredDeviceID: AudioObjectID?,
+        route: MeetingMicRouteDiagnosticsSnapshot
+    ) -> Signature {
+        Signature(
+            configuredDeviceID: configuredDeviceID,
+            selectedInputDeviceUID: route.selectedInputDeviceUID,
+            selectedInputDeviceResolved: route.selectedInputDeviceResolved,
+            defaultInputDeviceID: route.defaultInputDeviceID,
+            builtInInputDeviceID: route.builtInInputDeviceID
+        )
+    }
+}
+
 final class MeetingSession {
     private static let logger = Logger(subsystem: "com.muesli.native", category: "MeetingSession")
 
@@ -209,6 +300,9 @@ final class MeetingSession {
     /// Confined to `chunkRotationQueue`, which serialises every health callback.
     private var micFailoverPolicy = MeetingMicFailoverPolicy()
     private var micFailoverAttemptTracker = MeetingMicFailoverAttemptTracker()
+    /// A fallback chosen for this recording must outlive unrelated CoreAudio
+    /// inventory notifications, even though it is not the user's configured route.
+    private var micSessionRouteState: MeetingMicSessionRouteState
     private var lastMicFailoverEvaluationAt: Date?
     private let chunkRotationQueue = DispatchQueue(label: "MuesliNative.MeetingSession.chunkRotation")
     private let pausedDisplayLock = OSAllocatedUnfairLock(initialState: false)
@@ -253,6 +347,7 @@ final class MeetingSession {
     }
 
     private(set) var startTime: Date?
+    private var captureRequestedStartTime: Date?
     private(set) var isRecording = false
     private(set) var isPaused = false
 
@@ -279,6 +374,9 @@ final class MeetingSession {
         self.templateSnapshot = templateSnapshot
         self.transcriptionCoordinator = transcriptionCoordinator
         self.meetingMicRecorder = meetingMicRecorder
+        self.micSessionRouteState = MeetingMicSessionRouteState(
+            configuredDeviceID: meetingMicRecorder.preferredInputDeviceID
+        )
         if config.useCoreAudioTap {
             self.systemAudioRecorder = CoreAudioSystemRecorder()
         } else {
@@ -290,8 +388,28 @@ final class MeetingSession {
         backendLock.withLock { $0 = backend }
     }
 
-    func setPreferredMicrophoneInputDeviceID(_ deviceID: AudioObjectID?) {
-        meetingMicRecorder.preferredInputDeviceID = deviceID
+    func setPreferredMicrophoneInputDeviceID(
+        _ deviceID: AudioObjectID?,
+        explicitUserSelection: Bool = false
+    ) {
+        chunkRotationQueue.sync {
+            let route = meetingInputRouteProvider?()
+            switch micSessionRouteState.reconcileConfiguredRoute(
+                deviceID: deviceID,
+                route: route,
+                explicitUserSelection: explicitUserSelection
+            ) {
+            case .keepSessionOverride:
+                return
+            case .applyConfigured(let configuredDeviceID, let resetFailoverEligibility):
+                if resetFailoverEligibility {
+                    micFailoverPolicy = MeetingMicFailoverPolicy()
+                    micFailoverAttemptTracker = MeetingMicFailoverAttemptTracker()
+                    lastMicFailoverEvaluationAt = nil
+                }
+                meetingMicRecorder.preferredInputDeviceID = configuredDeviceID
+            }
+        }
     }
 
     private func currentBackend() -> BackendOption {
@@ -300,20 +418,20 @@ final class MeetingSession {
 
     func start() async throws {
         let vadManager = await transcriptionCoordinator.getVadManager()
-        let now = Date()
-        diagnostics = MeetingSessionDiagnostics(title: title, startedAt: now)
+        let requestedStart = Date()
+        diagnostics = MeetingSessionDiagnostics(title: title, startedAt: requestedStart)
 
         // AEC must be loaded before audio pipeline starts (streaming mode)
         await neuralAec.preload()
 
         chunkRotationQueue.sync {
-            startTime = now
-            // The timeline origin must be stamped after the AEC preload (seconds on
-            // first launch), or every retained recording opens with that much
-            // zero-fill and drifts off the transcript clock.
-            retainedRecordingTimeline.start(at: DispatchTime.now().uptimeNanoseconds)
-            chunkTimingTracker.start()
-            systemChunkTimingTracker.start()
+            // The persisted clock is established by the first accepted PCM
+            // callback. Capture startup and permission latency are not audio.
+            startTime = nil
+            captureRequestedStartTime = requestedStart
+            retainedRecordingTimeline.reset()
+            chunkTimingTracker.discard()
+            systemChunkTimingTracker.discard()
             isRecording = true
             setPausedStateOnQueue(false)
         }
@@ -343,9 +461,11 @@ final class MeetingSession {
                 isRecording = false
                 setPausedStateOnQueue(false)
                 startTime = nil
+                captureRequestedStartTime = nil
                 retainedRecordingTimeline.reset()
                 chunkTimingTracker.discard()
                 systemChunkTimingTracker.discard()
+                micSessionRouteState.endSession()
             }
             meetingMicRecorder.cancel()
             if let url = await systemAudioRecorder.stop() {
@@ -557,6 +677,10 @@ final class MeetingSession {
             setPausedStateOnQueue(false)
             chunkTimingTracker.discard()
             systemChunkTimingTracker.discard()
+            micSessionRouteState.endSession()
+            retainedRecordingTimeline.reset()
+            startTime = nil
+            captureRequestedStartTime = nil
             let rawRecorder = rawMicChunkRecorder
             let systemRecorder = systemChunkRecorder
             rawMicChunkRecorder = nil
@@ -618,7 +742,8 @@ final class MeetingSession {
             // Flush partial AEC frame before stopping chunk recorder
             appendFlushedStreamingMicOnQueue()
 
-            let meetingStart = self.startTime ?? Date()
+            let meetingStart = self.startTime ?? self.captureRequestedStartTime ?? Date()
+            micSessionRouteState.endSession()
             let lastRawMicURL = rawMicChunkRecorder?.stop()
             let lastSystemChunkURL = systemChunkRecorder?.stop()
             rawMicChunkRecorder = nil
@@ -1148,6 +1273,7 @@ final class MeetingSession {
             // mid-recording handoff: it starts the candidate, waits for real
             // samples, and only then retires the silent one.
             micFailoverAttemptTracker.begin(record)
+            micSessionRouteState.beginFailover(to: fallbackDeviceID, route: routeSnapshot)
             meetingMicRecorder.preferredInputDeviceID = fallbackDeviceID
             return nil
         }
@@ -1160,6 +1286,7 @@ final class MeetingSession {
             fputs("[meeting] microphone handoff completed after replacement produced audio\n", stderr)
             Self.logger.info("Meeting mic failover completed")
         } else {
+            micSessionRouteState.failoverDidFail(deviceID: record.fallbackDeviceID)
             fputs("[meeting] microphone handoff failed: \(record.handoffErrorDescription ?? "unknown error")\n", stderr)
             Self.logger.error("Meeting mic failover failed")
         }
@@ -1178,16 +1305,18 @@ final class MeetingSession {
     private func enqueueRealtimeMicSamples(_ rawSamples: [Int16]) {
         guard !rawSamples.isEmpty else { return }
         let callbackUptime = DispatchTime.now().uptimeNanoseconds
+        let callbackDate = Date()
 
         chunkRotationQueue.async { [weak self] in
             guard let self, self.isRecording, !self.isPaused else { return }
 
             let healthSnapshot = self.micHealthTracker.noteRawMicSamples(rawSamples)
             self.onMicHealthChanged?(healthSnapshot)
-            let recordingOffset = self.retainedRecordingTimeline.sampleStartOffset(
+            let recordingOffset = self.recordingOffsetOnQueue(
                 for: .mic,
                 sampleCount: rawSamples.count,
-                callbackUptimeNanoseconds: callbackUptime
+                callbackUptimeNanoseconds: callbackUptime,
+                callbackDate: callbackDate
             )
             self.retainedRecordingWriter?.appendMic(rawSamples, atSampleOffset: recordingOffset)
 
@@ -1209,18 +1338,20 @@ final class MeetingSession {
     private func enqueueRealtimeSystemSamples(_ samples: [Int16]) {
         guard !samples.isEmpty else { return }
         let callbackUptime = DispatchTime.now().uptimeNanoseconds
+        let callbackDate = Date()
 
         chunkRotationQueue.async { [weak self] in
             guard let self, self.isRecording, !self.isPaused else { return }
 
-            let now = Date()
+            let now = callbackDate
             let healthSnapshot = self.micHealthTracker.noteSystemSamples(samples, now: now)
             let failoverSnapshot = self.applyMicFailoverIfNeededOnQueue(healthSnapshot, now: now)
             self.onMicHealthChanged?(failoverSnapshot ?? healthSnapshot)
-            let recordingOffset = self.retainedRecordingTimeline.sampleStartOffset(
+            let recordingOffset = self.recordingOffsetOnQueue(
                 for: .system,
                 sampleCount: samples.count,
-                callbackUptimeNanoseconds: callbackUptime
+                callbackUptimeNanoseconds: callbackUptime,
+                callbackDate: callbackDate
             )
             self.retainedRecordingWriter?.appendSystem(samples, atSampleOffset: recordingOffset)
             self.systemChunkRecorder?.append(samples)
@@ -1240,6 +1371,34 @@ final class MeetingSession {
                 systemVadController.processAudio(floatSamples)
             }
         }
+    }
+
+    private func recordingOffsetOnQueue(
+        for source: MeetingRecordingTimeline.Source,
+        sampleCount: Int,
+        callbackUptimeNanoseconds: UInt64,
+        callbackDate: Date
+    ) -> Int {
+        let origin = MeetingCaptureOrigin(
+            callbackEndUptimeNanoseconds: callbackUptimeNanoseconds,
+            callbackEndDate: callbackDate,
+            sampleCount: sampleCount
+        )
+        if retainedRecordingTimeline.startIfNeeded(at: origin.uptimeNanoseconds) {
+            startTime = origin.wallClockDate
+        }
+        let sampleOffset = retainedRecordingTimeline.sampleStartOffset(
+            for: source,
+            sampleCount: sampleCount,
+            callbackUptimeNanoseconds: callbackUptimeNanoseconds
+        )
+        switch source {
+        case .mic:
+            chunkTimingTracker.start(atSampleIndex: Int64(sampleOffset))
+        case .system:
+            systemChunkTimingTracker.start(atSampleIndex: Int64(sampleOffset))
+        }
+        return sampleOffset
     }
 
     private func appendCleanedMicSamplesOnQueue(_ cleanedFloat: [Float]) {
