@@ -1369,12 +1369,20 @@ final class FloatingIndicatorController: NSObject {
         iconLabel.stringValue = recordingControlSymbol()
         iconLabel.textColor = .white.withAlphaComponent(isMeetingRecording ? 0.86 : 0.45)
         iconLabel.font = NSFont.systemFont(ofSize: isMeetingRecording ? 8 : 7, weight: .semibold)
+        // Frame from the measured glyph, centred on the control point. A fixed
+        // 10x10 box let the text field's font metrics decide where the glyph sat
+        // inside it, which is why the pause bars floated off the row's centreline
+        // the other chrome (waveform, stop square, chevron) is centred on.
         let controlSize = Self.recordingControlSize
+        let glyphSize = iconLabel.attributedStringValue.size()
+        let width = max(controlSize, ceil(glyphSize.width) + 2)
+        let height = max(controlSize, ceil(glyphSize.height))
+        let centerX = Self.recordingControlLeadingInset + controlSize / 2
         iconLabel.frame = NSRect(
-            x: Self.recordingControlLeadingInset,
-            y: floor((size.height - controlSize) / 2),
-            width: controlSize,
-            height: controlSize
+            x: round(centerX - width / 2),
+            y: round((size.height - height) / 2),
+            width: width,
+            height: height
         )
         textLabel.isHidden = true
         if animated {
@@ -1455,7 +1463,9 @@ final class FloatingIndicatorController: NSObject {
     /// symbol images are template images, which draw black as raw layer contents.
     private static let panelToggleGlyphImage: NSImage? = {
         guard let symbol = NSImage(systemSymbolName: "chevron.up", accessibilityDescription: "Show live transcript")?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold))
+            // 8pt to match the pause glyph's 8pt semibold, so the two leading
+            // controls read at the same optical weight.
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 8, weight: .semibold))
         else { return nil }
         return NSImage(size: symbol.size, flipped: false) { rect in
             symbol.draw(in: rect)
@@ -1494,11 +1504,18 @@ final class FloatingIndicatorController: NSObject {
     }
 
     private static func panelToggleLayerFrame(in size: NSSize) -> CGRect {
-        CGRect(
-            x: panelToggleLeadingInset,
-            y: floor((size.height - panelToggleGlyphSize) / 2) - 1,
-            width: panelToggleGlyphSize,
-            height: panelToggleGlyphSize
+        // The image's natural size, centred on the control point: aspect-fitting
+        // into an arbitrary square rescales the glyph, so a fixed box dictated its
+        // drawn size and a leftover -1 nudge (tuned for the old text glyph) held
+        // it below the centreline the rest of the chrome sits on.
+        let imageSize = panelToggleGlyphImage?.size
+            ?? NSSize(width: panelToggleGlyphSize, height: panelToggleGlyphSize)
+        let centerX = panelToggleLeadingInset + panelToggleGlyphSize / 2
+        return CGRect(
+            x: round(centerX - imageSize.width / 2),
+            y: round((size.height - imageSize.height) / 2),
+            width: imageSize.width,
+            height: imageSize.height
         )
     }
 
