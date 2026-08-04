@@ -170,8 +170,6 @@ final class MeetingMicHealthTracker {
 
     private static let sampleRate = 16_000
     private static let activeSystemPeakThreshold = 0.01
-    private static let nonZeroMicPeakThreshold = 0.0001
-    private static let zeroRatioThreshold = 0.999
     private static let degradedConfirmationSamples = sampleRate * 3
     /// Longer than the warning threshold: swapping the capture device mid-meeting
     /// costs a handoff gap, so only sustained silence is worth that.
@@ -192,11 +190,7 @@ final class MeetingMicHealthTracker {
             state.activeSystemSamplesWhileMicMissing = 0
 
             let stats = statsForSamples(samples)
-            let zeroRatio = stats.sampleCount > 0
-                ? Double(stats.zeroSampleCount) / Double(stats.sampleCount)
-                : 1
-            let hasSignal = stats.peak > Self.nonZeroMicPeakThreshold
-                || zeroRatio < Self.zeroRatioThreshold
+            let hasSignal = MeetingMicSignalClassifier.containsSignal(stats)
             state.lastRawMicWasEffectivelyZero = !hasSignal
             if hasSignal {
                 state.firstNonZeroMicAt = state.firstNonZeroMicAt ?? now

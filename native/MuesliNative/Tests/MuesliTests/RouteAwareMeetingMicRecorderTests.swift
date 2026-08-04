@@ -147,6 +147,52 @@ struct RouteAwareMeetingMicRecorderTests {
         #expect(system.cancelCalls == 1)
     }
 
+    @Test("digital silence does not complete a live microphone handoff")
+    func digitalSilenceDoesNotCompleteLiveHandoff() async throws {
+        let system = FakeMeetingMicRecorder(kind: .systemDefaultStreaming)
+        let appScoped = FakeMeetingMicRecorder(kind: .appScopedAudioQueue)
+        let lifecycleQueue = DispatchQueue(label: "RouteAwareMeetingMicRecorderTests.digital-silence")
+        let timeoutScheduler = ManualMeetingMicHandoffTimeoutScheduler()
+        let recorder = RouteAwareMeetingMicRecorder(
+            systemDefaultRecorder: system,
+            appScopedRecorder: appScoped,
+            lifecycleQueue: lifecycleQueue,
+            handoffTimeout: 1,
+            handoffTimeoutScheduler: timeoutScheduler.schedule
+        )
+        var samples: [[Int16]] = []
+        var handoffResults: [MeetingMicHandoffResult] = []
+        recorder.onRawPCMSamples = { samples.append($0) }
+        recorder.onHandoffResult = { handoffResults.append($0) }
+
+        try recorder.start()
+        recorder.preferredInputDeviceID = 91
+        try await waitUntil { appScoped.startCalls == 1 }
+
+        system.onRawPCMSamples?([7])
+        appScoped.onRawPCMSamples?([0, 0])
+        appScoped.onRawPCMSamples?([0, 0, 0])
+        lifecycleQueue.sync {}
+
+        #expect(recorder.activeRecorderKindForDebug() == .systemDefault)
+        #expect(system.stopCalls == 0)
+        #expect(samples == [[7]])
+        #expect(handoffResults.isEmpty)
+
+        #expect(timeoutScheduler.fireNext())
+        try await waitUntil { appScoped.cancelCalls == 1 }
+        system.onRawPCMSamples?([8])
+
+        #expect(recorder.activeRecorderKindForDebug() == .systemDefault)
+        #expect(samples == [[7], [8]])
+        #expect(handoffResults == [
+            .failed(
+                preferredInputDeviceID: 91,
+                reason: "The selected microphone did not produce audio."
+            )
+        ])
+    }
+
     @Test("failed live route change preserves current capture")
     func failedLiveRouteChangePreservesCurrentCapture() async throws {
         let system = FakeMeetingMicRecorder(kind: .systemDefaultStreaming)
@@ -165,6 +211,7 @@ struct RouteAwareMeetingMicRecorderTests {
 
         try recorder.start()
         recorder.preferredInputDeviceID = 91
+        try await waitUntil { handoffResults.count == 1 }
         try await waitUntil { appScoped.cancelCalls == 1 }
         system.onRawPCMSamples?([7])
 
