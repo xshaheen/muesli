@@ -259,6 +259,8 @@ Event-driven architecture for meeting notifications:
 - **NSHostingView as a window's contentView drives the window frame by default** (2026-08-02). The floating panel's `if isPresented` empty state collapsed its window to 0x0 at a stale corner, and every show's `setFrame` was re-moved by the async SwiftUI content pass — the true root cause behind all "panel appears then jumps" reports (three attachment architectures were blamed first). Any controller that owns its window's frame must set `hostingView.sizingOptions = []`.
 - **Floating transcript panel is user-positioned by design — do not re-attach it to the pill** (2026-08-02). Three attachment mechanisms (per-event re-placement, child windows, didMove-follow) all produced misplacement bugs against a draggable/animating/edge-clamped pill. The panel opens beside the pill only on first-ever use, then always at the user's saved `meeting_panel_origin` (draggable by its header; "Show Live Transcript" in the status-bar menu). Details: `.context/docs/floating-ui-review-02-08-2026.md`.
 
+- **WhisperKit `promptTokens` biasing returned empty transcripts on every decode** until the dependency was pinned past argmaxinc PR #514 (`97d09fd`, decode-loop index fix). Dictionary biasing therefore silently killed all Whisper dictation while the pin was on April's `main`. Manual repro harness: `WhisperBiasingManualReproTests`, gated by `MUESLI_WHISPER_REPRO_WAV=/path/to/16k-mono.wav`. (2026-08-04)
+
 ## Upcoming Work
 
 1. **Cancel "starting now" timer on Join Only/Dismiss** — Pass notification key into `handleUpcomingMeeting` so `onJoinOnly`/`onDismiss` callbacks can cancel `meetingStartingNowTimers[key]`.
