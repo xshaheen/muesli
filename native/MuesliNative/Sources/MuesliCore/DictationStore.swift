@@ -879,7 +879,7 @@ public final class DictationStore {
         let sql = """
         SELECT \(Self.meetingColumns)
         FROM meetings
-        WHERE deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR raw_transcript LIKE ? ESCAPE '\\' OR formatted_notes LIKE ? ESCAPE '\\' OR manual_notes LIKE ? ESCAPE '\\')
+        WHERE deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR raw_transcript LIKE ? ESCAPE '\\' OR cleaned_transcript LIKE ? ESCAPE '\\' OR formatted_notes LIKE ? ESCAPE '\\' OR manual_notes LIKE ? ESCAPE '\\')
         ORDER BY id DESC
         LIMIT ?
         """
@@ -893,7 +893,8 @@ public final class DictationStore {
         sqlite3_bind_text(statement, 2, pattern.utf8String, -1, sqliteTransient)
         sqlite3_bind_text(statement, 3, pattern.utf8String, -1, sqliteTransient)
         sqlite3_bind_text(statement, 4, pattern.utf8String, -1, sqliteTransient)
-        sqlite3_bind_int(statement, 5, Int32(limit))
+        sqlite3_bind_text(statement, 5, pattern.utf8String, -1, sqliteTransient)
+        sqlite3_bind_int(statement, 6, Int32(limit))
 
         var rows: [MeetingRecord] = []
         while sqlite3_step(statement) == SQLITE_ROW {
@@ -3163,7 +3164,8 @@ public final class DictationStore {
         SELECT m.cloud_record_name, m.title, m.raw_transcript, m.formatted_notes, m.manual_notes,
                m.start_time, m.duration_seconds, m.word_count, m.source, m.meeting_status,
                m.updated_at, m.deleted_at, m.cloud_change_tag,
-               COALESCE(m.follow_up_to_record_name, predecessor.cloud_record_name)
+               COALESCE(m.follow_up_to_record_name, predecessor.cloud_record_name),
+               m.cleaned_transcript, m.notes_source
         FROM meetings AS m
         LEFT JOIN meetings AS predecessor ON predecessor.id = m.follow_up_to_id
         WHERE m.sync_dirty = 1 AND m.cloud_record_name IS NOT NULL
@@ -3266,7 +3268,8 @@ public final class DictationStore {
         SELECT m.cloud_record_name, m.title, m.raw_transcript, m.formatted_notes, m.manual_notes,
                m.start_time, m.duration_seconds, m.word_count, m.source, m.meeting_status,
                m.updated_at, m.deleted_at, m.cloud_change_tag,
-               COALESCE(m.follow_up_to_record_name, predecessor.cloud_record_name)
+               COALESCE(m.follow_up_to_record_name, predecessor.cloud_record_name),
+               m.cleaned_transcript, m.notes_source
         FROM meetings AS m
         LEFT JOIN meetings AS predecessor ON predecessor.id = m.follow_up_to_id
         WHERE m.cloud_record_name IS NOT NULL
@@ -3692,6 +3695,8 @@ public final class DictationStore {
             text: rawTranscript,
             summaryText: optionalStringColumn(statement, index: 3),
             manualNotes: optionalStringColumn(statement, index: 4),
+            cleanedTranscript: optionalStringColumn(statement, index: 14),
+            notesSource: optionalStringColumn(statement, index: 15).flatMap(MeetingNotesSource.init(rawValue:)),
             source: source,
             localSource: localSource,
             meetingStatus: meetingStatus,
@@ -3889,11 +3894,11 @@ public final class DictationStore {
         INSERT INTO meetings (
             title, calendar_event_id, start_time, end_time, duration_seconds,
             raw_transcript, formatted_notes, mic_audio_path, system_audio_path,
-            saved_recording_path, meeting_status, manual_notes, word_count, source,
+            saved_recording_path, meeting_status, manual_notes, cleaned_transcript, notes_source, word_count, source,
             follow_up_to_id, follow_up_to_record_name, updated_at, deleted_at, cloud_record_name, cloud_change_tag,
             last_synced_at, sync_dirty
         )
-        VALUES (?, NULL, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?,
+        VALUES (?, NULL, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, COALESCE(?, ''), COALESCE(?, 'raw'), ?, ?,
                 (SELECT id FROM meetings WHERE cloud_record_name = ? AND deleted_at IS NULL LIMIT 1),
                 ?, ?, ?, ?, ?, ?, 0)
         ON CONFLICT(cloud_record_name) DO UPDATE SET
@@ -3905,6 +3910,8 @@ public final class DictationStore {
             formatted_notes = excluded.formatted_notes,
             meeting_status = excluded.meeting_status,
             manual_notes = excluded.manual_notes,
+            cleaned_transcript = CASE WHEN ? THEN excluded.cleaned_transcript ELSE meetings.cleaned_transcript END,
+            notes_source = CASE WHEN ? THEN excluded.notes_source ELSE meetings.notes_source END,
             word_count = excluded.word_count,
             source = excluded.source,
             follow_up_to_id = excluded.follow_up_to_id,
@@ -3933,19 +3940,66 @@ public final class DictationStore {
         let meetingStatus = record.meetingStatus ?? .completed
         sqlite3_bind_text(statement, 7, (meetingStatus.rawValue as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_text(statement, 8, ((record.manualNotes ?? "") as NSString).utf8String, -1, sqliteTransient)
-        sqlite3_bind_int(statement, 9, Int32(record.wordCount))
-        sqlite3_bind_text(statement, 10, (syncImportSource(for: record, fallback: MeetingSource.meeting.rawValue) as NSString).utf8String, -1, sqliteTransient)
-        bindOptionalText(followUpRecordName, at: 11, statement: statement)
-        bindOptionalText(followUpRecordName, at: 12, statement: statement)
-        sqlite3_bind_double(statement, 13, record.updatedAt.timeIntervalSince1970)
-        bindOptionalDouble(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, at: 14, statement: statement)
-        sqlite3_bind_text(statement, 15, (record.id as NSString).utf8String, -1, sqliteTransient)
-        bindOptionalText(record.cloudChangeTag, at: 16, statement: statement)
-        sqlite3_bind_double(statement, 17, Date().timeIntervalSince1970)
+        let cleanedTranscript = record.isDeleted ? "" : record.cleanedTranscript
+        let notesSource = record.isDeleted
+            ? MeetingNotesSource.raw
+            : record.notesSource ?? (record.cleanedTranscript == nil ? nil : .raw)
+        bindOptionalText(cleanedTranscript, at: 9, statement: statement)
+        bindOptionalText(notesSource?.rawValue, at: 10, statement: statement)
+        sqlite3_bind_int(statement, 11, Int32(record.wordCount))
+        sqlite3_bind_text(statement, 12, (syncImportSource(for: record, fallback: MeetingSource.meeting.rawValue) as NSString).utf8String, -1, sqliteTransient)
+        bindOptionalText(followUpRecordName, at: 13, statement: statement)
+        bindOptionalText(followUpRecordName, at: 14, statement: statement)
+        sqlite3_bind_double(statement, 15, record.updatedAt.timeIntervalSince1970)
+        bindOptionalDouble(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, at: 16, statement: statement)
+        sqlite3_bind_text(statement, 17, (record.id as NSString).utf8String, -1, sqliteTransient)
+        bindOptionalText(record.cloudChangeTag, at: 18, statement: statement)
+        sqlite3_bind_double(statement, 19, Date().timeIntervalSince1970)
+        sqlite3_bind_int(statement, 20, cleanedTranscript == nil ? 0 : 1)
+        sqlite3_bind_int(statement, 21, notesSource == nil ? 0 : 1)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
         }
-        return sqlite3_changes(db) > 0
+        let changed = sqlite3_changes(db) > 0
+        if changed, cleanedTranscript != nil || notesSource != nil {
+            // Updating raw_transcript intentionally fires the local invalidation
+            // trigger. Restore only cleanup state explicitly carried by the same
+            // remote revision after that trigger has run.
+            try restoreSyncedMeetingCleanupState(
+                recordName: record.id,
+                cleanedTranscript: cleanedTranscript,
+                notesSource: notesSource,
+                db: db
+            )
+        }
+        return changed
+    }
+
+    private func restoreSyncedMeetingCleanupState(
+        recordName: String,
+        cleanedTranscript: String?,
+        notesSource: MeetingNotesSource?,
+        db: OpaquePointer?
+    ) throws {
+        let sql = """
+        UPDATE meetings
+        SET cleaned_transcript = CASE WHEN ? THEN ? ELSE cleaned_transcript END,
+            notes_source = CASE WHEN ? THEN ? ELSE notes_source END
+        WHERE cloud_record_name = ?
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int(statement, 1, cleanedTranscript == nil ? 0 : 1)
+        bindOptionalText(cleanedTranscript, at: 2, statement: statement)
+        sqlite3_bind_int(statement, 3, notesSource == nil ? 0 : 1)
+        bindOptionalText(notesSource?.rawValue, at: 4, statement: statement)
+        sqlite3_bind_text(statement, 5, (recordName as NSString).utf8String, -1, sqliteTransient)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
     }
 
     private func normalizedFollowUpRecordName(_ followUpRecordName: String?, recordName: String) -> String? {

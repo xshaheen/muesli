@@ -51,6 +51,8 @@ public struct SyncTextRecord: Identifiable, Codable, Sendable, Equatable {
     public var speakerTranscript: String?
     public var summaryText: String?
     public var manualNotes: String?
+    public var cleanedTranscript: String?
+    public var notesSource: MeetingNotesSource?
     public var source: String?
     /// Platform origin for UI badges lives in `source`; this preserves the
     /// local capture subtype such as dictation, cua, meeting, or audio_import.
@@ -75,6 +77,8 @@ public struct SyncTextRecord: Identifiable, Codable, Sendable, Equatable {
         speakerTranscript: String? = nil,
         summaryText: String? = nil,
         manualNotes: String? = nil,
+        cleanedTranscript: String? = nil,
+        notesSource: MeetingNotesSource? = nil,
         source: String? = nil,
         localSource: String? = nil,
         meetingStatus: MeetingStatus? = nil,
@@ -96,6 +100,8 @@ public struct SyncTextRecord: Identifiable, Codable, Sendable, Equatable {
         self.speakerTranscript = speakerTranscript
         self.summaryText = summaryText
         self.manualNotes = manualNotes
+        self.cleanedTranscript = cleanedTranscript
+        self.notesSource = notesSource
         self.source = source
         self.localSource = localSource
         self.meetingStatus = meetingStatus
@@ -267,7 +273,7 @@ public struct CalendarOccurrenceReference: Codable, Equatable, Sendable {
 /// a cleaned transcript whose notes are still `.raw` has a regeneration that has
 /// not happened yet, whether it failed, was interrupted, or was never attempted.
 /// `.user` is terminal -- once someone edits their own notes, nothing overwrites them.
-public enum MeetingNotesSource: String, Codable, Sendable {
+public enum MeetingNotesSource: String, Codable, Sendable, Equatable {
     case raw
     case cleaned
     case user

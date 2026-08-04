@@ -1365,8 +1365,13 @@ struct DictationStoreTests {
         #expect(cloud["speakerTranscript"] == nil)
         #expect(cloud["summaryText"] == nil)
         #expect(cloud["manualNotes"] == nil)
+        #expect(cloud["cleanedTranscript"] == nil)
+        #expect(cloud["notesSource"] == nil)
         let changedKeys = Set(cloud.changedKeys())
-        #expect(changedKeys.isSuperset(of: ["title", "text", "speakerTranscript", "summaryText", "manualNotes"]))
+        #expect(changedKeys.isSuperset(of: [
+            "title", "text", "speakerTranscript", "summaryText", "manualNotes",
+            "cleanedTranscript", "notesSource",
+        ]))
     }
 
     @Test("sync cloud record can update an existing server record")
@@ -1503,6 +1508,90 @@ struct DictationStoreTests {
         #expect(meeting.systemAudioPath == nil)
         #expect(meeting.savedRecordingPath == nil)
         #expect(try store.textRecordsNeedingSync().isEmpty)
+    }
+
+    @Test("cleaned meeting state round-trips through CloudKit and survives a raw transcript update")
+    func cleanedMeetingStateRoundTripsThroughCloudKit() throws {
+        let source = try makeStore()
+        let destination = try makeStore()
+        let start = Date(timeIntervalSince1970: 1_770_000_000)
+        let firstRaw = "[10:00:00] Speaker 1: ship the old plan"
+        let firstCleaned = "[10:00:00] Speaker 1: Ship the old plan."
+        let meetingID = try source.insertMeeting(
+            title: "Cleanup sync",
+            calendarEventID: nil,
+            startTime: start,
+            endTime: start.addingTimeInterval(60),
+            rawTranscript: firstRaw,
+            formattedNotes: "Notes from raw",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        #expect(try source.storeCleanedMeetingTranscript(
+            id: meetingID,
+            cleanedTranscript: firstCleaned,
+            expectedRawTranscript: firstRaw
+        ))
+        #expect(try source.storeRegeneratedMeetingNotes(
+            id: meetingID,
+            formattedNotes: "Notes from cleaned v1",
+            expectedCleanedTranscript: firstCleaned,
+            expectedManualNotes: ""
+        ))
+
+        let firstOutbound = try #require(
+            try source.textRecordsNeedingSync().first { $0.kind == .meeting }
+        )
+        let firstCloud = MuesliICloudSyncEngine.syncZoneCloudRecord(from: firstOutbound)
+        #expect(firstCloud["cleanedTranscript"] as? String == firstCleaned)
+        #expect(firstCloud["notesSource"] as? String == MeetingNotesSource.cleaned.rawValue)
+        let firstRemote = try #require(MuesliICloudSyncEngine.syncTextRecord(from: firstCloud))
+        #expect(firstRemote.cleanedTranscript == firstCleaned)
+        #expect(firstRemote.notesSource == .cleaned)
+        #expect(try destination.upsertSyncedTextRecord(firstRemote))
+
+        let secondRaw = "[10:00:00] Speaker 1: ship teh new plan"
+        let secondCleaned = "[10:00:00] Speaker 1: Ship the new plan."
+        try source.updateMeetingTranscript(id: meetingID, rawTranscript: secondRaw)
+        #expect(try source.storeCleanedMeetingTranscript(
+            id: meetingID,
+            cleanedTranscript: secondCleaned,
+            expectedRawTranscript: secondRaw
+        ))
+        #expect(try source.storeRegeneratedMeetingNotes(
+            id: meetingID,
+            formattedNotes: "Notes from cleaned v2",
+            expectedCleanedTranscript: secondCleaned,
+            expectedManualNotes: ""
+        ))
+
+        let secondOutbound = try #require(
+            try source.textRecordsNeedingSync().first { $0.id == firstOutbound.id }
+        )
+        let secondCloud = MuesliICloudSyncEngine.syncZoneCloudRecord(from: secondOutbound)
+        let secondRemote = try #require(MuesliICloudSyncEngine.syncTextRecord(from: secondCloud))
+        #expect(try destination.upsertSyncedTextRecord(secondRemote))
+
+        let imported = try #require(try destination.recentMeetings(limit: 1).first)
+        #expect(imported.rawTranscript == secondRaw)
+        #expect(imported.cleanedTranscript == secondCleaned)
+        #expect(imported.notesSource == .cleaned)
+
+        // An older client can update metadata without the new fields. Their
+        // absence must decode safely and must not erase compatible local state.
+        secondCloud["cleanedTranscript"] = nil as NSString?
+        secondCloud["notesSource"] = nil as NSString?
+        secondCloud["title"] = "Renamed by legacy client" as NSString
+        secondCloud["updatedAt"] = secondOutbound.updatedAt.addingTimeInterval(60) as NSDate
+        let legacyRemote = try #require(MuesliICloudSyncEngine.syncTextRecord(from: secondCloud))
+        #expect(legacyRemote.cleanedTranscript == nil)
+        #expect(legacyRemote.notesSource == nil)
+        #expect(try destination.upsertSyncedTextRecord(legacyRemote))
+
+        let afterLegacyUpdate = try #require(try destination.recentMeetings(limit: 1).first)
+        #expect(afterLegacyUpdate.title == "Renamed by legacy client")
+        #expect(afterLegacyUpdate.cleanedTranscript == secondCleaned)
+        #expect(afterLegacyUpdate.notesSource == .cleaned)
     }
 
     @Test("recent meetings filter by recording device before limit")
@@ -3333,6 +3422,40 @@ struct DictationStoreTests {
         let results = try store.searchMeetings(query: "renewal")
 
         #expect(results.map(\.id).contains(id))
+    }
+
+    @Test("searchMeetings finds and previews cleaned-only transcript terms")
+    func searchMeetingsCleanedTranscript() throws {
+        let store = try makeStore()
+        let raw = "[10:00:00] Speaker 1: discuss the old codename"
+        let cleaned = "[10:00:00] Speaker 1: Discuss Project Lighthouse."
+        let id = try makeCleanedMeeting(store, raw: raw, cleaned: cleaned)
+
+        let result = try #require(try store.searchMeetings(query: "Lighthouse").first)
+
+        #expect(result.id == id)
+        #expect(result.rawTranscript == raw)
+        #expect(result.displayTranscript == cleaned)
+        #expect(
+            MeetingSearchPreview.bestMatchField(for: result, query: "Lighthouse")
+                .contains("Project Lighthouse")
+        )
+    }
+
+    @Test("raw-only meeting search matches still preview the display transcript")
+    func searchMeetingRawMatchUsesDisplayTranscriptPreview() throws {
+        let store = try makeStore()
+        let raw = "[10:00:00] Speaker 1: discuss the old codename"
+        let cleaned = "[10:00:00] Speaker 1: Discuss Project Lighthouse."
+        _ = try makeCleanedMeeting(store, raw: raw, cleaned: cleaned)
+
+        let result = try #require(try store.searchMeetings(query: "old codename").first)
+
+        #expect(result.displayTranscript == cleaned)
+        #expect(
+            MeetingSearchPreview.bestMatchField(for: result, query: "old codename")
+                == MeetingPreviewText.plainText(from: cleaned)
+        )
     }
 
     @Test("search is case-insensitive for ASCII")
