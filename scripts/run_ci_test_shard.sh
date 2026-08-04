@@ -30,6 +30,14 @@ case "${shard}" in
       CGPointCodableTests
       UpdateFailureGuidanceTests
       WordCountTests
+      ChatGPTResponsesMessagesTests
+      ChatGPTResponsesTruncationTests
+      FloatingIndicatorAnchorRestoreTests
+      FloatingIndicatorDragTests
+      FloatingIndicatorPlacementTests
+      FloatingMeetingChatTests
+      FloatingMeetingTranscriptPlacementTests
+      MarkdownRichTextEditorTests
     )
     ;;
   dictation-transcription)
@@ -63,6 +71,13 @@ case "${shard}" in
       HotkeyConfigTests
       DictationStateIdleTests
       DictationCorrectionMonitorTests
+      AsrVocabularyPromptTests
+      WhisperBiasingManualReproTests
+      TranscriptionResultCleanupTests
+      TranscriptionBackendResidencyPolicyTests
+      TranscriptCleanupRequestBodyTests
+      PostProcessorIdleUnloadPolicyTests
+      ModelDeletionExecutorTests
     )
     ;;
   meetings)
@@ -86,6 +101,17 @@ case "${shard}" in
       MeetingTemplateResolutionTests
       MeetingTemplatesDefaultFallbackTests
       RouteAwareMeetingMicRecorderTests
+      StreamingMicRecorderConfigChangeTests
+      SystemAudioRecorderTests
+      MeetingMicFailoverAttemptTrackerTests
+      MeetingMicFailoverPolicyTests
+      MeetingChatClientTests
+      MeetingChatConversationTests
+      MeetingChatRecipesTests
+      MeetingChatSourceTests
+      MeetingCleanupPromptTests
+      MeetingTranscriptAccessorTests
+      MeetingTranscriptCleanupTests
       DisabledCalendarFilterTests
       GoogleCalendarTests
     )
