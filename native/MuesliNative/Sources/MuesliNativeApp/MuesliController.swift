@@ -3040,6 +3040,11 @@ final class MuesliController: NSObject {
         refreshPostProcessorPromptAfterDictionaryChange()
     }
 
+    func replaceCustomWords(_ words: [CustomWord]) {
+        updateConfig { $0.customWords = words }
+        refreshPostProcessorPromptAfterDictionaryChange()
+    }
+
     func addDictionarySuggestion(_ suggestion: DictionarySuggestion) {
         guard config.enableDictionaryCorrectionPrompts else {
             logDictionarySuggestion("skip reason=disabled \(dictionarySuggestionLogMetadata(suggestion))")

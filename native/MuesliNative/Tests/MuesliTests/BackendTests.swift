@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-import MuesliCore
+@testable import MuesliCore
 @testable import MuesliNativeApp
 
 @Suite("WhisperKitTranscriber")
@@ -43,6 +43,185 @@ struct FluidAudioTranscriberTests {
     @Test("v3 model contains v3 in path")
     func v3Identification() {
         #expect(BackendOption.parakeetMultilingual.model.contains("v3"))
+    }
+}
+
+@Suite("Nemotron35ModelStore")
+struct Nemotron35ModelStoreTests {
+
+    @Test("app and CLI use the same Nemotron cache")
+    func sharedCachePath() {
+        #expect(Nemotron35ModelStore.cacheRelativePath == ".cache/muesli/models/nemotron35-multilingual-2240ms")
+        #expect(Nemotron35ModelStore.cacheDirectory().path.hasSuffix(Nemotron35ModelStore.cacheRelativePath))
+        #expect(Nemotron35ModelStore.requiredFileRelativePath == "encoder.mlmodelc/coremldata.bin")
+    }
+
+    @Test("partial Nemotron caches are not treated as downloaded")
+    func partialCacheIsIncomplete() throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("muesli-nemotron-store-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fileManager.removeItem(at: directory) }
+
+        for relativePath in Nemotron35ModelStore.requiredFileRelativePaths.dropLast() {
+            let file = directory.appendingPathComponent(relativePath)
+            try fileManager.createDirectory(
+                at: file.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data().write(to: file)
+        }
+
+        #expect(!Nemotron35ModelStore.isModelDownloaded(at: directory, fileManager: fileManager))
+
+        let finalFile = directory.appendingPathComponent(
+            try #require(Nemotron35ModelStore.requiredFileRelativePaths.last)
+        )
+        try Data().write(to: finalFile)
+
+        #expect(Nemotron35ModelStore.isModelDownloaded(at: directory, fileManager: fileManager))
+    }
+
+    @Test("tree requests retry transport and throttling failures")
+    func treeRequestRetriesTransportAndThrottlingFailures() async throws {
+        let url = try #require(URL(string: "https://example.com/tree"))
+        let stub = TreePageRequestStub([
+            .failure(URLError(.networkConnectionLost)),
+            .success((Data(), try httpResponse(url: url, statusCode: 429))),
+            .success((Data("[]".utf8), try httpResponse(url: url, statusCode: 200))),
+        ])
+        let delays = RetryDelayRecorder()
+
+        let data = try await Nemotron35ModelStore.requestTreePage(
+            from: url,
+            request: { try await stub.request($0) },
+            retryDelay: { await delays.record($0) }
+        )
+
+        #expect(data == Data("[]".utf8))
+        #expect(await stub.requestCount == 3)
+        #expect(await delays.values == [1_000_000_000, 2_000_000_000])
+    }
+
+    @Test("tree requests retry server failures")
+    func treeRequestRetriesServerFailures() async throws {
+        let url = try #require(URL(string: "https://example.com/tree"))
+        let stub = TreePageRequestStub([
+            .success((Data(), try httpResponse(url: url, statusCode: 503))),
+            .success((Data("[]".utf8), try httpResponse(url: url, statusCode: 200))),
+        ])
+
+        let data = try await Nemotron35ModelStore.requestTreePage(
+            from: url,
+            request: { try await stub.request($0) },
+            retryDelay: { _ in }
+        )
+
+        #expect(data == Data("[]".utf8))
+        #expect(await stub.requestCount == 2)
+    }
+
+    @Test("tree requests stop after three retryable failures")
+    func treeRequestRetriesAreBounded() async throws {
+        let url = try #require(URL(string: "https://example.com/tree"))
+        let unavailable = try httpResponse(url: url, statusCode: 503)
+        let stub = TreePageRequestStub([
+            .success((Data(), unavailable)),
+            .success((Data(), unavailable)),
+            .success((Data(), unavailable)),
+        ])
+
+        do {
+            _ = try await Nemotron35ModelStore.requestTreePage(
+                from: url,
+                request: { try await stub.request($0) },
+                retryDelay: { _ in }
+            )
+            Issue.record("Expected retries to be exhausted")
+        } catch let error as Nemotron35ModelStoreError {
+            guard case .retriesExhausted = error else {
+                Issue.record("Expected retries to be exhausted, got \(error)")
+                return
+            }
+        }
+
+        #expect(await stub.requestCount == 3)
+    }
+
+    @Test("tree requests fail immediately for non-retryable responses")
+    func treeRequestDoesNotRetryClientFailures() async throws {
+        let url = try #require(URL(string: "https://example.com/tree"))
+        let stub = TreePageRequestStub([
+            .success((Data(), try httpResponse(url: url, statusCode: 404))),
+        ])
+
+        do {
+            _ = try await Nemotron35ModelStore.requestTreePage(
+                from: url,
+                request: { try await stub.request($0) },
+                retryDelay: { _ in }
+            )
+            Issue.record("Expected a non-retryable HTTP error")
+        } catch let error as Nemotron35ModelStoreError {
+            guard case .httpError(let statusCode, _) = error else {
+                Issue.record("Expected an HTTP error, got \(error)")
+                return
+            }
+            #expect(statusCode == 404)
+        }
+
+        #expect(await stub.requestCount == 1)
+    }
+
+    @Test("tree requests preserve cancellation")
+    func treeRequestPreservesCancellation() async throws {
+        let url = try #require(URL(string: "https://example.com/tree"))
+        let stub = TreePageRequestStub([
+            .failure(CancellationError()),
+        ])
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await Nemotron35ModelStore.requestTreePage(
+                from: url,
+                request: { try await stub.request($0) },
+                retryDelay: { _ in }
+            )
+        }
+        #expect(await stub.requestCount == 1)
+    }
+
+    private func httpResponse(url: URL, statusCode: Int) throws -> HTTPURLResponse {
+        try #require(HTTPURLResponse(
+            url: url,
+            statusCode: statusCode,
+            httpVersion: nil,
+            headerFields: nil
+        ))
+    }
+}
+
+private actor TreePageRequestStub {
+    private var results: [Result<(Data, URLResponse), Error>]
+    private(set) var requestCount = 0
+
+    init(_ results: [Result<(Data, URLResponse), Error>]) {
+        self.results = results
+    }
+
+    func request(_ url: URL) throws -> (Data, URLResponse) {
+        requestCount += 1
+        guard !results.isEmpty else {
+            throw URLError(.badServerResponse)
+        }
+        return try results.removeFirst().get()
+    }
+}
+
+private actor RetryDelayRecorder {
+    private(set) var values: [UInt64] = []
+
+    func record(_ value: UInt64) {
+        values.append(value)
     }
 }
 

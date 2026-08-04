@@ -1,4 +1,5 @@
 import Foundation
+import MuesliCore
 
 /// ASR-stage vocabulary biasing built from the user's personal dictionary.
 ///

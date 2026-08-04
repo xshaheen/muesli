@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import MuesliCore
 @testable import MuesliNativeApp
 
 @Suite("ASR Vocabulary Prompt")

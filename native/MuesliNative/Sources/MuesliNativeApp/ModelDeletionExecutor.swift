@@ -1,4 +1,5 @@
 import Foundation
+import MuesliCore
 
 /// A value-only description of model files to remove. Building the plan on the
 /// main actor is cheap; resolving directories and touching disk happens only in
@@ -42,9 +43,10 @@ enum ModelDeletionPlan: Sendable, Equatable {
         case "whisper":
             WhisperKitTranscriber.deleteModel(model)
         case "nemotron35":
-            let path = fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms")
-            try removeItemIfPresent(at: path, fileManager: fileManager)
+            try removeItemIfPresent(
+                at: Nemotron35ModelStore.cacheDirectory(fileManager: fileManager),
+                fileManager: fileManager
+            )
         case "cohere":
             try removeItemIfPresent(
                 at: CohereTranscribeModelStore.cacheDirectory(),

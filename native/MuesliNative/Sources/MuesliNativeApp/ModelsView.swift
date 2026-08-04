@@ -1251,7 +1251,7 @@ struct ModelsView: View {
                         downloadProgress[option.model] = max(progress, 0.05)
                     }
                 }
-                guard isModelDownloaded(option, fm: FileManager.default) else {
+                guard option.isDownloaded else {
                     throw NSError(
                         domain: "MuesliModelDownload",
                         code: 1,
@@ -1355,9 +1355,8 @@ struct ModelsView: View {
     // MARK: - Check Downloaded Status
 
     private func checkDownloadedModels() {
-        let fm = FileManager.default
         for option in BackendOption.all {
-            if isModelDownloaded(option, fm: fm) {
+            if option.isDownloaded {
                 downloadedModels.insert(option.model)
             }
         }
@@ -1367,7 +1366,7 @@ struct ModelsView: View {
     /// installed for Nemotron 3.5? Never auto-downloads — just surfaces a badge.
     private func checkNemotron35Update() {
         guard #available(macOS 15, *),
-              isModelDownloaded(.nemotron35Multilingual, fm: FileManager.default) else { return }
+              BackendOption.nemotron35Multilingual.isDownloaded else { return }
         Task {
             let available = await Nemotron35StreamingTranscriber.updateAvailable()
             await MainActor.run { nemotron35UpdateAvailable = available }
@@ -1387,40 +1386,6 @@ struct ModelsView: View {
         }
     }
 
-    private func isModelDownloaded(_ option: BackendOption, fm: FileManager) -> Bool {
-        switch option.backend {
-        case "whisper":
-            return WhisperKitTranscriber.isModelDownloaded(option.model)
-        case "nemotron35":
-            return Nemotron35ModelCache.isComplete(fileManager: fm)
-        case "fluidaudio":
-            // Check FluidAudio's cache
-            let supportDir = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models")
-            if option.model.contains("parakeet") {
-                let version = option.model.contains("v2") ? "v2" : "v3"
-                if let contents = try? fm.contentsOfDirectory(at: supportDir, includingPropertiesForKeys: nil) {
-                    return contents.contains { $0.lastPathComponent.contains("parakeet") && $0.lastPathComponent.contains(version) }
-                }
-            }
-            return false
-        case "qwen":
-            let supportDir = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models/qwen3-asr-0.6b-coreml")
-            return fm.fileExists(atPath: supportDir.appendingPathComponent("int8/vocab.json").path)
-                || fm.fileExists(atPath: supportDir.appendingPathComponent("f32/vocab.json").path)
-        case "cohere":
-            return CohereTranscribeModelStore.isAvailableLocally()
-        case "indicasr":
-            return IndicASRModelStore.isAvailableLocally()
-        case "sensevoice":
-            return SenseVoiceTranscriber.isModelDownloaded()
-        case "gemma4-litert":
-            return Gemma4LiteRTModelStore.isAvailableLocally(fileManager: fm)
-        default:
-            return false
-        }
-    }
 }
 
 private final class URLSessionInvalidator: @unchecked Sendable {

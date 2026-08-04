@@ -211,7 +211,7 @@ struct BackendOption: Equatable {
             return fm.fileExists(atPath: supportDir.appendingPathComponent("int8/vocab.json").path)
                 || fm.fileExists(atPath: supportDir.appendingPathComponent("f32/vocab.json").path)
         case "nemotron35":
-            return Nemotron35ModelCache.isComplete(fileManager: fm)
+            return Nemotron35ModelStore.isModelDownloaded(fileManager: fm)
         case "cohere":
             return CohereTranscribeModelStore.isAvailableLocally()
         case "indicasr":
@@ -805,51 +805,6 @@ enum MeetingTranscriptCleanupPrompt {
         reorder, merge, or drop one.
         """
 }
-
-struct CustomWord: Codable, Equatable, Identifiable {
-    var id = UUID()
-    var word: String
-    var replacement: String?
-    var matchingThreshold: Double = 0.85
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case word
-        case replacement
-        case matchingThreshold = "matching_threshold"
-    }
-
-    init(id: UUID = UUID(), word: String, replacement: String?, matchingThreshold: Double = 0.85) {
-        self.id = id
-        self.word = word
-        self.replacement = replacement
-        self.matchingThreshold = Self.clampedThreshold(matchingThreshold)
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
-        word = try c.decode(String.self, forKey: .word)
-        replacement = try c.decodeIfPresent(String.self, forKey: .replacement)
-        matchingThreshold = Self.clampedThreshold(try c.decodeIfPresent(Double.self, forKey: .matchingThreshold) ?? 0.85)
-    }
-
-    var displayLabel: String {
-        if let replacement, !replacement.isEmpty {
-            return "\(word) → \(replacement)"
-        }
-        return word
-    }
-
-    var targetWord: String {
-        replacement ?? word
-    }
-
-    private static func clampedThreshold(_ value: Double) -> Double {
-        min(max(value, 0.70), 0.95)
-    }
-}
-
 struct DictionarySuggestion: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     var observed: String

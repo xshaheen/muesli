@@ -65,6 +65,7 @@ let package = Package(
                 "MuesliCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
+                .product(name: "WhisperKit", package: "WhisperKit"),
             ],
             path: "Sources/MuesliCLI"
         ),

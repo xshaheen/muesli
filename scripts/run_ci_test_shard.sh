@@ -38,6 +38,7 @@ case "${shard}" in
       FloatingMeetingChatTests
       FloatingMeetingTranscriptPlacementTests
       MarkdownRichTextEditorTests
+      CustomWordDictionaryTests
     )
     ;;
   dictation-transcription)
@@ -78,6 +79,7 @@ case "${shard}" in
       TranscriptCleanupRequestBodyTests
       PostProcessorIdleUnloadPolicyTests
       ModelDeletionExecutorTests
+      Nemotron35ModelStoreTests
     )
     ;;
   meetings)
