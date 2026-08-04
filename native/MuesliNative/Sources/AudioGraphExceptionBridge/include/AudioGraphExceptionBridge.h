@@ -21,6 +21,12 @@ FOUNDATION_EXPORT NSError * _Nullable MuesliAudioGraphSetInputDevice(
     AudioObjectID deviceID
 );
 
+/// The device the engine's input unit is currently bound to, or
+/// kAudioObjectUnknown when it cannot be read.
+FOUNDATION_EXPORT AudioObjectID MuesliAudioGraphCurrentInputDevice(
+    AVAudioEngine *engine
+);
+
 FOUNDATION_EXPORT NSError * _Nullable MuesliAudioGraphInstallInputTap(
     AVAudioEngine *engine,
     AVAudioNodeBus bus,
