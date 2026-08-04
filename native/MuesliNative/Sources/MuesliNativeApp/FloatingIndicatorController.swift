@@ -1476,11 +1476,11 @@ final class FloatingIndicatorController: NSObject {
     /// symbol images are template images, which draw black as raw layer contents.
     private static let panelToggleGlyphImage: NSImage? = {
         guard let symbol = NSImage(systemSymbolName: "captions.bubble", accessibilityDescription: "Show live transcript")?
-            // 7pt, below the pause glyph's 8pt: the bubble is a wide, filled shape
-            // (11x10 at 8pt against the pause bars' ~5pt of ink), so matching point
-            // sizes made it visually dominate the row. One point down lands both
-            // controls at the same optical weight.
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 7, weight: .semibold))
+            // 6pt, well below the pause glyph's 8pt: the bubble is a wide outline
+            // shape (11x10 at 8pt against the pause bars' ~5pt of ink), so matching
+            // point sizes made it visually dominate the row. Chosen from rendered
+            // side-by-side variants, not arithmetic.
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 6, weight: .semibold))
         else { return nil }
         return NSImage(size: symbol.size, flipped: false) { rect in
             symbol.draw(in: rect)
@@ -1502,12 +1502,12 @@ final class FloatingIndicatorController: NSObject {
     private static let panelToggleGlyphSize: CGFloat = 12
     /// The panel toggle holds the meeting pill's leftmost slot:
     /// [panel] [pause] [waveform] [stop].
-    private static let panelToggleLeadingInset: CGFloat = 7
+    private static let panelToggleLeadingInset: CGFloat = 8
     /// Where the meeting pause glyph centres — the second slot, clear of the
     /// toggle's hit region, which ends at the toggle's centre plus half the
-    /// minimum hit width (13 + 18 = 31). Dictation's ✕ has no toggle beside it
+    /// minimum hit width (14 + 18 = 32). Dictation's ✕ has no toggle beside it
     /// and keeps the plain leading inset.
-    private static let meetingPauseCenterX: CGFloat = 38
+    private static let meetingPauseCenterX: CGFloat = 34
     /// The smallest region a pointer can comfortably aim at, used to pad the recording
     /// pill's 10pt leading control out to a clickable width.
     private static let minimumControlHitWidth: CGFloat = 36
@@ -1531,7 +1531,10 @@ final class FloatingIndicatorController: NSObject {
         let centerX = panelToggleLeadingInset + panelToggleGlyphSize / 2
         return CGRect(
             x: round(centerX - imageSize.width / 2),
-            y: round((size.height - imageSize.height) / 2),
+            // One point above geometric centre: the symbol's bounding box includes
+            // the tail hanging below the bubble, so exact centring visibly sank
+            // the bubble's mass below the row every other glyph sits on.
+            y: round((size.height - imageSize.height) / 2 + 1),
             width: imageSize.width,
             height: imageSize.height
         )
