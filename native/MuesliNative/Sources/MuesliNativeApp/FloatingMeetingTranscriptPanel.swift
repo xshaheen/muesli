@@ -122,6 +122,17 @@ struct FloatingMeetingChatContext {
     /// Resolved per send, like the config, because the user types notes during the
     /// meeting and the panel must see what they have written by the time they ask.
     var manualNotes: () -> String = { "" }
+    /// Routes a Notes-tab edit into the same cache-then-persist path the main
+    /// window's notes editor uses, so the two editors converge on one value.
+    var saveManualNotes: (String) -> Void = { _ in }
+}
+
+/// What the floating panel is showing. Chat and Notes both need a meeting
+/// context; Chat additionally needs a usable summarization backend.
+enum FloatingMeetingPanelTab: Equatable {
+    case transcript
+    case chat
+    case notes
 }
 
 @MainActor
@@ -132,13 +143,24 @@ final class FloatingMeetingTranscriptModel {
     var isPresented = false
     var didCopy = false
 
-    /// Chat is closed until the user deliberately opens it. This flag gates keyboard focus:
-    /// while it is false the panel must never become key, or it would swallow keystrokes
-    /// meant for the meeting app the user is actually talking in.
-    var isChatOpen = false
+    /// The panel opens on the transcript; Chat and Notes are deliberate choices.
+    /// Keyboard focus is gated on the selected tab: on the transcript the panel
+    /// must never become key, or it would swallow keystrokes meant for the
+    /// meeting app the user is actually talking in.
+    var selectedTab: FloatingMeetingPanelTab = .transcript
     var chatContext: FloatingMeetingChatContext?
 
+    /// The Notes draft mirrors the shared manual-notes cache: reloaded every
+    /// time the tab opens, written through on every edit. The cache is updated
+    /// synchronously by every notes editor, so a tab-open read is never stale —
+    /// and reloading each open is what reconciles an edit made in the main
+    /// window while this tab was away.
+    var notesDraft = ""
+
+    var isChatOpen: Bool { selectedTab == .chat }
     var isChatAvailable: Bool { chatContext?.isReady() == true }
+    /// Notes need a meeting, not a backend — they are the user's own text.
+    var isNotesAvailable: Bool { chatContext != nil }
 
     /// The transcript chat reasons over: what was recorded before this session plus what has
     /// been captured since. Mirrors the detail view's Live tab; using the live portion alone
@@ -152,15 +174,33 @@ final class FloatingMeetingTranscriptModel {
 
     func openChat() {
         guard isChatAvailable else { return }
-        isChatOpen = true
+        selectedTab = .chat
     }
 
     func closeChat() {
-        isChatOpen = false
+        if selectedTab == .chat { selectedTab = .transcript }
     }
 
     func toggleChat() {
         isChatOpen ? closeChat() : openChat()
+    }
+
+    /// Selects the Notes tab, reloading the draft from the shared cache so an
+    /// edit made in the main window while this tab was away is what appears
+    /// here. Returns false when there is no meeting to attach notes to.
+    @discardableResult
+    func openNotes() -> Bool {
+        guard let chatContext else { return false }
+        notesDraft = chatContext.manualNotes()
+        selectedTab = .notes
+        return true
+    }
+
+    /// Write-through: every edit lands in the shared manual-notes cache, whose
+    /// debounced persistence the controller already owns.
+    func notesEdited(_ text: String) {
+        notesDraft = text
+        chatContext?.saveManualNotes(text)
     }
 
     func update(transcript: String, partialYou: String, partialOthers: String) {
@@ -173,16 +213,19 @@ final class FloatingMeetingTranscriptModel {
 
     /// Copies whatever the panel is currently showing.
     ///
-    /// The header button is the only copy affordance the panel has, so with chat
-    /// open it must copy the conversation. Copying the transcript instead gives the
-    /// user something they were not looking at, silently.
+    /// The header button is the only copy affordance the panel has, so it must
+    /// copy the visible tab. Copying the transcript while chat or notes is open
+    /// gives the user something they were not looking at, silently.
     func copyToPasteboard() {
         let text: String
-        if isChatOpen, let context = chatContext {
+        switch selectedTab {
+        case .chat where chatContext != nil:
             text = MeetingChatConversations.shared
-                .conversation(for: context.meetingID)
+                .conversation(for: chatContext!.meetingID)
                 .transcriptForCopying()
-        } else {
+        case .notes:
+            text = notesDraft
+        default:
             text = LiveTranscriptCopyContent.text(
                 transcript: presentation.transcript,
                 partialYou: presentation.partialYou,
@@ -200,8 +243,9 @@ final class FloatingMeetingTranscriptModel {
         isPaused = false
         isPresented = false
         didCopy = false
-        isChatOpen = false
+        selectedTab = .transcript
         chatContext = nil
+        notesDraft = ""
     }
 
     func showCopyConfirmation() {
@@ -255,20 +299,22 @@ final class FloatingMeetingTranscriptPanelController {
         self.onDismiss = onDismiss
     }
 
-    /// Supplies what chat needs. Called when a meeting starts rather than on every transcript
-    /// chunk: the prior transcript does not change during a session.
+    /// Supplies what chat and notes need. Called when a meeting starts rather than on
+    /// every transcript chunk: the prior transcript does not change during a session.
     func setChatContext(_ context: FloatingMeetingChatContext?) {
         model.chatContext = context
-        if context == nil { model.closeChat() }
+        if context == nil {
+            selectTab(.transcript)
+        }
     }
 
-    /// True only while the user has the composer open. The window must not become key at any
-    /// other time — a floating panel that takes focus during a call swallows the keystrokes
-    /// the user is typing into Zoom or Teams.
-    var wantsKeyboardFocus: Bool { model.isChatOpen }
+    /// True only while the user is on a tab they type into (chat or notes). The window
+    /// must not become key at any other time — a floating panel that takes focus during
+    /// a call swallows the keystrokes the user is typing into Zoom or Teams.
+    var wantsKeyboardFocus: Bool { model.selectedTab != .transcript }
 
     func closeChat() {
-        setChatOpen(false)
+        if model.isChatOpen { selectTab(.transcript) }
     }
 
     var isVisible: Bool {
@@ -408,16 +454,13 @@ final class FloatingMeetingTranscriptPanelController {
     /// Single place every teardown path goes through, so no route can skip the resign step.
     private func releaseChatFocus() {
         endOutsideClickDismissal()
-        guard model.isChatOpen else { return }
-        model.closeChat()
-        if let window = hostingView?.window, window.isKeyWindow {
-            // resignKey is only a notification hook -- neither it nor orderBack reassigns
-            // NSApp.keyWindow, so the panel kept the keyboard after chat closed. Ordering
-            // out and straight back in makes AppKit hand key status to another window
-            // while the panel stays on screen.
-            window.orderOut(nil)
-            window.orderFront(nil)
-        }
+        guard model.selectedTab != .transcript else { return }
+        model.selectedTab = .transcript
+        // resignKey is only a notification hook -- neither it nor orderBack reassigns
+        // NSApp.keyWindow, so the panel kept the keyboard after chat closed. Ordering
+        // out and straight back in makes AppKit hand key status to another window
+        // while the panel stays on screen.
+        resignPanelKey()
     }
 
     private func installMoveObserverIfNeeded(for window: NSWindow) {
@@ -443,43 +486,64 @@ final class FloatingMeetingTranscriptPanelController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: workItem)
     }
 
-    /// Opening chat lets the panel take keys; closing it must hand them back.
+    /// Selecting a typing tab lets the panel take keys; leaving it must hand them back.
     ///
     /// Without the resign step, the panel keeps key status after the composer closes and
     /// keeps swallowing keystrokes meant for the call — the precise failure the deliberate-
     /// focus rule exists to prevent, just delayed.
-    func setChatOpen(_ open: Bool) {
-        if open {
+    func selectTab(_ tab: FloatingMeetingPanelTab) {
+        switch tab {
+        case .chat:
             model.openChat()
             // openChat declines when no usable backend is configured. Arming the monitor
             // anyway would leave a global event monitor running that nothing ever tears
-            // down, since every teardown path is reached through the open chat.
+            // down, since every teardown path is reached through the open tab.
             guard model.isChatOpen else { return }
             beginOutsideClickDismissal()
-        } else {
+        case .notes:
+            guard model.openNotes() else { return }
+            beginOutsideClickDismissal()
+        case .transcript:
             endOutsideClickDismissal()
             // Resign only the panel's own key status. Deactivating the whole app would also
             // hide a main window the user may have opened deliberately.
             releaseChatFocus()
+            model.selectedTab = .transcript
         }
     }
 
-    /// Closes chat when the user clicks somewhere else.
+    func setChatOpen(_ open: Bool) {
+        selectTab(open ? .chat : .transcript)
+    }
+
+    /// Reacts to clicks somewhere else while a typing tab is open.
     ///
-    /// Hover no longer dismisses an open chat, so this is what replaces it. Without
-    /// it the panel would have no deliberate way out short of the header button, and
-    /// would sit over the call until the meeting ended.
+    /// Hover no longer dismisses an open chat, so this is what replaces it: chat closes
+    /// outright (its old behavior), while notes stay visible but hand the keyboard back —
+    /// the user is glancing at the call, not done taking notes.
     private func beginOutsideClickDismissal() {
         guard outsideClickMonitor == nil else { return }
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] _ in
-            guard let self, self.model.isChatOpen else { return }
+            guard let self, self.model.selectedTab != .transcript else { return }
             // A global monitor only sees clicks outside this app's windows, but the
             // panel can also be clicked while another app is frontmost, so check the
             // pointer against the panel's own frame before dismissing.
             guard !self.pointerIsInsidePanel() else { return }
-            self.setChatOpen(false)
+            if self.model.isChatOpen {
+                self.selectTab(.transcript)
+            } else {
+                self.resignPanelKey()
+            }
+        }
+    }
+
+    /// Hands key status back without changing what the panel shows.
+    private func resignPanelKey() {
+        if let window = hostingView?.window, window.isKeyWindow {
+            window.orderOut(nil)
+            window.orderFront(nil)
         }
     }
 
@@ -505,13 +569,12 @@ final class FloatingMeetingTranscriptPanelController {
                 model: model,
                 onOpenNotes: onOpenNotes,
                 onDismiss: onDismiss,
-                // Through the controller, never straight to the model: opening chat has
-                // to arm outside-click dismissal and closing it has to hand keyboard focus
-                // back. Flipping the model's flag alone leaves a 360x320 panel parked over
-                // the call with no way out but the header button.
-                onToggleChat: { [weak self] in
-                    guard let self else { return }
-                    self.setChatOpen(!self.model.isChatOpen)
+                // Through the controller, never straight to the model: opening a typing
+                // tab has to arm outside-click dismissal and leaving it has to hand
+                // keyboard focus back. Flipping the model's flag alone leaves a 360x320
+                // panel parked over the call with no way out but the header button.
+                onSelectTab: { [weak self] tab in
+                    self?.selectTab(tab)
                 }
             )
         )
@@ -543,7 +606,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
     let model: FloatingMeetingTranscriptModel
     let onOpenNotes: () -> Void
     let onDismiss: () -> Void
-    var onToggleChat: () -> Void = {}
+    var onSelectTab: (FloatingMeetingPanelTab) -> Void = { _ in }
 
     private var partialYou: String {
         model.presentation.partialYou.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -565,22 +628,41 @@ private struct FloatingMeetingTranscriptPanelView: View {
         )
     }
 
+    /// The copy button must enable off the visible tab's payload: notes written
+    /// before any speech exists are copyable even though the transcript is empty.
+    private var copyPayloadIsEmpty: Bool {
+        switch model.selectedTab {
+        case .notes:
+            return model.notesDraft.isEmpty
+        case .chat where model.chatContext != nil:
+            return MeetingChatConversations.shared
+                .conversation(for: model.chatContext!.meetingID)
+                .transcriptForCopying()
+                .isEmpty
+        default:
+            return copyText.isEmpty
+        }
+    }
+
     var body: some View {
         if model.isPresented {
             VStack(spacing: 0) {
                 header
                     .background(PanelWindowDragHandle())
                 Divider().background(MuesliTheme.surfaceBorder)
-                if model.isChatOpen, let context = model.chatContext {
+                switch model.selectedTab {
+                case .chat where model.chatContext != nil:
                     MeetingChatView(
-                        conversation: MeetingChatConversations.shared.conversation(for: context.meetingID),
+                        conversation: MeetingChatConversations.shared.conversation(for: model.chatContext!.meetingID),
                         transcript: model.chatTranscript,
                         systemPrompt: MeetingChatSource.systemPrompt(isRecording: true),
-                        manualNotes: context.manualNotes(),
-                        config: context.currentConfig(),
+                        manualNotes: model.chatContext!.manualNotes(),
+                        config: model.chatContext!.currentConfig(),
                         isCompact: true
                     )
-                } else {
+                case .notes:
+                    notesEditor
+                default:
                     transcript
                 }
             }
@@ -598,9 +680,17 @@ private struct FloatingMeetingTranscriptPanelView: View {
         }
     }
 
+    private var headerTitle: String {
+        switch model.selectedTab {
+        case .transcript: return "Live transcript"
+        case .chat: return "Ask about this meeting"
+        case .notes: return "My notes"
+        }
+    }
+
     private var header: some View {
         HStack(spacing: MuesliTheme.spacing8) {
-            Text(model.isChatOpen ? "Ask about this meeting" : "Live transcript")
+            Text(headerTitle)
                 .font(MuesliTheme.callout().weight(.semibold))
                 .foregroundStyle(MuesliTheme.textPrimary)
             Spacer()
@@ -611,26 +701,14 @@ private struct FloatingMeetingTranscriptPanelView: View {
                 .font(MuesliTheme.caption())
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .fixedSize()
-            // Sits immediately left of dismiss, and to the right of the variable-width
+            // The tab strip sits immediately left of dismiss, right of the variable-width
             // status label, so its hit region is a fixed offset from the panel's right edge.
-            // Placing it left of the status text would make the region depend on whether the
-            // label reads "Live" or "Paused".
+            tabButton(.transcript, icon: "text.quote", help: "Live transcript")
             if model.isChatAvailable {
-                Button(action: onToggleChat) {
-                    Image(systemName: model.isChatOpen ? "text.quote" : "bubble.left.and.text.bubble.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(model.isChatOpen ? MuesliTheme.accent : MuesliTheme.textSecondary)
-                        .frame(width: 24, height: 24)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(model.isChatOpen
-                                    ? MuesliTheme.accent.opacity(0.14)
-                                    : Color.clear)
-                        )
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(model.isChatOpen ? "Back to transcript" : "Ask about this meeting")
+                tabButton(.chat, icon: "bubble.left.and.text.bubble.right", help: "Ask about this meeting")
+            }
+            if model.isNotesAvailable {
+                tabButton(.notes, icon: "note.text", help: "My notes")
             }
             Button(action: onDismiss) {
                 Image(systemName: "chevron.down")
@@ -649,11 +727,28 @@ private struct FloatingMeetingTranscriptPanelView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(copyText.isEmpty)
-            .help("Copy transcript")
+            .disabled(copyPayloadIsEmpty)
+            .help("Copy")
         }
         .padding(.horizontal, MuesliTheme.spacing16)
         .frame(height: 42)
+    }
+
+    private func tabButton(_ tab: FloatingMeetingPanelTab, icon: String, help: String) -> some View {
+        let isSelected = model.selectedTab == tab
+        return Button { onSelectTab(tab) } label: {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isSelected ? MuesliTheme.accent : MuesliTheme.textSecondary)
+                .frame(width: 24, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isSelected ? MuesliTheme.accent.opacity(0.14) : Color.clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private var transcript: some View {
@@ -669,6 +764,31 @@ private struct FloatingMeetingTranscriptPanelView: View {
             )
         }
         .defaultScrollAnchor(.bottom)
+    }
+
+    /// A plain text editor over the same manual notes the main window edits.
+    /// Every keystroke writes through to the shared cache; persistence is the
+    /// controller's existing debounced path.
+    private var notesEditor: some View {
+        TextEditor(text: Binding(
+            get: { model.notesDraft },
+            set: { model.notesEdited($0) }
+        ))
+        .font(.system(size: 12))
+        .foregroundStyle(MuesliTheme.textPrimary)
+        .scrollContentBackground(.hidden)
+        .padding(.horizontal, MuesliTheme.spacing8)
+        .padding(.vertical, MuesliTheme.spacing8)
+        .overlay(alignment: .topLeading) {
+            if model.notesDraft.isEmpty {
+                Text("Type your notes — they feed the meeting summary.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .padding(.horizontal, MuesliTheme.spacing12)
+                    .padding(.vertical, MuesliTheme.spacing12)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     private func copyTranscript() {

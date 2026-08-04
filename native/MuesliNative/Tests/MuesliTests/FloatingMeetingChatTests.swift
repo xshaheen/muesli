@@ -85,6 +85,82 @@ struct FloatingMeetingChatTests {
         #expect(model.chatContext == nil)
     }
 
+    // MARK: - Notes tab
+
+    @Test("notes are available with a meeting even when chat's backend is not ready")
+    func notesAvailableWithoutBackend() {
+        // Notes are the user's own text: they need a meeting, not credentials.
+        let model = FloatingMeetingTranscriptModel()
+        model.chatContext = FloatingMeetingChatContext(
+            meetingID: 1,
+            priorTranscript: "",
+            currentConfig: { AppConfig() },
+            isReady: { false }
+        )
+
+        #expect(model.isChatAvailable == false)
+        #expect(model.isNotesAvailable)
+        #expect(model.openNotes())
+        #expect(model.selectedTab == .notes)
+    }
+
+    @Test("notes cannot open without a meeting context")
+    func notesNeedContext() {
+        let model = FloatingMeetingTranscriptModel()
+
+        #expect(model.openNotes() == false)
+        #expect(model.selectedTab == .transcript)
+    }
+
+    @Test("opening notes reads the shared cache and edits write through")
+    func notesLoadAndWriteThrough() {
+        // The closure pair models the controller's live cache: writes land in it
+        // synchronously, reads always see the latest value from either editor.
+        var cache = "existing notes"
+        var saved: [String] = []
+        let model = FloatingMeetingTranscriptModel()
+        model.chatContext = FloatingMeetingChatContext(
+            meetingID: 1,
+            priorTranscript: "",
+            currentConfig: { AppConfig() },
+            isReady: { false },
+            manualNotes: { cache },
+            saveManualNotes: { cache = $0; saved.append($0) }
+        )
+
+        #expect(model.openNotes())
+        #expect(model.notesDraft == "existing notes")
+
+        model.notesEdited("existing notes + more")
+        #expect(saved == ["existing notes + more"])
+
+        // An edit made in the main window while this tab was away appears on
+        // re-open — the reload is what keeps the two editors converged.
+        model.selectedTab = .transcript
+        cache = "edited in the main window"
+        #expect(model.openNotes())
+        #expect(model.notesDraft == "edited in the main window")
+    }
+
+    @Test("reset returns to the transcript tab and clears the notes draft")
+    func resetClearsNotes() {
+        let model = FloatingMeetingTranscriptModel()
+        model.chatContext = FloatingMeetingChatContext(
+            meetingID: 1,
+            priorTranscript: "",
+            currentConfig: { AppConfig() },
+            isReady: { false },
+            manualNotes: { "loaded" }
+        )
+        _ = model.openNotes()
+        model.notesEdited("draft")
+
+        model.reset()
+
+        #expect(model.selectedTab == .transcript)
+        #expect(model.notesDraft.isEmpty)
+    }
+
     // MARK: - Transcript parity
 
     @Test("panel chat combines the prior transcript with the live one")

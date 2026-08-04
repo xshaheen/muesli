@@ -5619,9 +5619,14 @@ final class MuesliController: NSObject {
                         priorTranscript: priorTranscriptForChat,
                         currentConfig: { [weak self] in self?.config ?? AppConfig() },
                         isReady: { [weak self] in self?.isMeetingChatReady ?? false },
+                        // Through the live cache, not the row: while the meeting runs the
+                        // cache is the freshest copy (persistence is debounced) and it
+                        // avoids hydrating the growing row on every read.
                         manualNotes: { [weak self] in
-                            guard let self else { return "" }
-                            return (try? self.dictationStore.meeting(id: meetingID))?.manualNotes ?? ""
+                            self?.manualNotesForLiveMeeting(id: meetingID) ?? ""
+                        },
+                        saveManualNotes: { [weak self] notes in
+                            self?.cacheMeetingManualNotes(id: meetingID, notes: notes)
                         }
                     )
                 )

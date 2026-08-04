@@ -169,6 +169,7 @@ final class FloatingIndicatorController: NSObject {
     var onCancelToggleDictation: (() -> Void)?
     var onPositionSaved: ((CGPoint) -> Void)?
     private var stopLayer: CALayer?
+    private var panelToggleLayer: CATextLayer?
     private var transcribingTitle = "Transcribing"
     private var computerUseTranscriptText: String?
     private var loadingSpinner: NSProgressIndicator?
@@ -307,19 +308,54 @@ final class FloatingIndicatorController: NSObject {
 
     func handleClick(atX x: CGFloat? = nil) {
         guard state == .recording else { return }
-        if let x, x < recordingPauseRegionMaxX() {
-            if isMeetingRecording {
-                onToggleMeetingPause?()
-            } else {
-                onCancelToggleDictation?()
+        if isMeetingRecording {
+            switch Self.meetingRecordingPillAction(
+                clickX: x,
+                pauseRegionMaxX: recordingPauseRegionMaxX(),
+                panelToggleRegion: panelToggleHitRegion()
+            ) {
+            case .togglePause: onToggleMeetingPause?()
+            case .togglePanel: toggleMeetingTranscriptPanel()
+            case .stop: onStopMeeting?()
             }
             return
         }
-        if isMeetingRecording {
-            onStopMeeting?()
-        } else {
-            onStopToggleDictation?()
+        if let x, x < recordingPauseRegionMaxX() {
+            onCancelToggleDictation?()
+            return
         }
+        onStopToggleDictation?()
+    }
+
+    enum MeetingRecordingPillAction: Equatable {
+        case togglePause
+        case togglePanel
+        case stop
+    }
+
+    /// Maps a click on the meeting pill to its control. The trailing side has
+    /// always stopped the recording; the panel toggle carves its own region out
+    /// of the middle, leaving pause on the left and stop everywhere else.
+    static func meetingRecordingPillAction(
+        clickX: CGFloat?,
+        pauseRegionMaxX: CGFloat,
+        panelToggleRegion: ClosedRange<CGFloat>?
+    ) -> MeetingRecordingPillAction {
+        guard let clickX else { return .stop }
+        if clickX < pauseRegionMaxX { return .togglePause }
+        if let panelToggleRegion, panelToggleRegion.contains(clickX) { return .togglePanel }
+        return .stop
+    }
+
+    /// The panel toggle's hit region: the comfortable minimum width centred on the
+    /// glyph, stopping short of the pause region and the stop square.
+    private func panelToggleHitRegion() -> ClosedRange<CGFloat>? {
+        guard let panelToggleLayer, panelToggleLayer.superlayer != nil else { return nil }
+        let mid = panelToggleLayer.frame.midX
+        let lower = max(recordingPauseRegionMaxX(), mid - Self.minimumControlHitWidth / 2)
+        let upper = min(stopLayer?.frame.minX ?? .greatestFiniteMagnitude, mid + Self.minimumControlHitWidth / 2)
+        guard lower < upper else { return nil }
+        return lower...upper
     }
 
     /// Where the leading control's hit region ends on a recording pill.
@@ -1372,12 +1408,38 @@ final class FloatingIndicatorController: NSObject {
 
         contentView.layer?.addSublayer(stop)
         stopLayer = stop
+        addPanelToggleLayer(in: size)
+    }
+
+    /// The panel-toggle glyph a meeting pill carries between the waveform and the
+    /// stop square. Added and removed with the stop layer so the two cannot drift
+    /// apart across relayouts.
+    private func addPanelToggleLayer(in size: NSSize) {
+        removePanelToggleLayer()
+        guard isMeetingRecording, let contentView else { return }
+
+        let glyph = CATextLayer()
+        glyph.string = "\u{2630}"
+        glyph.fontSize = 8
+        glyph.alignmentMode = .center
+        glyph.foregroundColor = NSColor.white.withAlphaComponent(0.7).cgColor
+        glyph.contentsScale = contentView.window?.backingScaleFactor ?? 2
+        glyph.frame = Self.panelToggleLayerFrame(in: size)
+        contentView.layer?.addSublayer(glyph)
+        panelToggleLayer = glyph
+    }
+
+    private func removePanelToggleLayer() {
+        panelToggleLayer?.removeFromSuperlayer()
+        panelToggleLayer = nil
     }
 
     private static let stopSquareSize: CGFloat = 6
     private static let stopSquareTrailingInset: CGFloat = 8
     private static let recordingControlSize: CGFloat = 10
     private static let recordingControlLeadingInset: CGFloat = 7
+    private static let panelToggleGlyphSize: CGFloat = 10
+    private static let panelToggleTrailingInset: CGFloat = 22
     /// The smallest region a pointer can comfortably aim at, used to pad the recording
     /// pill's 10pt leading control out to a clickable width.
     private static let minimumControlHitWidth: CGFloat = 36
@@ -1391,6 +1453,15 @@ final class FloatingIndicatorController: NSObject {
         )
     }
 
+    private static func panelToggleLayerFrame(in size: NSSize) -> CGRect {
+        CGRect(
+            x: size.width - panelToggleGlyphSize - panelToggleTrailingInset,
+            y: floor((size.height - panelToggleGlyphSize) / 2) - 1,
+            width: panelToggleGlyphSize,
+            height: panelToggleGlyphSize
+        )
+    }
+
     private func recordingControlSymbol() -> String {
         guard isMeetingRecording else { return "\u{2715}" }
         return isMeetingRecordingPaused ? "\u{25B6}" : "\u{23F8}"
@@ -1399,6 +1470,7 @@ final class FloatingIndicatorController: NSObject {
     private func removeStopLayer() {
         stopLayer?.removeFromSuperlayer()
         stopLayer = nil
+        removePanelToggleLayer()
     }
 
     private func stopWaveformAnimation() {
@@ -2050,6 +2122,11 @@ final class FloatingIndicatorController: NSObject {
         case .idle:
             return isHovered ? NSSize(width: 220, height: 36) : Self.idleIndicatorSize
         case .preparing, .recording:
+            // A meeting pill carries a third control (the panel toggle) between the
+            // waveform and the stop square, so it needs the extra width.
+            if state == .recording, isMeetingRecording {
+                return NSSize(width: 96, height: 22)
+            }
             return NSSize(width: 76, height: 22)
         case .transcribing:
             if let transcript = computerUseTranscriptText {

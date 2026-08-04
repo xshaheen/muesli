@@ -88,6 +88,22 @@ struct FloatingIndicatorDragTests {
     private let screen = NSRect(x: 0, y: 0, width: 1_440, height: 900)
     private let collapsed = NSSize(width: 44, height: 28)
 
+    @Test("meeting pill clicks map to pause, panel toggle, and stop by region")
+    func meetingPillClickMapping() {
+        typealias C = FloatingIndicatorController
+        let panelRegion: ClosedRange<CGFloat> = 57...81
+
+        // No location: the pill's historical default is stop.
+        #expect(C.meetingRecordingPillAction(clickX: nil, pauseRegionMaxX: 30, panelToggleRegion: panelRegion) == .stop)
+        #expect(C.meetingRecordingPillAction(clickX: 10, pauseRegionMaxX: 30, panelToggleRegion: panelRegion) == .togglePause)
+        // The waveform strip between pause and the toggle still stops, as it always has.
+        #expect(C.meetingRecordingPillAction(clickX: 45, pauseRegionMaxX: 30, panelToggleRegion: panelRegion) == .stop)
+        #expect(C.meetingRecordingPillAction(clickX: 69, pauseRegionMaxX: 30, panelToggleRegion: panelRegion) == .togglePanel)
+        #expect(C.meetingRecordingPillAction(clickX: 90, pauseRegionMaxX: 30, panelToggleRegion: panelRegion) == .stop)
+        // Without the glyph laid out there is no toggle region, and the middle stays stop.
+        #expect(C.meetingRecordingPillAction(clickX: 69, pauseRegionMaxX: 30, panelToggleRegion: nil) == .stop)
+    }
+
     @Test("an unclamped pill saves the anchor where it was dropped")
     func unclampedDragSavesTheDropPoint() {
         // Nothing was clamped, so anchor and pill centre started together -- and the
