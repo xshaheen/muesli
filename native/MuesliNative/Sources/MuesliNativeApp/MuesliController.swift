@@ -436,6 +436,7 @@ final class MuesliController: NSObject {
     /// Present only while a resume is in flight; consumed at stop to merge old + new
     /// transcript, and cleared on success or restored-on-failure.
     private var pendingResumePriorTranscript: [Int64: String] = [:]
+    private var meetingTranscriptCleanupTasks: [Int64: (id: UUID, task: Task<Void, Never>)] = [:]
     private var iCloudSyncTask: Task<Void, Never>?
     private var iCloudSyncGeneration = 0
     private var iCloudSyncDebounceTask: Task<Void, Never>?
@@ -446,6 +447,13 @@ final class MuesliController: NSObject {
     private var bridgeDiscoveryFollowUpPending = false
     private var hasStarted = false
 
+    var inFlightMeetingTranscriptCleanupCount: Int {
+        meetingTranscriptCleanupTasks.count
+    }
+
+    private let meetingTranscriptCleanupSenderFactory:
+        (TranscriptCleanupBackendOption, AppConfig) -> (String) async throws -> TranscriptCleanupResult
+
     init(
         runtime: RuntimePaths,
         dictationStore: DictationStore? = nil,
@@ -454,7 +462,10 @@ final class MuesliController: NSObject {
         meetingMarkdownAutoExporter: MeetingMarkdownAutoExporting = MeetingMarkdownAutoExporter(),
         launchAtLoginManager: LaunchAtLoginManaging = SystemLaunchAtLoginManager(),
         audioDuckingController: AudioDuckingManaging = AudioDuckingController(),
-        dictationAudioRoutingController: DictationAudioRouting = DictationAudioRouteController()
+        dictationAudioRoutingController: DictationAudioRouting = DictationAudioRouteController(),
+        meetingTranscriptCleanupSenderFactory: @escaping
+            (TranscriptCleanupBackendOption, AppConfig) -> (String) async throws -> TranscriptCleanupResult =
+            MeetingTranscriptCleanup.liveSender
     ) {
         self.configStore = configStore
         var loadedConfig = configStore.load()
@@ -478,6 +489,7 @@ final class MuesliController: NSObject {
         self.launchAtLoginCoordinator = LaunchAtLoginCoordinator(manager: launchAtLoginManager)
         self.audioDuckingController = audioDuckingController
         self.dictationAudioRoutingController = dictationAudioRoutingController
+        self.meetingTranscriptCleanupSenderFactory = meetingTranscriptCleanupSenderFactory
         self.dictationAudioRoutingController.selectedInputDeviceUID = loadedConfig.dictationInputDeviceUID
         self.dictationAudioRoutingController.selectedMeetingInputDeviceUID = loadedConfig.meetingInputDeviceUID
         self.config = loadedConfig
@@ -1299,6 +1311,9 @@ final class MuesliController: NSObject {
     }
 
     func updateConfig(_ mutate: (inout AppConfig) -> Void) {
+        let previousMeetingCleanupFingerprint = config.enableMeetingTranscriptCleanup
+            ? config.meetingTranscriptCleanupConsentFingerprint
+            : nil
         let wasICloudSyncEnabled = config.iCloudSyncEnabled
         let previousMeetingInputDeviceUID = config.meetingInputDeviceUID
         let previousHotkeyTriggerThresholdMS = config.hotkeyTriggerThresholdMS
@@ -1356,6 +1371,12 @@ final class MuesliController: NSObject {
             Self.meetingCleanupLogger.notice(
                 "Meeting transcript cleanup consent auto-revoked: backend or destination changed since consent was granted"
             )
+        }
+        let currentMeetingCleanupFingerprint = config.enableMeetingTranscriptCleanup
+            ? config.meetingTranscriptCleanupConsentFingerprint
+            : nil
+        if currentMeetingCleanupFingerprint != previousMeetingCleanupFingerprint {
+            cancelMeetingTranscriptCleanupTasks()
         }
         let configuredMeetingTranscriptionBackend = BackendOption.all.first(where: {
             $0.backend == config.meetingTranscriptionBackend && $0.model == config.meetingTranscriptionModel
@@ -6493,18 +6514,32 @@ final class MuesliController: NSObject {
             )
             return
         }
+        guard let consentFingerprint = config.meetingTranscriptCleanupConsentFingerprint else {
+            return
+        }
         fputs("[meeting-cleanup] scheduled for meeting \(meetingID) via \(backend.backend)\n", stderr)
 
         let config = self.config
-        Task { [weak self] in
+        let sender = meetingTranscriptCleanupSenderFactory(backend, config)
+        let taskID = UUID()
+        meetingTranscriptCleanupTasks[meetingID]?.task.cancel()
+        let task = Task { [weak self] in
             guard let self else { return }
+            defer { self.finishMeetingTranscriptCleanup(meetingID: meetingID, taskID: taskID) }
             guard let meeting = try? self.dictationStore.meeting(id: meetingID) else { return }
             let raw = meeting.rawTranscript
             guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
             let cleaned = await MeetingTranscriptCleanup.clean(
                 transcript: raw,
-                send: MeetingTranscriptCleanup.liveSender(backend: backend, config: config)
+                isAuthorized: { [weak self] in
+                    guard let self else { return false }
+                    return self.isMeetingTranscriptCleanupAuthorized(
+                        backend: backend,
+                        consentFingerprint: consentFingerprint
+                    )
+                },
+                send: sender
             )
             guard let cleaned else { return }
 
@@ -6526,6 +6561,31 @@ final class MuesliController: NSObject {
 
             await self.regenerateNotesFromCleanedTranscript(meetingID: meetingID)
         }
+        meetingTranscriptCleanupTasks[meetingID] = (taskID, task)
+    }
+
+    private func isMeetingTranscriptCleanupAuthorized(
+        backend: TranscriptCleanupBackendOption,
+        consentFingerprint: String
+    ) -> Bool {
+        selectedPostProcessorBackend == backend
+            && config.meetingTranscriptCleanupConsentFingerprint == consentFingerprint
+            && MeetingTranscriptCleanup.isEnabled(
+                config: config,
+                backend: backend,
+                isChatGPTAuthenticated: appState.isChatGPTAuthenticated
+            )
+    }
+
+    private func cancelMeetingTranscriptCleanupTasks() {
+        let tasks = meetingTranscriptCleanupTasks.values.map(\.task)
+        meetingTranscriptCleanupTasks.removeAll()
+        tasks.forEach { $0.cancel() }
+    }
+
+    private func finishMeetingTranscriptCleanup(meetingID: Int64, taskID: UUID) {
+        guard meetingTranscriptCleanupTasks[meetingID]?.id == taskID else { return }
+        meetingTranscriptCleanupTasks.removeValue(forKey: meetingID)
     }
 
     /// Rebuilds a meeting's notes from its cleaned transcript.

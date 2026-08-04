@@ -26,10 +26,14 @@ enum MeetingTranscriptCleanup {
 
     /// Cleans `transcript`, or returns nil if it cannot be shown to be complete.
     ///
+    /// - Parameter isAuthorized: Rechecked immediately before every chunk leaves
+    ///   the process. Meeting cleanup consent is mutable while a long transcript
+    ///   is being processed, so authorization at scheduling time is insufficient.
     /// - Parameter send: injected so tests can drive every failure mode without a
     ///   network. Production passes `liveSender(backend:config:)`.
     static func clean(
         transcript: String,
+        isAuthorized: () async -> Bool = { true },
         send: (String) async throws -> TranscriptCleanupResult
     ) async -> String? {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -41,11 +45,16 @@ enum MeetingTranscriptCleanup {
 
         var cleanedUnits: [MeetingTranscriptUnit] = []
         for (position, chunk) in chunks.enumerated() {
+            guard !Task.isCancelled, await isAuthorized() else {
+                fputs("[meeting-cleanup] cancelled before chunk \(position + 1)/\(chunks.count)\n", stderr)
+                return nil
+            }
             let payload = MeetingTranscriptCleanupValidator.requestPayload(for: chunk)
             let result: TranscriptCleanupResult
             do {
                 result = try await send(payload)
             } catch {
+                guard !Task.isCancelled else { return nil }
                 // Never propagates. The meeting is already complete and durable;
                 // cleanup is an improvement that either lands or does not.
                 logger.error("chunk \(position + 1)/\(chunks.count) failed: \(error.localizedDescription)")
@@ -58,6 +67,10 @@ enum MeetingTranscriptCleanup {
                     safeDescription = String(describing: type(of: error))
                 }
                 fputs("[meeting-cleanup] chunk \(position + 1)/\(chunks.count) failed: \(safeDescription)\n", stderr)
+                return nil
+            }
+            guard !Task.isCancelled, await isAuthorized() else {
+                fputs("[meeting-cleanup] cancelled after chunk \(position + 1)/\(chunks.count)\n", stderr)
                 return nil
             }
             switch MeetingTranscriptCleanupValidator.validate(

@@ -37,6 +37,64 @@ struct MeetingsNavigationTests {
             .appendingPathComponent("muesli-nav-support-\(UUID().uuidString)", isDirectory: true)
     }
 
+    private func makeInFlightCleanupController() throws -> (
+        controller: MuesliController,
+        meetingID: Int64,
+        probe: CancellableMeetingCleanupSenderProbe
+    ) {
+        let store = try makeStore()
+        let transcript = (0..<40).map {
+            "[10:\(String(format: "%02d", $0)):00] Speaker 1: "
+                + String(repeating: "word ", count: 40)
+        }.joined(separator: "\n")
+        let now = Date()
+        let meetingID = try store.insertMeeting(
+            title: "Consent cancellation",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: transcript,
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        let configStore = ConfigStore(supportDirectory: makeSupportDirectory())
+        let backend = TranscriptCleanupBackendOption.hosted(.ollama)
+        var config = AppConfig()
+        config.postProcessorBackend = backend.backend
+        config.ollamaURL = "http://localhost:11434"
+        #expect(MeetingTranscriptCleanupPolicy.grantConsent(for: backend, config: &config))
+        configStore.save(config)
+
+        let probe = CancellableMeetingCleanupSenderProbe()
+        let controller = MuesliController(
+            runtime: RuntimePaths(
+                repoRoot: FileManager.default.temporaryDirectory,
+                menuIcon: nil,
+                appIcon: nil,
+                bundlePath: nil
+            ),
+            dictationStore: store,
+            configStore: configStore,
+            meetingTranscriptCleanupSenderFactory: { _, _ in
+                { payload in try await probe.send(payload) }
+            }
+        )
+        return (controller, meetingID, probe)
+    }
+
+    private func waitForCleanupSend(
+        _ probe: CancellableMeetingCleanupSenderProbe,
+        toFinish: Bool = false
+    ) async {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
+            let reached = toFinish ? await probe.finishedSendCount > 0 : await probe.sendCount > 0
+            if reached { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     @discardableResult
     private func insertMeeting(
         in store: DictationStore,
@@ -1218,6 +1276,40 @@ struct MeetingsNavigationTests {
         #expect(controller.config.meetingTranscriptCleanupConsentFingerprint == nil)
     }
 
+    @Test("changing cleanup destination cancels in-flight chunk uploads")
+    func changingCleanupDestinationCancelsInFlightUploads() async throws {
+        let (controller, meetingID, probe) = try makeInFlightCleanupController()
+        controller.scheduleMeetingTranscriptCleanup(meetingID: meetingID)
+        await waitForCleanupSend(probe)
+        #expect(await probe.sendCount == 1)
+
+        controller.updateConfig { $0.ollamaURL = "http://192.168.1.50:11434" }
+        await waitForCleanupSend(probe, toFinish: true)
+
+        #expect(controller.inFlightMeetingTranscriptCleanupCount == 0)
+        #expect(await probe.sendCount == 1)
+        #expect(await probe.finishedSendCount == 1)
+        #expect(controller.config.enableMeetingTranscriptCleanup == false)
+        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint == nil)
+    }
+
+    @Test("disabling cleanup cancels in-flight chunk uploads")
+    func disablingCleanupCancelsInFlightUploads() async throws {
+        let (controller, meetingID, probe) = try makeInFlightCleanupController()
+        controller.scheduleMeetingTranscriptCleanup(meetingID: meetingID)
+        await waitForCleanupSend(probe)
+        #expect(await probe.sendCount == 1)
+
+        controller.setMeetingTranscriptCleanupEnabled(false)
+        await waitForCleanupSend(probe, toFinish: true)
+
+        #expect(controller.inFlightMeetingTranscriptCleanupCount == 0)
+        #expect(await probe.sendCount == 1)
+        #expect(await probe.finishedSendCount == 1)
+        #expect(controller.config.enableMeetingTranscriptCleanup == false)
+        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint == nil)
+    }
+
     @Test("startup repairs a persisted Gemma dictation and cleanup conflict")
     func startupRepairsPersistedGemmaConflict() {
         let configStore = ConfigStore(supportDirectory: makeSupportDirectory())
@@ -1303,6 +1395,24 @@ struct MeetingsNavigationTests {
             source: .meeting,
             followUpToID: nil,
             preview: "Summary"
+        )
+    }
+}
+
+private actor CancellableMeetingCleanupSenderProbe {
+    private(set) var sendCount = 0
+    private(set) var finishedSendCount = 0
+
+    func send(_ payload: String) async throws -> TranscriptCleanupResult {
+        sendCount += 1
+        defer { finishedSendCount += 1 }
+        if sendCount == 1 {
+            try await Task.sleep(for: .seconds(30))
+        }
+        return TranscriptCleanupResult(
+            rawOutput: payload,
+            cleanedOutput: payload,
+            model: "test"
         )
     }
 }

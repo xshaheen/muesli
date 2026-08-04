@@ -296,6 +296,24 @@ struct MeetingTranscriptCleanupTests {
         #expect(cleaned == nil)
     }
 
+    @Test("revoked authorization prevents subsequent chunk sends")
+    func revokedAuthorizationStopsChunking() async {
+        let transcript = (0..<40).map {
+            "[10:\(String(format: "%02d", $0)):00] Speaker 1: "
+                + String(repeating: "word ", count: 40)
+        }.joined(separator: "\n")
+        let probe = MeetingCleanupAuthorizationProbe()
+
+        let cleaned = await MeetingTranscriptCleanup.clean(
+            transcript: transcript,
+            isAuthorized: { await probe.isAuthorized },
+            send: { payload in await probe.sendAndRevoke(payload) }
+        )
+
+        #expect(await probe.sendCount == 1)
+        #expect(cleaned == nil)
+    }
+
     @Test("a throwing backend yields nothing rather than propagating")
     func throwingBackendYieldsNil() async {
         let cleaned = await MeetingTranscriptCleanup.clean(transcript: diarized) { _ in
@@ -406,5 +424,22 @@ struct MeetingTranscriptCleanupTests {
 
         // Already revoked: nothing further to report.
         #expect(MeetingTranscriptCleanupPolicy.reconcileConsent(in: &config) == false)
+    }
+}
+
+private actor MeetingCleanupAuthorizationProbe {
+    private var authorized = true
+    private(set) var sendCount = 0
+
+    var isAuthorized: Bool { authorized }
+
+    func sendAndRevoke(_ payload: String) -> TranscriptCleanupResult {
+        sendCount += 1
+        authorized = false
+        return TranscriptCleanupResult(
+            rawOutput: payload,
+            cleanedOutput: payload,
+            model: "test"
+        )
     }
 }
