@@ -4880,6 +4880,12 @@ final class MuesliController: NSObject {
         indicator.toggleMeetingTranscriptPanel()
     }
 
+    /// Menu-bar toggle for the floating pill itself. Goes through config so the
+    /// setting persists and the Settings checkbox stays in agreement.
+    @objc func toggleFloatingIndicatorVisibility() {
+        updateConfig { $0.showFloatingIndicator.toggle() }
+    }
+
     @objc func toggleMeetingRecordingPause() {
         if isMeetingRecordingPaused() {
             resumeMeetingRecording()

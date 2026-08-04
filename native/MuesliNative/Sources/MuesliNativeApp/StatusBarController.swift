@@ -126,6 +126,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         } else {
             menu.addItem(actionItem(title: "Start Meeting Recording", action: #selector(MuesliController.toggleMeetingRecording)))
         }
+        let indicatorTitle = controller.config.showFloatingIndicator
+            ? "Hide Floating Button"
+            : "Show Floating Button"
+        menu.addItem(actionItem(title: indicatorTitle, action: #selector(MuesliController.toggleFloatingIndicatorVisibility)))
         menu.addItem(.separator())
 
         let recentItem = NSMenuItem(title: "Recent Dictations", action: nil, keyEquivalent: "")
