@@ -192,6 +192,9 @@ final class FloatingIndicatorController: NSObject {
     /// stale, so there is no cancellation path to keep in step.
     private var pendingWaveformChromeGeneration: UInt64?
     private var hasPendingWaveformChrome: Bool { pendingWaveformChromeGeneration == chromeGeneration }
+    private var activePresentationRole: FloatingIndicatorPresentationRole = .idleCollapsed
+    private var activeSurfaceSize: NSSize?
+    private var notificationObservers: [(center: NotificationCenter, token: NSObjectProtocol)] = []
 
     private static let logger = Logger(subsystem: "com.muesli.native", category: "FloatingIndicator")
 
@@ -212,13 +215,40 @@ final class FloatingIndicatorController: NSObject {
         // the topology settles. The transcript is not re-placed here -- it is a window
         // the user positioned, and its saved origin is re-clamped onto an attached
         // screen at the next show.
-        NotificationCenter.default.addObserver(
+        let screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.scheduleScreenReconfigurationRelayout()
+            Task { @MainActor [weak self] in
+                self?.scheduleScreenReconfigurationRelayout()
+            }
         }
+        notificationObservers.append((NotificationCenter.default, screenObserver))
+
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        let accessibilityObserver = workspaceCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshSurfaceForAccessibilityDisplayOptions()
+            }
+        }
+        notificationObservers.append((workspaceCenter, accessibilityObserver))
+    }
+
+    deinit {
+        for observer in notificationObservers {
+            observer.center.removeObserver(observer.token)
+        }
+    }
+
+    private func refreshSurfaceForAccessibilityDisplayOptions() {
+        guard let activeSurfaceSize else { return }
+        let style = applyFloatingSurface(activePresentationRole, frameSize: activeSurfaceSize)
+        panel?.alphaValue = style.panelAlpha
     }
 
     private var screenRelayoutWorkItem: DispatchWorkItem?
@@ -430,7 +460,6 @@ final class FloatingIndicatorController: NSObject {
 
         guard !isShowingLoading,
               let panel,
-              let contentView,
               let iconLabel,
               let textLabel else {
             // A declined collapse still leaves the drag running, so settle any transition
@@ -448,7 +477,7 @@ final class FloatingIndicatorController: NSObject {
         let style = styleForState(state, config: config)
         let targetFrame = frameForState(state, config: config)
 
-        let localIndicator = applyIndicatorFrame(targetFrame)
+        applyIndicatorFrame(targetFrame)
         // Put it back under the pointer. After the collapse the window is the pill, so
         // its origin is the pill's origin.
         if let pillScreenFrame {
@@ -459,9 +488,6 @@ final class FloatingIndicatorController: NSObject {
             ))
         }
 
-        contentView.layer?.backgroundColor = style.background.cgColor
-        contentView.layer?.borderColor = style.border.cgColor
-        glassView?.frame = NSRect(origin: .zero, size: localIndicator.size)
         panel.alphaValue = style.alpha
 
         if state == .recording {
@@ -490,9 +516,8 @@ final class FloatingIndicatorController: NSObject {
         //
         // This used to run only for idle, so dragging during a recording resized the
         // window and stopped -- leaving the tint layer and waveform bars laid out for
-        // the old geometry. A recording pill has a clear
-        // background and a hidden glass view, so those two *are* its entire visible
-        // appearance: stale, they render as nothing and the pill vanishes.
+        // the old geometry. The surface and waveform are the recording pill's visible
+        // appearance, so stale geometry can make the pill appear clipped or empty.
         applyGlassState(state, frameSize: targetFrame.size)
         applyWaveformChrome(for: state, mode: recordingWaveformMode, in: targetFrame.size)
         // setState orders the panel front after every transition; a drag resizes the
@@ -867,10 +892,6 @@ final class FloatingIndicatorController: NSObject {
             }
             panel.animator().alphaValue = style.alpha
 
-            contentView.layer?.backgroundColor = style.background.cgColor
-            contentView.layer?.borderWidth = 1.0
-            contentView.layer?.borderColor = style.border.cgColor
-
             if state == .recording {
                 applyRecordingControlChrome(
                     iconLabel: iconLabel,
@@ -937,7 +958,7 @@ final class FloatingIndicatorController: NSObject {
         if panel == nil {
             createPanel(config: config)
         }
-        guard let panel, let contentView, let iconLabel, let textLabel else { return }
+        guard let panel, let iconLabel, let textLabel else { return }
 
         if !isComputerUseCursorMode {
             // The settled frame, not `panel.frame`: entering cursor mode during a
@@ -970,8 +991,6 @@ final class FloatingIndicatorController: NSObject {
 
         panel.level = .statusBar
         panel.ignoresMouseEvents = true
-        glassView?.isHidden = true
-        tintLayer?.isHidden = true
         micIconView?.isHidden = true
         wandIconView?.isHidden = true
 
@@ -982,19 +1001,20 @@ final class FloatingIndicatorController: NSObject {
 
             applyIndicatorFrame(targetFrame, animated: true)
             panel.animator().alphaValue = 1.0
-            contentView.layer?.backgroundColor = NSColor.colorWith(hex: 0x1455D9, alpha: 0.88).cgColor
-            contentView.layer?.borderWidth = 1.0
-            contentView.layer?.borderColor = NSColor.colorWith(hex: 0xFFFFFF, alpha: 0.34).cgColor
+            let surfaceStyle = applyFloatingSurface(.computerUse, frameSize: targetSize)
 
             iconLabel.isHidden = false
             iconLabel.animator().alphaValue = 1
             iconLabel.stringValue = "•"
             iconLabel.font = NSFont.systemFont(ofSize: 18, weight: .heavy)
-            iconLabel.textColor = .white
+            iconLabel.textColor = NSColor.colorWith(
+                hexString: surfaceStyle.glyphHex,
+                alpha: surfaceStyle.glyphAlpha
+            )
 
             textLabel.stringValue = label
             textLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-            textLabel.textColor = .white.withAlphaComponent(0.92)
+            textLabel.textColor = .white.withAlphaComponent(surfaceStyle.textAlpha)
             textLabel.isHidden = label.isEmpty
             textLabel.animator().alphaValue = label.isEmpty ? 0 : 1
             layoutLabels(
@@ -1038,7 +1058,7 @@ final class FloatingIndicatorController: NSObject {
         }
         let config = configStore.load()
         if panel == nil { createPanel(config: config) }
-        guard let panel, let contentView, let iconLabel, let textLabel else { return }
+        guard let panel, let iconLabel, let textLabel else { return }
         // The warning is centred on the pill's current position, so it has to be sized
         // and clamped against the display the pill is actually on.
         //
@@ -1070,9 +1090,6 @@ final class FloatingIndicatorController: NSObject {
         let y = min(max(center.y - warningSize.height / 2, screen.minY), screen.maxY - warningSize.height)
         let targetFrame = NSRect(x: x, y: y, width: warningSize.width, height: warningSize.height)
 
-        // Warning uses its own solid amber background — hide glass layers.
-        glassView?.isHidden = true
-        tintLayer?.isHidden = true
         micIconView?.isHidden = true
 
         NSAnimationContext.runAnimationGroup { context in
@@ -1082,20 +1099,21 @@ final class FloatingIndicatorController: NSObject {
 
             applyIndicatorFrame(targetFrame, animated: true)
             panel.animator().alphaValue = 1.0
-            contentView.layer?.backgroundColor = NSColor.colorWith(hex: 0xD99A11, alpha: 0.92).cgColor
-            contentView.layer?.borderWidth = 1.0
-            contentView.layer?.borderColor = NSColor.colorWith(hex: 0xFFFFFF, alpha: 0.24).cgColor
+            let surfaceStyle = applyFloatingSurface(.warning, frameSize: warningSize)
 
             let hasIcon = !icon.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             iconLabel.isHidden = !hasIcon
             iconLabel.font = NSFont.systemFont(ofSize: 14, weight: .bold)
             iconLabel.stringValue = icon
-            iconLabel.textColor = NSColor.colorWith(hex: 0x1A140D, alpha: 0.95)
+            iconLabel.textColor = NSColor.colorWith(
+                hexString: surfaceStyle.glyphHex,
+                alpha: surfaceStyle.glyphAlpha
+            )
             iconLabel.animator().alphaValue = hasIcon ? 1 : 0
 
             textLabel.stringValue = message
             textLabel.font = warningFont
-            textLabel.textColor = NSColor.colorWith(hex: 0x1A140D, alpha: 0.95)
+            textLabel.textColor = .white.withAlphaComponent(surfaceStyle.textAlpha)
             textLabel.isHidden = false
             textLabel.animator().alphaValue = 1
             layoutLabels(iconLabel: iconLabel, textLabel: textLabel, in: warningSize, hasTitle: true, animated: true)
@@ -1191,10 +1209,6 @@ final class FloatingIndicatorController: NSObject {
         micIconView?.isHidden = true
         wandIconView?.isHidden = true
         iconLabel?.isHidden = true
-        glassView?.isHidden = false
-        tintLayer?.isHidden = false
-        tintLayer?.backgroundColor = NSColor.colorWith(hexString: "1e1e2e", alpha: 0.72).cgColor
-        applyTintLayerGeometry(size: loadingSize, radius: loadingSize.height / 2)
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.18
@@ -1203,9 +1217,7 @@ final class FloatingIndicatorController: NSObject {
 
             applyIndicatorFrame(targetFrame, animated: true)
             panel.animator().alphaValue = 1.0
-            contentView.layer?.backgroundColor = NSColor.clear.cgColor
-            contentView.layer?.borderWidth = 1.0
-            contentView.layer?.borderColor = NSColor.colorWith(hex: 0xFFFFFF, alpha: 0.16).cgColor
+            let surfaceStyle = applyFloatingSurface(.loading, frameSize: loadingSize)
 
             loadingSpinner?.frame = NSRect(
                 x: startX, y: (loadingSize.height - spinnerSize) / 2,
@@ -1221,7 +1233,7 @@ final class FloatingIndicatorController: NSObject {
             textLabel.usesSingleLineMode = true
             textLabel.cell?.wraps = false
             textLabel.cell?.isScrollable = false
-            textLabel.textColor = NSColor.colorWith(hex: 0xFFFFFF, alpha: 0.82)
+            textLabel.textColor = .white.withAlphaComponent(surfaceStyle.textAlpha)
             textLabel.frame = NSRect(
                 x: startX + spinnerSize + gap,
                 y: (loadingSize.height - 14) / 2,
@@ -1701,41 +1713,43 @@ final class FloatingIndicatorController: NSObject {
         CATransaction.commit()
     }
 
-    private func applyGlassState(_ state: DictationState, frameSize: NSSize) {
-        let config = configStore.load()
+    @discardableResult
+    private func applyFloatingSurface(
+        _ role: FloatingIndicatorPresentationRole,
+        frameSize: NSSize
+    ) -> FloatingIndicatorSurfaceStyle {
+        let workspace = NSWorkspace.shared
+        let recordingAccentHex = role == .recording
+            ? configStore.load().recordingColorHex
+            : "ffffff"
+        let style = FloatingIndicatorSurfaceStyle.resolve(
+            role: role,
+            recordingAccentHex: recordingAccentHex,
+            reduceTransparency: workspace.accessibilityDisplayShouldReduceTransparency,
+            increaseContrast: workspace.accessibilityDisplayShouldIncreaseContrast
+        )
         let radius = frameSize.height / 2
-        let themeHex = config.recordingColorHex
 
-        // Frosted glass in every state. Recording used to hide the frost behind a
-        // near-solid accent fill, which made the meeting pill the one opaque slab in
-        // an otherwise translucent surface family — the accent now tints the same
-        // glass the idle pill and the transcript panel use.
-        glassView?.isHidden = false
+        activePresentationRole = role
+        activeSurfaceSize = frameSize
+        glassView?.isHidden = !style.usesGlassEffect
         glassView?.frame = NSRect(origin: .zero, size: frameSize)
         glassView?.layer?.cornerRadius = radius
         glassView?.layer?.masksToBounds = true
-
-        let tintAlpha: CGFloat
-        let tintHex: String
-        switch state {
-        case .idle:
-            tintAlpha = isHovered ? 0.72 : 0.44
-            tintHex = "1e1e2e"
-        case .preparing:
-            tintAlpha = 0.62
-            tintHex = "1e1e2e"
-        case .recording:
-            // Low enough for the blur to read through, high enough that the white
-            // waveform and controls keep their contrast on bright backdrops.
-            tintAlpha = 0.6
-            tintHex = themeHex
-        case .transcribing:
-            tintAlpha = 0.62
-            tintHex = "1e1e2e"
-        }
         tintLayer?.isHidden = false
-        tintLayer?.backgroundColor = NSColor.colorWith(hexString: tintHex, alpha: tintAlpha).cgColor
+        tintLayer?.backgroundColor = NSColor.colorWith(hexString: style.tintHex, alpha: style.tintAlpha).cgColor
         applyTintLayerGeometry(size: frameSize, radius: radius)
+        contentView?.layer?.backgroundColor = NSColor.clear.cgColor
+        contentView?.layer?.borderWidth = style.borderWidth
+        contentView?.layer?.borderColor = NSColor.colorWith(
+            hexString: style.borderHex,
+            alpha: style.borderAlpha
+        ).cgColor
+        return style
+    }
+
+    private func applyGlassState(_ state: DictationState, frameSize: NSSize) {
+        applyFloatingSurface(presentationRole(for: state), frameSize: frameSize)
 
         let iconSize = NSSize(width: 18, height: 18)
 
@@ -1801,6 +1815,19 @@ final class FloatingIndicatorController: NSObject {
             wandIconView?.isHidden = true
             iconLabel?.isHidden = true
             micIconView?.isHidden = true
+        }
+    }
+
+    private func presentationRole(for state: DictationState) -> FloatingIndicatorPresentationRole {
+        switch state {
+        case .idle:
+            return isHovered ? .idleHovered : .idleCollapsed
+        case .preparing:
+            return .preparing
+        case .recording:
+            return .recording
+        case .transcribing:
+            return .transcribing
         }
     }
 
@@ -1930,10 +1957,9 @@ final class FloatingIndicatorController: NSObject {
             // and the container view follow the size, and cursor mode changed it.
             applyIndicatorFrame(returnFrame)
         }
-        // Geometry alone leaves the cursor pill's appearance behind -- blue fill, "•" for
-        // an icon, the glass, tint, mic and wand views all hidden -- so the pill sits at
-        // home as a blue dot until something else happens to change state. Re-running the
-        // state it is actually in restores its own chrome.
+        // Geometry alone leaves the cursor pill's appearance behind -- its semantic dot,
+        // label and status-level behavior -- so re-running the actual state restores all
+        // of its chrome and interaction policy together.
         setState(state, config: configStore.load())
     }
 
@@ -2327,31 +2353,35 @@ final class FloatingIndicatorController: NSObject {
         )
     }
 
-    private func styleForState(_ state: DictationState, config: AppConfig) -> (background: NSColor, border: NSColor, icon: String, title: String, iconColor: NSColor, textColor: NSColor, alpha: CGFloat) {
+    private func styleForState(_ state: DictationState, config: AppConfig) -> (icon: String, title: String, iconColor: NSColor, textColor: NSColor, alpha: CGFloat) {
+        let surfaceStyle = FloatingIndicatorSurfaceStyle.resolve(
+            role: presentationRole(for: state),
+            recordingAccentHex: config.recordingColorHex,
+            reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        )
+        let textColor = NSColor.white.withAlphaComponent(surfaceStyle.textAlpha)
+
         switch state {
         case .idle:
             return (
-                .clear,
-                .colorWith(hex: 0xFFFFFF, alpha: isHovered ? 0.14 : 0.22),
                 "",
                 isHovered ? "Hold \(config.dictationHotkey.label) to dictate" : "",
-                .colorWith(hex: 0xFFFFFF, alpha: 0.75),
-                .colorWith(hex: 0xFFFFFF, alpha: 0.75),
-                isHovered ? 1.0 : 0.85
+                textColor,
+                textColor,
+                surfaceStyle.panelAlpha
             )
         case .preparing:
-            return (.clear, .colorWith(hex: 0xFFFFFF, alpha: 0.16), "", "", .white, .white, 1.0)
+            return ("", "", .white, .white, surfaceStyle.panelAlpha)
         case .recording:
             // No icon or title here: the recording pill's leading control comes from
             // `applyRecordingControlChrome`, which every path that lays it out uses. The
             // stop glyph this used to carry was only ever picked up by the drag collapse,
             // where it rendered at the wrong size in the wrong place.
-            return (.clear, .colorWith(hex: 0xFFFFFF, alpha: 0.16), "", "", .white, .white, 1.0)
+            return ("", "", .white, .white, surfaceStyle.panelAlpha)
         case .transcribing:
             return (
-                .clear, .colorWith(hex: 0xFFFFFF, alpha: 0.16),
                 "", transcribingTitle,
-                .white, .colorWith(hex: 0xFFFFFF, alpha: 0.82), 1.0
+                .white, textColor, surfaceStyle.panelAlpha
             )
         }
     }
