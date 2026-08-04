@@ -215,44 +215,51 @@ struct MeetingChatView: View {
 
     /// One-tap saved prompts. Each sends its full instruction through the same path a typed
     /// question uses, while the conversation shows only the recipe's name.
+    ///
+    /// A horizontal scroll, not a wrapping row: in the floating panel's 360pt the
+    /// names used to wrap to two lines, turning the capsules into tall uneven
+    /// lozenges. Single-line chips keep the capsule shape; overflow scrolls.
     private var recipeChips: some View {
-        HStack(spacing: 6) {
-            ForEach(MeetingChatRecipes.visible()) { recipe in
-                Button { run(recipe) } label: {
-                    Text(recipe.name)
-                        .font(.system(size: isCompact ? 10 : 11))
-                        .foregroundStyle(MuesliTheme.textSecondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule().fill(MuesliTheme.backgroundRaised)
-                        )
-                        .overlay(
-                            Capsule().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                .disabled(!canRunRecipe)
-                .help(recipe.prompt)
-            }
-
-            if !MeetingChatRecipes.overflow().isEmpty {
-                Menu {
-                    ForEach(MeetingChatRecipes.overflow()) { recipe in
-                        Button(recipe.name) { run(recipe) }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(MeetingChatRecipes.visible()) { recipe in
+                    Button { run(recipe) } label: {
+                        Text(recipe.name)
+                            .font(.system(size: isCompact ? 10 : 11, weight: .medium))
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule().fill(MuesliTheme.backgroundRaised)
+                            )
+                            .overlay(
+                                Capsule().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                            )
                     }
-                } label: {
-                    Text("All recipes")
-                        .font(.system(size: isCompact ? 10 : 11))
-                        .foregroundStyle(MuesliTheme.textTertiary)
+                    .buttonStyle(.plain)
+                    .disabled(!canRunRecipe)
+                    .help(recipe.prompt)
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .disabled(!canRunRecipe)
-            }
 
-            Spacer(minLength: 0)
+                if !MeetingChatRecipes.overflow().isEmpty {
+                    Menu {
+                        ForEach(MeetingChatRecipes.overflow()) { recipe in
+                            Button(recipe.name) { run(recipe) }
+                        }
+                    } label: {
+                        Text("All recipes")
+                            .font(.system(size: isCompact ? 10 : 11))
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .disabled(!canRunRecipe)
+                }
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var canRunRecipe: Bool {
