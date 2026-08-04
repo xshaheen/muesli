@@ -758,6 +758,14 @@ final class MuesliController: NSObject {
                 await self.applyDesignatedTranscriptionBackends()
                 await self.transcriptionCoordinator.startMemoryPressureMonitoring()
                 let dictationBackend = self.selectedBackend
+                // Same warming pill the backend picker shows: without it, a launch-time
+                // Whisper preload is invisible and the first hotkey press mid-warmup
+                // reads as the app ignoring the user.
+                if dictationBackend.backend == "whisper" {
+                    await MainActor.run {
+                        self.indicator.showLoading("Warming up...")
+                    }
+                }
                 guard await self.prepareDictationBackend(dictationBackend) else { return }
                 await self.preloadOptionalTranscriptionResources(
                     for: dictationBackend,
