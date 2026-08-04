@@ -6463,7 +6463,20 @@ final class MuesliController: NSObject {
             config: config,
             backend: backend,
             isChatGPTAuthenticated: appState.isChatGPTAuthenticated
-        ) else { return }
+        ) else {
+            // Every component, because a silent skip here is indistinguishable from
+            // a cleanup that ran and failed — the exact hole this line plugs.
+            fputs(
+                "[meeting-cleanup] skipped for meeting \(meetingID): "
+                    + "consent=\(MeetingTranscriptCleanupPolicy.hasCurrentConsent(for: backend, config: config)) "
+                    + "eligible=\(MeetingTranscriptCleanupPolicy.isEligible(backend)) "
+                    + "configured=\(TranscriptCleanupClient.hasRequiredSettings(for: backend, config: config, isChatGPTAuthenticated: appState.isChatGPTAuthenticated)) "
+                    + "chatgptAuthFlag=\(appState.isChatGPTAuthenticated)\n",
+                stderr
+            )
+            return
+        }
+        fputs("[meeting-cleanup] scheduled for meeting \(meetingID) via \(backend.backend)\n", stderr)
 
         let config = self.config
         Task { [weak self] in

@@ -49,6 +49,15 @@ enum MeetingTranscriptCleanup {
                 // Never propagates. The meeting is already complete and durable;
                 // cleanup is an improvement that either lands or does not.
                 logger.error("chunk \(position + 1)/\(chunks.count) failed: \(error.localizedDescription)")
+                // Type and status only: a backend's error body can echo request
+                // content, and stderr has none of the unified log's privacy handling.
+                let safeDescription: String
+                if case let .backendFailed(statusCode, _)? = error as? ChatGPTResponsesError {
+                    safeDescription = "ChatGPT HTTP \(statusCode)"
+                } else {
+                    safeDescription = String(describing: type(of: error))
+                }
+                fputs("[meeting-cleanup] chunk \(position + 1)/\(chunks.count) failed: \(safeDescription)\n", stderr)
                 return nil
             }
             switch MeetingTranscriptCleanupValidator.validate(
@@ -63,13 +72,18 @@ enum MeetingTranscriptCleanup {
                 // transcript repaired up to the failure point and raw after it is
                 // the invisible failure this whole unit exists to prevent.
                 logger.error("chunk \(position + 1)/\(chunks.count) rejected: \(rejection.reason)")
+                fputs("[meeting-cleanup] chunk \(position + 1)/\(chunks.count) rejected: \(rejection.reason)\n", stderr)
                 return nil
             }
         }
 
         let cleaned = MeetingTranscriptChunker.reassemble(cleanedUnits)
         let cleanedTrimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanedTrimmed.isEmpty, cleaned != transcript else { return nil }
+        guard !cleanedTrimmed.isEmpty, cleaned != transcript else {
+            fputs("[meeting-cleanup] discarded: output empty or identical to the raw transcript\n", stderr)
+            return nil
+        }
+        fputs("[meeting-cleanup] completed: \(chunks.count) chunk(s)\n", stderr)
         return cleaned
     }
 
