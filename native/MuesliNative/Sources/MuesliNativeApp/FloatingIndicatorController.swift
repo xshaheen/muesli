@@ -1530,11 +1530,11 @@ final class FloatingIndicatorController: NSObject {
         let centerX = panelToggleLeadingInset + panelToggleGlyphSize / 2
         return CGRect(
             x: round(centerX - imageSize.width / 2),
-            // Above geometric centre: the symbol's bounding box includes the tail
-            // hanging below the bubble, so exact centring visibly sank the bubble's
-            // mass below the row every other glyph sits on. Not rounded — a half
-            // point is one whole pixel on the 2x displays this renders on.
-            y: (size.height - imageSize.height) / 2 + 1.5,
+            // Exact geometric centre. An optical raise compensating for the
+            // bubble's tail helped at 6pt, but at 8pt the symbol's bounding box is
+            // already balanced — the user's own ruler screenshot showed the raised
+            // bubble floating ~1.5pt above the line the other glyphs sit on.
+            y: (size.height - imageSize.height) / 2,
             width: imageSize.width,
             height: imageSize.height
         )
