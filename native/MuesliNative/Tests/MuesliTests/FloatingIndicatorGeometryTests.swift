@@ -6,8 +6,8 @@ import AppKit
 @MainActor
 struct FloatingIndicatorAnchorRestoreTests {
     private let screen = NSRect(x: 0, y: 0, width: 1_440, height: 900)
-    private let collapsed = NSSize(width: 44, height: 28)
-    private let expanded = NSSize(width: 220, height: 36)
+    private let collapsed = NSSize(width: 44, height: 22)
+    private let expanded = NSSize(width: 220, height: 22)
 
     private func anchor(_ center: CGPoint) -> CGPoint {
         FloatingIndicatorController.clampedAnchorCenter(center, in: screen, size: collapsed)
@@ -38,7 +38,7 @@ struct FloatingIndicatorAnchorRestoreTests {
         let resolved = anchor(saved)
 
         #expect(resolved.x == 1_400, "horizontal intent is kept")
-        #expect(resolved.y == 14, "nudged just inside the collapsed pill's reach")
+        #expect(resolved.y == 11, "nudged just inside the collapsed pill's reach")
         #expect(resolved != FloatingIndicatorController.defaultIndicatorCenter(in: screen))
     }
 
@@ -86,7 +86,7 @@ struct FloatingIndicatorAnchorRestoreTests {
 @MainActor
 struct FloatingIndicatorDragTests {
     private let screen = NSRect(x: 0, y: 0, width: 1_440, height: 900)
-    private let collapsed = NSSize(width: 44, height: 28)
+    private let collapsed = NSSize(width: 44, height: 22)
 
     @Test("meeting pill clicks map to panel toggle, pause, stop, and an inert waveform")
     func meetingPillClickMapping() {
@@ -157,7 +157,7 @@ struct FloatingIndicatorDragTests {
         let anchorAtDragStart = CGPoint(x: 1_418, y: 450)
         let expanded = FloatingIndicatorController.clampedIndicatorFrame(
             center: anchorAtDragStart,
-            size: NSSize(width: 220, height: 36),
+            size: NSSize(width: 220, height: 22),
             in: screen
         )
         #expect(expanded.midX == 1_330, "the expansion cannot sit around its anchor here")

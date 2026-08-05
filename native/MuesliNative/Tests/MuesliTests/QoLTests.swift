@@ -179,15 +179,15 @@ struct IndicatorFrameSizeTests {
     @MainActor
     func anchorCentersUseExpectedInsets() {
         let visibleFrame = NSRect(x: 100, y: 50, width: 1200, height: 800)
-        let size = NSSize(width: 44, height: 28)
+        let size = NSSize(width: 44, height: 22)
 
         #expect(
             FloatingIndicatorController.anchorCenter(.topLeading, in: visibleFrame, size: size) ==
-            CGPoint(x: 130, y: 828)
+            CGPoint(x: 130, y: 831)
         )
         #expect(
             FloatingIndicatorController.anchorCenter(.bottomCenter, in: visibleFrame, size: size) ==
-            CGPoint(x: 700, y: 72)
+            CGPoint(x: 700, y: 69)
         )
     }
 
@@ -206,7 +206,7 @@ struct IndicatorFrameSizeTests {
         #expect(short.width >= 190)
         #expect(long.width > short.width)
         #expect(long.width <= 360)
-        #expect(long.height == 32)
+        #expect(long.height == FloatingIndicatorController.compactIndicatorHeight)
     }
 
     @Test("transcribing pill caps to available screen width")
@@ -218,7 +218,33 @@ struct IndicatorFrameSizeTests {
         )
 
         #expect(size.width <= 148)
-        #expect(size.height == 32)
+        #expect(size.height == FloatingIndicatorController.compactIndicatorHeight)
+    }
+
+    @Test("every single-line presentation uses the recording capsule height")
+    @MainActor
+    func singleLinePresentationsShareCompactHeight() {
+        let expected = FloatingIndicatorController.compactIndicatorHeight
+        let sizes = [
+            FloatingIndicatorController.idleIndicatorSize,
+            FloatingIndicatorController.transcribingPillSizeForTesting(
+                title: "Transcribing",
+                screenWidth: 1200
+            ),
+            FloatingIndicatorController.warningPillSizeForTesting(
+                message: "Microphone unavailable",
+                icon: "⚡",
+                screenWidth: 1200
+            ),
+            FloatingIndicatorController.loadingPillSizeForTesting(
+                message: "Loading model",
+                screenWidth: 1200
+            ),
+            FloatingIndicatorController.computerUseCursorSizeForTesting(label: ""),
+            FloatingIndicatorController.computerUseCursorSizeForTesting(label: "Click target")
+        ]
+
+        #expect(sizes.allSatisfy { $0.height == expected })
     }
 
     @Test("CUA transcript pill wraps and grows vertically instead of truncating")
@@ -234,7 +260,7 @@ struct IndicatorFrameSizeTests {
         )
 
         #expect(short.width >= 280)
-        #expect(short.height >= 44)
+        #expect(short.height == FloatingIndicatorController.compactIndicatorHeight)
         #expect(long.width <= 372)
         #expect(long.height > short.height)
     }

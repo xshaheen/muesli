@@ -1079,7 +1079,7 @@ final class FloatingIndicatorController: NSObject {
         chromeGeneration &+= 1
 
         let warningFont = NSFont.systemFont(ofSize: 11, weight: .medium)
-        let warningSize = warningPillSize(
+        let warningSize = Self.warningPillSize(
             message: message,
             icon: icon,
             font: warningFont,
@@ -1138,7 +1138,7 @@ final class FloatingIndicatorController: NSObject {
         warningDismissWorkItem = nil
     }
 
-    private func warningPillSize(message: String, icon: String, font: NSFont, screen: NSRect) -> NSSize {
+    private static func warningPillSize(message: String, icon: String, font: NSFont, screen: NSRect) -> NSSize {
         let horizontalPadding: CGFloat = 18
         let hasIcon = !icon.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let iconWidth = hasIcon
@@ -1149,7 +1149,10 @@ final class FloatingIndicatorController: NSObject {
         let preferredWidth = horizontalPadding + iconWidth + iconGap + textWidth + horizontalPadding
         let minWidth: CGFloat = hasIcon ? 180 : 88
         let maxWidth = max(minWidth, min(640, screen.width - 32))
-        return NSSize(width: min(max(preferredWidth, minWidth), maxWidth), height: 36)
+        return NSSize(
+            width: min(max(preferredWidth, minWidth), maxWidth),
+            height: Self.compactIndicatorHeight
+        )
     }
 
     func showLoading(_ message: String) {
@@ -1179,7 +1182,7 @@ final class FloatingIndicatorController: NSObject {
         cancelWarningDismissal()
         chromeGeneration &+= 1
         isShowingLoading = true
-        let loadingSize = loadingPillSize(message: message, screen: screen)
+        let loadingSize = Self.loadingPillSize(message: message, screen: screen)
         let center = CGPoint(x: pillFrame.midX, y: pillFrame.midY)
         let x = min(max(center.x - loadingSize.width / 2, screen.minX), screen.maxX - loadingSize.width)
         let y = min(max(center.y - loadingSize.height / 2, screen.minY), screen.maxY - loadingSize.height)
@@ -1245,7 +1248,7 @@ final class FloatingIndicatorController: NSObject {
         panel.orderFrontRegardless()
     }
 
-    private func loadingPillSize(message: String, screen: NSRect) -> NSSize {
+    private static func loadingPillSize(message: String, screen: NSRect) -> NSSize {
         let font = NSFont.systemFont(ofSize: 11, weight: .medium)
         let spinnerSize: CGFloat = 16
         let gap: CGFloat = 8
@@ -1254,7 +1257,10 @@ final class FloatingIndicatorController: NSObject {
         let preferredWidth = horizontalPadding + spinnerSize + gap + textWidth + horizontalPadding
         let minWidth = min(CGFloat(180), max(120, screen.width - 32))
         let maxWidth = max(minWidth, min(360, screen.width - 32))
-        return NSSize(width: min(max(preferredWidth, minWidth), maxWidth), height: 36)
+        return NSSize(
+            width: min(max(preferredWidth, minWidth), maxWidth),
+            height: Self.compactIndicatorHeight
+        )
     }
 
     func hideLoading() {
@@ -1856,7 +1862,7 @@ final class FloatingIndicatorController: NSObject {
         let iconSize = NSSize(width: 18, height: 18)
         let gap: CGFloat = 8
         let horizontalPadding: CGFloat = 16
-        let verticalPadding: CGFloat = 12
+        let verticalPadding: CGFloat = 2
         let textX = horizontalPadding + iconSize.width + gap
         let textWidth = max(40, size.width - textX - horizontalPadding)
         let textHeight = max(16, size.height - (verticalPadding * 2))
@@ -1968,11 +1974,14 @@ final class FloatingIndicatorController: NSObject {
 
     private static func computerUseCursorSize(label: String) -> NSSize {
         guard !label.isEmpty else {
-            return NSSize(width: 36, height: 36)
+            return NSSize(width: compactIndicatorHeight, height: compactIndicatorHeight)
         }
         let font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         let textWidth = ceil((label as NSString).size(withAttributes: [.font: font]).width)
-        return NSSize(width: min(max(84, textWidth + 48), 190), height: 34)
+        return NSSize(
+            width: min(max(84, textWidth + 48), 190),
+            height: compactIndicatorHeight
+        )
     }
 
     private static func computerUseCursorFrame(
@@ -2078,9 +2087,13 @@ final class FloatingIndicatorController: NSObject {
         CATransaction.commit()
     }
 
+    /// Every single-line floating state uses the recording capsule's compact geometry.
+    /// Content can widen the capsule; only wrapped transcript content may grow taller.
+    nonisolated static let compactIndicatorHeight: CGFloat = 22
+
     /// The collapsed pill. The anchor is defined against this size, not against whichever
     /// state happens to be showing.
-    nonisolated static let idleIndicatorSize = NSSize(width: 44, height: 28)
+    nonisolated static let idleIndicatorSize = NSSize(width: 44, height: compactIndicatorHeight)
 
     /// Stand-in bounds for sizing when no display is attached. Only the states that clamp
     /// their width against the screen read it at all.
@@ -2240,16 +2253,18 @@ final class FloatingIndicatorController: NSObject {
     private func indicatorSize(for state: DictationState, on screen: NSRect) -> NSSize {
         switch state {
         case .idle:
-            return isHovered ? NSSize(width: 220, height: 36) : Self.idleIndicatorSize
+            return isHovered
+                ? NSSize(width: 220, height: Self.compactIndicatorHeight)
+                : Self.idleIndicatorSize
         case .preparing, .recording:
             // A meeting pill carries a third control (the panel toggle), and its
             // waveform strip is inert — so the width must hold two full-size hit
             // regions on the left, one on the right, and 27pt of bars that overlap
             // none of them.
             if state == .recording, isMeetingRecording {
-                return NSSize(width: 112, height: 22)
+                return NSSize(width: 112, height: Self.compactIndicatorHeight)
             }
-            return NSSize(width: 76, height: 22)
+            return NSSize(width: 76, height: Self.compactIndicatorHeight)
         case .transcribing:
             if let transcript = computerUseTranscriptText {
                 return Self.computerUseTranscriptPillSize(transcript: transcript, screen: screen)
@@ -2464,6 +2479,26 @@ final class FloatingIndicatorController: NSObject {
         transcribingPillSize(title: title, screenWidth: screenWidth)
     }
 
+    static func warningPillSizeForTesting(message: String, icon: String, screenWidth: CGFloat) -> NSSize {
+        warningPillSize(
+            message: message,
+            icon: icon,
+            font: NSFont.systemFont(ofSize: 11, weight: .medium),
+            screen: NSRect(x: 0, y: 0, width: screenWidth, height: 900)
+        )
+    }
+
+    static func loadingPillSizeForTesting(message: String, screenWidth: CGFloat) -> NSSize {
+        loadingPillSize(
+            message: message,
+            screen: NSRect(x: 0, y: 0, width: screenWidth, height: 900)
+        )
+    }
+
+    static func computerUseCursorSizeForTesting(label: String) -> NSSize {
+        computerUseCursorSize(label: label)
+    }
+
     static func computerUseTranscriptPillSizeForTesting(
         transcript: String,
         screenWidth: CGFloat,
@@ -2484,7 +2519,10 @@ final class FloatingIndicatorController: NSObject {
         let preferredWidth = horizontalPadding + iconWidth + gap + textWidth + horizontalPadding
         let minWidth = min(CGFloat(190), max(120, screenWidth - 32))
         let maxWidth = max(minWidth, min(420, screenWidth - 32))
-        return NSSize(width: min(max(preferredWidth, minWidth), maxWidth), height: 32)
+        return NSSize(
+            width: min(max(preferredWidth, minWidth), maxWidth),
+            height: compactIndicatorHeight
+        )
     }
 
     private static func computerUseTranscriptPillSize(transcript: String, screen: NSRect) -> NSSize {
@@ -2493,7 +2531,7 @@ final class FloatingIndicatorController: NSObject {
         let iconWidth: CGFloat = 18
         let gap: CGFloat = 8
         let horizontalPadding: CGFloat = 16
-        let verticalPadding: CGFloat = 12
+        let verticalPadding: CGFloat = 3
         let chromeWidth = horizontalPadding + iconWidth + gap + horizontalPadding
         let minWidth = min(CGFloat(280), max(160, screen.width - 48))
         let maxWidth = max(minWidth, min(720, screen.width - 48))
@@ -2502,7 +2540,7 @@ final class FloatingIndicatorController: NSObject {
         let textWidth = max(40, preferredWidth - chromeWidth)
         let textHeight = transcriptTextHeight(normalized, font: font, width: textWidth)
         let maxHeight = max(CGFloat(56), screen.height - 48)
-        let preferredHeight = max(CGFloat(44), ceil(textHeight) + (verticalPadding * 2))
+        let preferredHeight = max(compactIndicatorHeight, ceil(textHeight) + (verticalPadding * 2))
         return NSSize(width: preferredWidth, height: min(preferredHeight, maxHeight))
     }
 

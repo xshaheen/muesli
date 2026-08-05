@@ -6,8 +6,8 @@ import AppKit
 @MainActor
 struct FloatingIndicatorPlacementTests {
     private let screen = NSRect(x: 0, y: 0, width: 1_440, height: 900)
-    private let collapsed = NSSize(width: 44, height: 28)
-    private let expanded = NSSize(width: 220, height: 36)
+    private let collapsed = NSSize(width: 44, height: 22)
+    private let expanded = NSSize(width: 220, height: 22)
 
     private func frame(center: CGPoint, size: NSSize) -> NSRect {
         FloatingIndicatorController.clampedIndicatorFrame(center: center, size: size, in: screen)
