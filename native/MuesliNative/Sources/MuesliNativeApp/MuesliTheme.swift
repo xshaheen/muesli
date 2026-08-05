@@ -40,18 +40,32 @@ enum MuesliTheme {
     static let defaultAccent    = Color.adaptive(dark: defaultAccentDarkHex, light: defaultAccentLightHex)
     static var accentOverrideHex: String?
     static var accent: Color {
-        if let hex = accentOverrideHex, !hex.isEmpty,
-           let val = UInt64(hex.replacingOccurrences(of: "#", with: ""), radix: 16) {
-            return Color(hex: Int(val))
+        if let value = parsedAccentHex(accentOverrideHex) {
+            return Color(hex: value)
         }
         return defaultAccent
     }
+    static var resolvedAccentDarkHex: Int {
+        resolvedAccentDarkHex(overrideHex: accentOverrideHex)
+    }
+    static func resolvedAccentDarkHex(overrideHex: String?) -> Int {
+        parsedAccentHex(overrideHex) ?? defaultAccentDarkHex
+    }
     static var accentSubtle: Color { accent.opacity(0.15) }
+
+    private static func parsedAccentHex(_ hex: String?) -> Int? {
+        guard let hex, !hex.isEmpty,
+              let value = UInt64(hex.replacingOccurrences(of: "#", with: ""), radix: 16)
+        else { return nil }
+        return Int(value)
+    }
 
     // MARK: - Semantic
 
-    static let recording        = Color(hex: 0xEF4444)
-    static let transcribing     = Color(hex: 0xF59E0B)
+    static let recordingHex     = 0xEF4444
+    static let transcribingHex  = 0xF59E0B
+    static let recording        = Color(hex: recordingHex)
+    static let transcribing     = Color(hex: transcribingHex)
     static let success          = Color(hex: 0x34D399)
 
     // MARK: - Typography (SF Pro via .system())

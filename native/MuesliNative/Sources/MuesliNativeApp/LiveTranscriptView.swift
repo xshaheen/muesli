@@ -84,7 +84,7 @@ struct LiveTranscriptBubble: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(
                     surfacePresentation == .floatingPanel
-                        ? Color.white.opacity(didCopy ? 0.95 : 0.62)
+                        ? (didCopy ? MuesliTheme.success : Color.white.opacity(0.62))
                         : (didCopy ? MuesliTheme.success : MuesliTheme.textSecondary)
                 )
                 .frame(width: 18, height: 18)

@@ -72,7 +72,7 @@ struct FloatingIndicatorStyleTests {
 
 @Suite("Floating meeting panel surface style")
 struct FloatingMeetingPanelStyleTests {
-    @Test("panel inherits the indicator neutral glass surface without accent chrome")
+    @Test("panel keeps neutral glass while reserving a subtle selected-control fill")
     func panelUsesNeutralGlassSurface() {
         let panel = FloatingMeetingPanelSurfaceStyle.resolve()
         let indicator = FloatingIndicatorSurfaceStyle.resolve(role: .recording)
@@ -80,6 +80,29 @@ struct FloatingMeetingPanelStyleTests {
         #expect(panel.glass == indicator)
         #expect(panel.cornerRadius == MuesliTheme.cornerXL)
         #expect(panel.selectedControlAlpha == 0.14)
+    }
+
+    @Test("semantic accents stay limited to the established state palette")
+    func semanticAccentPalette() {
+        #expect(MuesliTheme.defaultAccentDarkHex == 0x6BA3F7)
+        #expect(MuesliTheme.recordingHex == 0xEF4444)
+        #expect(MuesliTheme.transcribingHex == 0xF59E0B)
+    }
+
+    @Test("compact and expanded selections resolve the same custom accent")
+    func selectionAccentOverride() {
+        #expect(MuesliTheme.resolvedAccentDarkHex(overrideHex: "#89b4fa") == 0x89B4FA)
+        #expect(MuesliTheme.resolvedAccentDarkHex(overrideHex: "not-a-color") == MuesliTheme.defaultAccentDarkHex)
+    }
+
+    @Test("an open panel can observe a refreshed selection accent")
+    @MainActor
+    func panelSelectionAccentRefresh() {
+        let model = FloatingMeetingTranscriptModel()
+
+        model.setSelectionAccentHex(0x89B4FA)
+
+        #expect(model.selectionAccentHex == 0x89B4FA)
     }
 
     @Test("panel preserves accessible opaque and high-contrast fallbacks")

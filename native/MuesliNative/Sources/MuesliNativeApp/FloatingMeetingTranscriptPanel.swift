@@ -5,9 +5,9 @@ import os
 
 enum FloatingMeetingTranscriptPlacement {
     static let panelSize = NSSize(width: 360, height: 320)
-    /// Keeps the panel off the pill rather than flush against it, so the two read as
-    /// separate windows and the pill's controls stay clear of the panel's edge.
-    static let gap: CGFloat = 8
+    /// Keeps the independently movable panel clear of the pill while making their shared
+    /// glass chrome read as one floating system.
+    static let gap: CGFloat = 4
     static let screenInset: CGFloat = 8
 
     enum Side {
@@ -142,6 +142,7 @@ final class FloatingMeetingTranscriptModel {
     var isPaused = false
     var isPresented = false
     var didCopy = false
+    var selectionAccentHex = MuesliTheme.resolvedAccentDarkHex
 
     /// The panel opens on the transcript; Chat and Notes are deliberate choices.
     /// Keyboard focus is gated on the selected tab: on the transcript the panel
@@ -220,6 +221,10 @@ final class FloatingMeetingTranscriptModel {
             partialYou: partialYou,
             partialOthers: partialOthers
         )
+    }
+
+    func setSelectionAccentHex(_ hex: Int) {
+        selectionAccentHex = hex
     }
 
     /// Copies whatever the panel is currently showing.
@@ -345,6 +350,10 @@ final class FloatingMeetingTranscriptPanelController {
 
     func setPaused(_ paused: Bool) {
         model.isPaused = paused
+    }
+
+    func setSelectionAccentHex(_ hex: Int) {
+        model.setSelectionAccentHex(hex)
     }
 
     /// Shows the transcript, placing it beside the pill only when the user has never
@@ -761,7 +770,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
                 .foregroundStyle(Color.white.opacity(0.95))
             Spacer()
             Circle()
-                .fill(Color.white.opacity(model.isPaused ? 0.34 : 0.76))
+                .fill(model.isPaused ? MuesliTheme.transcribing : MuesliTheme.success)
                 .frame(width: 6, height: 6)
             Text(model.isPaused ? "Paused" : "Live")
                 .font(MuesliTheme.caption())
@@ -788,7 +797,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
             Button(action: copyTranscript) {
                 Image(systemName: model.didCopy ? "checkmark" : "doc.on.doc")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(model.didCopy ? 0.95 : 0.68))
+                    .foregroundStyle(model.didCopy ? MuesliTheme.success : Color.white.opacity(0.68))
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
@@ -807,14 +816,15 @@ private struct FloatingMeetingTranscriptPanelView: View {
         surfaceStyle: FloatingMeetingPanelSurfaceStyle
     ) -> some View {
         let isSelected = model.selectedTab == tab
+        let selectionAccent = Color(hex: model.selectionAccentHex)
         return Button { onSelectTab(tab) } label: {
             Image(systemName: icon)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(isSelected ? 0.95 : 0.62))
+                .foregroundStyle(isSelected ? selectionAccent : Color.white.opacity(0.62))
                 .frame(width: 26, height: 26)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.white.opacity(isSelected ? surfaceStyle.selectedControlAlpha : 0))
+                        .fill(isSelected ? selectionAccent.opacity(surfaceStyle.selectedControlAlpha) : Color.clear)
                 )
                 .contentShape(Rectangle())
         }

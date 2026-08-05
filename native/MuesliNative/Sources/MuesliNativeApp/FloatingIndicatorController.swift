@@ -715,6 +715,7 @@ final class FloatingIndicatorController: NSObject {
         guard let visibleFrame = Self.screenVisibleFrame(intersecting: indicatorFrame) else { return }
         Self.logger.notice("transcript show source=\(source, privacy: .public) pill=\(NSStringFromRect(indicatorFrame), privacy: .public)")
         meetingTranscriptPanel.show(beside: indicatorFrame, in: visibleFrame)
+        refreshMeetingPanelToggleChrome()
     }
 
 
@@ -727,6 +728,12 @@ final class FloatingIndicatorController: NSObject {
         } else {
             meetingTranscriptPanel.hide()
         }
+        refreshMeetingPanelToggleChrome()
+    }
+
+    private func refreshMeetingPanelToggleChrome() {
+        guard state == .recording, isMeetingRecording else { return }
+        addPanelToggleLayer(in: chromeLayoutSize(for: state, config: configStore.load()))
     }
 
     /// Applies a new indicator geometry.
@@ -797,6 +804,7 @@ final class FloatingIndicatorController: NSObject {
     func setState(_ state: DictationState, config: AppConfig) {
         let previousState = self.state
         let previousHover = isHovered
+        meetingTranscriptPanel.setSelectionAccentHex(MuesliTheme.resolvedAccentDarkHex)
         if isComputerUseCursorMode {
             exitComputerUseCursorMode(restoreFrame: false)
         }
@@ -1396,7 +1404,9 @@ final class FloatingIndicatorController: NSObject {
     ) {
         iconLabel.isHidden = false
         iconLabel.stringValue = recordingControlSymbol()
-        iconLabel.textColor = .white.withAlphaComponent(isMeetingRecording ? 0.86 : 0.45)
+        iconLabel.textColor = isMeetingRecordingPaused
+            ? .colorWith(hex: MuesliTheme.transcribingHex, alpha: 0.92)
+            : .white.withAlphaComponent(isMeetingRecording ? 0.86 : 0.45)
         iconLabel.font = NSFont.systemFont(ofSize: isMeetingRecording ? 10 : 7, weight: .semibold)
         // Frame from the measured glyph, centred on the control point. A fixed
         // 10x10 box let the text field's font metrics decide where the glyph sat
@@ -1465,7 +1475,10 @@ final class FloatingIndicatorController: NSObject {
         let stop = CALayer()
         stop.frame = Self.stopLayerFrame(in: size)
         stop.cornerRadius = 1
-        stop.backgroundColor = NSColor.white.withAlphaComponent(0.85).cgColor
+        stop.backgroundColor = NSColor.colorWith(
+            hex: MuesliTheme.recordingHex,
+            alpha: 0.90
+        ).cgColor
 
         contentView.layer?.addSublayer(stop)
         stopLayer = stop
@@ -1482,30 +1495,34 @@ final class FloatingIndicatorController: NSObject {
         let glyph = CALayer()
         // A captions bubble, not a directional caret: the control opens the live
         // transcript, and this is the one glyph on the pill that says so.
-        glyph.contents = Self.panelToggleGlyphImage?.layerContents(forContentsScale: scale)
+        let image = panelToggleGlyphImage()
+        glyph.contents = image?.layerContents(forContentsScale: scale)
         glyph.contentsGravity = .resizeAspect
         glyph.contentsScale = scale
-        glyph.frame = Self.panelToggleLayerFrame(in: size)
+        glyph.frame = Self.panelToggleLayerFrame(in: size, imageSize: image?.size)
         contentView.layer?.addSublayer(glyph)
         panelToggleLayer = glyph
     }
 
-    /// White captions.bubble at the pill's control weight, tinted once and reused —
-    /// symbol images are template images, which draw black as raw layer contents.
-    private static let panelToggleGlyphImage: NSImage? = {
+    /// The captions bubble becomes the one blue selection cue in the compact control
+    /// while its panel is visible. The pill material and every inactive glyph stay neutral.
+    private func panelToggleGlyphImage() -> NSImage? {
         guard let symbol = NSImage(systemSymbolName: "captions.bubble", accessibilityDescription: "Show live transcript")?
             // Two points below the pause glyph's font size: the bubble is a wide
             // outline shape, so matching point sizes made it visually dominate the
             // row. Chosen from rendered side-by-side variants, not arithmetic.
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 8, weight: .semibold))
         else { return nil }
+        let tint = meetingTranscriptPanel.isVisible
+            ? NSColor.colorWith(hex: MuesliTheme.resolvedAccentDarkHex, alpha: 0.95)
+            : NSColor.white.withAlphaComponent(0.8)
         return NSImage(size: symbol.size, flipped: false) { rect in
             symbol.draw(in: rect)
-            NSColor.white.withAlphaComponent(0.8).set()
+            tint.set()
             rect.fill(using: .sourceAtop)
             return true
         }
-    }()
+    }
 
     private func removePanelToggleLayer() {
         panelToggleLayer?.removeFromSuperlayer()
@@ -1538,13 +1555,12 @@ final class FloatingIndicatorController: NSObject {
         )
     }
 
-    private static func panelToggleLayerFrame(in size: NSSize) -> CGRect {
+    private static func panelToggleLayerFrame(in size: NSSize, imageSize: NSSize?) -> CGRect {
         // The image's natural size, centred on the control point: aspect-fitting
         // into an arbitrary square rescales the glyph, so a fixed box dictated its
         // drawn size and a leftover -1 nudge (tuned for the old text glyph) held
         // it below the centreline the rest of the chrome sits on.
-        let imageSize = panelToggleGlyphImage?.size
-            ?? NSSize(width: panelToggleGlyphSize, height: panelToggleGlyphSize)
+        let imageSize = imageSize ?? NSSize(width: panelToggleGlyphSize, height: panelToggleGlyphSize)
         let centerX = panelToggleLeadingInset + panelToggleGlyphSize / 2
         return CGRect(
             x: round(centerX - imageSize.width / 2),
@@ -1784,6 +1800,10 @@ final class FloatingIndicatorController: NSObject {
             micIconView?.isHidden = true
             iconLabel?.isHidden = true
             wandIconView?.isHidden = false
+            wandIconView?.contentTintColor = .colorWith(
+                hex: MuesliTheme.transcribingHex,
+                alpha: 0.92
+            )
             if computerUseTranscriptText != nil {
                 layoutComputerUseTranscript(in: frameSize, animated: false)
                 return
