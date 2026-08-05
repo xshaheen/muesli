@@ -1719,12 +1719,8 @@ final class FloatingIndicatorController: NSObject {
         frameSize: NSSize
     ) -> FloatingIndicatorSurfaceStyle {
         let workspace = NSWorkspace.shared
-        let recordingAccentHex = role == .recording
-            ? configStore.load().recordingColorHex
-            : "ffffff"
         let style = FloatingIndicatorSurfaceStyle.resolve(
             role: role,
-            recordingAccentHex: recordingAccentHex,
             reduceTransparency: workspace.accessibilityDisplayShouldReduceTransparency,
             increaseContrast: workspace.accessibilityDisplayShouldIncreaseContrast
         )
@@ -2356,7 +2352,6 @@ final class FloatingIndicatorController: NSObject {
     private func styleForState(_ state: DictationState, config: AppConfig) -> (icon: String, title: String, iconColor: NSColor, textColor: NSColor, alpha: CGFloat) {
         let surfaceStyle = FloatingIndicatorSurfaceStyle.resolve(
             role: presentationRole(for: state),
-            recordingAccentHex: config.recordingColorHex,
             reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
         )
         let textColor = NSColor.white.withAlphaComponent(surfaceStyle.textAlpha)
