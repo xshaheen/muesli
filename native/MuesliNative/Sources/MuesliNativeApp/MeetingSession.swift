@@ -456,6 +456,7 @@ final class MeetingSession {
             meetingMicRecorder.onRawPCMSamples = nil
             (meetingMicRecorder as? MeetingMicHandoffReporting)?.onHandoffResult = nil
             systemAudioRecorder.onPCMSamples = nil
+            systemAudioRecorder.onSystemAudioInterruption = nil
             systemAudioRecorder.onSystemAudioFailure = nil
             systemAudioRecorder.onSystemAudioRecovery = nil
             retainedRecordingWriter?.cancel()
@@ -710,6 +711,7 @@ final class MeetingSession {
         (meetingMicRecorder as? MeetingMicHandoffReporting)?.onHandoffResult = nil
         meetingMicRecorder.cancel()
         systemAudioRecorder.onPCMSamples = nil
+        systemAudioRecorder.onSystemAudioInterruption = nil
         systemAudioRecorder.onSystemAudioFailure = nil
         systemAudioRecorder.onSystemAudioRecovery = nil
         // `discard()` is called from synchronous UI paths, so the system-audio
@@ -744,6 +746,7 @@ final class MeetingSession {
         systemVadController = nil
         meetingMicRecorder.onRawPCMSamples = nil
         systemAudioRecorder.onPCMSamples = nil
+        systemAudioRecorder.onSystemAudioInterruption = nil
         systemAudioRecorder.onSystemAudioFailure = nil
         systemAudioRecorder.onSystemAudioRecovery = nil
         let (meetingStart, lastChunkTiming, lastRawMicURL, lastSystemChunkTiming, lastSystemChunkURL) = chunkRotationQueue.sync { () -> (Date, MeetingChunkTimingSnapshot?, URL?, MeetingChunkTimingSnapshot?, URL?) in
@@ -1232,6 +1235,9 @@ final class MeetingSession {
         systemAudioRecorder.onPCMSamples = { [weak self] samples in
             self?.enqueueRealtimeSystemSamples(samples)
         }
+        systemAudioRecorder.onSystemAudioInterruption = { [weak self] in
+            self?.handleSystemAudioCaptureInterruption()
+        }
         systemAudioRecorder.onSystemAudioFailure = { [weak self] error in
             self?.handleSystemAudioCaptureFailure(error)
         }
@@ -1241,13 +1247,17 @@ final class MeetingSession {
     }
 
     /// The mic side continues while the recorder retries the system side. Rotate
-    /// the interrupted chunk now so resumed audio can retain its real time gap.
-    private func handleSystemAudioCaptureFailure(_ error: Error) {
+    /// every interrupted chunk so resumed audio retains its real time gap, even
+    /// when the first tap rebuild succeeds and no user warning is needed.
+    private func handleSystemAudioCaptureInterruption() {
         chunkRotationQueue.async { [weak self] in
             guard let self, self.isRecording else { return }
             self.rotateSystemChunkOnQueue()
             self.systemChunkNeedsTimelineRealignment = true
         }
+    }
+
+    private func handleSystemAudioCaptureFailure(_ error: Error) {
         fputs("[meeting] system audio capture interrupted; recovery continues: \(error.localizedDescription)\n", stderr)
         Self.logger.error("System audio capture interrupted mid-meeting; recovery continues: \(error.localizedDescription, privacy: .public)")
         onSystemAudioCaptureFailure?(error)

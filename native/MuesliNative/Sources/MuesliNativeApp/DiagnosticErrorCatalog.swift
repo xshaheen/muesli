@@ -148,6 +148,8 @@ enum DiagnosticErrorCatalog {
             (caseName, summary, status) = ("device_io_proc_creation_failed", "CoreAudio device callback could not be created", nil)
         case .tapFormatUnavailable(let value):
             (caseName, summary, status) = ("tap_format_unavailable", "CoreAudio tap stream format was unavailable", value)
+        case .tapProducedNoSamples:
+            (caseName, summary, status) = ("tap_produced_no_samples", "Rebuilt CoreAudio tap produced no audio samples", nil)
         }
 
         let safeCode = status.map(String.init) ?? caseName

@@ -149,6 +149,7 @@ struct SystemAudioCaptureFailureGate {
 
 final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, SystemAudioCapturing, SystemAudioDiagnosticsProviding {
     var onPCMSamples: (([Int16]) -> Void)?
+    var onSystemAudioInterruption: (() -> Void)?
     var onSystemAudioFailure: ((Error) -> Void)?
     var onSystemAudioRecovery: (() -> Void)?
 
@@ -327,6 +328,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, Sys
         // and close — otherwise it corrupts the header or writes to a closed file.
         let writtenBytes = sampleHandlerQueue.sync { () -> Int in
             onPCMSamples = nil
+            onSystemAudioInterruption = nil
             onSystemAudioFailure = nil
             onSystemAudioRecovery = nil
             let bytes = totalBytesWritten
@@ -545,6 +547,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, Sys
             return self.failureGate.shouldReportUnexpectedStop()
         }
         guard shouldReport else { return }
+        onSystemAudioInterruption?()
         onSystemAudioFailure?(error)
     }
 
@@ -570,6 +573,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, Sys
         // on the sample-handler queue for the same reason stop() does.
         sampleHandlerQueue.sync {
             onPCMSamples = nil
+            onSystemAudioInterruption = nil
             onSystemAudioFailure = nil
             onSystemAudioRecovery = nil
             if let file = outputFile {

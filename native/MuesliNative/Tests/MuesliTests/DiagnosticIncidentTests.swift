@@ -207,6 +207,22 @@ struct DiagnosticIncidentTests {
         #expect(incident.errorFingerprint.area == "system_audio_capture")
     }
 
+    @Test("silent rebuilt CoreAudio taps have a stable privacy-safe fingerprint")
+    func silentRebuiltCoreAudioTapFingerprint() {
+        let incident = DiagnosticIncident(
+            kind: .meetingSystemAudioCaptureFailed,
+            severity: .warning,
+            stage: .meetingSystemAudioCapture,
+            error: CoreAudioSystemRecorder.RecorderError.tapProducedNoSamples,
+            metadata: metadata
+        )
+
+        #expect(incident.errorFingerprint.signature == "core_audio_tap_produced_no_samples")
+        #expect(incident.errorDomain == "CoreAudioSystemRecorder.RecorderError")
+        #expect(incident.errorCode == "tap_produced_no_samples")
+        #expect(incident.errorFingerprint.area == "system_audio_capture")
+    }
+
     @Test("domain fallback covers Swift enum style diagnostic errors")
     func domainFallbackCoversSwiftEnumErrors() {
         let meaning = DiagnosticErrorCatalog.meaning(

@@ -17,6 +17,18 @@ struct CoreAudioSystemRecorderTests {
         #expect(!CoreAudioTapRecoveryPolicy.shouldReportInterruption(afterFailedAttempt: 2))
         #expect(CoreAudioTapRecoveryPolicy.shouldReportInterruption(afterFailedAttempt: 3))
         #expect(!CoreAudioTapRecoveryPolicy.shouldReportInterruption(afterFailedAttempt: 4))
+        #expect(CoreAudioTapRecoveryPolicy.shouldReportNoSamples(
+            isAwaitingRecoverySamples: true,
+            didReportInterruption: false
+        ))
+        #expect(!CoreAudioTapRecoveryPolicy.shouldReportNoSamples(
+            isAwaitingRecoverySamples: true,
+            didReportInterruption: true
+        ))
+        #expect(!CoreAudioTapRecoveryPolicy.shouldReportNoSamples(
+            isAwaitingRecoverySamples: false,
+            didReportInterruption: false
+        ))
     }
 
     @Test("watchdog detects only an active capture callback stall")
