@@ -1,0 +1,121 @@
+{
+  "project": "muesli-unified-glass",
+  "nodes": [
+    {
+      "id": "current-neutral-glass",
+      "parents": [],
+      "round": 0,
+      "mode": "existing",
+      "thesis": "Apply the recording pill material recipe to all floating surfaces.",
+      "anchors": ["current app", "user screenshots", "MuesliTheme"],
+      "artifact": "none",
+      "status": "parent",
+      "created_at_utc": "2026-08-05T10:11:26Z",
+      "generation": {
+        "capability": "existing implementation",
+        "provider": "local",
+        "model": "none",
+        "prompt_hash": "unknown",
+        "prompt_path": "none",
+        "settings": {},
+        "seed": "unknown",
+        "generated_at_utc": "2026-08-05T10:11:26Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "continuum-01",
+      "parents": ["current-neutral-glass"],
+      "round": 1,
+      "mode": "iterate",
+      "thesis": "The compact control is the handle of the expanded panel, so both read as one continuous object.",
+      "anchors": ["recording glass", "attached popover", "editorial hierarchy"],
+      "artifact": "direction-01.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-05T10:11:26Z",
+      "generation": {
+        "capability": "x-frontend-design",
+        "provider": "local",
+        "model": "codex",
+        "prompt_hash": "local-brief-v1",
+        "prompt_path": "brief.md",
+        "settings": {"viewport": "720x760"},
+        "seed": "unknown",
+        "generated_at_utc": "2026-08-05T10:11:26Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "dock-01",
+      "parents": ["current-neutral-glass"],
+      "round": 1,
+      "mode": "iterate",
+      "thesis": "A stable side rail makes modes obvious and lets meeting content breathe.",
+      "anchors": ["recording glass", "tool dock", "calm workspace"],
+      "artifact": "direction-02.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-05T10:11:26Z",
+      "generation": {
+        "capability": "x-frontend-design",
+        "provider": "local",
+        "model": "codex",
+        "prompt_hash": "local-brief-v1",
+        "prompt_path": "brief.md",
+        "settings": {"viewport": "720x760"},
+        "seed": "unknown",
+        "generated_at_utc": "2026-08-05T10:11:26Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "ribbon-01",
+      "parents": ["current-neutral-glass"],
+      "round": 1,
+      "mode": "iterate",
+      "thesis": "A thin command ribbon prioritizes live status and makes content the dominant surface.",
+      "anchors": ["recording glass", "command ribbon", "content-first panel"],
+      "artifact": "direction-03.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-05T10:11:26Z",
+      "generation": {
+        "capability": "x-frontend-design",
+        "provider": "local",
+        "model": "codex",
+        "prompt_hash": "local-brief-v1",
+        "prompt_path": "brief.md",
+        "settings": {"viewport": "720x760"},
+        "seed": "unknown",
+        "generated_at_utc": "2026-08-05T10:11:26Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "continuum-semantic-02",
+      "parents": ["continuum-01"],
+      "round": 2,
+      "mode": "iterate",
+      "thesis": "Keep the glass system neutral and use color only as a compact carrier of recording, pause, selection, and success state.",
+      "anchors": ["continuum-01", "Muesli semantic tokens", "existing native window behavior"],
+      "artifact": "continuum-semantic-02.html",
+      "status": "selected",
+      "created_at_utc": "2026-08-05T10:30:45Z",
+      "generation": {
+        "capability": "x-frontend-design",
+        "provider": "local",
+        "model": "codex",
+        "prompt_hash": "f877cf8d94bf750d759908d8ef00ac0ce39fc1acf5f9607c322586024fa06be8",
+        "prompt_path": "brief.md",
+        "settings": {"viewport": "720x760", "palette": "neutral-with-semantic-state"},
+        "seed": "unknown",
+        "generated_at_utc": "2026-08-05T10:30:45Z",
+        "remote_service_disclosure": "none"
+      }
+    }
+  ],
+  "edges": [
+    {"from": "current-neutral-glass", "to": "continuum-01", "operation": "combine", "feedback_ref": "feedback.md#05-08-2026", "decided_at_utc": "2026-08-05T10:11:26Z"},
+    {"from": "current-neutral-glass", "to": "dock-01", "operation": "explore", "feedback_ref": "feedback.md#05-08-2026", "decided_at_utc": "2026-08-05T10:11:26Z"},
+    {"from": "current-neutral-glass", "to": "ribbon-01", "operation": "explore", "feedback_ref": "feedback.md#05-08-2026", "decided_at_utc": "2026-08-05T10:11:26Z"},
+    {"from": "continuum-01", "to": "continuum-semantic-02", "operation": "combine", "feedback_ref": "feedback.md#05-08-2026--round-2", "decided_at_utc": "2026-08-05T10:30:45Z"}
+  ]
+}
