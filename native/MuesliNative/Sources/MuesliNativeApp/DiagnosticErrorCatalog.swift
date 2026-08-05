@@ -35,6 +35,8 @@ enum DiagnosticErrorCatalog {
         let match: Match?
         if let nemotronError = error as? NemotronRNNTError {
             match = nemotronMatch(for: nemotronError)
+        } else if let coreAudioError = error as? CoreAudioSystemRecorder.RecorderError {
+            match = coreAudioTapMatch(for: coreAudioError)
         } else {
             let nsError = error as NSError
             match = lookup(domain: nsError.domain, code: String(nsError.code))
@@ -115,6 +117,47 @@ enum DiagnosticErrorCatalog {
             area: failure.area,
             domain: "NemotronRNNTError",
             code: failure.rawValue
+        )
+    }
+
+    private static func coreAudioTapMatch(for error: CoreAudioSystemRecorder.RecorderError) -> Match {
+        let caseName: String
+        let summary: String
+        let status: OSStatus?
+        switch error {
+        case .fileCreationFailed:
+            (caseName, summary, status) = ("file_creation_failed", "System audio capture file could not be created", nil)
+        case .noDefaultOutputDevice:
+            (caseName, summary, status) = ("no_default_output_device", "No default system audio output was available", nil)
+        case .tapCreationFailed(let value):
+            (caseName, summary, status) = ("tap_creation_failed", "CoreAudio process tap creation failed", value)
+        case .aggregateDeviceCreationFailed(let value):
+            (caseName, summary, status) = ("aggregate_device_creation_failed", "CoreAudio aggregate device creation failed", value)
+        case .coreAudioSetupFailed(let step, let value):
+            let safeStep = switch step {
+            case "create aggregate IOProc": "create_io_proc"
+            case "start aggregate device": "start_aggregate_device"
+            default: "unknown_setup_step"
+            }
+            (caseName, summary, status) = (
+                "setup_\(safeStep)_failed",
+                "CoreAudio capture setup failed at \(safeStep.replacingOccurrences(of: "_", with: " "))",
+                value
+            )
+        case .deviceIOProcCreationFailed:
+            (caseName, summary, status) = ("device_io_proc_creation_failed", "CoreAudio device callback could not be created", nil)
+        case .tapFormatUnavailable(let value):
+            (caseName, summary, status) = ("tap_format_unavailable", "CoreAudio tap stream format was unavailable", value)
+        }
+
+        let safeCode = status.map(String.init) ?? caseName
+        let signature = status.map { "core_audio_\(caseName).\($0)" } ?? "core_audio_\(caseName)"
+        return fixedMatch(
+            signature: signature,
+            summary: summary,
+            area: "system_audio_capture",
+            domain: "CoreAudioSystemRecorder.RecorderError",
+            code: safeCode
         )
     }
 

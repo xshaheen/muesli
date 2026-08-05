@@ -308,15 +308,20 @@ final class MeetingSession {
     private let pausedDisplayLock = OSAllocatedUnfairLock(initialState: false)
     private var chunkTimingTracker = MeetingChunkTimingTracker()
     private var systemChunkTimingTracker = MeetingChunkTimingTracker()
+    /// Set after a system-capture interruption so the first recovered callback
+    /// preserves the wall-clock gap instead of compressing the transcript.
+    private var systemChunkNeedsTimelineRealignment = false
     private var systemChunkRecorder: PCMChunkRecorder?
     var onProgress: ((MeetingProcessingStage) -> Void)?
     var onMicHealthChanged: ((MeetingMicHealthSnapshot) -> Void)?
     /// Live input-route facts for silent-mic failover. Read on the chunk
     /// rotation queue, so it must not block on CoreAudio.
     var meetingInputRouteProvider: (() -> MeetingMicRouteDiagnosticsSnapshot?)?
-    /// System audio capture died mid-meeting and could not be rebuilt. Called on
-    /// a background thread; the owner is responsible for surfacing it.
+    /// System audio capture is interrupted and background recovery is taking
+    /// longer than expected. Called on a background thread.
     var onSystemAudioCaptureFailure: ((Error) -> Void)?
+    /// A reported system-audio interruption produced samples again.
+    var onSystemAudioCaptureRecovered: (() -> Void)?
     var manualNotesProvider: (() async -> String?)?
     var liveTitleProvider: (() async -> String?)?
     /// Formatted notes of the predecessor meeting when this session records a
@@ -432,6 +437,7 @@ final class MeetingSession {
             retainedRecordingTimeline.reset()
             chunkTimingTracker.discard()
             systemChunkTimingTracker.discard()
+            systemChunkNeedsTimelineRealignment = false
             isRecording = true
             setPausedStateOnQueue(false)
         }
@@ -451,6 +457,7 @@ final class MeetingSession {
             (meetingMicRecorder as? MeetingMicHandoffReporting)?.onHandoffResult = nil
             systemAudioRecorder.onPCMSamples = nil
             systemAudioRecorder.onSystemAudioFailure = nil
+            systemAudioRecorder.onSystemAudioRecovery = nil
             retainedRecordingWriter?.cancel()
             retainedRecordingWriter = nil
             rawMicChunkRecorder?.cancel()
@@ -465,6 +472,7 @@ final class MeetingSession {
                 retainedRecordingTimeline.reset()
                 chunkTimingTracker.discard()
                 systemChunkTimingTracker.discard()
+                systemChunkNeedsTimelineRealignment = false
                 micSessionRouteState.endSession()
             }
             meetingMicRecorder.cancel()
@@ -677,6 +685,7 @@ final class MeetingSession {
             setPausedStateOnQueue(false)
             chunkTimingTracker.discard()
             systemChunkTimingTracker.discard()
+            systemChunkNeedsTimelineRealignment = false
             micSessionRouteState.endSession()
             retainedRecordingTimeline.reset()
             startTime = nil
@@ -702,6 +711,7 @@ final class MeetingSession {
         meetingMicRecorder.cancel()
         systemAudioRecorder.onPCMSamples = nil
         systemAudioRecorder.onSystemAudioFailure = nil
+        systemAudioRecorder.onSystemAudioRecovery = nil
         // `discard()` is called from synchronous UI paths, so the system-audio
         // teardown runs detached; its callbacks are already unhooked above and
         // the only remaining work is deleting the abandoned temp file.
@@ -735,6 +745,7 @@ final class MeetingSession {
         meetingMicRecorder.onRawPCMSamples = nil
         systemAudioRecorder.onPCMSamples = nil
         systemAudioRecorder.onSystemAudioFailure = nil
+        systemAudioRecorder.onSystemAudioRecovery = nil
         let (meetingStart, lastChunkTiming, lastRawMicURL, lastSystemChunkTiming, lastSystemChunkURL) = chunkRotationQueue.sync { () -> (Date, MeetingChunkTimingSnapshot?, URL?, MeetingChunkTimingSnapshot?, URL?) in
             isRecording = false
             setPausedStateOnQueue(false)
@@ -750,6 +761,7 @@ final class MeetingSession {
             systemChunkRecorder = nil
             let lastChunkTiming = chunkTimingTracker.finish()
             let lastSystemChunkTiming = systemChunkTimingTracker.finish()
+            systemChunkNeedsTimelineRealignment = false
             return (meetingStart, lastChunkTiming, lastRawMicURL, lastSystemChunkTiming, lastSystemChunkURL)
         }
         let rawStreamingMicURL = meetingMicRecorder.stop()
@@ -1223,14 +1235,28 @@ final class MeetingSession {
         systemAudioRecorder.onSystemAudioFailure = { [weak self] error in
             self?.handleSystemAudioCaptureFailure(error)
         }
+        systemAudioRecorder.onSystemAudioRecovery = { [weak self] in
+            self?.handleSystemAudioCaptureRecovery()
+        }
     }
 
-    /// The meeting keeps recording the mic side, so the failure has to be
-    /// surfaced rather than silently ending the "Others" track.
+    /// The mic side continues while the recorder retries the system side. Rotate
+    /// the interrupted chunk now so resumed audio can retain its real time gap.
     private func handleSystemAudioCaptureFailure(_ error: Error) {
-        fputs("[meeting] system audio capture stopped: \(error.localizedDescription)\n", stderr)
-        Self.logger.error("System audio capture stopped mid-meeting: \(error.localizedDescription, privacy: .public)")
+        chunkRotationQueue.async { [weak self] in
+            guard let self, self.isRecording else { return }
+            self.rotateSystemChunkOnQueue()
+            self.systemChunkNeedsTimelineRealignment = true
+        }
+        fputs("[meeting] system audio capture interrupted; recovery continues: \(error.localizedDescription)\n", stderr)
+        Self.logger.error("System audio capture interrupted mid-meeting; recovery continues: \(error.localizedDescription, privacy: .public)")
         onSystemAudioCaptureFailure?(error)
+    }
+
+    private func handleSystemAudioCaptureRecovery() {
+        fputs("[meeting] system audio capture recovered\n", stderr)
+        Self.logger.info("System audio capture recovered mid-meeting")
+        onSystemAudioCaptureRecovered?()
     }
 
     /// A microphone that delivers pure digital silence while the meeting is
@@ -1353,6 +1379,10 @@ final class MeetingSession {
                 callbackUptimeNanoseconds: callbackUptime,
                 callbackDate: callbackDate
             )
+            if self.systemChunkNeedsTimelineRealignment {
+                self.systemChunkTimingTracker.realign(atSampleIndex: Int64(recordingOffset))
+                self.systemChunkNeedsTimelineRealignment = false
+            }
             self.retainedRecordingWriter?.appendSystem(samples, atSampleOffset: recordingOffset)
             self.systemChunkRecorder?.append(samples)
             self.systemChunkTimingTracker.append(sampleCount: samples.count)

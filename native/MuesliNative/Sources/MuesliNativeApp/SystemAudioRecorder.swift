@@ -150,6 +150,7 @@ struct SystemAudioCaptureFailureGate {
 final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, SystemAudioCapturing, SystemAudioDiagnosticsProviding {
     var onPCMSamples: (([Int16]) -> Void)?
     var onSystemAudioFailure: ((Error) -> Void)?
+    var onSystemAudioRecovery: (() -> Void)?
 
     /// Guards `stream` and `startFailed`: `startStream()` assigns from the
     /// startup task while `stop()` and `cleanupFailedStart()` read from the
@@ -327,6 +328,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, Sys
         let writtenBytes = sampleHandlerQueue.sync { () -> Int in
             onPCMSamples = nil
             onSystemAudioFailure = nil
+            onSystemAudioRecovery = nil
             let bytes = totalBytesWritten
             if let file = outputFile {
                 let header = WavWriter.header(dataSize: bytes)
@@ -569,6 +571,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, Sys
         sampleHandlerQueue.sync {
             onPCMSamples = nil
             onSystemAudioFailure = nil
+            onSystemAudioRecovery = nil
             if let file = outputFile {
                 file.closeFile()
             }

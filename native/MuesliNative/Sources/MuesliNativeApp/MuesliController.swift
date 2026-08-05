@@ -5711,6 +5711,13 @@ final class MuesliController: NSObject {
                         )
                     }
                 }
+                meetingSession.onSystemAudioCaptureRecovered = { [weak self] in
+                    Task { @MainActor in
+                        guard let self,
+                              self.activeMeetingID == meetingID || self.meetingStartMeetingID == meetingID else { return }
+                        self.updateActiveMeetingSystemAudioRecovery(meetingID: meetingID)
+                    }
+                }
                 try await meetingSession.start()
                 if Task.isCancelled || canceledMeetingStartIDs.contains(meetingID) {
                     throw CancellationError()
@@ -6196,8 +6203,16 @@ final class MuesliController: NSObject {
 
     private func updateActiveMeetingSystemAudioFailure(meetingID: Int64) {
         activeMeetingAudioWarningState.recordSystemAudioFailure(
-            message: "System audio capture stopped. Muesli is still recording your microphone, but other participants may be missing."
+            message: "System audio was interrupted. Muesli is retrying automatically; other participants may be missing until capture resumes."
         )
+        let nextWarning = activeMeetingAudioWarningState.resolvedWarning(meetingID: meetingID)
+        guard activeMeetingAudioWarning != nextWarning else { return }
+        activeMeetingAudioWarning = nextWarning
+        syncAppState()
+    }
+
+    private func updateActiveMeetingSystemAudioRecovery(meetingID: Int64) {
+        activeMeetingAudioWarningState.clearSystemAudioFailure()
         let nextWarning = activeMeetingAudioWarningState.resolvedWarning(meetingID: meetingID)
         guard activeMeetingAudioWarning != nextWarning else { return }
         activeMeetingAudioWarning = nextWarning

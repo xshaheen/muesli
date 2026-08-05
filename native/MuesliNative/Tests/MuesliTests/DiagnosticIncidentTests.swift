@@ -188,6 +188,25 @@ struct DiagnosticIncidentTests {
         #expect(incident.telemetryParameters["diagnostic.stage"] == "meeting_system_audio_capture")
     }
 
+    @Test("CoreAudio tap failures retain their privacy-safe operation and status")
+    func coreAudioTapFailureFingerprint() {
+        let incident = DiagnosticIncident(
+            kind: .meetingSystemAudioCaptureFailed,
+            severity: .warning,
+            stage: .meetingSystemAudioCapture,
+            error: CoreAudioSystemRecorder.RecorderError.coreAudioSetupFailed(
+                "start aggregate device",
+                -50
+            ),
+            metadata: metadata
+        )
+
+        #expect(incident.errorFingerprint.signature == "core_audio_setup_start_aggregate_device_failed.-50")
+        #expect(incident.errorDomain == "CoreAudioSystemRecorder.RecorderError")
+        #expect(incident.errorCode == "-50")
+        #expect(incident.errorFingerprint.area == "system_audio_capture")
+    }
+
     @Test("domain fallback covers Swift enum style diagnostic errors")
     func domainFallbackCoversSwiftEnumErrors() {
         let meaning = DiagnosticErrorCatalog.meaning(
@@ -328,5 +347,34 @@ struct DiagnosticIncidentReporterTests {
 
         reporter.recordManualReport()
         #expect(appState.pendingDiagnosticIncident?.kind == .manualReport)
+    }
+
+    @Test("privacy-safe incident history survives reporter restart")
+    func incidentHistorySurvivesRestart() throws {
+        let suiteName = "DiagnosticIncidentReporterHistoryTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let reporter = DiagnosticIncidentReporter(
+            appState: AppState(),
+            defaults: defaults,
+            telemetrySink: { _ in }
+        )
+        let incident = reporter.record(
+            kind: .meetingSystemAudioCaptureFailed,
+            severity: .warning,
+            stage: .meetingSystemAudioCapture,
+            error: NSError(domain: "NSOSStatusErrorDomain", code: -50),
+            promptUser: false
+        )
+
+        let restartedReporter = DiagnosticIncidentReporter(
+            appState: AppState(),
+            defaults: defaults,
+            telemetrySink: { _ in }
+        )
+
+        #expect(restartedReporter.recentIncidents().map(\.id) == [incident.id])
+        #expect(restartedReporter.recentIncidents().first?.errorFingerprint == incident.errorFingerprint)
     }
 }
