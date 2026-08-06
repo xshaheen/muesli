@@ -291,9 +291,14 @@ final class FloatingIndicatorController: NSObject {
             isMeetingTranscriptManuallyDismissed = true
             hideMeetingTranscript()
         } else {
-            isMeetingTranscriptManuallyDismissed = false
-            showMeetingTranscript()
+            showMeetingTranscriptPanel()
         }
+    }
+
+    /// Shows the transcript window without toggling a panel that is already visible.
+    func showMeetingTranscriptPanel() {
+        isMeetingTranscriptManuallyDismissed = false
+        showMeetingTranscript()
     }
 
     var currentFrame: NSRect? {

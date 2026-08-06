@@ -129,6 +129,7 @@ struct MeetingsNavigationTests {
 
         #expect(presentation.opensMeetingDocument)
         #expect(presentation.presentsHistoryWindow)
+        #expect(!presentation.presentsFloatingPanelWhenRecordingStarts)
     }
 
     @Test("background meeting starts only transition the recording pill")
@@ -137,6 +138,17 @@ struct MeetingsNavigationTests {
 
         #expect(!presentation.opensMeetingDocument)
         #expect(!presentation.presentsHistoryWindow)
+        #expect(!presentation.presentsFloatingPanelWhenRecordingStarts)
+    }
+
+    @Test("compact control presentation requests floating UI without opening the main window")
+    func compactControlMeetingStartPresentation() {
+        let presentation = MeetingStartPresentation.compactControl
+
+        #expect(presentation == .floatingPanel)
+        #expect(!presentation.opensMeetingDocument)
+        #expect(!presentation.presentsHistoryWindow)
+        #expect(presentation.presentsFloatingPanelWhenRecordingStarts)
     }
 
     @Test("each dashboard statistic opens insights with its originating section")
