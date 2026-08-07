@@ -37,10 +37,13 @@ struct MenuBarIconRendererTests {
         #expect(image != nil)
     }
 
-    @Test("make(choice:) returns a template image for menu bar adaptation")
+    @Test("every selectable SF Symbol is available as a template image")
     func makeIsTemplate() {
-        let image = MenuBarIconRenderer.make(choice: "mic.fill")
-        #expect(image?.isTemplate == true)
+        for option in MenuBarIconRenderer.options where option.id != "muesli" {
+            let image = MenuBarIconRenderer.make(choice: option.id)
+            #expect(image != nil, "Missing selectable icon: \(option.id)")
+            #expect(image?.isTemplate == true, "Non-template selectable icon: \(option.id)")
+        }
     }
 
     @Test("make(choice:) returns a non-zero size image")
@@ -48,5 +51,24 @@ struct MenuBarIconRendererTests {
         let image = MenuBarIconRenderer.make(choice: "mic.fill")
         #expect((image?.size.width ?? 0) > 0)
         #expect((image?.size.height ?? 0) > 0)
+    }
+
+    @MainActor
+    @Test("floating indicator preserves template rendering across setup and refresh")
+    func floatingIndicatorPreservesTemplateRendering() {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let configStore = ConfigStore(supportDirectory: supportDirectory)
+        var config = AppConfig()
+        config.menuBarIcon = "sparkles"
+        configStore.save(config)
+        let indicator = FloatingIndicatorController(configStore: configStore)
+
+        indicator.setState(.idle, config: config)
+        #expect(indicator.idleIconIsTemplateForTesting == true)
+
+        indicator.refreshIcon()
+        #expect(indicator.idleIconIsTemplateForTesting == true)
+        indicator.close()
     }
 }
