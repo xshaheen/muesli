@@ -271,9 +271,19 @@ struct MeetingMicSessionRouteState {
 final class MeetingSession {
     private static let logger = Logger(subsystem: "com.muesli.native", category: "MeetingSession")
 
+    private struct TranscriptionAuthorityState {
+        var backend: BackendOption
+        var usesUnifiedNemotronTranscript: Bool
+    }
+
     private let title: String
     private let calendarEventID: String?
-    private let backendLock = OSAllocatedUnfairLock(initialState: BackendOption.whisper)
+    private let transcriptionAuthorityLock = OSAllocatedUnfairLock(
+        initialState: TranscriptionAuthorityState(
+            backend: .whisper,
+            usesUnifiedNemotronTranscript: false
+        )
+    )
     private let runtime: RuntimePaths
     private let config: AppConfig
     private let templateSnapshot: MeetingTemplateSnapshot
@@ -368,7 +378,10 @@ final class MeetingSession {
     ) {
         self.title = title
         self.calendarEventID = calendarEventID
-        backendLock.withLock { $0 = backend }
+        transcriptionAuthorityLock.withLock {
+            $0.backend = backend
+            $0.usesUnifiedNemotronTranscript = config.usesUnifiedNemotronMeetingTranscript
+        }
         self.runtime = runtime
         self.config = config
         self.templateSnapshot = templateSnapshot
@@ -384,8 +397,14 @@ final class MeetingSession {
         }
     }
 
-    func updateBackend(_ backend: BackendOption) {
-        backendLock.withLock { $0 = backend }
+    func updateTranscriptionAuthority(
+        backend: BackendOption,
+        usesUnifiedNemotronTranscript: Bool
+    ) {
+        transcriptionAuthorityLock.withLock {
+            $0.backend = backend
+            $0.usesUnifiedNemotronTranscript = usesUnifiedNemotronTranscript
+        }
     }
 
     func setPreferredMicrophoneInputDeviceID(
@@ -413,7 +432,11 @@ final class MeetingSession {
     }
 
     private func currentBackend() -> BackendOption {
-        backendLock.withLock { $0 }
+        transcriptionAuthorityLock.withLock { $0.backend }
+    }
+
+    func usesLiveNemotronTranscriptAsFinal() -> Bool {
+        transcriptionAuthorityLock.withLock { $0.usesUnifiedNemotronTranscript }
     }
 
     func start() async throws {
@@ -593,8 +616,7 @@ final class MeetingSession {
         start: TimeInterval,
         end: TimeInterval
     ) -> [SpeechSegment] {
-        let prefersStreamingTranscript = config.enableLiveStreamingPartials
-            && config.resolvedMeetingLiveCaptionBackend == .nemotron35
+        let prefersStreamingTranscript = usesLiveNemotronTranscriptAsFinal()
         return MeetingStreamingTranscriptResolver.resolve(
             durableSegments: segments,
             authoritativeStreamingText: partialSession?.pendingSegmentText(id: segmentID),
@@ -721,8 +743,7 @@ final class MeetingSession {
         let endTime = Date()
         var micSegments: [SpeechSegment] = []
         var systemSegments: [SpeechSegment] = []
-        let usesUnifiedNemotronTranscript = config.enableLiveStreamingPartials
-            && config.resolvedMeetingLiveCaptionBackend == .nemotron35
+        let usesUnifiedNemotronTranscript = usesLiveNemotronTranscriptAsFinal()
 
         // Stop VAD controller
         if !usesUnifiedNemotronTranscript {

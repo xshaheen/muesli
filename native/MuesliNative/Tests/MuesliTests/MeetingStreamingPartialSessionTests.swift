@@ -411,6 +411,24 @@ struct MeetingStreamingPartialSessionTests {
         #expect(resolved.first?.text == "complete durable text")
     }
 
+    @Test("a selected final model remains authoritative over live Nemotron text")
+    func selectedFinalModelRemainsAuthoritative() {
+        let durable = [SpeechSegment(start: 3, end: 4, text: "higher quality batch text")]
+
+        let resolved = MeetingStreamingTranscriptResolver.resolve(
+            durableSegments: durable,
+            authoritativeStreamingText: "live Nemotron text",
+            prefersStreamingTranscript: false,
+            start: 3,
+            end: 4
+        )
+
+        #expect(resolved.count == 1)
+        #expect(resolved.first?.start == 3)
+        #expect(resolved.first?.end == 4)
+        #expect(resolved.first?.text == "higher quality batch text")
+    }
+
     @Test("an empty durable result stays empty when streaming audio was discontinuous")
     func discontinuousSegmentDoesNotInventEmptyDurableFallback() {
         let resolved = MeetingStreamingTranscriptResolver.resolve(

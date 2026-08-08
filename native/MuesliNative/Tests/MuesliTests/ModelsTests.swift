@@ -637,6 +637,7 @@ struct AppConfigTests {
         #expect(config.enableDictationOCRContext == false)
         #expect(config.enableLiveStreamingPartials == false)
         #expect(config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU)
+        #expect(config.useLiveMeetingTranscriptAsFinal == true)
         #expect(config.showMeetingTranscriptOnIndicatorHover == true)
         #expect(config.dictationHotkey == .default)
         #expect(config.computerUseHotkey == .computerUseDefault)
@@ -855,6 +856,7 @@ struct AppConfigTests {
         config.meetingInputDeviceUID = "meeting-mic"
         config.enableAutomaticDiagnosticIssuePrompts = true
         config.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
+        config.useLiveMeetingTranscriptAsFinal = false
         config.showMeetingTranscriptOnIndicatorHover = false
         config.contributionPromptNextWordCount = 31_000
         config.contributionPromptNextMeetingCount = 75
@@ -931,6 +933,7 @@ struct AppConfigTests {
         #expect(decoded.meetingInputDeviceUID == "meeting-mic")
         #expect(decoded.enableAutomaticDiagnosticIssuePrompts == true)
         #expect(decoded.resolvedMeetingLiveCaptionBackend == .nemotron35)
+        #expect(decoded.useLiveMeetingTranscriptAsFinal == false)
         #expect(decoded.showMeetingTranscriptOnIndicatorHover == false)
         #expect(decoded.contributionPromptNextWordCount == 31_000)
         #expect(decoded.contributionPromptNextMeetingCount == 75)
@@ -1015,6 +1018,7 @@ struct AppConfigTests {
         #expect(json["enable_screen_context"] != nil)
         #expect(json["enable_dictation_ocr_context"] != nil)
         #expect(json["enable_live_streaming_partials"] != nil)
+        #expect(json["use_live_meeting_transcript_as_final"] != nil)
         #expect(json["show_meeting_transcript_on_indicator_hover"] != nil)
     }
 
@@ -1087,6 +1091,7 @@ struct AppConfigTests {
         #expect(config.enableDictationOCRContext == false)
         #expect(config.enableLiveStreamingPartials == false)
         #expect(config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU)
+        #expect(config.useLiveMeetingTranscriptAsFinal == true)
         #expect(config.showMeetingTranscriptOnIndicatorHover == true)
     }
 

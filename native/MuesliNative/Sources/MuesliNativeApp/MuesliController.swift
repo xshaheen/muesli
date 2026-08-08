@@ -1292,7 +1292,6 @@ final class MuesliController: NSObject {
         }
 
         selectedMeetingTranscriptionBackend = resolved
-        activeMeetingSession?.updateBackend(resolved)
         if config.meetingTranscriptionBackend != resolved.backend ||
             config.meetingTranscriptionModel != resolved.model {
             config.meetingTranscriptionBackend = resolved.backend
@@ -1302,12 +1301,23 @@ final class MuesliController: NSObject {
         }
         appState.selectedMeetingTranscriptionBackend = resolved
         appState.config = config
+        updateActiveMeetingTranscriptionAuthority()
         return resolved
     }
 
     @discardableResult
     func refreshMeetingTranscriptionSelectionForAvailability() -> BackendOption? {
         normalizeMeetingTranscriptionSelectionForAvailability()
+    }
+
+    func refreshMeetingTranscriptionSelectionAfterDeleting(_ option: BackendOption) {
+        if selectedMeetingTranscriptionBackend == option,
+           config.usesNemotronLiveMeetingTranscript,
+           !config.useLiveMeetingTranscriptAsFinal {
+            selectLiveMeetingTranscriptAsFinal()
+        } else {
+            normalizeMeetingTranscriptionSelectionForAvailability()
+        }
     }
 
     func updateConfig(_ mutate: (inout AppConfig) -> Void) {
@@ -1435,6 +1445,7 @@ final class MuesliController: NSObject {
         appState.selectedMeetingSummaryBackend = selectedMeetingSummaryBackend
         appState.selectedPostProcessorBackend = selectedPostProcessorBackend
         appState.config = config
+        updateActiveMeetingTranscriptionAuthority()
         appState.isChatGPTAuthenticated = chatGPTAuth.isAuthenticated
         syncCalendarMonitor()
         syncMeetingDetectionMonitor()
@@ -2245,6 +2256,27 @@ final class MuesliController: NSObject {
     }
 
     func selectMeetingTranscriptionBackend(_ option: BackendOption, requireDownloaded: Bool = true) {
+        applyMeetingTranscriptionBackend(option, requireDownloaded: requireDownloaded)
+    }
+
+    func selectMeetingFinalTranscriptBackend(
+        _ option: BackendOption,
+        requireDownloaded: Bool = true
+    ) {
+        applyMeetingTranscriptionBackend(option, requireDownloaded: requireDownloaded) {
+            $0.useLiveMeetingTranscriptAsFinal = false
+        }
+    }
+
+    func selectLiveMeetingTranscriptAsFinal() {
+        updateConfig { $0.useLiveMeetingTranscriptAsFinal = true }
+    }
+
+    private func applyMeetingTranscriptionBackend(
+        _ option: BackendOption,
+        requireDownloaded: Bool = true,
+        additionalConfigMutation: ((inout AppConfig) -> Void)? = nil
+    ) {
         guard option.supportsMeetingTranscription else {
             presentErrorAlert(
                 title: "Meeting model unavailable",
@@ -2265,11 +2297,11 @@ final class MuesliController: NSObject {
             let wasICloudSyncEnabled = config.iCloudSyncEnabled
             config.meetingTranscriptionBackend = option.backend
             config.meetingTranscriptionModel = option.model
+            additionalConfigMutation?(&config)
             configStore.save(config)
             selectedMeetingTranscriptionBackend = option
             appState.selectedMeetingTranscriptionBackend = option
             appState.config = config
-            activeMeetingSession?.updateBackend(option)
             applyConfigRuntimeSideEffects(
                 wasICloudSyncEnabled: wasICloudSyncEnabled,
                 hotkeyTriggerThresholdChanged: false,
@@ -2277,11 +2309,11 @@ final class MuesliController: NSObject {
             )
             return
         }
-        updateConfig {
-            $0.meetingTranscriptionBackend = option.backend
-            $0.meetingTranscriptionModel = option.model
+        updateConfig { config in
+            config.meetingTranscriptionBackend = option.backend
+            config.meetingTranscriptionModel = option.model
+            additionalConfigMutation?(&config)
         }
-        activeMeetingSession?.updateBackend(option)
         Task { [weak self] in
             guard let self else { return }
             await self.transcriptionCoordinator.preload(
@@ -2293,6 +2325,13 @@ final class MuesliController: NSObject {
                 self.statusBarController?.refresh()
             }
         }
+    }
+
+    private func updateActiveMeetingTranscriptionAuthority() {
+        activeMeetingSession?.updateTranscriptionAuthority(
+            backend: selectedMeetingTranscriptionBackend,
+            usesUnifiedNemotronTranscript: config.usesUnifiedNemotronMeetingTranscript
+        )
     }
 
     func selectCohereLanguage(_ language: CohereTranscribeLanguage) {

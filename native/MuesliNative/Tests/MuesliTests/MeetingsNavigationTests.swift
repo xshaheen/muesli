@@ -1226,6 +1226,37 @@ struct MeetingsNavigationTests {
         #expect(controller.appState.config.meetingTranscriptionModel == BackendOption.whisperLargeTurbo.model)
     }
 
+    @Test("batch final selection survives enabling Nemotron live preview")
+    func batchFinalSelectionSurvivesEnablingNemotronLivePreview() {
+        let controller = makeController()
+
+        controller.selectMeetingFinalTranscriptBackend(.whisperLargeTurbo, requireDownloaded: false)
+        controller.updateConfig {
+            $0.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
+            $0.enableLiveStreamingPartials = true
+        }
+
+        #expect(controller.appState.selectedMeetingTranscriptionBackend == .whisperLargeTurbo)
+        #expect(controller.appState.config.useLiveMeetingTranscriptAsFinal == false)
+        #expect(!controller.appState.config.usesUnifiedNemotronMeetingTranscript)
+    }
+
+    @Test("deleting the selected batch final falls back to live Nemotron")
+    func deletingSelectedBatchFinalFallsBackToLiveNemotron() {
+        let controller = makeController()
+
+        controller.selectMeetingFinalTranscriptBackend(.whisperLargeTurbo, requireDownloaded: false)
+        controller.updateConfig {
+            $0.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
+            $0.enableLiveStreamingPartials = true
+        }
+
+        controller.refreshMeetingTranscriptionSelectionAfterDeleting(.whisperLargeTurbo)
+
+        #expect(controller.appState.config.useLiveMeetingTranscriptAsFinal)
+        #expect(controller.appState.config.usesUnifiedNemotronMeetingTranscript)
+    }
+
     @Test("selecting Gemma dictation replaces conflicting Gemma cleanup")
     func selectingGemmaDictationReplacesGemmaCleanup() {
         let controller = makeController()

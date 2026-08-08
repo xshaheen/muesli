@@ -69,7 +69,7 @@ struct BackendOption: Equatable {
         model: "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
         label: "Nemotron 3.5 Multilingual",
         sizeLabel: "~665 MB",
-        description: "NVIDIA Nemotron 3.5 streaming RNNT via FluidInference. Multilingual incl. Hindi, Chinese, Japanese + 100+ locales (auto-detect). Native punctuation. Hold-to-talk or double-tap handsfree (live text). For meetings, one continuous transcript is used live and as the final raw transcript. Append-only with no corrections.",
+        description: "NVIDIA Nemotron 3.5 streaming RNNT via FluidInference. Multilingual incl. Hindi, Chinese, Japanese + 100+ locales (auto-detect). Native punctuation. Hold-to-talk or double-tap handsfree (live text). For meetings, its continuous transcript can be used live and as the final raw transcript, or paired with a separate final model. Append-only with no corrections.",
         recommended: false
     )
 
@@ -312,7 +312,7 @@ enum MeetingLiveCaptionBackend: String, CaseIterable, Codable, Sendable {
     var settingsLabel: String {
         switch self {
         case .parakeetRealtimeEOU: return "\(label) (live preview only)"
-        case .nemotron35: return "\(label) (live + final)"
+        case .nemotron35: return "\(label) (live transcript)"
         }
     }
 
@@ -1174,6 +1174,9 @@ struct AppConfig: Codable {
     /// Enables the explicitly selected live meeting transcription mode.
     var enableLiveStreamingPartials: Bool = false
     var meetingLiveCaptionBackend: String = MeetingLiveCaptionBackend.defaultBackend.rawValue
+    /// Preserves the original unified Nemotron behavior unless the user explicitly
+    /// chooses a separate downloaded model for the final transcript.
+    var useLiveMeetingTranscriptAsFinal: Bool = true
     /// Reveals a compact live transcript beside the meeting waveform while the
     /// pointer is over either floating surface.
     var showMeetingTranscriptOnIndicatorHover: Bool = true
@@ -1295,6 +1298,7 @@ struct AppConfig: Codable {
         case useCoreAudioTap = "use_core_audio_tap"
         case enableLiveStreamingPartials = "enable_live_streaming_partials"
         case meetingLiveCaptionBackend = "meeting_live_caption_backend"
+        case useLiveMeetingTranscriptAsFinal = "use_live_meeting_transcript_as_final"
         case showMeetingTranscriptOnIndicatorHover = "show_meeting_transcript_on_indicator_hover"
         case meetingHookEnabled = "meeting_hook_enabled"
         case meetingHookPath = "meeting_hook_path"
@@ -1492,6 +1496,8 @@ struct AppConfig: Codable {
         meetingLiveCaptionBackend = MeetingLiveCaptionBackend
             .resolved(try? c.decode(String.self, forKey: .meetingLiveCaptionBackend))
             .rawValue
+        useLiveMeetingTranscriptAsFinal = (try? c.decode(Bool.self, forKey: .useLiveMeetingTranscriptAsFinal))
+            ?? defaults.useLiveMeetingTranscriptAsFinal
         showMeetingTranscriptOnIndicatorHover = (try? c.decode(Bool.self, forKey: .showMeetingTranscriptOnIndicatorHover)) ?? defaults.showMeetingTranscriptOnIndicatorHover
         meetingHookEnabled = (try? c.decode(Bool.self, forKey: .meetingHookEnabled)) ?? defaults.meetingHookEnabled
         meetingHookPath = (try? c.decode(String.self, forKey: .meetingHookPath)) ?? defaults.meetingHookPath
@@ -1541,6 +1547,17 @@ struct AppConfig: Codable {
 
     var resolvedMeetingRecordingFileFormat: MeetingRecordingFileFormat {
         MeetingRecordingFileFormat.resolved(meetingRecordingFileFormat)
+    }
+}
+
+extension AppConfig {
+    var usesNemotronLiveMeetingTranscript: Bool {
+        enableLiveStreamingPartials
+            && resolvedMeetingLiveCaptionBackend == .nemotron35
+    }
+
+    var usesUnifiedNemotronMeetingTranscript: Bool {
+        usesNemotronLiveMeetingTranscript && useLiveMeetingTranscriptAsFinal
     }
 }
 

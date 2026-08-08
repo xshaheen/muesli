@@ -219,7 +219,7 @@ struct ModelsView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(MuesliTheme.textTertiary)
 
-                Text("Choose one live meeting transcript model. Nemotron is live + final; Parakeet is live preview only.")
+                Text("Choose one live meeting transcript model. Nemotron can also create the final transcript; Parakeet is live preview only.")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
             }
@@ -1346,6 +1346,7 @@ struct ModelsView: View {
                 await controller.transcriptionCoordinator.unloadTranscriber(for: option)
                 try await ModelDeletionExecutor.execute(deletionPlan)
                 _ = downloadedModels.remove(option.model)
+                controller.refreshMeetingTranscriptionSelectionAfterDeleting(option)
             } catch {
                 fputs("[muesli-native] model delete failed for \(option.backend)/\(option.model): \(error)\n", stderr)
             }
