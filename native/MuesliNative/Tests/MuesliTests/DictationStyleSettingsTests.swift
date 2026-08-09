@@ -31,6 +31,7 @@ struct DictationStyleSettingsTests {
         )
         #expect(first.dictationStyleDomainRules.first?.hostname == "docs.google.com")
         #expect(first.dictationStyleDomainRules.first?.styleID == nil)
+        #expect(DictationStyleResolver.sanitizeConfiguration(first).dictationStyleDomainRules.count == 1)
         #expect(throws: DictationStyleSettingsError.self) {
             try DictationStyleSettingsModel.addingDomainRule(input: "DOCS.GOOGLE.COM", to: first)
         }
@@ -49,6 +50,7 @@ struct DictationStyleSettingsTests {
         #expect(first.dictationStyleAppRules.first?.bundleID == "com.apple.mail")
         #expect(first.dictationStyleAppRules.first?.displayName == "Mail")
         #expect(first.dictationStyleAppRules.first?.styleID == nil)
+        #expect(DictationStyleResolver.sanitizeConfiguration(first).dictationStyleAppRules.count == 1)
         #expect(throws: DictationStyleSettingsError.self) {
             try DictationStyleSettingsModel.addingAppRule(
                 bundleID: "com.apple.mail",

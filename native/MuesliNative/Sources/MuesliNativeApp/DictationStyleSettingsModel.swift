@@ -12,10 +12,6 @@ struct DictationStyleDeletionImpact: Equatable {
     let appCount: Int
     let domainCount: Int
 
-    var totalAssignments: Int {
-        (repairsGlobal ? 1 : 0) + categoryCount + appCount + domainCount
-    }
-
     var confirmationMessage: String {
         var parts: [String] = []
         if repairsGlobal { parts.append("the global style") }
@@ -245,13 +241,7 @@ enum DictationStyleSettingsModel {
         guard !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw DictationStyleSettingsError.missingStyleInstructions
         }
-        let duplicateBuiltIn = TranscriptCleanupPrompts.builtIns.contains {
-            normalizedStyleName($0.name) == normalizedName
-        }
-        let duplicateCustom = config.customTranscriptCleanupPrompts.contains {
-            $0.id != excludingID && normalizedStyleName($0.name) == normalizedName
-        }
-        guard !duplicateBuiltIn, !duplicateCustom else {
+        guard !hasStyleNamed(normalizedName, excludingID: excludingID, in: config) else {
             throw DictationStyleSettingsError.duplicateStyleName
         }
     }
@@ -269,7 +259,16 @@ enum DictationStyleSettingsModel {
         return DictationStyleAppCandidate(bundleID: bundleID, displayName: name)
     }
 
-    private static func normalizedStyleName(_ name: String) -> String {
+    static func hasStyleNamed(_ name: String, excludingID: String?, in config: AppConfig) -> Bool {
+        let normalizedName = normalizedStyleName(name)
+        return TranscriptCleanupPrompts.builtIns.contains {
+            normalizedStyleName($0.name) == normalizedName
+        } || config.customTranscriptCleanupPrompts.contains {
+            $0.id != excludingID && normalizedStyleName($0.name) == normalizedName
+        }
+    }
+
+    static func normalizedStyleName(_ name: String) -> String {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .lowercased()

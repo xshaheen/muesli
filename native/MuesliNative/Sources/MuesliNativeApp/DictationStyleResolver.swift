@@ -332,45 +332,39 @@ enum DictationStyleResolver {
     }
 
     private static func sanitizedAppRules(_ rules: [DictationStyleAppRule]) -> [DictationStyleAppRule] {
-        var byBundleID: [String: DictationStyleAppRule] = [:]
-        var order: [String] = []
-        for rule in rules {
-            guard let bundleID = normalizeBundleID(rule.bundleID) else { continue }
+        var seenBundleIDs = Set<String>()
+        let retained = rules.reversed().compactMap { rule -> DictationStyleAppRule? in
+            guard let bundleID = normalizeBundleID(rule.bundleID) else { return nil }
+            guard seenBundleIDs.insert(bundleID).inserted else { return nil }
             let categoryID = category(id: rule.categoryID)?.rawValue
             let styleID = normalizedReference(rule.styleID)
-            guard hasAssignment(categoryID: categoryID, styleID: styleID) else { continue }
             let displayName = rule.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-            byBundleID[bundleID] = DictationStyleAppRule(
+            return DictationStyleAppRule(
                 bundleID: bundleID,
                 displayName: displayName,
                 categoryID: categoryID,
                 styleID: styleID
             )
-            order.removeAll { $0 == bundleID }
-            order.append(bundleID)
         }
-        return order.compactMap { byBundleID[$0] }
+        return Array(retained.reversed())
     }
 
     private static func sanitizedDomainRules(
         _ rules: [DictationStyleDomainRule]
     ) -> [DictationStyleDomainRule] {
-        var byHostname: [String: DictationStyleDomainRule] = [:]
-        var order: [String] = []
-        for rule in rules {
-            guard let hostname = normalizeHostname(rule.hostname) else { continue }
+        var seenHostnames = Set<String>()
+        let retained = rules.reversed().compactMap { rule -> DictationStyleDomainRule? in
+            guard let hostname = normalizeHostname(rule.hostname) else { return nil }
+            guard seenHostnames.insert(hostname).inserted else { return nil }
             let categoryID = category(id: rule.categoryID)?.rawValue
             let styleID = normalizedReference(rule.styleID)
-            guard hasAssignment(categoryID: categoryID, styleID: styleID) else { continue }
-            byHostname[hostname] = DictationStyleDomainRule(
+            return DictationStyleDomainRule(
                 hostname: hostname,
                 categoryID: categoryID,
                 styleID: styleID
             )
-            order.removeAll { $0 == hostname }
-            order.append(hostname)
         }
-        return order.compactMap { byHostname[$0] }
+        return Array(retained.reversed())
     }
 
     private static func normalizedReference(_ value: String?) -> String? {

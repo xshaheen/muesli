@@ -102,8 +102,7 @@ struct DictationStyleRulesView: View {
                         Spacer()
                         stylePicker(
                             label: "\(category.displayName) category style",
-                            selection: appState.config.dictationStyleCategoryAssignments[category.rawValue],
-                            includeInherited: true
+                            selection: appState.config.dictationStyleCategoryAssignments[category.rawValue]
                         ) { styleID in
                             persist(DictationStyleSettingsModel.settingCategoryStyle(
                                 styleID,
@@ -199,7 +198,7 @@ struct DictationStyleRulesView: View {
                     in: appState.config
                 ))
             }
-            stylePicker(label: "Exact style for \(rule.displayName)", selection: rule.styleID, includeInherited: true) { styleID in
+            stylePicker(label: "Exact style for \(rule.displayName)", selection: rule.styleID) { styleID in
                 persist(DictationStyleSettingsModel.settingAppRule(
                     bundleID: rule.bundleID,
                     categoryID: rule.categoryID,
@@ -231,7 +230,7 @@ struct DictationStyleRulesView: View {
                     in: appState.config
                 ))
             }
-            stylePicker(label: "Exact style for \(rule.hostname)", selection: rule.styleID, includeInherited: true) { styleID in
+            stylePicker(label: "Exact style for \(rule.hostname)", selection: rule.styleID) { styleID in
                 persist(DictationStyleSettingsModel.settingDomainRule(
                     hostname: rule.hostname,
                     categoryID: rule.categoryID,
@@ -287,11 +286,10 @@ struct DictationStyleRulesView: View {
     private func stylePicker(
         label: String,
         selection: String?,
-        includeInherited: Bool,
         onChange: @escaping (String?) -> Void
     ) -> some View {
         Picker(label, selection: Binding(get: { selection ?? "" }, set: { onChange($0.isEmpty ? nil : $0) })) {
-            if includeInherited { Text("Inherit / Global").tag("") }
+            Text("Inherit / Global").tag("")
             ForEach(styles) { style in Text(style.name).tag(style.id) }
         }
         .labelsHidden()

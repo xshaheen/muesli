@@ -24,26 +24,26 @@ struct DictationStyleHistoryBadgeContent: Equatable {
     }
 
     private static func sourceLabel(_ rawValue: String?) -> String? {
-        switch rawValue {
-        case "domain": "Selected by website rule"
-        case "app": "Selected by app rule"
-        case "category": "Selected by category"
-        case "global": "Selected from the global style"
-        case "built_in_fallback": "Selected as the built-in fallback"
-        default: nil
+        guard let rawValue, let source = DictationStyleSelectionSource(rawValue: rawValue) else { return nil }
+        return switch source {
+        case .domain: "Selected by website rule"
+        case .app: "Selected by app rule"
+        case .category: "Selected by category"
+        case .global: "Selected from the global style"
+        case .builtInFallback: "Selected as the built-in fallback"
         }
     }
 
     private static func outcomeLabel(_ rawValue: String?) -> String? {
-        switch rawValue {
-        case "applied": "Cleanup applied"
-        case "fallback_empty": "Original dictation kept because cleanup returned no text"
-        case "fallback_rejected": "Original dictation kept because cleanup was rejected"
-        case "fallback_error": "Original dictation kept because cleanup failed"
-        case "skipped_disabled": "Cleanup skipped because it was disabled"
-        case "skipped_unavailable": "Cleanup skipped because it was unavailable"
-        case "skipped_streaming": "Cleanup skipped for streaming dictation"
-        default: nil
+        guard let rawValue, let outcome = DictationCleanupOutcome(rawValue: rawValue) else { return nil }
+        return switch outcome {
+        case .applied: "Cleanup applied"
+        case .fallbackEmpty: "Original dictation kept because cleanup returned no text"
+        case .fallbackRejected: "Original dictation kept because cleanup was rejected"
+        case .fallbackError: "Original dictation kept because cleanup failed"
+        case .skippedDisabled: "Cleanup skipped because it was disabled"
+        case .skippedUnavailable: "Cleanup skipped because it was unavailable"
+        case .skippedStreaming: "Cleanup skipped for streaming dictation"
         }
     }
 }

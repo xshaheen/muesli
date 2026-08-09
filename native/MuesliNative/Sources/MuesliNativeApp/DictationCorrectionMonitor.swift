@@ -39,8 +39,6 @@ struct DictationSessionTarget: Sendable, Equatable {
     }
 }
 
-typealias DictationCorrectionTargetApp = DictationSessionTarget
-
 enum DictationStyleSessionMode: Sendable, Equatable {
     case standard
     case voiceNote
@@ -1035,7 +1033,7 @@ final class DictationCorrectionMonitor {
     func start(
         originalText: String,
         appContext: String,
-        targetApp: DictationCorrectionTargetApp?,
+        targetApp: DictationSessionTarget?,
         onSuggestion: @escaping @MainActor (DictionarySuggestion) -> Void
     ) {
         cancel()
@@ -1133,7 +1131,7 @@ final class DictationCorrectionMonitor {
         originalText: String,
         editedSnapshot: String,
         appContext: String,
-        targetApp: DictationCorrectionTargetApp?,
+        targetApp: DictationSessionTarget?,
         maxSuggestions: Int,
         recognizedEnglishWords: Set<String>
     ) -> [DictionarySuggestion] {
@@ -1192,7 +1190,7 @@ final class DictationCorrectionMonitor {
 
     nonisolated private static func detectEditedSnapshots(
         originalText: String,
-        targetApp: DictationCorrectionTargetApp?
+        targetApp: DictationSessionTarget?
     ) -> [String] {
         var seen = Set<String>()
         var snapshots: [String] = []

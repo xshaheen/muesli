@@ -34,31 +34,23 @@ struct DictationStyleObservabilityTests {
         }
     }
 
-    @Test("telemetry ignores every identity and content field")
-    func excludesSensitiveInput() {
-        let secret = "must-not-leave-device"
+    @Test("telemetry allowlist has no identity or content keys")
+    func excludesSensitiveKeys() {
         let parameters = DictationStyleObservability.parameters(
             for: DictationStyleObservabilityInput(
                 selectionSource: .domain,
                 isCustomStyle: true,
                 cleanupOutcome: .fallbackError,
-                cleanupBackend: .hosted(.openAI),
-                bundleID: secret,
-                hostname: secret,
-                appName: secret,
-                styleID: secret,
-                styleName: secret,
-                prompt: secret,
-                transcript: secret,
-                url: secret,
-                selectedText: secret,
-                ocrText: secret
+                cleanupBackend: .hosted(.openAI)
             )
         )
 
         #expect(Set(parameters.keys) == DictationStyleObservability.parameterKeys)
-        #expect(!parameters.keys.contains { $0.contains("bundle") || $0.contains("host") })
-        #expect(!parameters.values.contains(secret))
+        let prohibitedFragments = [
+            "bundle", "host", "app_name", "style_id", "style_name", "prompt",
+            "transcript", "url", "selected_text", "ocr", "context",
+        ]
+        #expect(!parameters.keys.contains { key in prohibitedFragments.contains { key.contains($0) } })
     }
 
     @Test("missing style provenance stays coarse")

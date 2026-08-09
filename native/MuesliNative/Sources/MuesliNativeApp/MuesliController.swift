@@ -8405,10 +8405,11 @@ final class MuesliController: NSObject {
     }
 
     private func beginDictationStyleSession(mode: DictationStyleSessionMode) {
+        let frontmostApplication = NSWorkspace.shared.frontmostApplication
         let target = DictationSessionTarget(
-            app: NSWorkspace.shared.frontmostApplication == NSRunningApplication.current
+            app: frontmostApplication == NSRunningApplication.current
                 ? lastExternalApp
-                : NSWorkspace.shared.frontmostApplication
+                : frontmostApplication
         )
         activeDictationStyleSession = DictationStyleSessionSnapshot(
             target: target,

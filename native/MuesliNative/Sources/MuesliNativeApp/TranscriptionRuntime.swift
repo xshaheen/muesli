@@ -124,13 +124,14 @@ enum DictationCleanupFinalizer {
         original: SpeechTranscriptionResult,
         attempt: DictationCleanupAttempt,
         customWords: [CustomWord],
-        provenance: DictationCleanupStyleProvenance?
+        provenance: DictationCleanupStyleProvenance?,
+        fallbackResult: SpeechTranscriptionResult? = nil
     ) -> DictationTranscriptionResult {
         let cleanupResult: SpeechTranscriptionResult
         if case .applied(let applied) = attempt {
             cleanupResult = applied
         } else {
-            cleanupResult = TranscriptionResultCleanup.removeFillers(original)
+            cleanupResult = fallbackResult ?? TranscriptionResultCleanup.removeFillers(original)
         }
 
         let final: SpeechTranscriptionResult
@@ -1154,14 +1155,13 @@ actor TranscriptionCoordinator {
             postProcessorSnapshot: postProcessorSnapshot,
             appContext: appContext
         )
-        if attempt.outcome != .applied {
-            _ = removeFillersWithLogging(result)
-        }
+        let fallbackResult = attempt.outcome == .applied ? nil : removeFillersWithLogging(result)
         let final = DictationCleanupFinalizer.finalize(
             original: result,
             attempt: attempt,
             customWords: dictionary,
-            provenance: policy.provenance
+            provenance: policy.provenance,
+            fallbackResult: fallbackResult
         )
         if !final.text.isEmpty {
             Qwen3PostProcessorLogging.logVerbose("Dictation final transcript: \(final.text)")

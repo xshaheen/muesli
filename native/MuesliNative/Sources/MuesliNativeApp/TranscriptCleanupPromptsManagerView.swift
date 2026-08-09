@@ -432,13 +432,7 @@ struct TranscriptCleanupPromptsManagerView: View {
     }
 
     private func presetNameExists(_ name: String, excludingID: String?) -> Bool {
-        let normalizedName = normalizedPresetName(name)
-        if builtInPresets.contains(where: { normalizedPresetName($0.name) == normalizedName }) {
-            return true
-        }
-        return customPresets.contains { preset in
-            preset.id != excludingID && normalizedPresetName(preset.name) == normalizedName
-        }
+        DictationStyleSettingsModel.hasStyleNamed(name, excludingID: excludingID, in: appState.config)
     }
 
     private func suggestedUniqueName(for baseName: String) -> String {
@@ -454,12 +448,6 @@ struct TranscriptCleanupPromptsManagerView: View {
             }
         }
         return "\(fallbackBase) \(UUID().uuidString.prefix(4))"
-    }
-
-    private func normalizedPresetName(_ name: String) -> String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .lowercased()
     }
 
     private func actionButton(
