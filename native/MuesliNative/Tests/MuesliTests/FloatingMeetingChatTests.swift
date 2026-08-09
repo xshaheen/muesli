@@ -263,9 +263,7 @@ struct FloatingMeetingChatTests {
 
     @Test("a question asked in the panel is visible in the detail tab")
     func panelAndTabShareConversation() async {
-        let registry = MeetingChatConversations.shared
-        registry.forget(meetingID: 7777)
-
+        let registry = MeetingChatConversations()
         let fromPanel = registry.conversation(for: 7777)
         await fromPanel.send(
             displayText: "asked from the floating panel",
@@ -279,6 +277,5 @@ struct FloatingMeetingChatTests {
         #expect(fromTab.turns.count == 2)
         #expect(fromTab.turns.first?.displayText == "asked from the floating panel")
 
-        registry.forget(meetingID: 7777)
     }
 }

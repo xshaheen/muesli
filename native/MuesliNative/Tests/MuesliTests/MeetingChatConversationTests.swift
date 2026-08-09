@@ -1,17 +1,124 @@
 import Testing
 import Foundation
 import MuesliCore
+import SQLite3
 @testable import MuesliNativeApp
+
+private actor MeetingChatReplyGate {
+    private var continuation: CheckedContinuation<String, Never>?
+    private var pendingReply: String?
+
+    func wait() async -> String {
+        if let pendingReply {
+            self.pendingReply = nil
+            return pendingReply
+        }
+        return await withCheckedContinuation { continuation = $0 }
+    }
+
+    func resume(returning reply: String) {
+        if let continuation {
+            continuation.resume(returning: reply)
+            self.continuation = nil
+        } else {
+            pendingReply = reply
+        }
+    }
+}
 
 @Suite("MeetingChatConversation")
 @MainActor
 struct MeetingChatConversationTests {
+    private enum PersistenceTestError: Error, LocalizedError {
+        case unavailable
+
+        var errorDescription: String? { "test storage unavailable" }
+    }
+
     private func stubTransport(_ reply: String) -> ([MeetingChatMessage], AppConfig) async throws -> String {
         { _, _ in reply }
     }
 
     private func failingTransport(_ error: MeetingChatError) -> ([MeetingChatMessage], AppConfig) async throws -> String {
         { _, _ in throw error }
+    }
+
+    private func makeStoreAndMeeting() throws -> (
+        store: DictationStore,
+        meetingID: Int64,
+        temporaryDirectory: URL
+    ) {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-chat-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        let databaseURL = temporaryDirectory.appendingPathComponent("muesli.db")
+        let store = DictationStore(databaseURL: databaseURL)
+        try store.migrateIfNeeded()
+        let now = Date()
+        let meetingID = try store.insertMeeting(
+            title: "Persisted chat",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: "Transcript",
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        return (store, meetingID, temporaryDirectory)
+    }
+
+    private func setRawChatHistory(
+        _ json: String,
+        meetingID: Int64,
+        store: DictationStore
+    ) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open(store.resolvedDatabaseURL.path, &db) == SQLITE_OK else {
+            throw PersistenceTestError.unavailable
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "UPDATE meetings SET chat_history_json = ? WHERE id = ?",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK else {
+            throw PersistenceTestError.unavailable
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (json as NSString).utf8String, -1, nil)
+        sqlite3_bind_int64(statement, 2, meetingID)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw PersistenceTestError.unavailable
+        }
+    }
+
+    private func rawChatHistory(meetingID: Int64, store: DictationStore) throws -> String {
+        var db: OpaquePointer?
+        guard sqlite3_open(store.resolvedDatabaseURL.path, &db) == SQLITE_OK else {
+            throw PersistenceTestError.unavailable
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "SELECT chat_history_json FROM meetings WHERE id = ?",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK else {
+            throw PersistenceTestError.unavailable
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, meetingID)
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let value = sqlite3_column_text(statement, 0) else {
+            throw PersistenceTestError.unavailable
+        }
+        return String(cString: value)
     }
 
     @Test("a successful exchange records question then answer, in order")
@@ -80,7 +187,7 @@ struct MeetingChatConversationTests {
 
     @Test("bulk clear drops every conversation")
     func bulkClearDropsAll() async {
-        let registry = MeetingChatConversations.shared
+        let registry = MeetingChatConversations()
         let first = registry.conversation(for: 9001)
         await first.send(
             displayText: "q",
@@ -187,9 +294,7 @@ struct MeetingChatConversationTests {
     func registryReturnsSharedInstance() async {
         // The property that makes history continuous between the detail tab and the
         // floating panel. Separate instances would silently split the conversation.
-        let registry = MeetingChatConversations.shared
-        registry.forget(meetingID: 4242)
-
+        let registry = MeetingChatConversations()
         let fromTab = registry.conversation(for: 4242)
         let fromPanel = registry.conversation(for: 4242)
 
@@ -203,23 +308,15 @@ struct MeetingChatConversationTests {
 
         #expect(fromPanel.turns.count == 2)
         #expect(fromPanel.turns[0].displayText == "asked in the tab")
-
-        registry.forget(meetingID: 4242)
     }
 
     @Test("different meetings get different conversations")
     func registrySeparatesMeetings() {
-        let registry = MeetingChatConversations.shared
-        registry.forget(meetingID: 1)
-        registry.forget(meetingID: 2)
-
+        let registry = MeetingChatConversations()
         let first = registry.conversation(for: 1)
         let second = registry.conversation(for: 2)
 
         #expect(first !== second)
-
-        registry.forget(meetingID: 1)
-        registry.forget(meetingID: 2)
     }
 
     @Test("the registry evicts the least recently used conversation at capacity")
@@ -236,6 +333,131 @@ struct MeetingChatConversationTests {
 
         #expect(registry.conversation(for: 1) === conversations[0])
         #expect(registry.conversation(for: 2) !== conversations[1])
+    }
+
+    @Test("the registry does not evict a conversation while its request is in flight")
+    func registryKeepsInFlightConversationResident() async throws {
+        let (store, meetingID, temporaryDirectory) = try makeStoreAndMeeting()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let registry = MeetingChatConversations(store: store)
+        let conversation = registry.conversation(for: meetingID)
+        let replyGate = MeetingChatReplyGate()
+        let sendTask = Task {
+            await conversation.send(
+                displayText: "Still working?",
+                transcript: "T",
+                systemPrompt: "P",
+                config: AppConfig(),
+                send: { _, _ in await replyGate.wait() }
+            )
+        }
+        while !conversation.isSending {
+            await Task.yield()
+        }
+
+        for otherMeetingID in 2 ... 11 {
+            _ = registry.conversation(for: Int64(otherMeetingID))
+        }
+
+        #expect(registry.conversation(for: meetingID) === conversation)
+
+        await replyGate.resume(returning: "Finished.")
+        await sendTask.value
+        #expect(try store.meetingChatTurns(meetingID: meetingID).count == 2)
+    }
+
+    @Test("conversation history survives registry reconstruction")
+    func conversationHistorySurvivesRegistryReconstruction() async throws {
+        let (store, meetingID, temporaryDirectory) = try makeStoreAndMeeting()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let firstRegistry = MeetingChatConversations(store: store)
+
+        await firstRegistry.conversation(for: meetingID).send(
+            displayText: "What did I miss?",
+            sentText: "Summarize the latest decisions.",
+            transcript: "T",
+            systemPrompt: "P",
+            config: AppConfig(),
+            send: stubTransport("The launch moved to Friday.")
+        )
+
+        let reloaded = MeetingChatConversations(store: store).conversation(for: meetingID)
+
+        #expect(reloaded.turns.count == 2)
+        #expect(reloaded.turns[0].role == .user)
+        #expect(reloaded.turns[0].displayText == "What did I miss?")
+        #expect(reloaded.turns[0].sentText == "Summarize the latest decisions.")
+        #expect(reloaded.turns[1].role == .assistant)
+        #expect(reloaded.turns[1].displayText == "The launch moved to Friday.")
+    }
+
+    @Test("failed exchanges survive reconstruction without entering later requests")
+    func failedExchangeSurvivesRegistryReconstruction() async throws {
+        let (store, meetingID, temporaryDirectory) = try makeStoreAndMeeting()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let registry = MeetingChatConversations(store: store)
+
+        await registry.conversation(for: meetingID).send(
+            displayText: "Question that failed",
+            transcript: "T",
+            systemPrompt: "P",
+            config: AppConfig(),
+            send: failingTransport(.notConfigured(backend: "OpenAI"))
+        )
+
+        let reloaded = MeetingChatConversations(store: store).conversation(for: meetingID)
+        #expect(reloaded.turns.count == 1)
+        #expect(reloaded.turns[0].wasAnswered == false)
+        #expect(reloaded.requestMessages(transcript: "T", systemPrompt: "P").count == 1)
+    }
+
+    @Test("persistence failures remain visible after successful and failed requests")
+    func persistenceFailuresRemainVisible() async {
+        let success = MeetingChatConversation(
+            persistTurns: { _ in throw PersistenceTestError.unavailable }
+        )
+        await success.send(
+            displayText: "Question",
+            transcript: "T",
+            systemPrompt: "P",
+            config: AppConfig(),
+            send: stubTransport("Answer")
+        )
+        #expect(success.lastError?.contains("test storage unavailable") == true)
+
+        let failure = MeetingChatConversation(
+            persistTurns: { _ in throw PersistenceTestError.unavailable }
+        )
+        await failure.send(
+            displayText: "Question",
+            transcript: "T",
+            systemPrompt: "P",
+            config: AppConfig(),
+            send: failingTransport(.notConfigured(backend: "OpenAI"))
+        )
+        #expect(failure.lastError?.contains("test storage unavailable") == true)
+        #expect(failure.lastError?.contains("OpenAI") == true)
+    }
+
+    @Test("an unreadable history is not overwritten by the next exchange")
+    func unreadableHistoryIsPreserved() async throws {
+        let (store, meetingID, temporaryDirectory) = try makeStoreAndMeeting()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let malformedJSON = "not valid JSON"
+        try setRawChatHistory(malformedJSON, meetingID: meetingID, store: store)
+        let conversation = MeetingChatConversations(store: store).conversation(for: meetingID)
+
+        #expect(conversation.lastError?.contains("could not be loaded") == true)
+        await conversation.send(
+            displayText: "New question",
+            transcript: "T",
+            systemPrompt: "P",
+            config: AppConfig(),
+            send: stubTransport("New answer")
+        )
+
+        #expect(try rawChatHistory(meetingID: meetingID, store: store) == malformedJSON)
+        #expect(conversation.lastError?.contains("could not be saved") == true)
     }
 
     // MARK: - The user's own notes as context

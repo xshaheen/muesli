@@ -2,53 +2,32 @@ import Foundation
 import MuesliCore
 import Observation
 
-/// One exchange in the conversation.
-///
-/// `displayText` and `sentText` differ when a saved prompt ("recipe") is used: the list
-/// shows "What did I miss", the model receives the full instruction. Keeping both here
-/// means the recipe layer adds no state of its own.
-struct MeetingChatTurn: Identifiable, Equatable {
-    enum Role: Equatable {
-        case user, assistant
-    }
-
-    let id: UUID
-    let role: Role
-    let displayText: String
-    let sentText: String
-    /// False for a question whose request failed. It stays on screen so the user can see
-    /// what they asked, but it is withheld from later requests: replaying an unanswered
-    /// question would produce two consecutive user turns and invite the model to answer the
-    /// stale one.
-    var wasAnswered: Bool
-
-    init(
-        id: UUID = UUID(),
-        role: Role,
-        displayText: String,
-        sentText: String? = nil,
-        wasAnswered: Bool = true
-    ) {
-        self.id = id
-        self.role = role
-        self.displayText = displayText
-        self.sentText = sentText ?? displayText
-        self.wasAnswered = wasAnswered
-    }
-}
+typealias MeetingChatTurn = MeetingChatTurnRecord
 
 /// Conversation state for one meeting.
 ///
 /// Owned above the views, not inside them. Both chat surfaces -- the meeting detail tab and
 /// the floating panel -- render the same composer, so view-local state would give each its
 /// own copy and a question asked in the panel would vanish when the user switched to the
-/// tab. Shared ownership is what makes history continuous across surfaces.
+/// tab. Shared ownership keeps history continuous across surfaces; the registry's store-backed
+/// instance keeps completed exchanges continuous across cache eviction and app restarts.
 @MainActor
 @Observable
 final class MeetingChatConversation {
     private(set) var turns: [MeetingChatTurn] = []
     private(set) var isSending = false
     private(set) var lastError: String?
+    private let persistTurns: (([MeetingChatTurn]) async throws -> Void)?
+
+    init(
+        turns: [MeetingChatTurn] = [],
+        lastError: String? = nil,
+        persistTurns: (([MeetingChatTurn]) async throws -> Void)? = nil
+    ) {
+        self.turns = turns
+        self.lastError = lastError
+        self.persistTurns = persistTurns
+    }
 
     var isEmpty: Bool { turns.isEmpty }
 
@@ -88,6 +67,9 @@ final class MeetingChatConversation {
         do {
             let answer = try await transport(request, config)
             turns.append(MeetingChatTurn(role: .assistant, displayText: answer))
+            if let persistenceError = await persistHistoryError() {
+                lastError = persistenceError
+            }
         } catch {
             // The failed question stays in the list; removing it would leave the user
             // staring at an error with no record of what they asked. It is marked unanswered
@@ -96,9 +78,22 @@ final class MeetingChatConversation {
                 turns[index].wasAnswered = false
             }
             lastError = error.localizedDescription
+            if let persistenceError = await persistHistoryError() {
+                lastError = "\(lastError ?? "The request failed.") \(persistenceError)"
+            }
         }
 
         isSending = false
+    }
+
+    private func persistHistoryError() async -> String? {
+        guard let persistTurns else { return nil }
+        do {
+            try await persistTurns(turns)
+            return nil
+        } catch {
+            return "Chat history could not be saved: \(error.localizedDescription)"
+        }
     }
 
     /// System context plus the answered turn history, oldest first.
@@ -166,11 +161,22 @@ final class MeetingChatConversation {
 /// Meeting-keyed registry so both surfaces resolve the same conversation instance.
 @MainActor
 final class MeetingChatConversations {
-    static let shared = MeetingChatConversations()
+    static let shared = MeetingChatConversations(
+        store: DictationStore(
+            databaseURL: MuesliPaths.defaultDatabaseURL(
+                appName: AppIdentity.supportDirectoryName
+            )
+        )
+    )
 
     private static let capacity = 10
     private var byMeeting: [Int64: MeetingChatConversation] = [:]
     private var meetingIDsByRecency: [Int64] = []
+    private let store: DictationStore?
+
+    init(store: DictationStore? = nil) {
+        self.store = store
+    }
 
     func conversation(for meetingID: Int64) -> MeetingChatConversation {
         if let existing = byMeeting[meetingID] {
@@ -178,16 +184,80 @@ final class MeetingChatConversations {
             return existing
         }
 
-        if byMeeting.count >= Self.capacity,
-           let leastRecentlyUsedMeetingID = meetingIDsByRecency.first {
-            byMeeting.removeValue(forKey: leastRecentlyUsedMeetingID)
-            meetingIDsByRecency.removeFirst()
-        }
+        evictIdleConversationsIfNeeded()
 
-        let created = MeetingChatConversation()
+        let created: MeetingChatConversation
+        if let store {
+            let persistTurns = persistenceHandler(for: meetingID, store: store)
+            do {
+                let turns = try store.meetingChatTurns(meetingID: meetingID)
+                created = MeetingChatConversation(
+                    turns: turns,
+                    persistTurns: persistTurns
+                )
+            } catch {
+                created = MeetingChatConversation(
+                    lastError: "Chat history could not be loaded: \(error.localizedDescription)",
+                    persistTurns: recoveryPersistenceHandler(for: meetingID, store: store)
+                )
+            }
+        } else {
+            created = MeetingChatConversation()
+        }
         byMeeting[meetingID] = created
         meetingIDsByRecency.append(meetingID)
         return created
+    }
+
+    private func persistenceHandler(
+        for meetingID: Int64,
+        store: DictationStore
+    ) -> ([MeetingChatTurn]) async throws -> Void {
+        let databaseURL = store.resolvedDatabaseURL
+        return { turns in
+            try await Task.detached(priority: .utility) {
+                try DictationStore(databaseURL: databaseURL).replaceMeetingChatTurns(
+                    meetingID: meetingID,
+                    turns: turns
+                )
+            }.value
+        }
+    }
+
+    /// A failed read must not turn the next send into a destructive whole-history overwrite.
+    /// Retrying the read first lets transient failures recover while malformed payloads stay
+    /// untouched for a future repair path.
+    private func recoveryPersistenceHandler(
+        for meetingID: Int64,
+        store: DictationStore
+    ) -> ([MeetingChatTurn]) async throws -> Void {
+        let databaseURL = store.resolvedDatabaseURL
+        return { turns in
+            try await Task.detached(priority: .utility) {
+                let backgroundStore = DictationStore(databaseURL: databaseURL)
+                let storedTurns = try backgroundStore.meetingChatTurns(meetingID: meetingID)
+                let storedIDs = Set(storedTurns.map(\.id))
+                let mergedTurns = storedTurns + turns.filter { !storedIDs.contains($0.id) }
+                try backgroundStore.replaceMeetingChatTurns(
+                    meetingID: meetingID,
+                    turns: mergedTurns
+                )
+            }.value
+        }
+    }
+
+    private func evictIdleConversationsIfNeeded() {
+        while byMeeting.count >= Self.capacity {
+            guard let leastRecentlyUsedMeetingID = meetingIDsByRecency.first(where: {
+                byMeeting[$0]?.isSending == false
+            }) else {
+                // An in-flight conversation may still persist after its transport returns.
+                // Temporarily exceeding capacity preserves one writer for that meeting.
+                return
+            }
+            byMeeting.removeValue(forKey: leastRecentlyUsedMeetingID)
+            meetingIDsByRecency.removeAll { $0 == leastRecentlyUsedMeetingID }
+        }
     }
 
     func forget(meetingID: Int64) {

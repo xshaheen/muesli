@@ -142,6 +142,7 @@ public final class DictationStore {
             saved_recording_path TEXT,
             meeting_status TEXT NOT NULL DEFAULT 'completed',
             manual_notes TEXT NOT NULL DEFAULT '',
+            chat_history_json TEXT NOT NULL DEFAULT '[]',
             word_count INTEGER NOT NULL DEFAULT 0,
             selected_template_id TEXT,
             selected_template_name TEXT,
@@ -255,6 +256,12 @@ public final class DictationStore {
             "ALTER TABLE meetings ADD COLUMN notes_source TEXT NOT NULL DEFAULT 'raw'"
         ] {
             _ = sqlite3_exec(db, sql, nil, nil, nil)
+        }
+        if try !columnExists("chat_history_json", in: "meetings", db: db) {
+            try exec(
+                "ALTER TABLE meetings ADD COLUMN chat_history_json TEXT NOT NULL DEFAULT '[]'",
+                db: db
+            )
         }
         // A cleaned transcript -- and the state marking notes as summarised from it
         // -- must never outlive the raw text it was derived from. Enforcing that
@@ -1786,6 +1793,7 @@ public final class DictationStore {
                 previous_meeting_notes = '',
                 formatted_notes = NULL,
                 manual_notes = '',
+                chat_history_json = '[]',
                 mic_audio_path = NULL,
                 system_audio_path = NULL,
                 saved_recording_path = NULL,
@@ -1905,6 +1913,7 @@ public final class DictationStore {
                 previous_meeting_notes = '',
                 formatted_notes = NULL,
                 manual_notes = '',
+                chat_history_json = '[]',
                 mic_audio_path = NULL,
                 system_audio_path = NULL,
                 saved_recording_path = NULL,
@@ -2303,6 +2312,47 @@ public final class DictationStore {
         }
         guard sqlite3_changes(db) > 0 else {
             throw DictationStoreError.meetingNotFound(id: id)
+        }
+    }
+
+    public func meetingChatTurns(meetingID: Int64) throws -> [MeetingChatTurnRecord] {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        let sql = "SELECT chat_history_json FROM meetings WHERE id = ? AND deleted_at IS NULL"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, meetingID)
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            return []
+        }
+        let json = stringColumn(statement, index: 0)
+        return try JSONDecoder().decode([MeetingChatTurnRecord].self, from: Data(json.utf8))
+    }
+
+    public func replaceMeetingChatTurns(meetingID: Int64, turns: [MeetingChatTurnRecord]) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(turns)
+        let json = String(decoding: data, as: UTF8.self)
+
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        let sql = "UPDATE meetings SET chat_history_json = ? WHERE id = ? AND deleted_at IS NULL"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (json as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_int64(statement, 2, meetingID)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
+        guard sqlite3_changes(db) > 0 else {
+            throw DictationStoreError.meetingNotFound(id: meetingID)
         }
     }
 
@@ -3918,6 +3968,10 @@ public final class DictationStore {
             follow_up_to_record_name = excluded.follow_up_to_record_name,
             updated_at = excluded.updated_at,
             deleted_at = excluded.deleted_at,
+            chat_history_json = CASE
+                WHEN excluded.deleted_at IS NOT NULL THEN '[]'
+                ELSE meetings.chat_history_json
+            END,
             cloud_change_tag = excluded.cloud_change_tag,
             last_synced_at = excluded.last_synced_at,
             sync_dirty = 0
@@ -4171,6 +4225,31 @@ public final class DictationStore {
     private func exec(_ sql: String, db: OpaquePointer?) throws {
         if sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK {
             throw lastError(db)
+        }
+    }
+
+    private func columnExists(
+        _ column: String,
+        in table: String,
+        db: OpaquePointer?
+    ) throws -> Bool {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(\(table))", -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+
+        while true {
+            switch sqlite3_step(statement) {
+            case SQLITE_ROW:
+                if stringColumn(statement, index: 1) == column {
+                    return true
+                }
+            case SQLITE_DONE:
+                return false
+            default:
+                throw lastError(db)
+            }
         }
     }
 

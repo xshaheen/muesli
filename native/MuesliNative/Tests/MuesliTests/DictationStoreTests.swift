@@ -49,6 +49,49 @@ struct DictationStoreTests {
         NSError(domain: "DictationStoreTests", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
+    @Test("meeting chat turns round-trip and are removed with the meeting")
+    func meetingChatTurnsRoundTripAndClearOnDelete() throws {
+        let store = try makeStore()
+        let now = Date()
+        let meetingID = try store.insertMeeting(
+            title: "Chat persistence",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: "Transcript",
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        let turns = [
+            MeetingChatTurnRecord(
+                id: UUID(),
+                role: .user,
+                displayText: "What did I miss?",
+                sentText: "Summarize the decisions.",
+                wasAnswered: true
+            ),
+            MeetingChatTurnRecord(
+                id: UUID(),
+                role: .assistant,
+                displayText: "The launch moved to Friday.",
+                sentText: "The launch moved to Friday.",
+                wasAnswered: true
+            ),
+        ]
+
+        try store.replaceMeetingChatTurns(meetingID: meetingID, turns: turns)
+        #expect(try store.meetingChatTurns(meetingID: meetingID) == turns)
+
+        try store.deleteMeeting(id: meetingID)
+        #expect(try store.meetingChatTurns(meetingID: meetingID).isEmpty)
+        #expect(try firstTextColumns(
+            store.resolvedDatabaseURL,
+            "SELECT chat_history_json FROM meetings WHERE id = \(meetingID)",
+            count: 1
+        ) == ["[]"])
+    }
+
     private func setFolderParentRaw(folderID: Int64, parentID: Int64, store: DictationStore) throws {
         var db: OpaquePointer?
         guard sqlite3_open(store.databasePath().path, &db) == SQLITE_OK else {
@@ -585,6 +628,34 @@ struct DictationStoreTests {
 
         let inserted = try store.recentMeetings(limit: 1).first
         #expect(inserted?.savedRecordingPath == "/tmp/meeting.wav")
+    }
+
+    @Test("migration adds chat history storage to legacy meeting schema")
+    func migrationAddsChatHistoryStorage() throws {
+        let store = try makeLegacyStore()
+        try rawExec(
+            store.resolvedDatabaseURL,
+            """
+            INSERT INTO meetings (id, title, start_time, raw_transcript, formatted_notes)
+            VALUES (42, 'Existing meeting', '2026-08-09T10:00:00Z', 'Existing transcript', 'Existing notes')
+            """
+        )
+
+        try store.migrateIfNeeded()
+        let meetingID: Int64 = 42
+        let turn = MeetingChatTurnRecord(
+            id: UUID(),
+            role: .user,
+            displayText: "Question",
+            sentText: "Question",
+            wasAnswered: false
+        )
+
+        #expect(try store.meetingChatTurns(meetingID: meetingID).isEmpty)
+        #expect(try store.meeting(id: meetingID)?.rawTranscript == "Existing transcript")
+
+        try store.replaceMeetingChatTurns(meetingID: meetingID, turns: [turn])
+        #expect(try store.meetingChatTurns(meetingID: meetingID) == [turn])
     }
 
     @Test("recording references project only meetings that still hold a recording")
@@ -1508,6 +1579,52 @@ struct DictationStoreTests {
         #expect(meeting.systemAudioPath == nil)
         #expect(meeting.savedRecordingPath == nil)
         #expect(try store.textRecordsNeedingSync().isEmpty)
+    }
+
+    @Test("a remote meeting deletion clears local-only chat history")
+    func remoteMeetingDeletionClearsLocalChatHistory() throws {
+        let (store, url) = try makeStoreWithURL()
+        let startedAt = Date(timeIntervalSince1970: 1_770_000_000)
+        let recordName = "meeting-remote-delete-chat"
+        #expect(try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: recordName,
+            kind: .meeting,
+            title: "Remote meeting",
+            text: "Transcript",
+            source: "ios",
+            meetingStatus: .completed,
+            createdAt: startedAt,
+            updatedAt: startedAt,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(60),
+            durationSeconds: 60,
+            wordCount: 1,
+            cloudChangeTag: "tag-1"
+        )))
+        let meetingID = try #require(try store.recentMeetings(limit: 1).first?.id)
+        try store.replaceMeetingChatTurns(
+            meetingID: meetingID,
+            turns: [MeetingChatTurnRecord(role: .user, displayText: "Private question")]
+        )
+
+        #expect(try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: recordName,
+            kind: .meeting,
+            text: "",
+            source: "ios",
+            createdAt: startedAt,
+            updatedAt: startedAt.addingTimeInterval(60),
+            durationSeconds: 0,
+            wordCount: 0,
+            isDeleted: true,
+            cloudChangeTag: "tag-2"
+        )))
+
+        #expect(try firstTextColumns(
+            url,
+            "SELECT chat_history_json FROM meetings WHERE id = \(meetingID)",
+            count: 1
+        ) == ["[]"])
     }
 
     @Test("cleaned meeting state round-trips through CloudKit and survives a raw transcript update")
@@ -3703,15 +3820,19 @@ struct DictationStoreTests {
     func clearMeetingsClearsCleanupColumns() throws {
         let (store, url) = try makeStoreWithURL()
         let id = try makeCleanedMeeting(store)
+        try store.replaceMeetingChatTurns(
+            meetingID: id,
+            turns: [MeetingChatTurnRecord(role: .user, displayText: "Private question")]
+        )
 
         try store.clearMeetings()
 
         let columns = try firstTextColumns(
             url,
-            "SELECT cleaned_transcript FROM meetings WHERE id = \(id)",
-            count: 1
+            "SELECT cleaned_transcript, chat_history_json FROM meetings WHERE id = \(id)",
+            count: 2
         )
-        #expect(columns == [""])
+        #expect(columns == ["", "[]"])
     }
 
     // MARK: - Notes regeneration state

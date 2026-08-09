@@ -322,6 +322,37 @@ public struct MeetingListRecord: Identifiable, Equatable, Sendable {
     }
 }
 
+/// One locally persisted meeting-chat turn. Chat history is intentionally not part of the
+/// CloudKit meeting record, so enabling it does not expand sync or disclosure scope.
+public struct MeetingChatTurnRecord: Identifiable, Codable, Equatable, Sendable {
+    public enum Role: String, Codable, Sendable {
+        case user
+        case assistant
+    }
+
+    public let id: UUID
+    public let role: Role
+    /// `displayText` is the recipe label shown in the UI; `sentText` is the expanded prompt.
+    public let displayText: String
+    public let sentText: String
+    /// False for a question whose request failed, so later requests do not replay it.
+    public var wasAnswered: Bool
+
+    public init(
+        id: UUID = UUID(),
+        role: Role,
+        displayText: String,
+        sentText: String? = nil,
+        wasAnswered: Bool = true
+    ) {
+        self.id = id
+        self.role = role
+        self.displayText = displayText
+        self.sentText = sentText ?? displayText
+        self.wasAnswered = wasAnswered
+    }
+}
+
 public struct MeetingRecord: Identifiable, Codable, Sendable {
     public let id: Int64
     public let title: String
