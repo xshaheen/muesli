@@ -3,22 +3,84 @@ import Testing
 
 @Suite("Meeting detail responsive layout")
 struct MeetingDetailResponsiveLayoutTests {
-    @Test("header falls back to stacked title and actions when the detail pane is narrow")
-    func headerHasStackedFallback() throws {
+    @Test("utility band falls back to stacked folder and actions when the detail pane is narrow")
+    func utilityBandHasStackedFallback() throws {
         let source = try meetingDetailSource()
-        let adaptiveHeader = try sourceSection(
+        let utilityBand = try sourceSection(
             in: source,
-            from: "private func adaptiveHeaderContent",
-            to: "private func headerTitleContent"
+            from: "private func headerUtilityBand",
+            to: "private func meetingActionRail"
         )
 
-        #expect(adaptiveHeader.contains("ViewThatFits(in: .horizontal)"))
-        #expect(adaptiveHeader.contains("HStack(alignment: .top"))
-        #expect(adaptiveHeader.contains("VStack(alignment: .leading"))
+        #expect(utilityBand.contains("ViewThatFits(in: .horizontal)"))
+        #expect(utilityBand.contains("HStack(alignment: .center"))
+        #expect(utilityBand.contains("VStack(alignment: .leading"))
         #expect(
-            try index(of: "HStack(alignment: .top", in: adaptiveHeader)
-                < index(of: "VStack(alignment: .leading", in: adaptiveHeader)
+            try index(of: "HStack(alignment: .center", in: utilityBand)
+                < index(of: "VStack(alignment: .leading", in: utilityBand)
         )
+    }
+
+    @Test("folder and meeting actions share a compact responsive utility band")
+    func headerUsesGroupedActionRail() throws {
+        let source = try meetingDetailSource()
+        let titleContent = try sourceSection(
+            in: source,
+            from: "private func headerTitleContent",
+            to: "private func headerUtilityBand"
+        )
+        let utilityBand = try sourceSection(
+            in: source,
+            from: "private func headerUtilityBand",
+            to: "private func meetingActionRail"
+        )
+        let responsiveRail = try sourceSection(
+            in: source,
+            from: "private func meetingActionRail",
+            to: "private func content(for meeting"
+        )
+        let actionRail = try sourceSection(
+            in: source,
+            from: "private func actionRail(for meeting",
+            to: "private func primaryActionRail"
+        )
+        let railContainer = try sourceSection(
+            in: source,
+            from: "private func actionRailContainer",
+            to: "private var railDivider"
+        )
+        let iconButton = try sourceSection(
+            in: source,
+            from: "private func railIconButton",
+            to: "private func retranscribeAction"
+        )
+        let templateMenu = try sourceSection(
+            in: source,
+            from: "private func templateMenu(for meeting",
+            to: "private func contentToolbar"
+        )
+
+        #expect(!titleContent.contains("folderPill(for: meeting)"))
+        #expect(utilityBand.contains("folderPill(for: meeting)"))
+        #expect(utilityBand.contains("meetingActionRail(for: meeting"))
+        #expect(utilityBand.contains("ViewThatFits(in: .horizontal)"))
+        #expect(responsiveRail.contains("ViewThatFits(in: .horizontal)"))
+        #expect(responsiveRail.contains("primaryActionRail(for: meeting"))
+        #expect(responsiveRail.contains("extremeNarrowActionRail(for: meeting"))
+        #expect(
+            try index(of: "actionRail(for: meeting", in: responsiveRail)
+                < index(of: "primaryActionRail(for: meeting", in: responsiveRail)
+        )
+        #expect(actionRail.contains("primaryActionRailContent(for: meeting"))
+        #expect(actionRail.contains("utilityActionRailContent(for: meeting)"))
+        #expect(actionRail.contains("railDivider"))
+        #expect(railContainer.contains("HStack(spacing: 0)"))
+        #expect(railContainer.contains(".clipShape(RoundedRectangle"))
+        #expect(iconButton.contains(".accessibilityLabel(label)"))
+        #expect(iconButton.contains(".help(label)"))
+        #expect(templateMenu.contains(".truncationMode(.tail)"))
+        #expect(templateMenu.contains(".frame(maxWidth: 120"))
+        #expect(templateMenu.contains(".accessibilityLabel(templateAccessibilityLabel"))
     }
 
     private func meetingDetailSource() throws -> String {

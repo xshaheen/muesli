@@ -289,23 +289,10 @@ struct MeetingDetailView: View {
         for meeting: MeetingRecord,
         appliedTemplate: MeetingTemplateSnapshot
     ) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: MuesliTheme.spacing24) {
-                headerTitleContent(for: meeting, appliedTemplate: appliedTemplate)
-
-                Spacer(minLength: MuesliTheme.spacing16)
-
-                headerActionContent(for: meeting, appliedTemplate: appliedTemplate)
-            }
-
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-                headerTitleContent(for: meeting, appliedTemplate: appliedTemplate)
-
-                HStack {
-                    Spacer(minLength: 0)
-                    headerActionContent(for: meeting, appliedTemplate: appliedTemplate)
-                }
-            }
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            headerTitleContent(for: meeting, appliedTemplate: appliedTemplate)
+            headerUtilityBand(for: meeting, appliedTemplate: appliedTemplate)
+            threadBreadcrumb
         }
     }
 
@@ -340,25 +327,66 @@ struct MeetingDetailView: View {
                 Spacer(minLength: 0)
             }
 
-            folderPill(for: meeting)
-
-            threadBreadcrumb
         }
     }
 
     @ViewBuilder
-    private func headerActionContent(
+    private func headerUtilityBand(
         for meeting: MeetingRecord,
         appliedTemplate: MeetingTemplateSnapshot
     ) -> some View {
-        // The mode picker lives in the content toolbar, directly above the content it
-        // switches, rather than up here beside the meeting-level actions.
-        VStack(alignment: .trailing, spacing: 10) {
-            if showsManualNotesEditor(for: meeting) {
-                recordingControlGroup(for: meeting)
-            } else {
-                headerActions(for: meeting, appliedTemplate: appliedTemplate)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                folderPill(for: meeting)
+                Spacer(minLength: MuesliTheme.spacing16)
+                if showsManualNotesEditor(for: meeting) {
+                    recordingControlGroup(for: meeting)
+                } else {
+                    meetingActionRail(for: meeting, appliedTemplate: appliedTemplate)
+                }
             }
+
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                folderPill(for: meeting)
+                if showsManualNotesEditor(for: meeting) {
+                    recordingControlGroup(for: meeting)
+                } else {
+                    meetingActionRail(for: meeting, appliedTemplate: appliedTemplate)
+                }
+            }
+        }
+    }
+
+    private func meetingActionRail(
+        for meeting: MeetingRecord,
+        appliedTemplate: MeetingTemplateSnapshot
+    ) -> some View {
+        ViewThatFits(in: .horizontal) {
+            actionRail(for: meeting, appliedTemplate: appliedTemplate)
+
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                primaryActionRail(for: meeting, appliedTemplate: appliedTemplate)
+                utilityActionRail(for: meeting)
+            }
+
+            extremeNarrowActionRail(for: meeting, appliedTemplate: appliedTemplate)
+        }
+    }
+
+    private func extremeNarrowActionRail(
+        for meeting: MeetingRecord,
+        appliedTemplate: MeetingTemplateSnapshot
+    ) -> some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            if canShowResumeChooser(for: meeting) {
+                actionRailContainer {
+                    resumeRecordingButton(for: meeting)
+                }
+            }
+            actionRailContainer {
+                templateAndExportActionRailContent(for: meeting, appliedTemplate: appliedTemplate)
+            }
+            utilityActionRail(for: meeting)
         }
     }
 
@@ -617,46 +645,93 @@ struct MeetingDetailView: View {
             && !appState.isMeetingRecording
     }
 
-    @ViewBuilder
-    private func headerActions(for meeting: MeetingRecord, appliedTemplate: MeetingTemplateSnapshot) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: MuesliTheme.spacing8) {
-                resumeChooserIfAvailable(for: meeting)
-                templateMenu(for: meeting, appliedTemplate: appliedTemplate)
-                exportMenu(for: meeting)
-                summaryAction(for: meeting)
-                editButton(for: meeting)
-                moreActionsMenu(for: meeting)
-            }
-
-            VStack(alignment: .trailing, spacing: MuesliTheme.spacing8) {
-                HStack(spacing: MuesliTheme.spacing8) {
-                    resumeChooserIfAvailable(for: meeting)
-                    templateMenu(for: meeting, appliedTemplate: appliedTemplate)
-                    exportMenu(for: meeting)
-                    summaryAction(for: meeting)
-                }
-                HStack(spacing: MuesliTheme.spacing8) {
-                    editButton(for: meeting)
-                    moreActionsMenu(for: meeting)
-                }
-            }
+    private func actionRail(for meeting: MeetingRecord, appliedTemplate: MeetingTemplateSnapshot) -> some View {
+        actionRailContainer {
+            primaryActionRailContent(for: meeting, appliedTemplate: appliedTemplate)
+            railDivider
+            utilityActionRailContent(for: meeting)
         }
+    }
+
+    private func primaryActionRail(
+        for meeting: MeetingRecord,
+        appliedTemplate: MeetingTemplateSnapshot
+    ) -> some View {
+        actionRailContainer {
+            primaryActionRailContent(for: meeting, appliedTemplate: appliedTemplate)
+        }
+    }
+
+    private func utilityActionRail(for meeting: MeetingRecord) -> some View {
+        actionRailContainer {
+            utilityActionRailContent(for: meeting)
+        }
+    }
+
+    @ViewBuilder
+    private func primaryActionRailContent(
+        for meeting: MeetingRecord,
+        appliedTemplate: MeetingTemplateSnapshot
+    ) -> some View {
+        if canShowResumeChooser(for: meeting) {
+            resumeRecordingButton(for: meeting)
+            railDivider
+        }
+        templateAndExportActionRailContent(for: meeting, appliedTemplate: appliedTemplate)
+    }
+
+    @ViewBuilder
+    private func templateAndExportActionRailContent(
+        for meeting: MeetingRecord,
+        appliedTemplate: MeetingTemplateSnapshot
+    ) -> some View {
+        templateMenu(for: meeting, appliedTemplate: appliedTemplate)
+        railDivider
+        exportMenu(for: meeting)
+    }
+
+    @ViewBuilder
+    private func utilityActionRailContent(for meeting: MeetingRecord) -> some View {
+        summaryAction(for: meeting)
+        railDivider
+        editButton(for: meeting)
+        if hasMoreActions(for: meeting) {
+            railDivider
+            moreActionsMenu(for: meeting)
+        }
+    }
+
+    private func actionRailContainer<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(spacing: 0) {
+            content()
+        }
+        .fixedSize()
+        .background(MuesliTheme.surfacePrimary)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
+    }
+
+    private var railDivider: some View {
+        Rectangle()
+            .fill(MuesliTheme.surfaceBorder)
+            .frame(width: 1, height: 18)
     }
 
     @ViewBuilder
     private func summaryAction(for meeting: MeetingRecord) -> some View {
         if isSummarizing {
-            HStack(spacing: 6) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Summarizing...")
-                    .font(.system(size: 11))
-                    .foregroundStyle(MuesliTheme.textTertiary)
-            }
-            .padding(.horizontal, MuesliTheme.spacing8)
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 34, height: 30)
+                .accessibilityLabel("Summarizing meeting")
+                .help("Summarizing meeting")
         } else {
-            iconButton("sparkles", label: primarySummaryActionLabel(for: meeting)) {
+            railIconButton("sparkles", label: primarySummaryActionLabel(for: meeting)) {
                 isSummarizing = true
                 let completion: (Result<Void, Error>) -> Void = { [meeting] result in
                     isSummarizing = false
@@ -683,7 +758,7 @@ struct MeetingDetailView: View {
 
     @ViewBuilder
     private func editButton(for meeting: MeetingRecord) -> some View {
-        iconButton(
+        railIconButton(
             isEditingNotes || isEditingTranscript ? "checkmark.circle" : "pencil",
             label: editButtonLabel
         ) {
@@ -726,6 +801,23 @@ struct MeetingDetailView: View {
         .disabled(isRetranscribing && !isEditingNotes && !isEditingTranscript)
     }
 
+    private func railIconButton(
+        _ systemImage: String,
+        label: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .frame(width: 34, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .help(label)
+    }
+
     @ViewBuilder
     private func retranscribeAction(for meeting: MeetingRecord) -> some View {
         if meeting.savedRecordingPath != nil {
@@ -764,6 +856,8 @@ struct MeetingDetailView: View {
 
     @ViewBuilder
     private func templateMenu(for meeting: MeetingRecord, appliedTemplate: MeetingTemplateSnapshot) -> some View {
+        let templateLabel = labelForSelection(on: meeting, appliedTemplate: appliedTemplate)
+        let templateAccessibilityLabel = "Summary template: \(templateLabel)"
         Menu {
             Button {
                 pendingTemplateID = MeetingTemplates.autoID
@@ -814,24 +908,25 @@ struct MeetingDetailView: View {
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: iconName(forSelectionOn: meeting, appliedTemplate: appliedTemplate))
-                    .font(.system(size: 10))
-                Text(labelForSelection(on: meeting, appliedTemplate: appliedTemplate))
-                    .font(.system(size: 11, weight: .medium))
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9))
+                    .font(.system(size: 10, weight: .semibold))
+                Text(templateLabel)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 120, alignment: .leading)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
             }
             .foregroundStyle(MuesliTheme.textSecondary)
-            .padding(.horizontal, MuesliTheme.spacing8)
-            .padding(.vertical, 5)
-            .background(MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-            .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-            )
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .fixedSize()
+        .accessibilityLabel(templateAccessibilityLabel)
+        .help(templateAccessibilityLabel)
     }
 
     @ViewBuilder
@@ -960,17 +1055,14 @@ struct MeetingDetailView: View {
 
     /// The resume control only makes sense on a finished meeting when no other
     /// recording/editing workflow is active.
-    @ViewBuilder
-    private func resumeChooserIfAvailable(for meeting: MeetingRecord) -> some View {
-        if controller.canResumeFinishedMeeting(meeting),
-           !appState.isMeetingRecording,
-           !appState.isMeetingStarting,
-           !isEditingNotes,
-           !isEditingTranscript,
-           !isSummarizing,
-           !isRetranscribing {
-            resumeRecordingButton(for: meeting)
-        }
+    private func canShowResumeChooser(for meeting: MeetingRecord) -> Bool {
+        controller.canResumeFinishedMeeting(meeting)
+            && !appState.isMeetingRecording
+            && !appState.isMeetingStarting
+            && !isEditingNotes
+            && !isEditingTranscript
+            && !isSummarizing
+            && !isRetranscribing
     }
 
     @ViewBuilder
@@ -1032,28 +1124,29 @@ struct MeetingDetailView: View {
                 Image(systemName: "square.and.arrow.up")
                     .font(.system(size: 10, weight: .semibold))
                 Text("Export")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
             }
-            .foregroundStyle(MuesliTheme.textPrimary)
-            .padding(.horizontal, MuesliTheme.spacing12)
-            .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                    .fill(MuesliTheme.accent.opacity(0.18))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                    .strokeBorder(MuesliTheme.accent.opacity(0.35), lineWidth: 1)
-            )
+            .foregroundStyle(MuesliTheme.textSecondary)
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .fixedSize()
         .disabled(isEditingNotes || isEditingTranscript)
+        .help("Export meeting")
+    }
+
+    private func hasMoreActions(for meeting: MeetingRecord) -> Bool {
+        meeting.savedRecordingPath != nil || controller.canDeleteMeeting(meeting)
     }
 
     @ViewBuilder
     private func moreActionsMenu(for meeting: MeetingRecord) -> some View {
-        if meeting.savedRecordingPath != nil || controller.canDeleteMeeting(meeting) {
+        if hasMoreActions(for: meeting) {
             Menu {
                 if let savedRecordingPath = meeting.savedRecordingPath {
                     Button {
@@ -1074,21 +1167,16 @@ struct MeetingDetailView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .foregroundStyle(MuesliTheme.textSecondary)
-                .frame(width: 30, height: 28)
-                .background(MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-                )
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .frame(width: 34, height: 30)
+                    .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
             .fixedSize()
+            .accessibilityLabel("More actions")
             .help("More actions")
         }
     }
@@ -1193,7 +1281,7 @@ struct MeetingDetailView: View {
     /// chevron segment doesn't render, leaving the menu unreachable.)
     @ViewBuilder
     private func resumeRecordingButton(for meeting: MeetingRecord) -> some View {
-        HStack(spacing: 1) {
+        HStack(spacing: 0) {
             Button {
                 controller.resumeFinishedMeeting(meetingID: meeting.id)
             } label: {
@@ -1205,8 +1293,9 @@ struct MeetingDetailView: View {
                 }
                 .foregroundStyle(MuesliTheme.backgroundBase)
                 .padding(.horizontal, MuesliTheme.spacing12)
-                .padding(.vertical, 7)
+                .frame(height: 30)
                 .background(MuesliTheme.accent)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("Resume recording")
@@ -1226,21 +1315,22 @@ struct MeetingDetailView: View {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(MuesliTheme.backgroundBase)
-                    .padding(.horizontal, 8)
-                    .frame(maxHeight: .infinity)
+                    .frame(width: 28, height: 30)
                     .background(MuesliTheme.accent)
+                    .overlay(alignment: .leading) {
+                        Rectangle()
+                            .fill(MuesliTheme.backgroundBase.opacity(0.25))
+                            .frame(width: 1, height: 18)
+                    }
+                    .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize(horizontal: true, vertical: false)
+            .accessibilityLabel("More resume options")
             .help("Resume recording, or start a follow-up meeting")
         }
         .fixedSize()
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-        .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                .strokeBorder(MuesliTheme.accent.opacity(0.35), lineWidth: 1)
-        )
     }
 
     private var stopRecordingButton: some View {
