@@ -116,7 +116,7 @@ struct SidebarView: View {
                 .padding(.bottom, MuesliTheme.spacing16)
         }
         .frame(maxHeight: .infinity)
-        .background(MuesliTheme.backgroundDeep)
+        .background(MuesliTheme.backgroundDeep.ignoresSafeArea())
         .onChange(of: appState.selectedTab) { _, tab in
             if tab == .meetings {
                 meetingsExpanded = true
@@ -172,11 +172,13 @@ struct SidebarView: View {
                 Text("muesli")
                     .font(MuesliTheme.title2())
                     .foregroundStyle(MuesliTheme.textPrimary)
+                    .lineLimit(1)
             }
             if !userName.isEmpty {
                 Text("Hi, \(userName)")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textTertiary)
+                    .lineLimit(1)
                     .padding(.leading, 34)
             }
         }
@@ -423,6 +425,8 @@ struct SidebarView: View {
                 Text(label)
                     .font(MuesliTheme.headline())
                     .foregroundStyle(isSelected ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
+                    .lineLimit(1)
+                    .layoutPriority(1)
                 Spacer()
                 if let updateCTA {
                     HStack(spacing: 4) {

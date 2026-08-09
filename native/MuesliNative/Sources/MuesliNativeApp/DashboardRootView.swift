@@ -2,6 +2,10 @@ import SwiftUI
 import MuesliCore
 
 struct DashboardRootView: View {
+    static let sidebarMinimumWidth: CGFloat = 260
+    private static let sidebarIdealWidth: CGFloat = 280
+    private static let sidebarMaximumWidth: CGFloat = 320
+
     let appState: AppState
     let controller: MuesliController
     @State private var featureTourTargetFrames: [FeatureTourTarget: CGRect] = [:]
@@ -10,7 +14,12 @@ struct DashboardRootView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(appState: appState, controller: controller)
-                .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 300)
+                .frame(minWidth: Self.sidebarMinimumWidth)
+                .navigationSplitViewColumnWidth(
+                    min: Self.sidebarMinimumWidth,
+                    ideal: Self.sidebarIdealWidth,
+                    max: Self.sidebarMaximumWidth
+                )
                 .toolbar(removing: .sidebarToggle)
         } detail: {
             detailContent

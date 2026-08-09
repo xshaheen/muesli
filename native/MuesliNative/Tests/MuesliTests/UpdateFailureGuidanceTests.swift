@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Sparkle
 import Testing
@@ -260,6 +261,17 @@ struct UpdateActionRoutingTests {
 
 @Suite("Sidebar hit areas")
 struct SidebarHitAreaTests {
+    @Test("dashboard sidebar extends through the title bar")
+    @MainActor
+    func dashboardUsesFullSizeContent() {
+        #expect(RecentHistoryWindowController.dashboardStyleMask.contains(.fullSizeContentView))
+    }
+
+    @Test("sidebar starts wide enough to keep labels on one line")
+    func sidebarHasStableMinimumWidth() {
+        #expect(DashboardRootView.sidebarMinimumWidth >= 260)
+    }
+
     @Test("sidebar toggle restores or hides the navigation column")
     func sidebarVisibilityToggleCycles() {
         #expect(DashboardRootView.toggledColumnVisibility(after: .all) == .detailOnly)

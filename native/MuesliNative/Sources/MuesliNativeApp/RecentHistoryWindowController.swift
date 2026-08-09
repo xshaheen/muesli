@@ -5,6 +5,14 @@ import MuesliCore
 
 @MainActor
 final class RecentHistoryWindowController: NSObject, NSWindowDelegate {
+    static let dashboardStyleMask: NSWindow.StyleMask = [
+        .titled,
+        .closable,
+        .miniaturizable,
+        .resizable,
+        .fullSizeContentView,
+    ]
+
     private let store: DictationStore
     private let controller: MuesliController
     private var window: NSWindow?
@@ -56,7 +64,7 @@ final class RecentHistoryWindowController: NSObject, NSWindowDelegate {
     private func buildWindow() {
         let window = NSWindow(
             contentRect: NSRect(x: 180, y: 140, width: 1120, height: 790),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: Self.dashboardStyleMask,
             backing: .buffered,
             defer: false
         )
@@ -65,6 +73,7 @@ final class RecentHistoryWindowController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
         window.titleVisibility = .hidden
         window.backgroundColor = NSColor(red: 0.067, green: 0.071, blue: 0.078, alpha: 1) // #111214
 
