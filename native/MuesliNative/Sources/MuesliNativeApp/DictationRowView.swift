@@ -1,6 +1,53 @@
 import SwiftUI
 import MuesliCore
 
+struct DictationStyleHistoryBadgeContent: Equatable {
+    let label: String
+    let accessibilityDescription: String
+
+    static func make(for record: DictationRecord) -> Self? {
+        guard let styleName = nonEmpty(record.dictationStyleName),
+              let source = sourceLabel(record.dictationStyleSelectionSource),
+              let outcome = outcomeLabel(record.dictationCleanupOutcome)
+        else {
+            return nil
+        }
+        return Self(
+            label: styleName,
+            accessibilityDescription: "Dictation style \(styleName). \(source). \(outcome)."
+        )
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func sourceLabel(_ rawValue: String?) -> String? {
+        switch rawValue {
+        case "domain": "Selected by website rule"
+        case "app": "Selected by app rule"
+        case "category": "Selected by category"
+        case "global": "Selected from the global style"
+        case "built_in_fallback": "Selected as the built-in fallback"
+        default: nil
+        }
+    }
+
+    private static func outcomeLabel(_ rawValue: String?) -> String? {
+        switch rawValue {
+        case "applied": "Cleanup applied"
+        case "fallback_empty": "Original dictation kept because cleanup returned no text"
+        case "fallback_rejected": "Original dictation kept because cleanup was rejected"
+        case "fallback_error": "Original dictation kept because cleanup failed"
+        case "skipped_disabled": "Cleanup skipped because it was disabled"
+        case "skipped_unavailable": "Cleanup skipped because it was unavailable"
+        case "skipped_streaming": "Cleanup skipped for streaming dictation"
+        default: nil
+        }
+    }
+}
+
 struct DictationRowView: View {
     let record: DictationRecord
     let timeOnly: String
@@ -18,6 +65,10 @@ struct DictationRowView: View {
 
     private var syncOriginBadgeLabel: String? {
         SyncOriginDisplay.badgeLabel(forDictationSource: record.source)
+    }
+
+    private var styleBadge: DictationStyleHistoryBadgeContent? {
+        DictationStyleHistoryBadgeContent.make(for: record)
     }
 
     var body: some View {
@@ -43,6 +94,18 @@ struct DictationRowView: View {
 
                         if let syncOriginBadgeLabel {
                             SyncOriginBadge(label: syncOriginBadgeLabel)
+                        }
+
+                        if let styleBadge {
+                            Text(styleBadge.label)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(MuesliTheme.accent)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(MuesliTheme.accentSubtle)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .help(styleBadge.accessibilityDescription)
+                                .accessibilityLabel(styleBadge.accessibilityDescription)
                         }
 
                         Text(record.rawText)

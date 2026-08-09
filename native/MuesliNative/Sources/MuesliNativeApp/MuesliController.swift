@@ -8783,6 +8783,7 @@ final class MuesliController: NSObject {
             _ = try? dictationStore.insertDictation(
                 text: cleaned,
                 durationSeconds: duration,
+                dictationCleanupOutcome: DictationCleanupOutcome.skippedStreaming.rawValue,
                 startedAt: startedAt,
                 endedAt: Date()
             )
@@ -8923,6 +8924,10 @@ final class MuesliController: NSObject {
                     text: text,
                     durationSeconds: duration,
                     appContext: storageContext,
+                    dictationStyleID: result.cleanupStyle?.styleID,
+                    dictationStyleName: result.cleanupStyle?.styleName,
+                    dictationStyleSelectionSource: result.cleanupStyle?.source.rawValue,
+                    dictationCleanupOutcome: result.cleanupOutcome.rawValue,
                     startedAt: startedAt,
                     endedAt: Date()
                 )

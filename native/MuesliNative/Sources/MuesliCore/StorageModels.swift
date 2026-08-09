@@ -149,6 +149,10 @@ public struct DictationRecord: Identifiable, Codable, Sendable {
     public let wordCount: Int
     public let source: String
     public let computerUseTrace: ComputerUseTraceRecord?
+    public let dictationStyleID: String?
+    public let dictationStyleName: String?
+    public let dictationStyleSelectionSource: String?
+    public let dictationCleanupOutcome: String?
 
     public init(
         id: Int64,
@@ -158,7 +162,11 @@ public struct DictationRecord: Identifiable, Codable, Sendable {
         appContext: String,
         wordCount: Int,
         source: String = "dictation",
-        computerUseTrace: ComputerUseTraceRecord? = nil
+        computerUseTrace: ComputerUseTraceRecord? = nil,
+        dictationStyleID: String? = nil,
+        dictationStyleName: String? = nil,
+        dictationStyleSelectionSource: String? = nil,
+        dictationCleanupOutcome: String? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -168,6 +176,50 @@ public struct DictationRecord: Identifiable, Codable, Sendable {
         self.wordCount = wordCount
         self.source = source
         self.computerUseTrace = computerUseTrace
+        self.dictationStyleID = dictationStyleID
+        self.dictationStyleName = dictationStyleName
+        self.dictationStyleSelectionSource = dictationStyleSelectionSource
+        self.dictationCleanupOutcome = dictationCleanupOutcome
+    }
+
+    // Keep the established public/CLI Codable projection unchanged in v1.
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case timestamp
+        case durationSeconds
+        case rawText
+        case appContext
+        case wordCount
+        case source
+        case computerUseTrace
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int64.self, forKey: .id)
+        timestamp = try container.decode(String.self, forKey: .timestamp)
+        durationSeconds = try container.decode(Double.self, forKey: .durationSeconds)
+        rawText = try container.decode(String.self, forKey: .rawText)
+        appContext = try container.decode(String.self, forKey: .appContext)
+        wordCount = try container.decode(Int.self, forKey: .wordCount)
+        source = try container.decode(String.self, forKey: .source)
+        computerUseTrace = try container.decodeIfPresent(ComputerUseTraceRecord.self, forKey: .computerUseTrace)
+        dictationStyleID = nil
+        dictationStyleName = nil
+        dictationStyleSelectionSource = nil
+        dictationCleanupOutcome = nil
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(durationSeconds, forKey: .durationSeconds)
+        try container.encode(rawText, forKey: .rawText)
+        try container.encode(appContext, forKey: .appContext)
+        try container.encode(wordCount, forKey: .wordCount)
+        try container.encode(source, forKey: .source)
+        try container.encodeIfPresent(computerUseTrace, forKey: .computerUseTrace)
     }
 }
 

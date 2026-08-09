@@ -95,6 +95,32 @@ struct MuesliCLITests {
         #expect(detailPayload.notesSource == "cleaned")
     }
 
+    @Test("dictation JSON projections exclude local style provenance")
+    func dictationJSONExcludesStyleProvenance() throws {
+        let record = DictationRecord(
+            id: 7,
+            timestamp: "2026-08-09T00:00:00Z",
+            durationSeconds: 2,
+            rawText: "Styled dictation",
+            appContext: "Notes|com.apple.Notes",
+            wordCount: 2,
+            dictationStyleID: "writing",
+            dictationStyleName: "Writing",
+            dictationStyleSelectionSource: "category",
+            dictationCleanupOutcome: "applied"
+        )
+
+        for payload in [
+            try JSONEncoder().encode(record),
+            try JSONEncoder().encode(DictationListRow(record)),
+            try JSONEncoder().encode(DictationDetailPayload(record)),
+        ] {
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            #expect(object.keys.contains(where: { $0.localizedCaseInsensitiveContains("style") }) == false)
+            #expect(object.keys.contains(where: { $0.localizedCaseInsensitiveContains("cleanup") }) == false)
+        }
+    }
+
     @Test("transcribe validation rejects unsupported file extensions")
     func transcribeRejectsUnsupportedExtension() {
         #expect(throws: Error.self) {

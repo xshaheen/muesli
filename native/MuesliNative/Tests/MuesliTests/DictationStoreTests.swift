@@ -130,10 +130,259 @@ struct DictationStoreTests {
         }
     }
 
+    private func dictationColumnNames(store: DictationStore) throws -> Set<String> {
+        var db: OpaquePointer?
+        guard sqlite3_open(store.databasePath().path, &db) == SQLITE_OK else {
+            throw sqliteTestError("failed to open database for schema inspection")
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(dictations)", -1, &statement, nil) == SQLITE_OK else {
+            throw sqliteTestError("failed to inspect dictation schema")
+        }
+        defer { sqlite3_finalize(statement) }
+        var columns: Set<String> = []
+        while sqlite3_step(statement) == SQLITE_ROW,
+              let name = sqlite3_column_text(statement, 1) {
+            columns.insert(String(cString: name))
+        }
+        return columns
+    }
+
+    private func rawDictationProvenance(id: Int64, store: DictationStore) throws -> [String?] {
+        var db: OpaquePointer?
+        guard sqlite3_open(store.databasePath().path, &db) == SQLITE_OK else {
+            throw sqliteTestError("failed to open database for provenance inspection")
+        }
+        defer { sqlite3_close(db) }
+        let sql = """
+        SELECT dictation_style_id, dictation_style_name,
+               dictation_style_selection_source, dictation_cleanup_outcome
+        FROM dictations WHERE id = ?
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw sqliteTestError("failed to inspect dictation provenance")
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, id)
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            throw sqliteTestError("dictation row missing during provenance inspection")
+        }
+        return (0 ..< 4).map { index in
+            sqlite3_column_text(statement, Int32(index)).map { String(cString: $0) }
+        }
+    }
+
     @Test("migration creates tables without error")
     func migration() throws {
         let store = try makeStore()
         try store.migrateIfNeeded() // idempotent
+    }
+
+    @Test("dictation provenance migration repairs every partial schema idempotently")
+    func dictationProvenanceMigrationRepairsPartialSchemas() throws {
+        let provenanceColumns = [
+            "dictation_style_id TEXT",
+            "dictation_style_name TEXT",
+            "dictation_style_selection_source TEXT",
+            "dictation_cleanup_outcome TEXT",
+        ]
+
+        for mask in 0 ..< (1 << provenanceColumns.count) {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("muesli-style-migration-\(mask)-\(UUID().uuidString).db")
+            defer { try? FileManager.default.removeItem(at: url) }
+            var db: OpaquePointer?
+            #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+            let included = provenanceColumns.enumerated().compactMap { index, definition in
+                mask & (1 << index) == 0 ? nil : definition
+            }
+            let optionalColumns = included.isEmpty ? "" : ",\n" + included.joined(separator: ",\n")
+            let schema = """
+            CREATE TABLE dictations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                duration_seconds REAL,
+                raw_text TEXT,
+                app_context TEXT,
+                word_count INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'dictation',
+                started_at TEXT,
+                ended_at TEXT,
+                updated_at REAL NOT NULL DEFAULT 0,
+                deleted_at REAL,
+                cloud_record_name TEXT,
+                cloud_change_tag TEXT,
+                last_synced_at REAL,
+                sync_dirty INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now'))\(optionalColumns)
+            );
+            INSERT INTO dictations (timestamp, raw_text) VALUES ('2026-08-09T00:00:00Z', 'legacy text');
+            """
+            #expect(sqlite3_exec(db, schema, nil, nil, nil) == SQLITE_OK)
+            sqlite3_close(db)
+
+            let store = DictationStore(databaseURL: url)
+            try store.migrateIfNeeded()
+            try store.migrateIfNeeded()
+
+            #expect(try dictationColumnNames(store: store).isSuperset(of: [
+                "dictation_style_id",
+                "dictation_style_name",
+                "dictation_style_selection_source",
+                "dictation_cleanup_outcome",
+            ]))
+            let legacy = try #require(try store.recentDictations(limit: 1).first)
+            #expect(legacy.rawText == "legacy text")
+            #expect(legacy.dictationStyleID == nil)
+            #expect(legacy.dictationStyleName == nil)
+            #expect(legacy.dictationStyleSelectionSource == nil)
+            #expect(legacy.dictationCleanupOutcome == nil)
+        }
+    }
+
+    @Test("dictation provenance round-trips outcomes and unknown values remain non-presentational")
+    func dictationProvenanceRoundTrips() throws {
+        let store = try makeStore()
+        let now = Date()
+        let outcomes = [
+            "applied",
+            "fallback_empty",
+            "fallback_rejected",
+            "fallback_error",
+            "skipped_disabled",
+            "skipped_unavailable",
+            "skipped_streaming",
+        ]
+
+        for (index, outcome) in outcomes.enumerated() {
+            _ = try store.insertDictation(
+                text: "Outcome \(outcome)",
+                durationSeconds: 1,
+                dictationStyleID: index == outcomes.count - 1 ? nil : "style-\(index)",
+                dictationStyleName: index == outcomes.count - 1 ? nil : "Saved Name \(index)",
+                dictationStyleSelectionSource: index == outcomes.count - 1 ? nil : "global",
+                dictationCleanupOutcome: outcome,
+                startedAt: now.addingTimeInterval(Double(index)),
+                endedAt: now.addingTimeInterval(Double(index + 1))
+            )
+        }
+        _ = try store.insertDictation(
+            text: "Future metadata",
+            durationSeconds: 1,
+            dictationStyleID: "future-style",
+            dictationStyleName: "Future Style",
+            dictationStyleSelectionSource: "future_source",
+            dictationCleanupOutcome: "future_outcome",
+            startedAt: now.addingTimeInterval(20),
+            endedAt: now.addingTimeInterval(21)
+        )
+
+        let rows = try store.recentDictations(limit: 20)
+        for (index, outcome) in outcomes.enumerated() {
+            let row = try #require(rows.first { $0.rawText == "Outcome \(outcome)" })
+            #expect(row.dictationCleanupOutcome == outcome)
+            #expect(row.dictationStyleName == (index == outcomes.count - 1 ? nil : "Saved Name \(index)"))
+        }
+        let applied = try #require(rows.first { $0.dictationCleanupOutcome == "applied" })
+        let appliedBadge = try #require(DictationStyleHistoryBadgeContent.make(for: applied))
+        #expect(appliedBadge.label == "Saved Name 0")
+        #expect(appliedBadge.accessibilityDescription.contains("Selected from the global style"))
+        let streaming = try #require(rows.first { $0.dictationCleanupOutcome == "skipped_streaming" })
+        #expect(DictationStyleHistoryBadgeContent.make(for: streaming) == nil)
+        let future = try #require(rows.first { $0.rawText == "Future metadata" })
+        #expect(future.dictationStyleSelectionSource == "future_source")
+        #expect(future.dictationCleanupOutcome == "future_outcome")
+        #expect(DictationStyleHistoryBadgeContent.make(for: future) == nil)
+    }
+
+    @Test("sync excludes provenance and preserves it only for same-text acknowledgement")
+    func syncPreservesProvenanceOnlyForSameText() throws {
+        let store = try makeStore()
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let id = try store.insertDictation(
+            text: "Local styled text",
+            durationSeconds: 2,
+            dictationStyleID: "saved-style",
+            dictationStyleName: "Saved Style Name",
+            dictationStyleSelectionSource: "app",
+            dictationCleanupOutcome: "applied",
+            startedAt: now.addingTimeInterval(-2),
+            endedAt: now
+        )
+        let outbound = try #require(try store.textRecordsNeedingSync().first { $0.kind == .dictation })
+        let outboundJSON = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(outbound)) as? [String: Any])
+        #expect(outboundJSON.keys.contains(where: { $0.contains("style") || $0.contains("cleanup") }) == false)
+        #expect(try store.markTextRecordSynced(
+            kind: .dictation,
+            recordName: outbound.id,
+            changeTag: "tag-local",
+            recordUpdatedAt: outbound.updatedAt
+        ))
+
+        var sameText = outbound
+        sameText.updatedAt = outbound.updatedAt.addingTimeInterval(60)
+        sameText.cloudChangeTag = "tag-echo"
+        #expect(try store.upsertSyncedTextRecord(sameText))
+        let echoed = try #require(try store.dictation(id: id))
+        #expect(echoed.dictationStyleID == "saved-style")
+        #expect(echoed.dictationStyleName == "Saved Style Name")
+
+        var replacement = sameText
+        replacement.text = "Different remote text"
+        replacement.wordCount = 3
+        replacement.updatedAt = sameText.updatedAt.addingTimeInterval(60)
+        #expect(try store.upsertSyncedTextRecord(replacement))
+        let replaced = try #require(try store.dictation(id: id))
+        #expect(replaced.rawText == "Different remote text")
+        #expect(replaced.dictationStyleID == nil)
+        #expect(replaced.dictationStyleName == nil)
+        #expect(replaced.dictationStyleSelectionSource == nil)
+        #expect(replaced.dictationCleanupOutcome == nil)
+    }
+
+    @Test("delete clear and remote tombstone erase local provenance")
+    func deletionPathsEraseProvenance() throws {
+        let store = try makeStore()
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        func insert(_ text: String, offset: TimeInterval) throws -> Int64 {
+            try store.insertDictation(
+                text: text,
+                durationSeconds: 1,
+                dictationStyleID: "style",
+                dictationStyleName: "Snapshot",
+                dictationStyleSelectionSource: "global",
+                dictationCleanupOutcome: "applied",
+                startedAt: now.addingTimeInterval(offset),
+                endedAt: now.addingTimeInterval(offset + 1)
+            )
+        }
+
+        let deletedID = try insert("Delete me", offset: 0)
+        try store.deleteDictation(id: deletedID)
+        #expect(try rawDictationProvenance(id: deletedID, store: store).allSatisfy { $0 == nil })
+
+        let clearedID = try insert("Clear me", offset: 2)
+        try store.clearDictations()
+        #expect(try rawDictationProvenance(id: clearedID, store: store).allSatisfy { $0 == nil })
+
+        let tombstonedID = try insert("Sync then tombstone", offset: 4)
+        let outbound = try #require(try store.textRecordsNeedingSync().first { $0.text == "Sync then tombstone" })
+        #expect(try store.markTextRecordSynced(
+            kind: .dictation,
+            recordName: outbound.id,
+            changeTag: "tag-local",
+            recordUpdatedAt: outbound.updatedAt
+        ))
+        var tombstone = outbound
+        tombstone.text = ""
+        tombstone.wordCount = 0
+        tombstone.durationSeconds = 0
+        tombstone.isDeleted = true
+        tombstone.updatedAt = outbound.updatedAt.addingTimeInterval(60)
+        #expect(try store.upsertSyncedTextRecord(tombstone))
+        #expect(try rawDictationProvenance(id: tombstonedID, store: store).allSatisfy { $0 == nil })
     }
 
     @Test("database initialization failures close their SQLite handles")
