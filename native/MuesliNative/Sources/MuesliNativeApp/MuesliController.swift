@@ -1414,6 +1414,19 @@ final class MuesliController: NSObject {
         }
     }
 
+    /// Persists all style definitions and assignments as one candidate before
+    /// publishing them to the live runtime. A thrown error leaves both unchanged.
+    func updateDictationStyleConfiguration(_ mutate: (inout AppConfig) -> Void) throws {
+        let persisted = try DictationStyleSettingsModel.committing(
+            current: config,
+            mutate: mutate,
+            persist: configStore.saveDictationStyleConfiguration
+        )
+        config = persisted
+        appState.config = persisted
+        statusBarController?.refresh()
+    }
+
     private func applyConfigRuntimeSideEffects(
         wasICloudSyncEnabled: Bool,
         hotkeyTriggerThresholdChanged: Bool,
@@ -2533,21 +2546,21 @@ final class MuesliController: NSObject {
         preloadExperimentalTranscriptionFeatures()
     }
 
-    func selectTranscriptCleanupPrompt(id: String) {
+    func selectTranscriptCleanupPrompt(id: String) throws {
         let preset = TranscriptCleanupPrompts.resolve(id: id, custom: config.customTranscriptCleanupPrompts)
-        updateConfig {
+        try updateDictationStyleConfiguration {
             $0.activeTranscriptCleanupPromptId = preset.id
             $0.postProcessorSystemPrompt = preset.prompt
         }
         preloadExperimentalTranscriptionFeatures()
     }
 
-    func createTranscriptCleanupPrompt(name: String, prompt: String) {
+    func createTranscriptCleanupPrompt(name: String, prompt: String) throws {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty, !trimmedPrompt.isEmpty else { return }
         let preset = CustomTranscriptCleanupPrompt(name: trimmedName, prompt: trimmedPrompt)
-        updateConfig {
+        try updateDictationStyleConfiguration {
             $0.customTranscriptCleanupPrompts.append(preset)
             $0.activeTranscriptCleanupPromptId = preset.id
             $0.postProcessorSystemPrompt = preset.prompt
@@ -2555,11 +2568,11 @@ final class MuesliController: NSObject {
         preloadExperimentalTranscriptionFeatures()
     }
 
-    func updateTranscriptCleanupPrompt(id: String, name: String, prompt: String) {
+    func updateTranscriptCleanupPrompt(id: String, name: String, prompt: String) throws {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty, !trimmedPrompt.isEmpty else { return }
-        updateConfig {
+        try updateDictationStyleConfiguration {
             guard let index = $0.customTranscriptCleanupPrompts.firstIndex(where: { $0.id == id }) else { return }
             $0.customTranscriptCleanupPrompts[index].name = trimmedName
             $0.customTranscriptCleanupPrompts[index].prompt = trimmedPrompt
@@ -2570,14 +2583,9 @@ final class MuesliController: NSObject {
         preloadExperimentalTranscriptionFeatures()
     }
 
-    func deleteTranscriptCleanupPrompt(id: String) {
-        updateConfig {
-            $0.customTranscriptCleanupPrompts.removeAll { $0.id == id }
-            if $0.activeTranscriptCleanupPromptId == id {
-                $0.activeTranscriptCleanupPromptId = TranscriptCleanupPrompts.defaultID
-                $0.postProcessorSystemPrompt = PostProcessorOption.defaultSystemPrompt
-            }
-        }
+    func deleteTranscriptCleanupPrompt(id: String) throws {
+        let repaired = DictationStyleSettingsModel.deletingStyle(id: id, from: config)
+        try updateDictationStyleConfiguration { $0 = repaired }
         preloadExperimentalTranscriptionFeatures()
     }
 

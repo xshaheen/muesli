@@ -28,6 +28,7 @@ case "${shard}" in
       MeetingChunkCollectorTests
       AppConfigTests
       DictationStyleResolverTests
+      DictationStyleSettingsTests
       CGPointCodableTests
       UpdateFailureGuidanceTests
       WordCountTests
