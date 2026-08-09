@@ -41,6 +41,16 @@ struct MeetingNotesInlineMarkdownTests {
         #expect(attributed.runs.contains { $0.link == URL(string: "https://example.com") })
     }
 
+    @Test("non-web links stay visible and inert")
+    func nonWebLinksStayLiteral() {
+        for markdown in ["Open [the agenda](muesli://agenda)", "Read [item 4](internal)"] {
+            let attributed = MeetingNotesView.inline(markdown)
+
+            #expect(String(attributed.characters) == markdown)
+            #expect(!attributed.runs.contains { $0.link != nil })
+        }
+    }
+
     @Test("plain text is unchanged")
     func plainTextUnchanged() {
         #expect(rendered("No formatting here") == "No formatting here")
@@ -65,5 +75,17 @@ struct MeetingNotesInlineMarkdownTests {
     @Test("leading and trailing whitespace is preserved")
     func whitespaceIsPreserved() {
         #expect(rendered("  indented note  ") == "  indented note  ")
+    }
+
+    @Test("headings keep their level and parse inline formatting")
+    func headingsParseInlineFormatting() throws {
+        for (line, expectedLevel) in [("# **Status**", 1), ("## **Status**", 2), ("### **Status**", 3)] {
+            let heading = try #require(MeetingNotesView.headingContent(from: line))
+
+            #expect(heading.level == expectedLevel)
+            #expect(String(heading.text.characters) == "Status")
+            #expect(heading.text.runs.contains { $0.inlinePresentationIntent == .stronglyEmphasized })
+        }
+        #expect(MeetingNotesView.headingContent(from: "Ticket #123") == nil)
     }
 }
