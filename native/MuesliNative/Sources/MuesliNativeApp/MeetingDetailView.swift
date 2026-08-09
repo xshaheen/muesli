@@ -265,51 +265,7 @@ struct MeetingDetailView: View {
                 .buttonStyle(.plain)
             }
 
-            HStack(alignment: .top, spacing: MuesliTheme.spacing24) {
-                VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                    MarqueeTitleTextField(
-                        text: $editableTitle,
-                        onSubmit: {
-                            controller.updateMeetingTitle(id: meeting.id, title: editableTitle)
-                        },
-                        onTextChange: {
-                            debounceSaveTitle(meetingID: meeting.id)
-                        }
-                    )
-
-                    HStack(spacing: MuesliTheme.spacing8) {
-                        // One row: the date/duration/word-count string reads as a single
-                        // fact, and letting it wrap splits "786 words" onto its own line
-                        // while the template chip drifts away from it.
-                        Text(formatMeta(meeting))
-                            .font(MuesliTheme.callout())
-                            .foregroundStyle(MuesliTheme.textSecondary)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                        if let label = SyncOriginDisplay.badgeLabel(forMeetingSource: meeting.source) {
-                            SyncOriginBadge(label: label)
-                        }
-                        templateChip(for: appliedTemplate)
-                        Spacer(minLength: 0)
-                    }
-
-                    folderPill(for: meeting)
-
-                    threadBreadcrumb
-                }
-
-                Spacer(minLength: MuesliTheme.spacing16)
-
-                // The mode picker lives in the content toolbar, directly above the content it
-                // switches, rather than up here beside the meeting-level actions.
-                VStack(alignment: .trailing, spacing: 10) {
-                    if showsManualNotesEditor(for: meeting) {
-                        recordingControlGroup(for: meeting)
-                    } else {
-                        headerActions(for: meeting, appliedTemplate: appliedTemplate)
-                    }
-                }
-            }
+            adaptiveHeaderContent(for: meeting, appliedTemplate: appliedTemplate)
 
             if let savedRecordingPath = meeting.savedRecordingPath,
                FileManager.default.fileExists(atPath: savedRecordingPath) {
@@ -326,6 +282,84 @@ struct MeetingDetailView: View {
         .padding(.horizontal, 40)
         .padding(.vertical, 24)
         .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    @ViewBuilder
+    private func adaptiveHeaderContent(
+        for meeting: MeetingRecord,
+        appliedTemplate: MeetingTemplateSnapshot
+    ) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: MuesliTheme.spacing24) {
+                headerTitleContent(for: meeting, appliedTemplate: appliedTemplate)
+
+                Spacer(minLength: MuesliTheme.spacing16)
+
+                headerActionContent(for: meeting, appliedTemplate: appliedTemplate)
+            }
+
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+                headerTitleContent(for: meeting, appliedTemplate: appliedTemplate)
+
+                HStack {
+                    Spacer(minLength: 0)
+                    headerActionContent(for: meeting, appliedTemplate: appliedTemplate)
+                }
+            }
+        }
+    }
+
+    private func headerTitleContent(
+        for meeting: MeetingRecord,
+        appliedTemplate: MeetingTemplateSnapshot
+    ) -> some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            MarqueeTitleTextField(
+                text: $editableTitle,
+                onSubmit: {
+                    controller.updateMeetingTitle(id: meeting.id, title: editableTitle)
+                },
+                onTextChange: {
+                    debounceSaveTitle(meetingID: meeting.id)
+                }
+            )
+
+            HStack(spacing: MuesliTheme.spacing8) {
+                // One row: the date/duration/word-count string reads as a single
+                // fact, and letting it wrap splits "786 words" onto its own line
+                // while the template chip drifts away from it.
+                Text(formatMeta(meeting))
+                    .font(MuesliTheme.callout())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                if let label = SyncOriginDisplay.badgeLabel(forMeetingSource: meeting.source) {
+                    SyncOriginBadge(label: label)
+                }
+                templateChip(for: appliedTemplate)
+                Spacer(minLength: 0)
+            }
+
+            folderPill(for: meeting)
+
+            threadBreadcrumb
+        }
+    }
+
+    @ViewBuilder
+    private func headerActionContent(
+        for meeting: MeetingRecord,
+        appliedTemplate: MeetingTemplateSnapshot
+    ) -> some View {
+        // The mode picker lives in the content toolbar, directly above the content it
+        // switches, rather than up here beside the meeting-level actions.
+        VStack(alignment: .trailing, spacing: 10) {
+            if showsManualNotesEditor(for: meeting) {
+                recordingControlGroup(for: meeting)
+            } else {
+                headerActions(for: meeting, appliedTemplate: appliedTemplate)
+            }
+        }
     }
 
     @ViewBuilder
