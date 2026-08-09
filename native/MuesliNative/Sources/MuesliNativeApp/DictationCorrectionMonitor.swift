@@ -4,7 +4,7 @@ import Foundation
 import MuesliCore
 import os
 
-struct DictationCorrectionTargetApp: Sendable {
+struct DictationSessionTarget: Sendable, Equatable {
     let processID: pid_t
     let appName: String
     let bundleID: String
@@ -15,9 +15,87 @@ struct DictationCorrectionTargetApp: Sendable {
 
     init?(app: NSRunningApplication?) {
         guard let app else { return nil }
-        self.processID = app.processIdentifier
-        self.appName = app.localizedName ?? "Unknown"
-        self.bundleID = app.bundleIdentifier ?? ""
+        self.init(
+            processID: app.processIdentifier,
+            appName: app.localizedName ?? "Unknown",
+            bundleID: app.bundleIdentifier ?? ""
+        )
+    }
+
+    init(processID: pid_t, appName: String, bundleID: String) {
+        self.processID = processID
+        self.appName = appName
+        self.bundleID = bundleID
+    }
+
+    func matches(processID: pid_t?, bundleID: String) -> Bool {
+        guard processID == self.processID,
+              let expectedBundleID = DictationStyleResolver.normalizeBundleID(self.bundleID),
+              let actualBundleID = DictationStyleResolver.normalizeBundleID(bundleID)
+        else {
+            return false
+        }
+        return actualBundleID == expectedBundleID
+    }
+}
+
+typealias DictationCorrectionTargetApp = DictationSessionTarget
+
+enum DictationStyleSessionMode: Sendable, Equatable {
+    case standard
+    case voiceNote
+    case computerUse
+    case meeting
+    case streaming
+    case dictationTest
+
+    var allowsAdaptiveStyles: Bool { self == .standard }
+}
+
+struct DictationStyleSessionSnapshot {
+    let id: UUID
+    let target: DictationSessionTarget?
+    let config: AppConfig
+    let mode: DictationStyleSessionMode
+
+    init(
+        id: UUID = UUID(),
+        target: DictationSessionTarget?,
+        config: AppConfig,
+        mode: DictationStyleSessionMode
+    ) {
+        self.id = id
+        self.target = target
+        self.config = config
+        self.mode = mode
+    }
+
+    func matchingContext(_ result: DictationSessionContextResult?) -> DictationContext? {
+        guard let result,
+              result.sessionID == id,
+              let target,
+              target.matches(processID: result.context.processID, bundleID: result.context.bundleID)
+        else {
+            return nil
+        }
+        return result.context
+    }
+
+    func resolveStyle(context result: DictationSessionContextResult?) -> DictationStyleSelectionResult {
+        let context = matchingContext(result)
+        return DictationStyleResolver.resolve(
+            config: config,
+            bundleID: target?.bundleID,
+            hostname: context?.hostname
+        )
+    }
+
+    func cleanupPolicy(
+        enabled: Bool,
+        context result: DictationSessionContextResult?
+    ) -> DictationCleanupPolicy? {
+        guard mode.allowsAdaptiveStyles, config.adaptiveDictationStylesEnabled else { return nil }
+        return DictationCleanupPolicy(enabled: enabled, selection: resolveStyle(context: result))
     }
 }
 

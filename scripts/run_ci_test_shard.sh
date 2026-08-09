@@ -74,6 +74,7 @@ case "${shard}" in
       HotkeyConfigTests
       DictationStateIdleTests
       DictationCorrectionMonitorTests
+      DictationStyleSessionTests
       AsrVocabularyPromptTests
       WhisperBiasingManualReproTests
       TranscriptionResultCleanupTests

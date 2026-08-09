@@ -4,13 +4,40 @@ import Vision
 
 // MARK: - Dictation context (Accessibility + optional on-device OCR)
 
-struct DictationContext {
+struct DictationContext: Sendable, Equatable {
+    let processID: pid_t?
     let appName: String
     let bundleID: String
     let documentContext: String
     let selectedText: String
     let url: String?
+    let hostname: String?
     let ocrText: String
+
+    init(
+        processID: pid_t? = nil,
+        appName: String,
+        bundleID: String,
+        documentContext: String,
+        selectedText: String,
+        url: String?,
+        hostname: String? = nil,
+        ocrText: String
+    ) {
+        self.processID = processID
+        self.appName = appName
+        self.bundleID = bundleID
+        self.documentContext = documentContext
+        self.selectedText = selectedText
+        self.url = url
+        self.hostname = DictationStyleResolver.normalizeHostname(hostname)
+        self.ocrText = ocrText
+    }
+}
+
+struct DictationSessionContextResult: Sendable, Equatable {
+    let sessionID: UUID
+    let context: DictationContext
 }
 
 enum DictationContextCapture {
@@ -22,16 +49,35 @@ enum DictationContextCapture {
         shouldCaptureScreenOCR: (@Sendable () async -> Bool)? = nil
     ) async -> DictationContext {
         let base = capture()
+        return await enrichWithScreenOCR(
+            base,
+            target: nil,
+            includeScreenOCR: includeScreenOCR,
+            shouldCaptureScreenOCR: shouldCaptureScreenOCR
+        )
+    }
+
+    static func enrichWithScreenOCR(
+        _ base: DictationContext,
+        target: DictationSessionTarget?,
+        includeScreenOCR: Bool,
+        shouldCaptureScreenOCR: (@Sendable () async -> Bool)? = nil
+    ) async -> DictationContext {
         guard includeScreenOCR, CGPreflightScreenCaptureAccess() else { return base }
-        let screenContext = await ScreenContextCapture.captureVisibleScreen(shouldCapture: shouldCaptureScreenOCR)
+        let screenContext = await ScreenContextCapture.captureVisibleScreen(
+            target: target,
+            shouldCapture: shouldCaptureScreenOCR
+        )
         let ocrText = screenContext?.ocrText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !ocrText.isEmpty else { return base }
         return DictationContext(
+            processID: base.processID,
             appName: base.appName,
             bundleID: base.bundleID,
             documentContext: base.documentContext,
             selectedText: base.selectedText,
             url: base.url,
+            hostname: base.hostname,
             ocrText: ocrText
         )
     }
@@ -39,7 +85,24 @@ enum DictationContextCapture {
     /// Captures focused app name + text context via Accessibility API.
     /// Lightweight and deterministic — no screenshots, no OCR.
     static func capture() -> DictationContext {
-        let app = NSWorkspace.shared.frontmostApplication
+        capture(app: NSWorkspace.shared.frontmostApplication)
+    }
+
+    /// Captures context from the process bound to the dictation session. A terminated
+    /// or PID-reused process is rejected before any Accessibility reads.
+    static func capture(target: DictationSessionTarget) -> DictationContext? {
+        guard let app = NSRunningApplication(processIdentifier: target.processID),
+              target.matches(
+                  processID: app.processIdentifier,
+                  bundleID: app.bundleIdentifier ?? ""
+              )
+        else {
+            return nil
+        }
+        return capture(app: app)
+    }
+
+    private static func capture(app: NSRunningApplication?) -> DictationContext {
         let appName = app?.localizedName ?? "Unknown"
         let bundleID = app?.bundleIdentifier ?? ""
 
@@ -51,16 +114,19 @@ enum DictationContextCapture {
             selectedText = axStringValue(focusedElement, attribute: kAXSelectedTextAttribute as String)
         }
 
-        let url = browserURL(for: app)
+        let browserPage = browserPage(for: app)
+        let url = browserPage?.displayURL
 
         fputs("[muesli-native] dictation context: app=\(appName) docContext=\(docContext.count) chars selectedText=\(selectedText.count) chars url=\(url ?? "none")\n", stderr)
 
         return DictationContext(
+            processID: app?.processIdentifier,
             appName: appName,
             bundleID: bundleID,
             documentContext: docContext,
             selectedText: selectedText,
             url: url,
+            hostname: browserPage?.hostname,
             ocrText: ""
         )
     }
@@ -156,7 +222,7 @@ enum DictationContextCapture {
         return str
     }
 
-    private static func browserURL(for app: NSRunningApplication?) -> String? {
+    private static func browserPage(for app: NSRunningApplication?) -> (displayURL: String, hostname: String)? {
         guard let app else { return nil }
         let browserBundles = [
             "com.google.Chrome", "com.apple.Safari", "company.thebrowser.Browser",
@@ -174,12 +240,18 @@ enum DictationContextCapture {
         var urlValue: CFTypeRef?
         if AXUIElementCopyAttributeValue(axWindow, kAXDocumentAttribute as CFString, &urlValue) == .success,
            let url = urlValue as? String, !url.isEmpty {
-            if let parsed = URL(string: url) {
-                return "\(parsed.host ?? "")\(parsed.path)"
-            }
-            return String(url.prefix(100))
+            return browserPage(from: url)
         }
         return nil
+    }
+
+    static func browserPage(from url: String) -> (displayURL: String, hostname: String)? {
+        guard let parsed = URL(string: url),
+              let hostname = DictationStyleResolver.normalizeHostname(parsed.host)
+        else {
+            return nil
+        }
+        return ("\(hostname)\(parsed.path)", hostname)
     }
 }
 
@@ -196,22 +268,41 @@ enum ScreenContextCapture {
 
     /// Captures the frontmost app window and runs on-device OCR. The screenshot itself
     /// is not persisted or sent to cleanup backends; only recognized text is used.
-    static func captureVisibleScreen(shouldCapture: (@Sendable () async -> Bool)? = nil) async -> ScreenContext? {
-        await captureFrontmostWindow(logLabel: "dictation OCR", shouldCapture: shouldCapture)
+    static func captureVisibleScreen(
+        target: DictationSessionTarget? = nil,
+        shouldCapture: (@Sendable () async -> Bool)? = nil
+    ) async -> ScreenContext? {
+        await captureWindow(
+            target: target,
+            logLabel: "dictation OCR",
+            shouldCapture: shouldCapture
+        )
     }
 
     /// Captures a screenshot of the focused window and runs on-device OCR.
     /// Used for meeting context only — heavier than AX but provides visual content.
     static func captureOnce() async -> ScreenContext? {
-        await captureFrontmostWindow(logLabel: "meeting OCR")
+        await captureWindow(target: nil, logLabel: "meeting OCR")
     }
 
-    private static func captureFrontmostWindow(
+    private static func captureWindow(
+        target: DictationSessionTarget?,
         logLabel: String,
         shouldCapture: (@Sendable () async -> Bool)? = nil
     ) async -> ScreenContext? {
         guard CGPreflightScreenCaptureAccess() else { return nil }
-        let app = NSWorkspace.shared.frontmostApplication
+        let app: NSRunningApplication?
+        if let target {
+            let running = NSRunningApplication(processIdentifier: target.processID)
+            guard let running,
+                  target.matches(
+                      processID: running.processIdentifier,
+                      bundleID: running.bundleIdentifier ?? ""
+                  ) else { return nil }
+            app = running
+        } else {
+            app = NSWorkspace.shared.frontmostApplication
+        }
         let appName = app?.localizedName ?? "Unknown"
         let bundleID = app?.bundleIdentifier ?? ""
 

@@ -398,8 +398,10 @@ final class MuesliController: NSObject {
     private var previousStreamText = ""
     private var openWindowCount = 0
     private var lastExternalApp: NSRunningApplication?
-    private var capturedDictationContext: DictationContext?
-    private var capturedDictationCorrectionTargetApp: DictationCorrectionTargetApp?
+    private var activeDictationStyleSession: DictationStyleSessionSnapshot?
+    private var activeDictationContextResult: DictationSessionContextResult?
+    private var stoppedDictationStyleSession: DictationStyleSessionSnapshot?
+    private var stoppedDictationContextResult: DictationSessionContextResult?
     private var workspaceObserver: NSObjectProtocol?
     private var dataDidChangeObserver: NSObjectProtocol?
     private var iCloudAppActiveObserver: NSObjectProtocol?
@@ -2324,36 +2326,54 @@ final class MuesliController: NSObject {
         return option
     }
 
-    private func runtimePostProcessorOption() -> PostProcessorOption? {
-        guard selectedPostProcessorBackend == .local else { return nil }
-        return PostProcessorOption.runtimeOption(id: config.activePostProcessorId)
+    private func runtimePostProcessorOption(
+        config runtimeConfig: AppConfig? = nil,
+        backend: TranscriptCleanupBackendOption? = nil
+    ) -> PostProcessorOption? {
+        let runtimeConfig = runtimeConfig ?? config
+        guard (backend ?? selectedPostProcessorBackend) == .local else { return nil }
+        return PostProcessorOption.runtimeOption(id: runtimeConfig.activePostProcessorId)
     }
 
-    private func canRunTranscriptCleanup(option: PostProcessorOption?) -> Bool {
-        guard config.enablePostProcessor,
-              selectedPostProcessorBackend.isCompatible(with: selectedBackend) else { return false }
-        if selectedPostProcessorBackend == .local {
+    private func canRunTranscriptCleanup(
+        option: PostProcessorOption?,
+        config runtimeConfig: AppConfig? = nil,
+        transcriptionBackend: BackendOption? = nil,
+        cleanupBackend: TranscriptCleanupBackendOption? = nil
+    ) -> Bool {
+        let runtimeConfig = runtimeConfig ?? config
+        let transcriptionBackend = transcriptionBackend ?? selectedBackend
+        let cleanupBackend = cleanupBackend ?? selectedPostProcessorBackend
+        guard runtimeConfig.enablePostProcessor,
+              cleanupBackend.isCompatible(with: transcriptionBackend) else { return false }
+        if cleanupBackend == .local {
             return option != nil
         }
-        if selectedPostProcessorBackend == .gemma4LiteRT {
+        if cleanupBackend == .gemma4LiteRT {
             return Gemma4LiteRTModelStore.isAvailableLocally()
         }
         return TranscriptCleanupClient.hasRequiredSettings(
-            for: selectedPostProcessorBackend,
-            config: config,
+            for: cleanupBackend,
+            config: runtimeConfig,
             isChatGPTAuthenticated: chatGPTAuth.isAuthenticated
         )
     }
 
-    private func configureTranscriptCleanupForRuntime(option: PostProcessorOption? = nil) async {
+    private func configureTranscriptCleanupForRuntime(
+        option: PostProcessorOption? = nil,
+        config runtimeConfig: AppConfig? = nil,
+        backend: TranscriptCleanupBackendOption? = nil
+    ) async {
+        let runtimeConfig = runtimeConfig ?? config
+        let backend = backend ?? selectedPostProcessorBackend
         await transcriptionCoordinator.configurePostProcessor(
-            backend: selectedPostProcessorBackend,
-            option: option ?? runtimePostProcessorOption(),
+            backend: backend,
+            option: option ?? runtimePostProcessorOption(config: runtimeConfig, backend: backend),
             systemPrompt: Self.systemPromptWithSpeakerVocabulary(
-                config.postProcessorSystemPrompt,
-                customWords: config.customWords
+                runtimeConfig.postProcessorSystemPrompt,
+                customWords: runtimeConfig.customWords
             ),
-            config: config
+            config: runtimeConfig
         )
     }
 
@@ -3655,6 +3675,12 @@ final class MuesliController: NSObject {
         dictationTestTask?.cancel()
         dictationTestTask = nil
         dictationAudioSessionManager.cancel(reason: "test-cancel")
+        dictationStartedAt = nil
+        pendingDictationStopSessionID = nil
+        pendingDictationStopStartedAt = nil
+        pendingReleaseSoundSessionID = nil
+        clearCapturedDictationSessionContext()
+        resetDictationOutputMode()
         setState(.idle)
     }
 
@@ -8276,7 +8302,6 @@ final class MuesliController: NSObject {
         if dictationStartedAt == nil {
             dictationStartedAt = capturedAt
         }
-        capturedDictationContext = nil
         activateDictationRecordingIndicator()
         markDictationLatency("sound_start_requested:stream-active")
         SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
@@ -8307,54 +8332,93 @@ final class MuesliController: NSObject {
     }
 
     private var shouldCaptureDictationContext: Bool {
-        config.enableScreenContext && config.enablePostProcessor && !isDictationTestMode
+        guard let session = activeDictationStyleSession else { return false }
+        return session.config.enableScreenContext
+            && session.config.enablePostProcessor
+            && !isDictationTestMode
     }
 
     @MainActor
-    private func shouldContinueDictationOCRContextCapture(traceID: UUID?) -> Bool {
-        dictationLatencyTraceID == traceID
+    private func shouldContinueDictationOCRContextCapture(sessionID: UUID) -> Bool {
+        activeDictationStyleSession?.id == sessionID
             && shouldCaptureDictationContext
             && dictationState == .recording
             && !isMeetingRecording()
     }
 
     private func captureDictationContextAsync() {
-        guard shouldCaptureDictationContext else { return }
-        let traceID = dictationLatencyTraceID
-        let includeScreenOCR = config.enableDictationOCRContext
+        guard shouldCaptureDictationContext,
+              let session = activeDictationStyleSession,
+              let target = session.target else { return }
+        let sessionID = session.id
+        let includeScreenOCR = session.config.enableDictationOCRContext
             && !isMeetingRecording()
             && CGPreflightScreenCaptureAccess()
         markDictationLatency("context_capture_enqueue")
-        Task.detached(priority: .utility) { [weak self, traceID, includeScreenOCR] in
+        Task.detached(priority: .utility) { [weak self, sessionID, target, includeScreenOCR] in
             guard AXIsProcessTrusted() else { return }
-            let context = await DictationContextCapture.capture(
-                includeScreenOCR: includeScreenOCR,
-                shouldCaptureScreenOCR: { [weak self] in
-                    await self?.shouldContinueDictationOCRContextCapture(traceID: traceID) ?? false
-                }
-            )
-            await MainActor.run { [weak self, traceID] in
+            guard let baseContext = DictationContextCapture.capture(target: target) else { return }
+            let baseResult = DictationSessionContextResult(sessionID: sessionID, context: baseContext)
+            await MainActor.run { [weak self, sessionID] in
                 guard let self,
-                      self.dictationLatencyTraceID == traceID,
+                      self.activeDictationStyleSession?.id == sessionID,
                       self.shouldCaptureDictationContext,
                       self.dictationState == .recording else { return }
-                self.capturedDictationContext = context
-                self.markDictationLatency("context_capture_ready")
+                self.activeDictationContextResult = baseResult
+                self.markDictationLatency("context_capture_base_ready")
+            }
+            guard includeScreenOCR else { return }
+            let enrichedContext = await DictationContextCapture.enrichWithScreenOCR(
+                baseContext,
+                target: target,
+                includeScreenOCR: true,
+                shouldCaptureScreenOCR: { [weak self] in
+                    await self?.shouldContinueDictationOCRContextCapture(sessionID: sessionID) ?? false
+                }
+            )
+            guard !enrichedContext.ocrText.isEmpty else { return }
+            let enrichedResult = DictationSessionContextResult(sessionID: sessionID, context: enrichedContext)
+            await MainActor.run { [weak self, sessionID] in
+                guard let self,
+                      self.activeDictationStyleSession?.id == sessionID,
+                      self.shouldCaptureDictationContext,
+                      self.dictationState == .recording else { return }
+                self.activeDictationContextResult = enrichedResult
+                self.markDictationLatency("context_capture_ocr_ready")
             }
         }
     }
 
     private func clearCapturedDictationSessionContext() {
-        capturedDictationContext = nil
-        capturedDictationCorrectionTargetApp = nil
+        activeDictationStyleSession = nil
+        activeDictationContextResult = nil
+        stoppedDictationStyleSession = nil
+        stoppedDictationContextResult = nil
     }
 
-    private func captureDictationCorrectionTargetApp() {
-        capturedDictationCorrectionTargetApp = DictationCorrectionTargetApp(
+    private func beginDictationStyleSession(mode: DictationStyleSessionMode) {
+        let target = DictationSessionTarget(
             app: NSWorkspace.shared.frontmostApplication == NSRunningApplication.current
                 ? lastExternalApp
                 : NSWorkspace.shared.frontmostApplication
         )
+        activeDictationStyleSession = DictationStyleSessionSnapshot(
+            target: target,
+            config: config,
+            mode: isDictationTestMode
+                ? .dictationTest
+                : (currentDictationOutputMode == .voiceNote ? .voiceNote : mode)
+        )
+        activeDictationContextResult = nil
+        stoppedDictationStyleSession = nil
+        stoppedDictationContextResult = nil
+    }
+
+    private func freezeDictationStyleSessionAtStop() {
+        stoppedDictationStyleSession = activeDictationStyleSession
+        stoppedDictationContextResult = activeDictationContextResult
+        activeDictationStyleSession = nil
+        activeDictationContextResult = nil
     }
 
     private func handleStart() {
@@ -8374,7 +8438,7 @@ final class MuesliController: NSObject {
         beginDictationOutput()
         dictationStartedAt = nil
         clearCapturedDictationSessionContext()
-        captureDictationCorrectionTargetApp()
+        beginDictationStyleSession(mode: .standard)
         setState(.preparing)
         dictationAudioSessionManager.beginRecording(
             mode: "hold-start",
@@ -8547,7 +8611,7 @@ final class MuesliController: NSObject {
         beginDictationOutput(mode: outputMode)
         dictationStartedAt = nil
         clearCapturedDictationSessionContext()
-        captureDictationCorrectionTargetApp()
+        beginDictationStyleSession(mode: isStreamingDictationBackend ? .streaming : .standard)
         setState(.preparing)
 
         // Nemotron streaming: live text at cursor in handsfree mode too
@@ -8633,6 +8697,9 @@ final class MuesliController: NSObject {
             return
         }
 
+        // Freeze whatever base context is ready now. Stop never waits for the
+        // optional OCR enrichment, and late capture completions are rejected.
+        freezeDictationStyleSessionAtStop()
         markDictationLatency("sound_release_requested:stop")
         pendingDictationStopSessionID = dictationAudioSessionManager.currentSessionID
         pendingReleaseSoundSessionID = shouldPlayDictationLifecycleSounds && !isDictationTestMode
@@ -8759,12 +8826,21 @@ final class MuesliController: NSObject {
         syncDictationRecorderWarmup(intent: .postDictation(.dictationStop))
         let isTestMode = isDictationTestMode
         let outputMode = currentDictationOutputMode
-        let transcriptionBackend = isTestMode ? (dictationTestBackend ?? selectedBackend) : selectedBackend
-        let transcriptionLanguage = isTestMode ? (dictationTestCohereLanguage ?? config.resolvedCohereLanguage) : config.resolvedCohereLanguage
-        let indicTranscriptionLanguage = config.resolvedIndicASRLanguage
-        let capturedContext = capturedDictationContext
+        let styleSession = stoppedDictationStyleSession
+        let contextResult = stoppedDictationContextResult
+        let sessionConfig = styleSession?.config ?? config
+        let configuredBackend = BackendOption.resolve(
+            backend: sessionConfig.sttBackend,
+            model: sessionConfig.sttModel
+        ) ?? selectedBackend
+        let transcriptionBackend = isTestMode ? (dictationTestBackend ?? configuredBackend) : configuredBackend
+        let transcriptionLanguage = isTestMode
+            ? (dictationTestCohereLanguage ?? sessionConfig.resolvedCohereLanguage)
+            : sessionConfig.resolvedCohereLanguage
+        let indicTranscriptionLanguage = sessionConfig.resolvedIndicASRLanguage
+        let capturedContext = styleSession?.matchingContext(contextResult)
         let promptContext = capturedContext.map { DictationContextCapture.formatForPrompt($0) }
-        let correctionTargetApp = capturedDictationCorrectionTargetApp
+        let correctionTargetApp = styleSession?.target
         let storageContext = capturedContext.map { DictationContextCapture.formatForStorage($0) }
             ?? correctionTargetApp?.appContext
             ?? ""
@@ -8775,16 +8851,34 @@ final class MuesliController: NSObject {
             }
 
             do {
-                let ppOption = self.runtimePostProcessorOption()
-                await self.configureTranscriptCleanupForRuntime(option: ppOption)
-                let enableTranscriptCleanup = self.canRunTranscriptCleanup(option: ppOption)
-                let result = try await self.transcriptionCoordinator.transcribeDictation(
+                let cleanupBackend = TranscriptCleanupBackendOption.resolved(sessionConfig.postProcessorBackend)
+                let ppOption = self.runtimePostProcessorOption(
+                    config: sessionConfig,
+                    backend: cleanupBackend
+                )
+                await self.configureTranscriptCleanupForRuntime(
+                    option: ppOption,
+                    config: sessionConfig,
+                    backend: cleanupBackend
+                )
+                let enableTranscriptCleanup = self.canRunTranscriptCleanup(
+                    option: ppOption,
+                    config: sessionConfig,
+                    transcriptionBackend: transcriptionBackend,
+                    cleanupBackend: cleanupBackend
+                )
+                let cleanupPolicy = styleSession?.cleanupPolicy(
+                    enabled: enableTranscriptCleanup,
+                    context: contextResult
+                )
+                let result = try await self.transcriptionCoordinator.transcribeDictationWithCleanupOutcome(
                     at: wavURL,
                     backend: transcriptionBackend,
                     cohereLanguage: transcriptionLanguage,
                     indicASRLanguage: indicTranscriptionLanguage,
                     enablePostProcessor: enableTranscriptCleanup,
-                    customWords: self.serializedCustomWords(),
+                    cleanupPolicy: cleanupPolicy,
+                    customWords: self.serializedCustomWords(from: sessionConfig),
                     appContext: promptContext
                 )
                 // Drop result if test was cancelled (user navigated away)
@@ -8832,7 +8926,7 @@ final class MuesliController: NSObject {
                     self.syncAppState()
                     if outputMode != .voiceNote {
                         PasteController.paste(text: text)
-                        if self.config.enableDictionaryCorrectionPrompts {
+                        if sessionConfig.enableDictionaryCorrectionPrompts {
                             // Dictionary correction prompts are an explicit opt-in
                             // screen-context feature: they briefly read focused app
                             // text via Accessibility after dictation, then stop when
@@ -9107,6 +9201,10 @@ final class MuesliController: NSObject {
     }
 
     func serializedCustomWords() -> [[String: Any]] {
+        serializedCustomWords(from: config)
+    }
+
+    private func serializedCustomWords(from config: AppConfig) -> [[String: Any]] {
         config.customWords.map { word in
             var dict: [String: Any] = ["word": word.word]
             if let replacement = word.replacement {
