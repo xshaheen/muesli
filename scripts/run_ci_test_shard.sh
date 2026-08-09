@@ -80,6 +80,7 @@ case "${shard}" in
       WhisperBiasingManualReproTests
       TranscriptionResultCleanupTests
       DictationCleanupPolicyTests
+      DictationStyleObservabilityTests
       TranscriptionBackendResidencyPolicyTests
       TranscriptCleanupRequestBodyTests
       PostProcessorIdleUnloadPolicyTests

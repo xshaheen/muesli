@@ -8957,10 +8957,17 @@ final class MuesliController: NSObject {
                     self.setState(.idle)
                     self.meetingMonitor.resumeAfterCooldown()
                     self.syncDictationRecorderWarmup(intent: .postDictation(.transcriptionComplete))
-                    TelemetryDeck.signal("dictation.completed", parameters: [
-                        "backend": self.selectedBackend.backend,
-                        "paste_method": outputMode.pasteMethod,
-                    ])
+                    var telemetryParameters = DictationStyleObservability.parameters(
+                        for: DictationStyleObservabilityInput(
+                            selectionSource: result.cleanupStyle?.source,
+                            isCustomStyle: result.cleanupStyle?.isCustom,
+                            cleanupOutcome: result.cleanupOutcome,
+                            cleanupBackend: cleanupBackend
+                        )
+                    )
+                    telemetryParameters["backend"] = transcriptionBackend.backend
+                    telemetryParameters["paste_method"] = outputMode.pasteMethod
+                    TelemetryDeck.signal("dictation.completed", parameters: telemetryParameters)
                 }
             } catch is CancellationError {
                 fputs("[muesli-native] test dictation cancelled\n", stderr)

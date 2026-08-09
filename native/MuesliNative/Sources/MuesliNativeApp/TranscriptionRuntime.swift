@@ -1117,8 +1117,16 @@ actor TranscriptionCoordinator {
                 let hasSpeech = vadResults.contains { $0.probability > 0.5 }
                 if !hasSpeech {
                     fputs("[muesli-native] VAD: dictation is silent, skipping Cohere transcription\n", stderr)
+                    let empty = SpeechTranscriptionResult(text: "", segments: [])
+                    logSkippedCleanup(
+                        policy.enabled ? .skippedUnavailable : .skippedDisabled,
+                        result: empty,
+                        backend: backend,
+                        policy: policy,
+                        snapshot: postProcessorSnapshot
+                    )
                     return DictationTranscriptionResult(
-                        transcription: SpeechTranscriptionResult(text: "", segments: []),
+                        transcription: empty,
                         cleanupOutcome: policy.enabled ? .skippedUnavailable : .skippedDisabled,
                         cleanupStyle: policy.provenance
                     )
@@ -1292,18 +1300,22 @@ actor TranscriptionCoordinator {
     ) async -> DictationCleanupAttempt {
         guard policy.enabled else {
             Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor disabled for dictation")
+            logSkippedCleanup(.skippedDisabled, result: result, backend: backend, policy: policy, snapshot: postProcessorSnapshot)
             return .skippedDisabled
         }
         guard backend.backend != "indicasr" else {
             Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor skipped: Indic ASR output is not English post-processor safe")
+            logSkippedCleanup(.skippedUnavailable, result: result, backend: backend, policy: policy, snapshot: postProcessorSnapshot)
             return .skippedUnavailable
         }
         guard !result.text.isEmpty else {
             Qwen3PostProcessorLogging.logVerbose("Post-processor skipped: empty transcript")
+            logSkippedCleanup(.skippedUnavailable, result: result, backend: backend, policy: policy, snapshot: postProcessorSnapshot)
             return .skippedUnavailable
         }
         guard postProcessorSnapshot.backend.isCompatible(with: backend) else {
             Gemma4LiteRTLogging.log("Gemma cleanup skipped because Gemma is the transcription backend")
+            logSkippedCleanup(.skippedUnavailable, result: result, backend: backend, policy: policy, snapshot: postProcessorSnapshot)
             return .skippedUnavailable
         }
         // Hosted backends hold nothing on this machine, so they run outside the
@@ -1313,6 +1325,7 @@ actor TranscriptionCoordinator {
                 result,
                 backend: backend,
                 systemPrompt: policy.systemPromptSnapshot,
+                styleProvenance: policy.provenance,
                 postProcessorSnapshot: postProcessorSnapshot,
                 appContext: appContext
             )
@@ -1329,12 +1342,14 @@ actor TranscriptionCoordinator {
                 result,
                 backend: backend,
                 systemPrompt: policy.systemPromptSnapshot,
+                styleProvenance: policy.provenance,
                 postProcessorSnapshot: postProcessorSnapshot,
                 appContext: appContext
             )
         }
         guard #available(macOS 15, *) else {
             Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor skipped: requires macOS 15+")
+            logSkippedCleanup(.skippedUnavailable, result: result, backend: backend, policy: policy, snapshot: postProcessorSnapshot)
             return .skippedUnavailable
         }
 
@@ -1357,6 +1372,8 @@ actor TranscriptionCoordinator {
                     cleanupBackend: postProcessorSnapshot.backend,
                     cleanupModel: postProcessorSnapshot.modelId,
                     asrBackend: backend.backend,
+                    cleanupOutcome: .fallbackEmpty,
+                    styleProvenance: policy.provenance,
                     appContextText: appContext,
                     rawASRText: result.text,
                     rawCleanupOutputText: processed,
@@ -1373,6 +1390,8 @@ actor TranscriptionCoordinator {
                 cleanupBackend: postProcessorSnapshot.backend,
                 cleanupModel: postProcessorSnapshot.modelId,
                 asrBackend: backend.backend,
+                cleanupOutcome: .applied,
+                styleProvenance: policy.provenance,
                 appContextText: appContext,
                 rawASRText: result.text,
                 rawCleanupOutputText: processed,
@@ -1381,10 +1400,13 @@ actor TranscriptionCoordinator {
             )
             return .applied(TranscriptionResultCleanup.replacingText(in: result, with: trimmed))
         } catch Qwen3PostProcessorError.emptyOutput {
+            logCleanupFailure(.fallbackEmpty, status: "fallback_empty_output", result: result, backend: backend, styleProvenance: policy.provenance, snapshot: postProcessorSnapshot)
             return .fallbackEmpty
         } catch Qwen3PostProcessorError.rejectedOutput {
+            logCleanupFailure(.fallbackRejected, status: "fallback_rejected_output", result: result, backend: backend, styleProvenance: policy.provenance, snapshot: postProcessorSnapshot)
             return .fallbackRejected
         } catch Qwen3PostProcessorError.unavailable {
+            logSkippedCleanup(.skippedUnavailable, result: result, backend: backend, policy: policy, snapshot: postProcessorSnapshot)
             return .skippedUnavailable
         } catch {
             Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor failed, falling back: \(error)")
@@ -1393,6 +1415,8 @@ actor TranscriptionCoordinator {
                 cleanupBackend: postProcessorSnapshot.backend,
                 cleanupModel: postProcessorSnapshot.modelId,
                 asrBackend: backend.backend,
+                cleanupOutcome: .fallbackError,
+                styleProvenance: policy.provenance,
                 appContextText: appContext,
                 rawASRText: result.text,
                 errorDescription: String(describing: error)
@@ -1405,11 +1429,13 @@ actor TranscriptionCoordinator {
         _ result: SpeechTranscriptionResult,
         backend: BackendOption,
         systemPrompt: String,
+        styleProvenance: DictationCleanupStyleProvenance?,
         postProcessorSnapshot: PostProcessorSnapshot,
         appContext: String?
     ) async -> DictationCleanupAttempt {
         guard #available(macOS 15, *) else {
             Gemma4LiteRTLogging.log("Gemma cleanup skipped: requires macOS 15+")
+            logCleanupFailure(.skippedUnavailable, status: "skipped_unavailable", result: result, backend: backend, styleProvenance: styleProvenance, snapshot: postProcessorSnapshot)
             return .skippedUnavailable
         }
         do {
@@ -1439,6 +1465,8 @@ actor TranscriptionCoordinator {
                 cleanupBackend: postProcessorSnapshot.backend,
                 cleanupModel: postProcessorSnapshot.modelId,
                 asrBackend: backend.backend,
+                cleanupOutcome: .applied,
+                styleProvenance: styleProvenance,
                 appContextText: appContext,
                 rawASRText: result.text,
                 rawCleanupOutputText: cleanup.rawOutput,
@@ -1447,11 +1475,14 @@ actor TranscriptionCoordinator {
             )
             return .applied(TranscriptionResultCleanup.replacingText(in: result, with: trimmed))
         } catch Gemma4LiteRTTranscriber.TranscriberError.cleanupEmptyOutput {
+            logCleanupFailure(.fallbackEmpty, status: "fallback_empty_output", result: result, backend: backend, styleProvenance: styleProvenance, snapshot: postProcessorSnapshot)
             return .fallbackEmpty
         } catch Gemma4LiteRTTranscriber.TranscriberError.cleanupRejectedOutput {
+            logCleanupFailure(.fallbackRejected, status: "fallback_rejected_output", result: result, backend: backend, styleProvenance: styleProvenance, snapshot: postProcessorSnapshot)
             return .fallbackRejected
         } catch Gemma4LiteRTTranscriber.TranscriberError.modelMissing,
                 Gemma4LiteRTTranscriber.TranscriberError.notLoaded {
+            logCleanupFailure(.skippedUnavailable, status: "skipped_unavailable", result: result, backend: backend, styleProvenance: styleProvenance, snapshot: postProcessorSnapshot)
             return .skippedUnavailable
         } catch {
             Gemma4LiteRTLogging.log("Gemma cleanup failed, falling back: \(error)")
@@ -1460,6 +1491,8 @@ actor TranscriptionCoordinator {
                 cleanupBackend: postProcessorSnapshot.backend,
                 cleanupModel: postProcessorSnapshot.modelId,
                 asrBackend: backend.backend,
+                cleanupOutcome: .fallbackError,
+                styleProvenance: styleProvenance,
                 appContextText: appContext,
                 rawASRText: result.text,
                 errorDescription: String(describing: error)
@@ -1472,6 +1505,7 @@ actor TranscriptionCoordinator {
         _ result: SpeechTranscriptionResult,
         backend: BackendOption,
         systemPrompt: String,
+        styleProvenance: DictationCleanupStyleProvenance?,
         postProcessorSnapshot: PostProcessorSnapshot,
         appContext: String?
     ) async -> DictationCleanupAttempt {
@@ -1493,6 +1527,8 @@ actor TranscriptionCoordinator {
                     cleanupBackend: postProcessorSnapshot.backend,
                     cleanupModel: cleanup.model,
                     asrBackend: backend.backend,
+                    cleanupOutcome: .fallbackEmpty,
+                    styleProvenance: styleProvenance,
                     appContextText: appContext,
                     rawASRText: result.text,
                     rawCleanupOutputText: cleanup.rawOutput,
@@ -1508,6 +1544,8 @@ actor TranscriptionCoordinator {
                 cleanupBackend: postProcessorSnapshot.backend,
                 cleanupModel: cleanup.model,
                 asrBackend: backend.backend,
+                cleanupOutcome: .applied,
+                styleProvenance: styleProvenance,
                 appContextText: appContext,
                 rawASRText: result.text,
                 rawCleanupOutputText: cleanup.rawOutput,
@@ -1516,6 +1554,7 @@ actor TranscriptionCoordinator {
             )
             return .applied(TranscriptionResultCleanup.replacingText(in: result, with: trimmed))
         } catch TranscriptCleanupError.emptyResponse {
+            logCleanupFailure(.fallbackEmpty, status: "fallback_empty_output", result: result, backend: backend, styleProvenance: styleProvenance, snapshot: postProcessorSnapshot)
             return .fallbackEmpty
         } catch TranscriptCleanupError.rejectedOutput {
             Qwen3PostProcessorLogging.logVerbose("\(postProcessorSnapshot.backend.label) post-processor output rejected, falling back")
@@ -1524,12 +1563,15 @@ actor TranscriptionCoordinator {
                 cleanupBackend: postProcessorSnapshot.backend,
                 cleanupModel: postProcessorSnapshot.modelId,
                 asrBackend: backend.backend,
+                cleanupOutcome: .fallbackRejected,
+                styleProvenance: styleProvenance,
                 appContextText: appContext,
                 rawASRText: result.text,
                 errorDescription: TranscriptCleanupError.rejectedOutput.localizedDescription
             )
             return .fallbackRejected
         } catch TranscriptCleanupError.missingConfiguration {
+            logCleanupFailure(.skippedUnavailable, status: "skipped_unavailable", result: result, backend: backend, styleProvenance: styleProvenance, snapshot: postProcessorSnapshot)
             return .skippedUnavailable
         } catch {
             Qwen3PostProcessorLogging.logVerbose("\(postProcessorSnapshot.backend.label) post-processor failed, falling back: \(error)")
@@ -1538,12 +1580,50 @@ actor TranscriptionCoordinator {
                 cleanupBackend: postProcessorSnapshot.backend,
                 cleanupModel: postProcessorSnapshot.modelId,
                 asrBackend: backend.backend,
+                cleanupOutcome: .fallbackError,
+                styleProvenance: styleProvenance,
                 appContextText: appContext,
                 rawASRText: result.text,
                 errorDescription: String(describing: error)
             )
             return .fallbackError
         }
+    }
+
+    private func logSkippedCleanup(
+        _ outcome: DictationCleanupOutcome,
+        result: SpeechTranscriptionResult,
+        backend: BackendOption,
+        policy: DictationCleanupPolicy,
+        snapshot: PostProcessorSnapshot
+    ) {
+        logCleanupFailure(
+            outcome,
+            status: outcome.rawValue,
+            result: result,
+            backend: backend,
+            styleProvenance: policy.provenance,
+            snapshot: snapshot
+        )
+    }
+
+    private func logCleanupFailure(
+        _ outcome: DictationCleanupOutcome,
+        status: String,
+        result: SpeechTranscriptionResult,
+        backend: BackendOption,
+        styleProvenance: DictationCleanupStyleProvenance?,
+        snapshot: PostProcessorSnapshot
+    ) {
+        TranscriptCleanupDebugLogger.append(
+            status: status,
+            cleanupBackend: snapshot.backend,
+            cleanupModel: snapshot.modelId,
+            asrBackend: backend.backend,
+            cleanupOutcome: outcome,
+            styleProvenance: styleProvenance,
+            rawASRText: result.text
+        )
     }
 
     /// The dictation entry point receives the dictionary as plain dictionaries from the

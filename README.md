@@ -24,7 +24,7 @@
 
 ## What is Muesli?
 
-Muesli is a **lightweight native macOS app** that combines **WisprFlow-style dictation** and **Granola-style meeting transcription** in one tool. All transcription runs locally on Apple Silicon — your audio never leaves your device unless you choose a cloud-backed meeting summary provider.
+Muesli is a **lightweight native macOS app** that combines **WisprFlow-style dictation** and **Granola-style meeting transcription** in one tool. Speech-to-text runs locally on Apple Silicon and audio is not sent to a transcription service. Optional hosted cleanup and meeting-note providers receive text only when you configure and use them.
 
 <p align="center">
   <img src="assets/muesli-github-ss.png" alt="Muesli interface showing dictations and meeting history" width="900" />
@@ -59,6 +59,8 @@ Live transcription is off by default. Download Parakeet Realtime EOU or Nemotron
 - **Meeting templates** — Built-in and custom templates for meeting notes. Choose a template before or after recording — re-summarize any meeting with a different template.
 - **Dismiss calendar events** — Hide irrelevant events from Coming Up, status bar, and menu bar. Dismissed events are pruned automatically.
 - **iCloud Text Sync & iPhone Bridge** — Privately sync dictation text, meeting transcripts, notes, summaries, and manual notes with Muesli for iPhone through iCloud. Audio recordings are never synced.
+- **Adaptive Dictation Styles** — Opt in to local app/category and exact website rules that select built-in or custom cleanup instructions from the target captured at recording start. Style rules and local history provenance do not sync to iCloud.
+- **Local or hosted AI cleanup** — Keep cleanup on-device with Qwen/Gemma, or configure a hosted provider. Hosted cleanup receives transcript text plus the selected style instructions; separately enabled App Context is included only when that feature is on.
 - **Filler word removal** — Automatically strips "uh", "um", "er", "hmm" and verbal disfluencies.
 - **AI meeting notes** — BYOK with OpenAI or OpenRouter, sign in with your ChatGPT Plus/Pro subscription (no API key needed), or use local Ollama models. Auto-generated meeting titles. Re-summarize any meeting.
 - **ChatGPT OAuth** — Sign in with your existing ChatGPT subscription via browser-based OAuth (PKCE). Tokens stored in the app support directory with owner-only file permissions.
@@ -359,7 +361,8 @@ Muesli needs these macOS permissions (guided during onboarding):
 |---|---|
 | **Microphone** | Record audio for dictation and meetings |
 | **System Audio Recording** | Capture call audio from Zoom/Meet/Teams |
-| **Accessibility** | Simulate Cmd+V to paste transcribed text |
+| **Accessibility** | Simulate Cmd+V to paste; when App Context is enabled, read bounded focused-app text and browser URL context. Bundle-ID style matching does not need it. |
+| **Screen Recording** *(OCR opt-in)* | Capture OCR screen context separately from Accessibility; OCR is not used for style selection |
 | **Input Monitoring** | Detect hotkey presses globally |
 | **Camera** *(implicit)* | Detect webcam activation for meeting detection |
 | **Calendar** *(optional)* | Show upcoming meetings from Google Calendar |
@@ -388,6 +391,10 @@ Muesli needs these macOS permissions (guided during onboarding):
 | Word correction | Jaro-Winkler similarity (native Swift) |
 | Storage | SQLite (WAL mode) |
 | Signing | Developer ID + hardened runtime (notarization ready) |
+
+Adaptive Styles affect standard record-then-transcribe dictation. Nemotron double-tap streaming remains live and skips Adaptive Style cleanup; local history records that limitation as `skipped_streaming`.
+
+TelemetryDeck receives only coarse enum values for dictation backend, paste method, style-selection source, built-in/custom class, cleanup outcome, and cleanup backend. It never receives app or website identity, style IDs/names, prompts, transcripts, URLs, selected text, OCR, or App Context. Optional developer cleanup JSONL logs remain local, may contain bounded transcript/context and style provenance, and rotate after 5 MB. See the [privacy policy](docs/privacy.html) for the complete data-flow boundaries.
 
 ---
 
