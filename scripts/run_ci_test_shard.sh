@@ -77,6 +77,7 @@ case "${shard}" in
       AsrVocabularyPromptTests
       WhisperBiasingManualReproTests
       TranscriptionResultCleanupTests
+      DictationCleanupPolicyTests
       TranscriptionBackendResidencyPolicyTests
       TranscriptCleanupRequestBodyTests
       PostProcessorIdleUnloadPolicyTests

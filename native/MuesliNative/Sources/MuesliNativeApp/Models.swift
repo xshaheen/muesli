@@ -780,7 +780,7 @@ struct DictationStyleDomainRule: Codable, Equatable, Identifiable {
     }
 }
 
-enum DictationStyleSelectionSource: String, Codable, Equatable {
+enum DictationStyleSelectionSource: String, Codable, Equatable, Sendable {
     case domain
     case app
     case category

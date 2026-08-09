@@ -123,6 +123,107 @@ struct TranscriptionResultCleanupTests {
     }
 }
 
+@Suite("Per-dictation cleanup policy")
+struct DictationCleanupPolicyTests {
+    private let original = SpeechTranscriptionResult(
+        text: "Um send this to museli",
+        segments: [SpeechSegment(start: 0, end: 1, text: "Um send this to museli")]
+    )
+
+    @Test("composes one immutable style snapshot with provenance")
+    func composesStyleSnapshotOnce() {
+        let stylePrompt = "Keep the message concise and casual."
+        let selection = DictationStyleSelectionResult(
+            styleID: "message",
+            styleName: "Message",
+            prompt: stylePrompt,
+            isCustom: false,
+            source: .app,
+            categoryID: "messages"
+        )
+
+        let policy = DictationCleanupPolicy(enabled: true, selection: selection)
+
+        #expect(policy.systemPromptSnapshot.components(separatedBy: stylePrompt).count == 2)
+        #expect(policy.systemPromptSnapshot.contains("untrusted reference data"))
+        #expect(policy.provenance?.styleID == "message")
+        #expect(policy.provenance?.source == .app)
+    }
+
+    @Test("all non-applied outcomes retain deterministic cleanup and custom words")
+    func fallbackOutcomesAndFinalOrdering() {
+        let attempts: [(DictationCleanupAttempt, DictationCleanupOutcome)] = [
+            (.fallbackEmpty, .fallbackEmpty),
+            (.fallbackRejected, .fallbackRejected),
+            (.fallbackError, .fallbackError),
+            (.skippedDisabled, .skippedDisabled),
+            (.skippedUnavailable, .skippedUnavailable),
+            (.skippedStreaming, .skippedStreaming),
+        ]
+        let words = [CustomWord(word: "museli", replacement: "Muesli")]
+
+        for (attempt, expectedOutcome) in attempts {
+            let result = DictationCleanupFinalizer.finalize(
+                original: original,
+                attempt: attempt,
+                customWords: words,
+                provenance: nil
+            )
+            #expect(result.cleanupOutcome == expectedOutcome)
+            #expect(result.text == "Send this to Muesli")
+        }
+    }
+
+    @Test("custom words remain the final stage after applied cleanup")
+    func customWordsFollowAppliedCleanup() {
+        let applied = SpeechTranscriptionResult(text: "Send this to museli", segments: [])
+        let result = DictationCleanupFinalizer.finalize(
+            original: original,
+            attempt: .applied(applied),
+            customWords: [CustomWord(word: "museli", replacement: "Muesli")],
+            provenance: nil
+        )
+
+        #expect(result.cleanupOutcome == .applied)
+        #expect(result.text == "Send this to Muesli")
+    }
+
+    @Test("hosted and Gemma seams retain distinct request prompts")
+    func hostedAndGemmaPromptIsolation() {
+        let first = "First request style"
+        let second = "Second request style"
+
+        let hostedFirst = TranscriptCleanupClient.systemPromptWithAppContextGuidance(first, appContext: "reference")
+        let hostedSecond = TranscriptCleanupClient.systemPromptWithAppContextGuidance(second, appContext: "reference")
+        let gemmaFirst = Gemma4CleanupPromptBuilder.build(text: "hello", systemPrompt: first, appContext: "reference")
+        let gemmaSecond = Gemma4CleanupPromptBuilder.build(text: "hello", systemPrompt: second, appContext: "reference")
+
+        #expect(hostedFirst.contains(first) && !hostedFirst.contains(second))
+        #expect(hostedSecond.contains(second) && !hostedSecond.contains(first))
+        #expect(gemmaFirst.systemPrompt.contains(first) && !gemmaFirst.systemPrompt.contains(second))
+        #expect(gemmaSecond.systemPrompt.contains(second) && !gemmaSecond.systemPrompt.contains(first))
+        #expect(gemmaFirst.userPrompt.contains("untrusted quoted data"))
+    }
+
+    @available(macOS 15, *)
+    @Test("Qwen request templates reset safely and model reuse keys only on URL")
+    func qwenPromptIsolationAndResidency() {
+        let first = Qwen3RequestTemplatePlan(requestPrompt: "First request style")
+        let second = Qwen3RequestTemplatePlan(requestPrompt: "Second request style")
+        let model = URL(fileURLWithPath: "/tmp/model.gguf")
+
+        #expect(first.requestPrompt == "First request style")
+        #expect(second.requestPrompt == "Second request style")
+        #expect(first.resetPrompt == second.resetPrompt)
+        #expect(first.resetPrompt != first.requestPrompt)
+        #expect(!Qwen3PostProcessor.requiresModelReload(current: model, next: model))
+        #expect(Qwen3PostProcessor.requiresModelReload(
+            current: model,
+            next: URL(fileURLWithPath: "/tmp/other.gguf")
+        ))
+    }
+}
+
 @Suite("Inference serialization gate")
 struct InferenceGateTests {
 
