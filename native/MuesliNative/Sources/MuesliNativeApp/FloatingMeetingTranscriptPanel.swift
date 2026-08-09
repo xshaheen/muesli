@@ -5,9 +5,9 @@ import os
 
 enum FloatingMeetingTranscriptPlacement {
     static let panelSize = NSSize(width: 360, height: 320)
-    /// Keeps the panel off the pill rather than flush against it, so the two read as
-    /// separate windows and the pill's controls stay clear of the panel's edge.
-    static let gap: CGFloat = 8
+    /// Keeps the independently movable panel clear of the pill while making their shared
+    /// glass chrome read as one floating system.
+    static let gap: CGFloat = 4
     static let screenInset: CGFloat = 8
 
     enum Side {
@@ -142,6 +142,7 @@ final class FloatingMeetingTranscriptModel {
     var isPaused = false
     var isPresented = false
     var didCopy = false
+    var selectionAccentHex = MuesliTheme.resolvedAccentDarkHex
 
     /// The panel opens on the transcript; Chat and Notes are deliberate choices.
     /// Keyboard focus is gated on the selected tab: on the transcript the panel
@@ -220,6 +221,10 @@ final class FloatingMeetingTranscriptModel {
             partialYou: partialYou,
             partialOthers: partialOthers
         )
+    }
+
+    func setSelectionAccentHex(_ hex: Int) {
+        selectionAccentHex = hex
     }
 
     /// Copies whatever the panel is currently showing.
@@ -345,6 +350,10 @@ final class FloatingMeetingTranscriptPanelController {
 
     func setPaused(_ paused: Bool) {
         model.isPaused = paused
+    }
+
+    func setSelectionAccentHex(_ hex: Int) {
+        model.setSelectionAccentHex(hex)
     }
 
     /// Shows the transcript, placing it beside the pill only when the user has never
@@ -649,6 +658,8 @@ private struct FloatingMeetingTranscriptPanelView: View {
     let onOpenNotes: () -> Void
     let onDismiss: () -> Void
     var onSelectTab: (FloatingMeetingPanelTab) -> Void = { _ in }
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     private var partialYou: String {
         model.presentation.partialYou.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -687,11 +698,15 @@ private struct FloatingMeetingTranscriptPanelView: View {
     }
 
     var body: some View {
+        let surfaceStyle = FloatingMeetingPanelSurfaceStyle.resolve(
+            reduceTransparency: reduceTransparency,
+            increaseContrast: colorSchemeContrast == .increased
+        )
         if model.isPresented {
             VStack(spacing: 0) {
-                header
+                header(surfaceStyle: surfaceStyle)
                     .background(PanelWindowDragHandle())
-                Divider().background(MuesliTheme.surfaceBorder)
+                Divider().overlay(Color.white.opacity(FloatingMeetingPanelPalette.separatorAlpha))
                 switch model.selectedTab {
                 case .chat where model.chatContext != nil:
                     // Send-time resolvers, not resolved values: reading the growing
@@ -705,7 +720,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
                         systemPrompt: MeetingChatSource.systemPrompt(isRecording: true),
                         manualNotes: model.chatContext!.manualNotes,
                         config: model.chatContext!.currentConfig,
-                        isCompact: true
+                        presentation: .floatingPanel
                     )
                 case .notes:
                     notesEditor
@@ -717,13 +732,26 @@ private struct FloatingMeetingTranscriptPanelView: View {
                 width: FloatingMeetingTranscriptPlacement.panelSize.width,
                 height: FloatingMeetingTranscriptPlacement.panelSize.height
             )
-            .background(.ultraThinMaterial)
-            .background(MuesliTheme.backgroundRaised.opacity(0.92))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(MuesliTheme.surfaceBorder.opacity(0.8), lineWidth: 1)
+            .background {
+                ZStack {
+                    if surfaceStyle.glass.usesGlassEffect {
+                        Rectangle().fill(.ultraThinMaterial)
+                    }
+                    Color(hex: Int(surfaceStyle.glass.tintHex, radix: 16) ?? 0x1e1e2e)
+                        .opacity(surfaceStyle.glass.tintAlpha)
+                }
             }
+            .clipShape(RoundedRectangle(cornerRadius: surfaceStyle.cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: surfaceStyle.cornerRadius, style: .continuous)
+                    .strokeBorder(
+                        Color(hex: Int(surfaceStyle.glass.borderHex, radix: 16) ?? 0xffffff)
+                            .opacity(surfaceStyle.glass.borderAlpha),
+                        lineWidth: surfaceStyle.glass.borderWidth
+                    )
+            }
+            .environment(\.colorScheme, .dark)
+            .tint(Color.white.opacity(0.90))
         }
     }
 
@@ -735,32 +763,32 @@ private struct FloatingMeetingTranscriptPanelView: View {
         }
     }
 
-    private var header: some View {
+    private func header(surfaceStyle: FloatingMeetingPanelSurfaceStyle) -> some View {
         HStack(spacing: MuesliTheme.spacing8) {
             Text(headerTitle)
                 .font(MuesliTheme.callout().weight(.semibold))
-                .foregroundStyle(MuesliTheme.textPrimary)
+                .foregroundStyle(Color.white.opacity(0.95))
             Spacer()
             Circle()
-                .fill(model.isPaused ? MuesliTheme.textTertiary : MuesliTheme.success)
+                .fill(model.isPaused ? MuesliTheme.transcribing : MuesliTheme.success)
                 .frame(width: 6, height: 6)
             Text(model.isPaused ? "Paused" : "Live")
                 .font(MuesliTheme.caption())
-                .foregroundStyle(MuesliTheme.textSecondary)
+                .foregroundStyle(Color.white.opacity(0.62))
                 .fixedSize()
             // The tab strip sits immediately left of dismiss, right of the variable-width
             // status label, so its hit region is a fixed offset from the panel's right edge.
-            tabButton(.transcript, icon: "text.quote", help: "Transcript")
+            tabButton(.transcript, icon: "text.quote", help: "Transcript", surfaceStyle: surfaceStyle)
             if model.isChatAvailable {
-                tabButton(.chat, icon: "bubble.left.and.text.bubble.right", help: "Chat")
+                tabButton(.chat, icon: "bubble.left.and.text.bubble.right", help: "Chat", surfaceStyle: surfaceStyle)
             }
             if model.isNotesAvailable {
-                tabButton(.notes, icon: "note.text", help: "My notes")
+                tabButton(.notes, icon: "note.text", help: "My notes", surfaceStyle: surfaceStyle)
             }
             Button(action: onDismiss) {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .foregroundStyle(Color.white.opacity(0.68))
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
@@ -769,7 +797,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
             Button(action: copyTranscript) {
                 Image(systemName: model.didCopy ? "checkmark" : "doc.on.doc")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(model.didCopy ? MuesliTheme.success : MuesliTheme.textSecondary)
+                    .foregroundStyle(model.didCopy ? MuesliTheme.success : Color.white.opacity(0.68))
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
@@ -778,19 +806,25 @@ private struct FloatingMeetingTranscriptPanelView: View {
             .help("Copy")
         }
         .padding(.horizontal, MuesliTheme.spacing16)
-        .frame(height: 42)
+        .frame(height: 46)
     }
 
-    private func tabButton(_ tab: FloatingMeetingPanelTab, icon: String, help: String) -> some View {
+    private func tabButton(
+        _ tab: FloatingMeetingPanelTab,
+        icon: String,
+        help: String,
+        surfaceStyle: FloatingMeetingPanelSurfaceStyle
+    ) -> some View {
         let isSelected = model.selectedTab == tab
+        let selectionAccent = Color(hex: model.selectionAccentHex)
         return Button { onSelectTab(tab) } label: {
             Image(systemName: icon)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(isSelected ? MuesliTheme.accent : MuesliTheme.textSecondary)
-                .frame(width: 24, height: 24)
+                .foregroundStyle(isSelected ? selectionAccent : Color.white.opacity(0.62))
+                .frame(width: 26, height: 26)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isSelected ? MuesliTheme.accent.opacity(0.14) : Color.clear)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(isSelected ? selectionAccent.opacity(surfaceStyle.selectedControlAlpha) : Color.clear)
                 )
                 .contentShape(Rectangle())
         }
@@ -807,6 +841,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
                 horizontalPadding: MuesliTheme.spacing12,
                 topPadding: MuesliTheme.spacing8,
                 bottomPadding: MuesliTheme.spacing8,
+                surfacePresentation: .floatingPanel,
                 onOpen: onOpenNotes
             )
         }
@@ -822,7 +857,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
             set: { model.notesEdited($0) }
         ))
         .font(.system(size: 12))
-        .foregroundStyle(MuesliTheme.textPrimary)
+        .foregroundStyle(Color.white.opacity(0.92))
         .scrollContentBackground(.hidden)
         .padding(.horizontal, MuesliTheme.spacing8)
         .padding(.vertical, MuesliTheme.spacing8)
@@ -830,7 +865,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
             if model.notesDraft.isEmpty {
                 Text("Type your notes — they feed the meeting summary.")
                     .font(.system(size: 12))
-                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .foregroundStyle(Color.white.opacity(0.42))
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, MuesliTheme.spacing12)
                     .allowsHitTesting(false)

@@ -5,6 +5,63 @@ import Testing
 @Suite("CoreAudioSystemRecorder")
 struct CoreAudioSystemRecorderTests {
 
+    @Test("tap recovery keeps retrying after the fast retry window")
+    func tapRecoveryKeepsRetrying() {
+        #expect(CoreAudioTapRecoveryPolicy.retryDelay(afterFailedAttempt: 0) == 0.5)
+        #expect(CoreAudioTapRecoveryPolicy.retryDelay(afterFailedAttempt: 1) == 1)
+        #expect(CoreAudioTapRecoveryPolicy.retryDelay(afterFailedAttempt: 2) == 2)
+        #expect(CoreAudioTapRecoveryPolicy.retryDelay(afterFailedAttempt: 3) == 5)
+        #expect(CoreAudioTapRecoveryPolicy.retryDelay(afterFailedAttempt: 4) == 10)
+        #expect(CoreAudioTapRecoveryPolicy.retryDelay(afterFailedAttempt: 5) == 30)
+        #expect(CoreAudioTapRecoveryPolicy.retryDelay(afterFailedAttempt: 50) == 30)
+        #expect(!CoreAudioTapRecoveryPolicy.shouldReportInterruption(afterFailedAttempt: 2))
+        #expect(CoreAudioTapRecoveryPolicy.shouldReportInterruption(afterFailedAttempt: 3))
+        #expect(!CoreAudioTapRecoveryPolicy.shouldReportInterruption(afterFailedAttempt: 4))
+        #expect(CoreAudioTapRecoveryPolicy.shouldReportNoSamples(
+            isAwaitingRecoverySamples: true,
+            didReportInterruption: false
+        ))
+        #expect(!CoreAudioTapRecoveryPolicy.shouldReportNoSamples(
+            isAwaitingRecoverySamples: true,
+            didReportInterruption: true
+        ))
+        #expect(!CoreAudioTapRecoveryPolicy.shouldReportNoSamples(
+            isAwaitingRecoverySamples: false,
+            didReportInterruption: false
+        ))
+    }
+
+    @Test("watchdog detects only an active capture callback stall")
+    func watchdogDetectsActiveCaptureStall() {
+        let timeout = CoreAudioTapRecoveryPolicy.callbackTimeoutNanoseconds
+        let lastCallback = UInt64(1_000)
+
+        #expect(!CoreAudioTapRecoveryPolicy.hasCallbackStalled(
+            lastCallbackUptimeNanoseconds: lastCallback,
+            nowUptimeNanoseconds: lastCallback + timeout - 1,
+            isPaused: false,
+            isRecovering: false
+        ))
+        #expect(CoreAudioTapRecoveryPolicy.hasCallbackStalled(
+            lastCallbackUptimeNanoseconds: lastCallback,
+            nowUptimeNanoseconds: lastCallback + timeout,
+            isPaused: false,
+            isRecovering: false
+        ))
+        #expect(!CoreAudioTapRecoveryPolicy.hasCallbackStalled(
+            lastCallbackUptimeNanoseconds: lastCallback,
+            nowUptimeNanoseconds: lastCallback + timeout,
+            isPaused: true,
+            isRecovering: false
+        ))
+        #expect(!CoreAudioTapRecoveryPolicy.hasCallbackStalled(
+            lastCallbackUptimeNanoseconds: lastCallback,
+            nowUptimeNanoseconds: lastCallback + timeout,
+            isPaused: false,
+            isRecovering: true
+        ))
+    }
+
     @Test("global tap description captures process mix except Muesli")
     func globalTapDescriptionExcludesSelfAudio() {
         let tapDescription = CoreAudioSystemRecorder.makeGlobalTapDescription(

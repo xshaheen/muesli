@@ -5,6 +5,11 @@ import Observation
 import SwiftUI
 import AppKit
 
+enum MeetingChatPresentation: Equatable {
+    case standard
+    case floatingPanel
+}
+
 /// Chat surface over a meeting transcript.
 ///
 /// Sources nothing itself. The transcript and system prompt arrive as inputs so the same
@@ -26,13 +31,15 @@ struct MeetingChatView: View {
     /// the same reason `transcript` is: resolved per send, read nowhere in `body`.
     var manualNotes: () -> String = { "" }
     let config: () -> AppConfig
-    /// Compact mode trims padding and type size for the floating panel.
-    var isCompact: Bool = false
+    var presentation: MeetingChatPresentation = .standard
 
     @State private var draft: String = ""
     /// Which answer was just copied, so the button can confirm it happened.
     @State private var copiedTurnText: String?
     @FocusState private var isInputFocused: Bool
+
+    private var isCompact: Bool { presentation == .floatingPanel }
+    private var usesNeutralGlassStyle: Bool { presentation == .floatingPanel }
 
     private var canSend: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !conversation.isSending
@@ -41,7 +48,11 @@ struct MeetingChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             messageList
-            Divider().overlay(MuesliTheme.surfaceBorder)
+            Divider().overlay(
+                usesNeutralGlassStyle
+                    ? Color.white.opacity(FloatingMeetingPanelPalette.separatorAlpha)
+                    : MuesliTheme.surfaceBorder
+            )
             composer
         }
         .background {
@@ -135,8 +146,17 @@ struct MeetingChatView: View {
             .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(turn.role == .user ? MuesliTheme.surfaceSelected : MuesliTheme.backgroundRaised)
+                    .fill(turnBubbleFill(for: turn.role))
             )
+            .overlay {
+                if usesNeutralGlassStyle {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(
+                            Color.white.opacity(FloatingMeetingPanelPalette.separatorAlpha),
+                            lineWidth: 1
+                        )
+                }
+            }
             // The copy affordance only shows on hover; clicking the bubble itself
             // copies too, so the answer is grabbable without hunting for the button.
             .onTapGesture {
@@ -145,6 +165,17 @@ struct MeetingChatView: View {
             .frame(maxWidth: .infinity, alignment: turn.role == .user ? .trailing : .leading)
             if turn.role == .assistant { Spacer(minLength: 32) }
         }
+    }
+
+    private func turnBubbleFill(for role: MeetingChatTurn.Role) -> Color {
+        if usesNeutralGlassStyle {
+            return Color.white.opacity(
+                role == .user
+                    ? FloatingMeetingPanelPalette.strongSurfaceAlpha
+                    : FloatingMeetingPanelPalette.subtleSurfaceAlpha
+            )
+        }
+        return role == .user ? MuesliTheme.surfaceSelected : MuesliTheme.backgroundRaised
     }
 
     private func copyTurn(_ text: String) {
@@ -175,7 +206,9 @@ struct MeetingChatView: View {
 
     private var thinkingRow: some View {
         HStack(spacing: 6) {
-            ProgressView().controlSize(.small)
+            ProgressView()
+                .controlSize(.small)
+                .tint(usesNeutralGlassStyle ? Color.white.opacity(0.70) : MuesliTheme.accent)
             Text("Thinking…")
                 .font(.system(size: isCompact ? 11 : 12))
                 .foregroundStyle(MuesliTheme.textTertiary)
@@ -194,11 +227,20 @@ struct MeetingChatView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(MuesliTheme.backgroundRaised)
+                    .fill(
+                        usesNeutralGlassStyle
+                            ? Color.white.opacity(FloatingMeetingPanelPalette.subtleSurfaceAlpha)
+                            : MuesliTheme.backgroundRaised
+                    )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                    .strokeBorder(
+                        usesNeutralGlassStyle
+                            ? Color.white.opacity(FloatingMeetingPanelPalette.strongSurfaceAlpha)
+                            : MuesliTheme.surfaceBorder,
+                        lineWidth: 1
+                    )
             )
     }
 
@@ -232,10 +274,19 @@ struct MeetingChatView: View {
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4)
                             .background(
-                                Capsule().fill(MuesliTheme.backgroundRaised)
+                                Capsule().fill(
+                                    usesNeutralGlassStyle
+                                        ? Color.white.opacity(FloatingMeetingPanelPalette.controlSurfaceAlpha)
+                                        : MuesliTheme.backgroundRaised
+                                )
                             )
                             .overlay(
-                                Capsule().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                                Capsule().strokeBorder(
+                                    usesNeutralGlassStyle
+                                        ? Color.white.opacity(FloatingMeetingPanelPalette.strongSurfaceAlpha)
+                                        : MuesliTheme.surfaceBorder,
+                                    lineWidth: 1
+                                )
                             )
                     }
                     .buttonStyle(.plain)
@@ -293,11 +344,32 @@ struct MeetingChatView: View {
             Button(action: submit) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: isCompact ? 16 : 18))
-                    .foregroundStyle(canSend ? MuesliTheme.accent : MuesliTheme.textTertiary)
+                    .foregroundStyle(
+                        usesNeutralGlassStyle
+                            ? Color.white.opacity(canSend ? 0.92 : 0.34)
+                            : (canSend ? MuesliTheme.accent : MuesliTheme.textTertiary)
+                    )
             }
             .buttonStyle(.plain)
             .disabled(!canSend)
             .help("Send")
+        }
+        .padding(.horizontal, usesNeutralGlassStyle ? 10 : 0)
+        .padding(.vertical, usesNeutralGlassStyle ? 7 : 0)
+        .background {
+            if usesNeutralGlassStyle {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(FloatingMeetingPanelPalette.controlSurfaceAlpha))
+            }
+        }
+        .overlay {
+            if usesNeutralGlassStyle {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(
+                        Color.white.opacity(FloatingMeetingPanelPalette.strongSurfaceAlpha),
+                        lineWidth: 1
+                    )
+            }
         }
     }
 

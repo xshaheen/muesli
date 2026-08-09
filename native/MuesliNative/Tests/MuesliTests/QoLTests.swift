@@ -604,4 +604,20 @@ struct MeetingChunkTimingTrackerTests {
         #expect(second?.startTimeSeconds == 0.1)
         #expect(second?.durationSeconds == 0.05)
     }
+
+    @Test("realigns the next chunk after a capture interruption")
+    func realignsAfterCaptureInterruption() {
+        var tracker = MeetingChunkTimingTracker()
+        tracker.start()
+        tracker.append(sampleCount: 16_000)
+        _ = tracker.rotate()
+
+        tracker.realign(atSampleIndex: 160_000)
+        tracker.append(sampleCount: 8_000)
+        let resumed = tracker.finish()
+
+        #expect(resumed?.startSampleIndex == 160_000)
+        #expect(resumed?.startTimeSeconds == 10)
+        #expect(resumed?.durationSeconds == 0.5)
+    }
 }

@@ -9,6 +9,11 @@ struct FloatingMeetingTranscriptPlacementTests {
     private let inset = FloatingMeetingTranscriptPlacement.screenInset
     private let panelSize = FloatingMeetingTranscriptPlacement.panelSize
 
+    @Test("the initial panel placement keeps a tight visual connection to the pill")
+    func panelConnectionGap() {
+        #expect(gap == 4)
+    }
+
     private func pill(x: CGFloat, y: CGFloat = 440) -> NSRect {
         NSRect(x: x, y: y, width: 76, height: 22)
     }
@@ -51,11 +56,12 @@ struct FloatingMeetingTranscriptPlacementTests {
     func sideIsStickyAcrossSmallPillMovements() {
         // The panel is 360pt wide, so crossing the threshold relocates it by more than
         // its own width. A pill that drifts a few points must not be able to do that.
-        // 374 is two points shy of the width the left side needs, so the panel starts right.
-        let held = placement(beside: pill(x: 374), in: wideScreen)
+        // Start two points shy of the width the left side needs, so the panel starts right.
+        let required = panelSize.width + gap + inset
+        let held = placement(beside: pill(x: required - 2), in: wideScreen)
         #expect(held.side == .right, "no room on the left, so the first placement is on the right")
 
-        for x in stride(from: CGFloat(378), through: 398, by: 5) {
+        for x in stride(from: required + 2, through: required + 22, by: 5) {
             let drifted = pill(x: x)
             let sticky = placement(beside: drifted, in: wideScreen, preferring: held.side)
 

@@ -160,4 +160,15 @@ struct SystemAudioRecorderTests {
         state.reset()
         #expect(state.resolvedWarning(meetingID: 7) == nil)
     }
+
+    @Test("system audio warning clears after capture recovers")
+    func systemAudioWarningClearsAfterRecovery() {
+        var state = ActiveMeetingAudioWarningState()
+        state.updateMicrophone(message: "Microphone is silent")
+        state.recordSystemAudioFailure(message: "System audio stopped")
+
+        state.clearSystemAudioFailure()
+
+        #expect(state.resolvedWarning(meetingID: 7)?.message == "Microphone is silent")
+    }
 }

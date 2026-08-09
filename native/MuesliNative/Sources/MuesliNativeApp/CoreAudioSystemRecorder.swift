@@ -10,15 +10,51 @@ import os
 /// Protocol for system audio capture backends (ScreenCaptureKit vs CoreAudio tap).
 protocol SystemAudioCapturing: AnyObject {
     var onPCMSamples: (([Int16]) -> Void)? { get set }
-    /// Called when capture dies mid-recording and cannot be recovered, so the
-    /// owner can tell the user the "Others" side is gone.
+    /// Called once when an active capture first becomes interrupted.
+    var onSystemAudioInterruption: (() -> Void)? { get set }
+    /// Called when capture is interrupted long enough to degrade the meeting.
+    /// The backend may continue trying to recover after reporting the incident.
     var onSystemAudioFailure: ((Error) -> Void)? { get set }
+    /// Called after an interruption produces system-audio samples again.
+    var onSystemAudioRecovery: (() -> Void)? { get set }
     var isRecording: Bool { get }
     var isPaused: Bool { get }
     func start() async throws
     func pause()
     func resume()
     func stop() async -> URL?
+}
+
+enum CoreAudioTapRecoveryPolicy {
+    static let callbackTimeoutNanoseconds: UInt64 = 8_000_000_000
+    static let watchdogInterval: TimeInterval = 2
+    private static let retryDelays: [TimeInterval] = [0.5, 1, 2, 5, 10, 30]
+
+    static func retryDelay(afterFailedAttempt attempt: Int) -> TimeInterval {
+        retryDelays[min(max(attempt, 0), retryDelays.count - 1)]
+    }
+
+    static func shouldReportInterruption(afterFailedAttempt attempt: Int) -> Bool {
+        attempt == 3
+    }
+
+    static func shouldReportNoSamples(
+        isAwaitingRecoverySamples: Bool,
+        didReportInterruption: Bool
+    ) -> Bool {
+        isAwaitingRecoverySamples && !didReportInterruption
+    }
+
+    static func hasCallbackStalled(
+        lastCallbackUptimeNanoseconds: UInt64,
+        nowUptimeNanoseconds: UInt64,
+        isPaused: Bool,
+        isRecovering: Bool
+    ) -> Bool {
+        guard !isPaused, !isRecovering, lastCallbackUptimeNanoseconds > 0,
+              nowUptimeNanoseconds >= lastCallbackUptimeNanoseconds else { return false }
+        return nowUptimeNanoseconds - lastCallbackUptimeNanoseconds >= callbackTimeoutNanoseconds
+    }
 }
 
 /// Captures system audio via CoreAudio process tap + aggregate device.
@@ -30,7 +66,9 @@ protocol SystemAudioCapturing: AnyObject {
 /// - Hardware-synchronized with mic input when used in an aggregate device
 final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnosticsProviding {
     var onPCMSamples: (([Int16]) -> Void)?
+    var onSystemAudioInterruption: (() -> Void)?
     var onSystemAudioFailure: ((Error) -> Void)?
+    var onSystemAudioRecovery: (() -> Void)?
 
     private var tapID: AudioObjectID = kAudioObjectUnknown
     private var aggregateDeviceID: AudioDeviceID = kAudioObjectUnknown
@@ -39,9 +77,15 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
     private let deviceIOQueue = DispatchQueue(label: "com.muesli.system-audio-tap.io", qos: .userInitiated)
     private let processingQueue = DispatchQueue(label: "com.muesli.system-audio-tap")
     private var defaultOutputDeviceListenerBlock: AudioObjectPropertyListenerBlock?
-    /// Bumped per output-device change so a retry chain from an earlier change
-    /// abandons itself once a newer change takes over. Processing queue only.
+    /// Bumped per recovery episode so stale retry chains abandon themselves.
+    /// Processing queue only.
     private var tapRestartGeneration: UInt64 = 0
+    private var tapRecoveryWatchdog: DispatchSourceTimer?
+    private var isRecoveringTap = false
+    private var didReportTapInterruption = false
+    private var isAwaitingRecoverySamples = false
+    private var nextTapRecoveryAttempt = 0
+    private let lastCallbackUptimeNanoseconds = ManagedAtomic<UInt64>(0)
 
     private var outputFile: FileHandle?
     private var outputURL: URL?
@@ -59,10 +103,6 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
     }
 
     private static let targetSampleRate: Double = 16_000
-    /// Output-device transitions are transient; a rebuild that lands mid-switch
-    /// usually succeeds a moment later.
-    private static let tapRestartRetryDelays: [Double] = [0.5, 1.0, 2.0]
-
     /// Source format from the tap (queried at setup time).
     private var sourceSampleRate: Double = 48_000
     private var sourceChannels: UInt32 = 2
@@ -135,6 +175,9 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
             try createTapAndAggregateDevice()
             try setupAndStartAudioDevice()
             installDefaultOutputDeviceListener()
+            processingQueue.sync {
+                startRecoveryWatchdogOnQueue()
+            }
             fputs("[system-audio] CoreAudio tap capture started\n", stderr)
         } catch {
             fputs("[system-audio] CoreAudio tap start failed: \(error)\n", stderr)
@@ -156,9 +199,18 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
 
         removeDefaultOutputDeviceListener()
         processingQueue.sync {
+            tapRestartGeneration &+= 1
+            stopRecoveryWatchdogOnQueue()
+            isRecoveringTap = false
+            didReportTapInterruption = false
+            isAwaitingRecoverySamples = false
+            nextTapRecoveryAttempt = 0
+            lastCallbackUptimeNanoseconds.store(0, ordering: .releasing)
             teardownTapAndAudioDevice()
             onPCMSamples = nil
+            onSystemAudioInterruption = nil
             onSystemAudioFailure = nil
+            onSystemAudioRecovery = nil
         }
 
         if let file = outputFile {
@@ -185,6 +237,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
 
     func resume() {
         guard isRecording else { return }
+        lastCallbackUptimeNanoseconds.store(DispatchTime.now().uptimeNanoseconds, ordering: .releasing)
         isPaused = false
     }
 
@@ -268,6 +321,10 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         let generation = activeCaptureGeneration
         let block: AudioDeviceIOBlock = { [weak self] _, inputData, _, _, _ in
             guard let self, self.isRecording, !self.isPaused else { return }
+            self.lastCallbackUptimeNanoseconds.store(
+                DispatchTime.now().uptimeNanoseconds,
+                ordering: .releasing
+            )
             self.diagnosticsLock.withLock { $0.callbackCount += 1 }
 
             let buffers = Self.copyAudioBuffers(from: inputData)
@@ -303,6 +360,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
 
         do {
             try osCheck(AudioDeviceStart(aggregateDeviceID, procID), "start aggregate device")
+            lastCallbackUptimeNanoseconds.store(DispatchTime.now().uptimeNanoseconds, ordering: .releasing)
         } catch {
             AudioDeviceDestroyIOProcID(aggregateDeviceID, procID)
             deviceIOProcID = nil
@@ -355,6 +413,13 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
             state.postConversion.addInt16(int16Samples)
         }
         onPCMSamples?(int16Samples)
+        if isAwaitingRecoverySamples {
+            isAwaitingRecoverySamples = false
+            didReportTapInterruption = false
+            nextTapRecoveryAttempt = 0
+            fputs("[system-audio] CoreAudio tap capture recovered and resumed samples\n", stderr)
+            onSystemAudioRecovery?()
+        }
     }
 
     private func resampleMonoFloatToInt16(_ samples: [Float], sourceSampleRate: Double) -> [Int16]? {
@@ -750,11 +815,66 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         guard isRecording else { return }
 
         fputs("[system-audio] default output device changed; rebuilding tap\n", stderr)
-        tapRestartGeneration &+= 1
-        restartTapForDefaultOutputDeviceChange(generation: tapRestartGeneration, attempt: 0)
+        beginTapRecovery(reason: "default output device changed", detectedNoSamples: false)
     }
 
-    private func restartTapForDefaultOutputDeviceChange(generation: UInt64, attempt: Int) {
+    private func startRecoveryWatchdogOnQueue() {
+        guard tapRecoveryWatchdog == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: processingQueue)
+        timer.schedule(
+            deadline: .now() + CoreAudioTapRecoveryPolicy.watchdogInterval,
+            repeating: CoreAudioTapRecoveryPolicy.watchdogInterval
+        )
+        timer.setEventHandler { [weak self] in
+            self?.checkForStalledCallbacksOnQueue()
+        }
+        tapRecoveryWatchdog = timer
+        timer.resume()
+    }
+
+    private func stopRecoveryWatchdogOnQueue() {
+        tapRecoveryWatchdog?.cancel()
+        tapRecoveryWatchdog = nil
+    }
+
+    private func checkForStalledCallbacksOnQueue() {
+        guard isRecording else { return }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard CoreAudioTapRecoveryPolicy.hasCallbackStalled(
+            lastCallbackUptimeNanoseconds: lastCallbackUptimeNanoseconds.load(ordering: .acquiring),
+            nowUptimeNanoseconds: now,
+            isPaused: isPaused,
+            isRecovering: isRecoveringTap
+        ) else { return }
+
+        fputs("[system-audio] callback watchdog detected a stalled CoreAudio tap\n", stderr)
+        beginTapRecovery(reason: "audio callback watchdog timeout", detectedNoSamples: true)
+    }
+
+    private func beginTapRecovery(reason: String, detectedNoSamples: Bool) {
+        guard isRecording, !isRecoveringTap else { return }
+        if !isAwaitingRecoverySamples {
+            didReportTapInterruption = false
+            nextTapRecoveryAttempt = 0
+            isAwaitingRecoverySamples = true
+            onSystemAudioInterruption?()
+        } else if detectedNoSamples,
+                  CoreAudioTapRecoveryPolicy.shouldReportNoSamples(
+                      isAwaitingRecoverySamples: isAwaitingRecoverySamples,
+                      didReportInterruption: didReportTapInterruption
+                  ) {
+            didReportTapInterruption = true
+            let error = RecorderError.tapProducedNoSamples
+            fputs("[system-audio] rebuilt CoreAudio tap still produced no samples\n", stderr)
+            onSystemAudioFailure?(error)
+        }
+        isRecoveringTap = true
+        tapRestartGeneration &+= 1
+        fputs("[system-audio] beginning tap recovery: \(reason)\n", stderr)
+        restartTap(generation: tapRestartGeneration, attempt: nextTapRecoveryAttempt)
+    }
+
+    private func restartTap(generation: UInt64, attempt: Int) {
         guard isRecording, generation == tapRestartGeneration else { return }
 
         teardownTapAndAudioDevice()
@@ -763,24 +883,26 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         do {
             try createTapAndAggregateDevice()
             try setupAndStartAudioDevice()
-            fputs("[system-audio] CoreAudio tap capture restarted for default output device\n", stderr)
+            isRecoveringTap = false
+            isAwaitingRecoverySamples = true
+            nextTapRecoveryAttempt = attempt + 1
+            fputs("[system-audio] CoreAudio tap rebuilt; waiting for audio callbacks\n", stderr)
         } catch {
             teardownTapAndAudioDevice()
+            nextTapRecoveryAttempt = attempt + 1
 
-            if attempt < Self.tapRestartRetryDelays.count {
-                let delay = Self.tapRestartRetryDelays[attempt]
-                fputs("[system-audio] tap rebuild attempt \(attempt + 1) failed: \(error); retrying in \(delay)s\n", stderr)
-                processingQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
-                    self?.restartTapForDefaultOutputDeviceChange(generation: generation, attempt: attempt + 1)
-                }
-                return
+            if CoreAudioTapRecoveryPolicy.shouldReportInterruption(afterFailedAttempt: attempt),
+               !didReportTapInterruption {
+                didReportTapInterruption = true
+                fputs("[system-audio] tap recovery is taking longer than expected: \(error)\n", stderr)
+                onSystemAudioFailure?(error)
             }
 
-            isRecording = false
-            isPaused = false
-            onPCMSamples = nil
-            fputs("[system-audio] failed to restart after default output device change: \(error)\n", stderr)
-            onSystemAudioFailure?(error)
+            let delay = CoreAudioTapRecoveryPolicy.retryDelay(afterFailedAttempt: attempt)
+            fputs("[system-audio] tap rebuild attempt \(attempt + 1) failed: \(error); retrying in \(delay)s\n", stderr)
+            processingQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.restartTap(generation: generation, attempt: attempt + 1)
+            }
         }
     }
 
@@ -794,6 +916,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         case coreAudioSetupFailed(String, OSStatus)
         case deviceIOProcCreationFailed
         case tapFormatUnavailable(OSStatus)
+        case tapProducedNoSamples
 
         var errorDescription: String? {
             switch self {
@@ -811,6 +934,8 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
                 return "Could not create aggregate device IOProc"
             case .tapFormatUnavailable(let s):
                 return "Could not read tap stream format (status: \(s))"
+            case .tapProducedNoSamples:
+                return "Rebuilt CoreAudio tap produced no audio samples"
             }
         }
     }
@@ -849,7 +974,9 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         isRecording = false
         isPaused = false
         onPCMSamples = nil
+        onSystemAudioInterruption = nil
         onSystemAudioFailure = nil
+        onSystemAudioRecovery = nil
 
         removeDefaultOutputDeviceListener()
         teardownTapAndAudioDevice()

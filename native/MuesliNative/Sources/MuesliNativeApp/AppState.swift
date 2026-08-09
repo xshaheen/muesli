@@ -108,6 +108,10 @@ struct ActiveMeetingAudioWarningState {
         systemAudioFailureMessage = message
     }
 
+    mutating func clearSystemAudioFailure() {
+        systemAudioFailureMessage = nil
+    }
+
     mutating func reset() {
         microphoneMessage = nil
         systemAudioFailureMessage = nil

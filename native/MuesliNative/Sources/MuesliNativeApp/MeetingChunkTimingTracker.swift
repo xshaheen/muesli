@@ -30,6 +30,13 @@ struct MeetingChunkTimingTracker: Sendable {
         currentChunkSampleCount += Int64(sampleCount)
     }
 
+    /// Starts the next chunk at a callback-derived timeline position after an
+    /// interrupted source resumes. The interrupted chunk must be rotated first.
+    mutating func realign(atSampleIndex sampleIndex: Int64) {
+        currentChunkStartSampleIndex = max(sampleIndex, 0)
+        currentChunkSampleCount = 0
+    }
+
     mutating func rotate() -> MeetingChunkTimingSnapshot? {
         guard let currentChunkStartSampleIndex else { return nil }
         let snapshot = MeetingChunkTimingSnapshot(

@@ -4917,7 +4917,7 @@ final class MuesliController: NSObject {
             stopMeetingRecording()
         } else {
             let wasMeetingRecording = isMeetingRecording()
-            startMeetingRecordingFromEntryPoint()
+            startMeetingRecordingFromEntryPoint(presentation: .compactControl)
             if !isMeetingRecording() && !isStartingMeetingRecording && !wasMeetingRecording {
                 meetingRecordingHotkeyMonitor.cancelToggleMode()
             }
@@ -5005,6 +5005,7 @@ final class MuesliController: NSObject {
             calendarEventID: calendarEventID,
             calendarOccurrence: calendarOccurrence,
             openDocument: presentation.opensMeetingDocument,
+            showFloatingPanelWhenActive: presentation.presentsFloatingPanelWhenRecordingStarts,
             endDate: endDate,
             autoStopSource: autoStopSource,
             startOrigin: startOrigin
@@ -5022,6 +5023,7 @@ final class MuesliController: NSObject {
         calendarEventID: String? = nil,
         calendarOccurrence: CalendarOccurrenceReference? = nil,
         openDocument: Bool = false,
+        showFloatingPanelWhenActive: Bool = false,
         endDate: Date? = nil,
         autoStopSource: MeetingAutoStopSource? = nil,
         startOrigin: MeetingRecordingStartOrigin = .manual,
@@ -5101,6 +5103,7 @@ final class MuesliController: NSObject {
                     meetingID: meetingID,
                     backend: meetingBackend,
                     templateSnapshot: templateSnapshot,
+                    showFloatingPanelWhenActive: showFloatingPanelWhenActive,
                     endDate: endDate,
                     previousMeetingNotes: previousMeetingNotes
                 )
@@ -5526,6 +5529,7 @@ final class MuesliController: NSObject {
         meetingID: Int64,
         backend: BackendOption,
         templateSnapshot: MeetingTemplateSnapshot,
+        showFloatingPanelWhenActive: Bool = false,
         endDate: Date?,
         previousMeetingNotes: String? = nil
     ) async throws {
@@ -5721,6 +5725,13 @@ final class MuesliController: NSObject {
                         )
                     }
                 }
+                meetingSession.onSystemAudioCaptureRecovered = { [weak self] in
+                    Task { @MainActor in
+                        guard let self,
+                              self.activeMeetingID == meetingID || self.meetingStartMeetingID == meetingID else { return }
+                        self.updateActiveMeetingSystemAudioRecovery(meetingID: meetingID)
+                    }
+                }
                 try await meetingSession.start()
                 if Task.isCancelled || canceledMeetingStartIDs.contains(meetingID) {
                     throw CancellationError()
@@ -5739,6 +5750,11 @@ final class MuesliController: NSObject {
                 // or hover and drag stay dead for the whole recording.
                 indicator.hideLoading()
                 indicator.setMeetingRecording(true, config: config)
+                // A compact start shows its panel only after capture is live; otherwise
+                // an asynchronous start failure would strand an empty panel at idle.
+                if showFloatingPanelWhenActive {
+                    indicator.showMeetingTranscriptPanel()
+                }
                 statusBarController?.refresh()
                 syncAppState()
                 scheduleMeetingEndNotification(endDate: endDate, title: title)
@@ -6206,8 +6222,16 @@ final class MuesliController: NSObject {
 
     private func updateActiveMeetingSystemAudioFailure(meetingID: Int64) {
         activeMeetingAudioWarningState.recordSystemAudioFailure(
-            message: "System audio capture stopped. Muesli is still recording your microphone, but other participants may be missing."
+            message: "System audio was interrupted. Muesli is retrying automatically; other participants may be missing until capture resumes."
         )
+        let nextWarning = activeMeetingAudioWarningState.resolvedWarning(meetingID: meetingID)
+        guard activeMeetingAudioWarning != nextWarning else { return }
+        activeMeetingAudioWarning = nextWarning
+        syncAppState()
+    }
+
+    private func updateActiveMeetingSystemAudioRecovery(meetingID: Int64) {
+        activeMeetingAudioWarningState.clearSystemAudioFailure()
         let nextWarning = activeMeetingAudioWarningState.resolvedWarning(meetingID: meetingID)
         guard activeMeetingAudioWarning != nextWarning else { return }
         activeMeetingAudioWarning = nextWarning

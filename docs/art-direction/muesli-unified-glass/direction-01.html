@@ -1,0 +1,16 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Direction 01</title><link rel="stylesheet" href="styles.css"><style>
+.continuum { position:absolute; top:74px; left:50%; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; }
+.continuum .pill { z-index:2; margin-bottom:-13px; min-width:174px; justify-content:center; }
+.continuum .panel { padding-top:14px; display:flex; flex-direction:column; }
+.continuum .panel-head { padding-top:17px; }
+.workspace { position:absolute; left:44px; right:44px; bottom:-164px; height:330px; }
+.workspace-bar .mini-pill { margin-left:auto; height:27px; border-radius:14px; padding:0 10px; display:flex; align-items:center; gap:7px; font-size:10px; color:var(--muted); background:rgba(255,255,255,.06); border:1px solid var(--line-soft); }
+</style></head><body><main class="scene">
+<div class="eyebrow">Direction 01</div><div class="caption">One continuous object: control, portal, workspace.</div>
+<section class="continuum" aria-label="Unified recording control and panel">
+  <div class="pill glass"><button class="icon-button active" aria-label="Hide panel">▾</button><span class="live-dot"></span><span style="font-size:11px;color:var(--muted)">Live</span><div class="meter"><i></i><i></i><i></i><i></i><i></i></div><button class="icon-button" aria-label="Pause">Ⅱ</button><button class="icon-button" aria-label="Stop">■</button></div>
+  <article class="panel glass"><header class="panel-head"><strong class="panel-title">Transcript</strong><nav class="tabs"><button class="tab active">Transcript</button><button class="tab">Chat</button><button class="tab">Notes</button></nav><button class="icon-button" aria-label="Copy">⧉</button></header>
+  <div class="feed"><div class="turn"><div class="speaker">Others</div><p>We should keep the meeting context visible without making the panel feel heavy.</p></div><div class="turn you"><div class="speaker">You</div><p>The compact control and the larger surface should feel like the same object.</p></div><div class="turn"><div class="speaker">Others</div><p>Use depth and spacing for state. Keep color reserved for real problems.</p></div></div></article>
+</section>
+<section class="workspace" aria-label="Meeting workspace"><div class="workspace-bar"><span style="font-size:12px;color:var(--muted)">‹ Meetings</span><div class="mini-pill"><span class="live-dot"></span>Recording</div></div><div class="workspace-body"><h1 class="meeting-title">Meeting</h1><div class="meeting-meta">Today at 10:25 AM&nbsp;&nbsp;  •  &nbsp;&nbsp;Live transcript</div><div class="note-block"><h3>Notes</h3><div class="note-line"></div><div class="note-line"></div><div class="note-line"></div></div></div></section>
+</main></body></html>
