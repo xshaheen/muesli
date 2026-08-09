@@ -96,12 +96,36 @@ struct ActiveMeetingAudioWarning: Equatable {
     let message: String
 }
 
+struct ActiveMeetingAudioWarningState {
+    private(set) var microphoneMessage: String?
+    private(set) var systemAudioFailureMessage: String?
+
+    mutating func updateMicrophone(message: String?) {
+        microphoneMessage = message
+    }
+
+    mutating func recordSystemAudioFailure(message: String) {
+        systemAudioFailureMessage = message
+    }
+
+    mutating func reset() {
+        microphoneMessage = nil
+        systemAudioFailureMessage = nil
+    }
+
+    func resolvedWarning(meetingID: Int64) -> ActiveMeetingAudioWarning? {
+        (systemAudioFailureMessage ?? microphoneMessage).map {
+            ActiveMeetingAudioWarning(meetingID: meetingID, message: $0)
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class AppState {
     // Dashboard data
     var dictationRows: [DictationRecord] = []
-    var meetingRows: [MeetingRecord] = []
+    var meetingRows: [MeetingListRecord] = []
     var totalMeetingCount: Int = 0
     var meetingCountsByFolder: [Int64: Int] = [:]
     var directMeetingCountsByFolder: [Int64: Int] = [:]
@@ -209,9 +233,6 @@ final class AppState {
     // Computed
     var selectedMeeting: MeetingRecord? {
         guard let id = selectedMeetingID else { return nil }
-        if let row = meetingRows.first(where: { $0.id == id }) {
-            return row
-        }
         guard selectedMeetingRecord?.id == id else { return nil }
         return selectedMeetingRecord
     }

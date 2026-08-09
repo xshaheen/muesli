@@ -932,34 +932,21 @@ actor StreamingEouCLITranscriber: AudioTranscribing {
 
     func transcribe(wavURL: URL, model: TranscribeModel, progress: @escaping (String) -> Void) async throws -> HeadlessTranscription {
         let manager = try await loadedManager(progress: progress)
-        let samples = try CLIWavReader.readMonoFloatSamples(url: wavURL)
-        guard !samples.isEmpty else {
+        let result = try await CLIWavReader.forEachMonoFloatChunk(
+            url: wavURL,
+            chunkSamples: Self.chunkSize.chunkSamples
+        ) { buffer in
+            _ = try await manager.process(audioBuffer: buffer)
+        }
+        guard result.sampleCount > 0 else {
             return HeadlessTranscription(text: "", durationSeconds: 0)
         }
 
-        let chunkSamples = Self.chunkSize.chunkSamples
-        var chunkCount = 0
-        var offset = 0
-        while offset < samples.count {
-            try Task.checkCancellation()
-            let end = min(offset + chunkSamples, samples.count)
-            var chunk = Array(samples[offset..<end])
-            if chunk.count < chunkSamples {
-                chunk.append(contentsOf: repeatElement(Float(0), count: chunkSamples - chunk.count))
-            }
-            guard let buffer = Self.makeBuffer(samples: chunk) else {
-                throw CLIError.invalidInput("Could not allocate a streaming audio buffer.", fix: "Try a shorter audio file.")
-            }
-            chunkCount += 1
-            _ = try await manager.process(audioBuffer: buffer)
-            offset = end
-        }
-
         let finalText = try await manager.finish()
-        progress("streaming transcription complete (\(chunkCount) chunks of \(Self.chunkSize.durationMs)ms)")
+        progress("streaming transcription complete (\(result.chunkCount) chunks of \(Self.chunkSize.durationMs)ms)")
         return HeadlessTranscription(
             text: finalText,
-            durationSeconds: Double(samples.count) / Double(CLIWavWriter.sampleRate)
+            durationSeconds: Double(result.sampleCount) / Double(CLIWavWriter.sampleRate)
         )
     }
 
@@ -996,37 +983,80 @@ actor StreamingEouCLITranscriber: AudioTranscribing {
         }
     }
 
-    private static func makeBuffer(samples: [Float]) -> AVAudioPCMBuffer? {
-        guard let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 16_000,
-            channels: 1,
-            interleaved: false
-        ), let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)),
-            let channel = buffer.floatChannelData?[0] else {
-            return nil
-        }
-        buffer.frameLength = AVAudioFrameCount(samples.count)
-        channel.update(from: samples, count: samples.count)
-        return buffer
-    }
 }
 
-/// Reads a prepared CLI WAV (always 16kHz mono, written by `CLIWavWriter`) back into
-/// Float32 samples for chunked streaming feed. `AVAudioFile`'s default processing
-/// format decodes PCM16 to Float32 automatically, so no manual byte parsing is needed.
+/// Streams a prepared CLI WAV (always 16kHz mono, written by `CLIWavWriter`) as
+/// fixed-size Float32 buffers. `AVAudioFile` decodes PCM16 to Float32 while the
+/// bounded buffers keep memory use independent of the recording's duration.
 enum CLIWavReader {
-    static func readMonoFloatSamples(url: URL) throws -> [Float] {
-        let file = try AVAudioFile(forReading: url)
-        guard let buffer = AVAudioPCMBuffer(
+    struct ChunkingResult {
+        let sampleCount: Int
+        let chunkCount: Int
+    }
+
+    static func forEachMonoFloatChunk(
+        url: URL,
+        chunkSamples: Int,
+        process: (AVAudioPCMBuffer) async throws -> Void
+    ) async throws -> ChunkingResult {
+        guard chunkSamples > 0 else {
+            throw CLIError.invalidInput("Streaming audio chunk size must be positive.", fix: "Use a supported streaming model.")
+        }
+
+        let file: AVAudioFile
+        do {
+            file = try AVAudioFile(
+                forReading: url,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+        } catch {
+            throw CLIError.invalidInput("Could not open streaming audio: \(error.localizedDescription)", fix: "Ensure the prepared audio file is a valid WAV.")
+        }
+        guard let readBuffer = AVAudioPCMBuffer(
             pcmFormat: file.processingFormat,
-            frameCapacity: AVAudioFrameCount(file.length)
-        ) else {
+            frameCapacity: AVAudioFrameCount(chunkSamples)
+        ), let outputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: Double(CLIWavWriter.sampleRate),
+            channels: 1,
+            interleaved: false
+        ), let outputBuffer = AVAudioPCMBuffer(
+            pcmFormat: outputFormat,
+            frameCapacity: AVAudioFrameCount(chunkSamples)
+        ), let outputChannel = outputBuffer.floatChannelData?[0] else {
             throw CLIError.invalidInput("Could not allocate a read buffer for streaming audio.", fix: "Ensure the prepared audio file is a valid WAV.")
         }
-        try file.read(into: buffer)
-        guard let channel = buffer.floatChannelData?[0] else { return [] }
-        return Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+
+        var sampleCount = 0
+        var chunkCount = 0
+        while file.framePosition < file.length {
+            try Task.checkCancellation()
+            do {
+                try file.read(into: readBuffer)
+            } catch {
+                throw CLIError.invalidInput("Could not read streaming audio: \(error.localizedDescription)", fix: "Ensure the prepared audio file is a valid WAV.")
+            }
+            let framesRead = Int(readBuffer.frameLength)
+            guard framesRead > 0 else { break }
+            guard let inputChannel = readBuffer.floatChannelData?[0] else {
+                throw CLIError.invalidInput("Could not read mono Float32 audio samples.", fix: "Ensure the prepared audio file is a valid WAV.")
+            }
+
+            outputChannel.update(from: inputChannel, count: framesRead)
+            if framesRead < chunkSamples {
+                outputChannel.advanced(by: framesRead).update(
+                    repeating: 0,
+                    count: chunkSamples - framesRead
+                )
+            }
+            outputBuffer.frameLength = AVAudioFrameCount(chunkSamples)
+
+            sampleCount += framesRead
+            chunkCount += 1
+            try await process(outputBuffer)
+        }
+        return ChunkingResult(sampleCount: sampleCount, chunkCount: chunkCount)
     }
 }
 
@@ -1128,20 +1158,21 @@ struct CLISummaryConfig: Decodable {
     var customLLMModel = ""
     var customLLMFormat = "openai"
 
+    // Raw values must match AppConfig.CodingKeys exactly — config.json is written by the app in snake_case.
     enum CodingKeys: String, CodingKey {
-        case meetingSummaryBackend
-        case openAIAPIKey
-        case openRouterAPIKey
-        case openAIModel
-        case openRouterModel
-        case ollamaURL
-        case ollamaModel
-        case lmStudioURL
-        case lmStudioModel
-        case customLLMURL
-        case customLLMAPIKey
-        case customLLMModel
-        case customLLMFormat
+        case meetingSummaryBackend = "meeting_summary_backend"
+        case openAIAPIKey = "openai_api_key"
+        case openRouterAPIKey = "openrouter_api_key"
+        case openAIModel = "openai_model"
+        case openRouterModel = "openrouter_model"
+        case ollamaURL = "ollama_url"
+        case ollamaModel = "ollama_model"
+        case lmStudioURL = "lmstudio_url"
+        case lmStudioModel = "lmstudio_model"
+        case customLLMURL = "custom_llm_url"
+        case customLLMAPIKey = "custom_llm_api_key"
+        case customLLMModel = "custom_llm_model"
+        case customLLMFormat = "custom_llm_format"
     }
 
     init() {}

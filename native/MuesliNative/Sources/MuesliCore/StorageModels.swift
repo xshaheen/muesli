@@ -51,6 +51,8 @@ public struct SyncTextRecord: Identifiable, Codable, Sendable, Equatable {
     public var speakerTranscript: String?
     public var summaryText: String?
     public var manualNotes: String?
+    public var cleanedTranscript: String?
+    public var notesSource: MeetingNotesSource?
     public var source: String?
     /// Platform origin for UI badges lives in `source`; this preserves the
     /// local capture subtype such as dictation, cua, meeting, or audio_import.
@@ -75,6 +77,8 @@ public struct SyncTextRecord: Identifiable, Codable, Sendable, Equatable {
         speakerTranscript: String? = nil,
         summaryText: String? = nil,
         manualNotes: String? = nil,
+        cleanedTranscript: String? = nil,
+        notesSource: MeetingNotesSource? = nil,
         source: String? = nil,
         localSource: String? = nil,
         meetingStatus: MeetingStatus? = nil,
@@ -96,6 +100,8 @@ public struct SyncTextRecord: Identifiable, Codable, Sendable, Equatable {
         self.speakerTranscript = speakerTranscript
         self.summaryText = summaryText
         self.manualNotes = manualNotes
+        self.cleanedTranscript = cleanedTranscript
+        self.notesSource = notesSource
         self.source = source
         self.localSource = localSource
         self.meetingStatus = meetingStatus
@@ -261,12 +267,70 @@ public struct CalendarOccurrenceReference: Codable, Equatable, Sendable {
     }
 }
 
+/// What a meeting's `formattedNotes` were derived from.
+///
+/// This is the retry state for post-cleanup note regeneration: a meeting holding
+/// a cleaned transcript whose notes are still `.raw` has a regeneration that has
+/// not happened yet, whether it failed, was interrupted, or was never attempted.
+/// `.user` is terminal -- once someone edits their own notes, nothing overwrites them.
+public enum MeetingNotesSource: String, Codable, Sendable, Equatable {
+    case raw
+    case cleaned
+    case user
+}
+
+/// The bounded subset of a meeting needed by the history browser.
+///
+/// Full transcripts, notes, prompts, and captured context deliberately stay out
+/// of this type so refreshing the dashboard cannot hydrate large meeting blobs.
+public struct MeetingListRecord: Identifiable, Equatable, Sendable {
+    public static let previewCharacterLimit = 512
+
+    public let id: Int64
+    public let title: String
+    public let startTime: String
+    public let durationSeconds: Double
+    public let folderID: Int64?
+    public let savedRecordingPath: String?
+    public let status: MeetingStatus
+    public let source: MeetingSource
+    public let followUpToID: Int64?
+    public let preview: String
+
+    public init(
+        id: Int64,
+        title: String,
+        startTime: String,
+        durationSeconds: Double,
+        folderID: Int64?,
+        savedRecordingPath: String?,
+        status: MeetingStatus,
+        source: MeetingSource,
+        followUpToID: Int64?,
+        preview: String
+    ) {
+        self.id = id
+        self.title = title
+        self.startTime = startTime
+        self.durationSeconds = durationSeconds
+        self.folderID = folderID
+        self.savedRecordingPath = savedRecordingPath
+        self.status = status
+        self.source = source
+        self.followUpToID = followUpToID
+        self.preview = preview
+    }
+}
+
 public struct MeetingRecord: Identifiable, Codable, Sendable {
     public let id: Int64
     public let title: String
     public let startTime: String
     public let durationSeconds: Double
     public let rawTranscript: String
+    /// AI-repaired transcript, empty when cleanup has not run or did not succeed.
+    /// Never a substitute for `rawTranscript` in storage -- see `displayTranscript`.
+    public let cleanedTranscript: String
     public let formattedNotes: String
     public let wordCount: Int
     public let folderID: Int64?
@@ -288,6 +352,15 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
     /// Stable sync identity for the predecessor. Local row ids differ across
     /// devices, so sync uses the predecessor's cloud record name.
     public let followUpToRecordName: String?
+    /// Screen/OCR context captured during the meeting and fed to the original
+    /// summary. Retained so a later regeneration reproduces that call rather
+    /// than silently producing notes without it.
+    public let visualContext: String
+    /// The predecessor's notes as they were when the original summary ran.
+    /// Snapshotted rather than re-derived from `followUpToID`, because the
+    /// predecessor's notes may have changed since.
+    public let previousMeetingNotes: String
+    public let notesSource: MeetingNotesSource
 
     public init(
         id: Int64,
@@ -311,13 +384,21 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         selectedTemplatePrompt: String? = nil,
         source: MeetingSource = .meeting,
         followUpToID: Int64? = nil,
-        followUpToRecordName: String? = nil
+        followUpToRecordName: String? = nil,
+        cleanedTranscript: String = "",
+        visualContext: String = "",
+        previousMeetingNotes: String = "",
+        notesSource: MeetingNotesSource = .raw
     ) {
         self.id = id
         self.title = title
         self.startTime = startTime
         self.durationSeconds = durationSeconds
         self.rawTranscript = rawTranscript
+        self.cleanedTranscript = cleanedTranscript
+        self.visualContext = visualContext
+        self.previousMeetingNotes = previousMeetingNotes
+        self.notesSource = notesSource
         self.formattedNotes = formattedNotes
         self.wordCount = wordCount
         self.folderID = folderID
@@ -337,12 +418,30 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         self.followUpToRecordName = followUpToRecordName
     }
 
+    /// The transcript a reader should display or reason over.
+    ///
+    /// Every surface that shows the transcript to a human or feeds it to a model
+    /// goes through here, so "which surfaces see cleaned text" is one auditable
+    /// decision rather than a dozen scattered ones. Reach past this to
+    /// `rawTranscript` only for the durable record itself -- recovery, export, and
+    /// the resume path, which must keep reading exactly what was transcribed.
+    ///
+    /// Falls back to raw whenever cleanup has not run, did not succeed, or was
+    /// invalidated by a transcript edit, which is also why meetings predating
+    /// cleanup keep working unchanged.
+    public var displayTranscript: String {
+        cleanedTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? rawTranscript
+            : cleanedTranscript
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id
         case title
         case startTime
         case durationSeconds
         case rawTranscript
+        case cleanedTranscript
         case formattedNotes
         case wordCount
         case folderID
@@ -360,6 +459,9 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         case source
         case followUpToID
         case followUpToRecordName
+        case visualContext
+        case previousMeetingNotes
+        case notesSource
     }
 
     public init(from decoder: Decoder) throws {
@@ -386,7 +488,11 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
             selectedTemplatePrompt: try c.decodeIfPresent(String.self, forKey: .selectedTemplatePrompt),
             source: (try? c.decode(MeetingSource.self, forKey: .source)) ?? .meeting,
             followUpToID: try c.decodeIfPresent(Int64.self, forKey: .followUpToID),
-            followUpToRecordName: try c.decodeIfPresent(String.self, forKey: .followUpToRecordName)
+            followUpToRecordName: try c.decodeIfPresent(String.self, forKey: .followUpToRecordName),
+            cleanedTranscript: (try? c.decode(String.self, forKey: .cleanedTranscript)) ?? "",
+            visualContext: (try? c.decode(String.self, forKey: .visualContext)) ?? "",
+            previousMeetingNotes: (try? c.decode(String.self, forKey: .previousMeetingNotes)) ?? "",
+            notesSource: (try? c.decode(MeetingNotesSource.self, forKey: .notesSource)) ?? .raw
         )
     }
 

@@ -198,12 +198,14 @@ struct MeetingDetailPayload: Encodable {
     let startTime: String
     let durationSeconds: Double
     let rawTranscript: String
+    let cleanedTranscript: String
     let formattedNotes: String
     let wordCount: Int
     let folderID: Int64?
     let status: String
     let manualNotes: String
     let notesState: String
+    let notesSource: String
     let calendarEventID: String?
     let micAudioPath: String?
     let systemAudioPath: String?
@@ -219,12 +221,14 @@ struct MeetingDetailPayload: Encodable {
         startTime = record.startTime
         durationSeconds = record.durationSeconds
         rawTranscript = record.rawTranscript
+        cleanedTranscript = record.cleanedTranscript
         formattedNotes = record.formattedNotes
         wordCount = record.wordCount
         folderID = record.folderID
         status = record.status.rawValue
         manualNotes = record.manualNotes
         notesState = record.notesState.rawValue
+        notesSource = record.notesSource.rawValue
         calendarEventID = record.calendarEventID
         micAudioPath = record.micAudioPath
         systemAudioPath = record.systemAudioPath
@@ -309,13 +313,30 @@ struct MuesliCLI: AsyncParsableCommand {
             Foundation.exit(4)
         }
 
-        let code = Int32(Self.exitCode(for: error).rawValue)
+        // Everything else reaches here as ArgumentParser's CommandError, whose
+        // localizedDescription is only the opaque NSError bridge string. Let
+        // ArgumentParser render it: --help and --version exit cleanly with the
+        // real help text, and parse/validate() failures keep their own message.
+        let exitCode = Self.exitCode(for: error)
+        if exitCode.isSuccess {
+            let helpText = Self.fullMessage(for: error)
+            if !helpText.isEmpty {
+                print(helpText)
+            }
+            Foundation.exit(0)
+        }
+
+        let message = Self.message(for: error)
         emitFailure(
             command: CommandLine.arguments.joined(separator: " "),
-            error: ErrorBody(code: "usage_error", message: error.localizedDescription, fix: "Run `muesli-cli spec` for valid usage."),
+            error: ErrorBody(
+                code: "usage_error",
+                message: message.isEmpty ? error.localizedDescription : message,
+                fix: "Run `muesli-cli spec` for valid usage."
+            ),
             dbPath: nil
         )
-        Foundation.exit(code)
+        Foundation.exit(Int32(exitCode.rawValue))
     }
 
     func run() throws {

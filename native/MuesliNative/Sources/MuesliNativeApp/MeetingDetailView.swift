@@ -4,11 +4,13 @@ import MuesliCore
 private enum MeetingDocumentMode: Hashable {
     case notes
     case transcript
+    case chat
 }
 
 private enum RecordingContentMode: Hashable {
     case notes
     case live
+    case chat
 }
 
 private enum ManualNotesSaveStatus {
@@ -41,6 +43,68 @@ private struct LiveTranscriptSection: View {
             partialYou: appState.liveMeetingPartialYou,
             partialOthers: appState.liveMeetingPartialOthers
         )
+    }
+}
+
+/// Live chat is a wrapper for the same reason `LiveTranscriptSection` is: it must be the
+/// sole observer of `liveMeetingTranscript`. Reading that property in `MeetingDetailView.body`
+/// to pass a transcript into chat would re-render the whole detail view on every chunk.
+private struct LiveChatSection: View {
+    let appState: AppState
+    let meeting: MeetingRecord
+    let conversation: MeetingChatConversation
+    let manualNotes: String
+    let config: AppConfig
+
+    /// Fresh on every call: the send-time resolver below reaches through `appState`,
+    /// so a question asked minutes into the recording sees the transcript up to now.
+    private var currentTranscript: String {
+        MeetingChatSource.transcript(
+            for: meeting,
+            live: appState.liveMeetingTranscript,
+            isRecording: true
+        )
+    }
+
+    var body: some View {
+        MeetingChatView(
+            conversation: conversation,
+            transcript: { currentTranscript },
+            hasTranscript: !currentTranscript
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            systemPrompt: MeetingChatSource.systemPrompt(isRecording: true),
+            manualNotes: { manualNotes },
+            config: { config }
+        )
+    }
+}
+
+/// Which transcript chat reads, and how the model is told to interpret it.
+///
+/// A recording combines the prior transcript with the live one exactly as the Live tab does:
+/// on a resumed meeting `liveMeetingTranscript` holds only the newly recorded portion, so
+/// reading it alone would answer from less than the user can plainly see on screen.
+enum MeetingChatSource {
+    /// What chat should read for a meeting.
+    ///
+    /// A completed meeting gets `displayTranscript`, so chat reasons over repaired
+    /// text once cleanup has succeeded and over the raw text otherwise. A recording
+    /// meeting has no cleaned transcript yet and combines its pre-resume text with
+    /// the live one, or a resumed meeting would lose everything before the resume.
+    static func transcript(for meeting: MeetingRecord, live: String, isRecording: Bool) -> String {
+        isRecording
+            ? liveTranscript(prior: meeting.rawTranscript, live: live)
+            : meeting.displayTranscript
+    }
+
+    /// The same combination for a surface that holds its prior transcript as a plain string
+    /// rather than a record — the floating panel, which only ever shows a recording meeting.
+    static func liveTranscript(prior: String, live: String) -> String {
+        MeetingResumePolicy.combinedResumeTranscript(prior: prior, new: live)
+    }
+
+    static func systemPrompt(isRecording: Bool) -> String {
+        isRecording ? MeetingChatPrompts.live : MeetingChatPrompts.completed
     }
 }
 
@@ -115,6 +179,10 @@ struct MeetingDetailView: View {
                 .background(MuesliTheme.backgroundBase)
                 .onAppear {
                     threadContext = controller.meetingThreadContext(for: meeting.id)
+                    resetChatModeIfUnavailable()
+                }
+                .onChange(of: isChatAvailable) { _, _ in
+                    resetChatModeIfUnavailable()
                 }
                 .onChange(of: meeting.id) { _, _ in
                     syncLocalState(with: meeting)
@@ -210,13 +278,19 @@ struct MeetingDetailView: View {
                     )
 
                     HStack(spacing: MuesliTheme.spacing8) {
+                        // One row: the date/duration/word-count string reads as a single
+                        // fact, and letting it wrap splits "786 words" onto its own line
+                        // while the template chip drifts away from it.
                         Text(formatMeta(meeting))
                             .font(MuesliTheme.callout())
                             .foregroundStyle(MuesliTheme.textSecondary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         if let label = SyncOriginDisplay.badgeLabel(forMeetingSource: meeting.source) {
                             SyncOriginBadge(label: label)
                         }
                         templateChip(for: appliedTemplate)
+                        Spacer(minLength: 0)
                     }
 
                     folderPill(for: meeting)
@@ -226,15 +300,12 @@ struct MeetingDetailView: View {
 
                 Spacer(minLength: MuesliTheme.spacing16)
 
+                // The mode picker lives in the content toolbar, directly above the content it
+                // switches, rather than up here beside the meeting-level actions.
                 VStack(alignment: .trailing, spacing: 10) {
                     if showsManualNotesEditor(for: meeting) {
                         recordingControlGroup(for: meeting)
-                        if meeting.status == .recording {
-                            recordingModePicker
-                        }
                     } else {
-                        documentModePicker
-
                         headerActions(for: meeting, appliedTemplate: appliedTemplate)
                     }
                 }
@@ -265,6 +336,17 @@ struct MeetingDetailView: View {
                 let persistedNotes = Self.notesContent(for: meeting)
                 let hasPersistedNotes = !meeting.formattedNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || !meeting.rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                // The picker sits above the panes it switches, matching the completed-meeting
+                // layout. It cannot live in manualNotesToolbar — that is markdown-editing
+                // controls inside the Notes pane, so it would vanish on the Live and Chat tabs.
+                HStack {
+                    recordingModePicker
+                    Spacer()
+                }
+                .frame(maxWidth: 980, alignment: .leading)
+                .padding(.horizontal, 40)
+                .padding(.top, 12)
+
                 ZStack {
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                         if hasPersistedNotes {
@@ -315,6 +397,19 @@ struct MeetingDetailView: View {
                         .allowsHitTesting(recordingMode == .live)
                         .accessibilityHidden(recordingMode != .live)
 
+                    if isChatAvailable {
+                        LiveChatSection(
+                            appState: appState,
+                            meeting: meeting,
+                            conversation: MeetingChatConversations.shared.conversation(for: meeting.id),
+                            manualNotes: meeting.manualNotes,
+                            config: appState.config
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .opacity(recordingMode == .chat ? 1 : 0)
+                        .allowsHitTesting(recordingMode == .chat)
+                        .accessibilityHidden(recordingMode != .chat)
+                    }
                 }
             } else {
                 let isManualNotesEditable = canEditManualNotes(for: meeting)
@@ -393,10 +488,29 @@ struct MeetingDetailView: View {
                         .allowsHitTesting(documentMode == .notes)
                         .accessibilityHidden(documentMode != .notes)
 
-                    MeetingTranscriptView(transcript: meeting.rawTranscript)
+                    MeetingTranscriptView(transcript: meeting.displayTranscript)
                         .opacity(documentMode == .transcript ? 1 : 0)
                         .allowsHitTesting(documentMode == .transcript)
                         .accessibilityHidden(documentMode != .transcript)
+
+                    if isChatAvailable {
+                        MeetingChatView(
+                            conversation: MeetingChatConversations.shared.conversation(for: meeting.id),
+                            transcript: { MeetingChatSource.transcript(
+                                for: meeting,
+                                live: "",
+                                isRecording: false
+                            ) },
+                            hasTranscript: !meeting.displayTranscript
+                                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            systemPrompt: MeetingChatSource.systemPrompt(isRecording: false),
+                            manualNotes: { meeting.manualNotes },
+                            config: { appState.config }
+                        )
+                        .opacity(documentMode == .chat ? 1 : 0)
+                        .allowsHitTesting(documentMode == .chat)
+                        .accessibilityHidden(documentMode != .chat)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -408,14 +522,32 @@ struct MeetingDetailView: View {
         }
     }
 
+    /// Chat needs a backend that is actually usable, not merely selected. `resolvedBackend`
+    /// always returns something (it defaults to ChatGPT), so gating on it would show the tab
+    /// to users with no credentials and fail on first use. This reuses the same readiness
+    /// test the summary action already applies.
+    private var isChatAvailable: Bool { hasApiKey }
+
+    /// If credentials disappear while Chat is the selected segment, the picker item and its
+    /// content both vanish and every remaining view sits at zero opacity — a blank pane with
+    /// nothing selected. Fall back to a segment that still exists.
+    private func resetChatModeIfUnavailable() {
+        guard !isChatAvailable else { return }
+        if documentMode == .chat { documentMode = .notes }
+        if recordingMode == .chat { recordingMode = .notes }
+    }
+
     private var documentModePicker: some View {
         Picker("", selection: $documentMode) {
             Text("Notes").tag(MeetingDocumentMode.notes)
             Text("Transcript").tag(MeetingDocumentMode.transcript)
+            if isChatAvailable {
+                Text("Chat").tag(MeetingDocumentMode.chat)
+            }
         }
         .pickerStyle(.segmented)
         .tint(MuesliTheme.accent)
-        .frame(width: 220)
+        .frame(width: isChatAvailable ? 300 : 220)
         .disabled(isEditingNotes || isEditingTranscript)
     }
 
@@ -423,10 +555,13 @@ struct MeetingDetailView: View {
         Picker("", selection: $recordingMode) {
             Text("Notes").tag(RecordingContentMode.notes)
             Text("Live").tag(RecordingContentMode.live)
+            if isChatAvailable {
+                Text("Chat").tag(RecordingContentMode.chat)
+            }
         }
         .pickerStyle(.segmented)
         .tint(MuesliTheme.accent)
-        .frame(width: 180)
+        .frame(width: isChatAvailable ? 260 : 180)
     }
 
     private func showsManualNotesEditor(for meeting: MeetingRecord) -> Bool {
@@ -540,6 +675,10 @@ struct MeetingDetailView: View {
                     transcriptResummaryPromptMeetingID = meeting.id
                 }
             } else if documentMode == .transcript {
+                // Editing targets the raw transcript, not the displayed one. Saving a
+                // cleaned transcript back over raw would make the model's guesses the
+                // durable record, and the store's trigger discards the cleaned copy on
+                // save anyway -- so the user's edit becomes the new source of truth.
                 editableTranscript = meeting.rawTranscript
                 transcriptEditOriginalTranscript = meeting.rawTranscript
                 transcriptEditHadStructuredNotes = meeting.notesState == .structuredNotes
@@ -664,6 +803,8 @@ struct MeetingDetailView: View {
     @ViewBuilder
     private func contentToolbar(for meeting: MeetingRecord) -> some View {
         HStack {
+            documentModePicker
+
             Spacer()
 
             retranscribeAction(for: meeting)
@@ -691,7 +832,9 @@ struct MeetingDetailView: View {
             }
             .buttonStyle(.plain)
         }
-        .frame(maxWidth: 980, alignment: .leading)
+        // Matches the content container's cap. At 980 the toolbar stopped 100pt short of the
+        // content's right edge, so Copy floated inward instead of aligning with it.
+        .frame(maxWidth: 1080, alignment: .leading)
     }
 
     @ViewBuilder
@@ -1103,7 +1246,11 @@ struct MeetingDetailView: View {
                 .font(.system(size: 10))
             Text(snapshot.name)
                 .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
         }
+        // Without this the chip is the flexible element beside a fixed-width metadata
+        // string, so it collapses to just its icon when the row is tight.
+        .fixedSize(horizontal: true, vertical: false)
         .foregroundStyle(MuesliTheme.accent)
         .padding(.horizontal, MuesliTheme.spacing8)
         .padding(.vertical, 4)
@@ -1352,7 +1499,11 @@ struct MeetingDetailView: View {
         case .notes:
             return isEditingNotes ? editableNotes : Self.notesContent(for: meeting)
         case .transcript:
-            return isEditingTranscript ? editableTranscript : meeting.rawTranscript
+            return isEditingTranscript ? editableTranscript : meeting.displayTranscript
+        case .chat:
+            // Chat bubbles are individually selectable; copying the whole meeting from the
+            // chat tab should still yield the transcript, which is what a user means here.
+            return meeting.displayTranscript
         }
     }
 

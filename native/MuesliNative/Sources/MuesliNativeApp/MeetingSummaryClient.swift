@@ -130,6 +130,10 @@ enum MeetingSummaryClient {
     private static let defaultOllamaModel = "qwen3.5"
     private static let defaultSummaryMaxOutputTokens = 2500
     private static let titlePromptCharacterLimit = 6_000
+    // A long meeting on a reasoning model runs well past URLSession's 60s default,
+    // which would fail the request and burn a retry before the model ever answers.
+    private static let openAISummaryTimeout: TimeInterval = 300
+    private static let openRouterSummaryTimeout: TimeInterval = 300
     private static let ollamaSummaryTimeout: TimeInterval = 300
     private static let ollamaTitleTimeout: TimeInterval = 120
     private static let lmStudioSummaryTimeout: TimeInterval = 300
@@ -173,6 +177,35 @@ enum MeetingSummaryClient {
                 visualContext: visualContext,
                 previousMeetingNotes: previousMeetingNotes
             )
+        }
+    }
+
+    /// Whether the configured summary backend has everything it needs to produce notes.
+    ///
+    /// The OpenAI and OpenRouter paths return a raw-transcript stub instead of throwing
+    /// when their key is missing, so a caller that overwrites stored notes with the
+    /// result has to check this first — otherwise the stub is persisted as a summary.
+    static func isBackendConfigured(config: AppConfig, isChatGPTAuthenticated: Bool) -> Bool {
+        let backend = (config.meetingSummaryBackend.isEmpty ? MeetingSummaryBackendOption.chatGPT.backend : config.meetingSummaryBackend).lowercased()
+        switch backend {
+        case MeetingSummaryBackendOption.chatGPT.backend:
+            return isChatGPTAuthenticated
+        case MeetingSummaryBackendOption.openRouter.backend:
+            return !(ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] ?? config.openRouterAPIKey).isEmpty
+        case MeetingSummaryBackendOption.ollama.backend:
+            let rawURL = config.ollamaURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            return rawURL.isEmpty || URL(string: rawURL) != nil
+        case MeetingSummaryBackendOption.lmStudio.backend:
+            return resolveLMStudioURL(config: config) != nil
+                && !config.lmStudioModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case MeetingSummaryBackendOption.customLLM.backend:
+            let format = CustomLLMFormat(rawValue: config.customLLMFormat) ?? .openAI
+            let key = config.customLLMAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            return resolveCustomLLMURL(config: config, format: format) != nil
+                && !config.customLLMModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && (!customLLMRequiresAPIKey(config: config) || !key.isEmpty)
+        default:
+            return !(ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? config.openAIAPIKey).isEmpty
         }
     }
 
@@ -463,6 +496,22 @@ enum MeetingSummaryClient {
         return next < line.endIndex && line[next].isWhitespace
     }
 
+    static func openAISummaryBody(instructions: String, userPrompt: String, model: String) -> [String: Any] {
+        [
+            "model": model,
+            // /v1/responses persists responses server-side unless told not to —
+            // `store` defaults to true there, unlike /v1/chat/completions.
+            "store": false,
+            "input": [
+                ["role": "system", "content": instructions],
+                ["role": "user", "content": userPrompt],
+            ],
+            "reasoning": ["effort": SummaryModelPreset.reasoningEffort(for: model) ?? "low"],
+            "text": ["verbosity": "low"],
+            "max_output_tokens": defaultSummaryMaxOutputTokens,
+        ]
+    }
+
     private static func summarizeWithOpenAI(
         transcript: String,
         meetingTitle: String,
@@ -488,18 +537,10 @@ enum MeetingSummaryClient {
             previousMeetingNotes: previousMeetingNotes
         )
         let model = config.openAIModel.isEmpty ? defaultOpenAIModel : config.openAIModel
-        let body: [String: Any] = [
-            "model": model,
-            "input": [
-                ["role": "system", "content": instructions],
-                ["role": "user", "content": userPrompt],
-            ],
-            "reasoning": ["effort": SummaryModelPreset.reasoningEffort(for: model) ?? "low"],
-            "text": ["verbosity": "low"],
-            "max_output_tokens": defaultSummaryMaxOutputTokens,
-        ]
+        let body = openAISummaryBody(instructions: instructions, userPrompt: userPrompt, model: model)
 
         var request = URLRequest(url: openAIURL)
+        request.timeoutInterval = openAISummaryTimeout
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -560,6 +601,7 @@ enum MeetingSummaryClient {
         ]
 
         var request = URLRequest(url: openRouterURL)
+        request.timeoutInterval = openRouterSummaryTimeout
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -932,7 +974,7 @@ enum MeetingSummaryClient {
         }
     }
 
-    private static func extractOpenAIText(from payload: [String: Any]) -> String? {
+    static func extractOpenAIText(from payload: [String: Any]) -> String? {
         if let outputText = payload["output_text"] as? String, !outputText.isEmpty {
             return outputText.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -948,7 +990,7 @@ enum MeetingSummaryClient {
         return nil
     }
 
-    private static func validateHTTPResponse(_ response: URLResponse, data: Data, backend: String) throws {
+    static func validateHTTPResponse(_ response: URLResponse, data: Data, backend: String) throws {
         guard let httpResponse = response as? HTTPURLResponse else { return }
         guard (200..<300).contains(httpResponse.statusCode) else {
             let message = extractErrorMessage(from: data)
@@ -962,7 +1004,7 @@ enum MeetingSummaryClient {
         }
     }
 
-    private static func extractErrorMessage(from data: Data) -> String? {
+    static func extractErrorMessage(from data: Data) -> String? {
         guard
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
@@ -1003,7 +1045,7 @@ enum MeetingSummaryClient {
         return MeetingSummaryError.requestFailed(backend: backend, underlying: error)
     }
 
-    private static func extractOpenRouterText(from payload: [String: Any]) -> String? {
+    static func extractOpenRouterText(from payload: [String: Any]) -> String? {
         let choices = payload["choices"] as? [[String: Any]] ?? []
         guard let message = choices.first?["message"] as? [String: Any] else {
             return nil

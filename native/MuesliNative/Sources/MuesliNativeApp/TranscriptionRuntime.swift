@@ -13,6 +13,37 @@ struct SpeechTranscriptionResult: Sendable {
     let segments: [SpeechSegment]
 }
 
+/// Keeps aggregate text and timed segments from describing different transcripts.
+/// Cleanup transforms cannot losslessly retime or rewrite arbitrary backend
+/// segments, so any effective text change invalidates those segments.
+struct TranscriptionResultCleanup {
+    static func removeFillers(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
+        replacingText(in: result, with: FillerWordFilter.apply(result.text))
+    }
+
+    static func removeArtifacts(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
+        replacingText(in: result, with: TranscriptionEngineArtifactsFilter.apply(result.text))
+    }
+
+    static func cleanMeetingTranscript(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
+        let cleaned = removeFillers(removeArtifacts(result))
+        guard !TranscriptionEngineArtifactsFilter.isNonSpeechArtifact(cleaned.text) else {
+            return SpeechTranscriptionResult(text: "", segments: [])
+        }
+        return cleaned
+    }
+
+    static func replacingText(
+        in result: SpeechTranscriptionResult,
+        with filteredText: String
+    ) -> SpeechTranscriptionResult {
+        SpeechTranscriptionResult(
+            text: filteredText,
+            segments: filteredText == result.text ? result.segments : []
+        )
+    }
+}
+
 actor TranscriptionCoordinator {
     typealias DiarizerModelLoader = @Sendable (DiarizerRuntimePolicy) async throws -> DiarizerModels
     typealias VADLoader = @Sendable () async throws -> VadManager
@@ -60,6 +91,15 @@ actor TranscriptionCoordinator {
     private let diarizerDiagnostics: DiarizerPreloadDiagnostics
     private var activeBackend: String?
 
+    /// Backends whose models are (or may be) resident. Every load path records
+    /// itself here so `reconcileBackendResidency` knows what there is to free.
+    private var loadedBackends: Set<String> = []
+    /// Transcriptions and loads currently running, keyed by backend identifier.
+    /// Guards against a reconcile interleaving with an awaited inference.
+    private var backendsInFlight: [String: Int] = [:]
+    private var backendDesignation = TranscriptionBackendResidencyPolicy.Designation()
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+
     init(
         diarizerModelLoader: @escaping DiarizerModelLoader = { policy in
             try await DiarizerModels.download(configuration: policy.modelConfiguration)
@@ -96,7 +136,9 @@ actor TranscriptionCoordinator {
     ) async throws -> Nemotron35StreamingTranscriber {
         let transcriber = nemotron35Transcriber
         await transcriber.setPromptId(nemotron35PromptId)
-        try await transcriber.loadModels(progress: progress)
+        try await withBackendInFlight(BackendOption.nemotron35Multilingual.backend) {
+            try await transcriber.loadModels(progress: progress)
+        }
         return transcriber
     }
 
@@ -110,15 +152,48 @@ actor TranscriptionCoordinator {
     }
 
     func unloadNemotron35Transcriber() async {
+        loadedBackends.remove(BackendOption.nemotron35Multilingual.backend)
         if #available(macOS 15, *), let transcriber = _nemotron35Transcriber as? Nemotron35StreamingTranscriber {
             await transcriber.shutdown()
         }
     }
 
     func unloadGemma4LiteRTTranscriber() async {
+        loadedBackends.remove(BackendOption.gemma4E2BLiteRT.backend)
         if #available(macOS 15, *), let transcriber = _gemma4LiteRTTranscriber as? Gemma4LiteRTTranscriber {
             await transcriber.shutdown()
             _gemma4LiteRTTranscriber = nil
+        }
+    }
+
+    /// Awaited by model deletion so files are not removed while the transcriber
+    /// still maps them. Routed like residency, so Parakeet variants land on the
+    /// shared FluidAudio transcriber.
+    ///
+    /// The shared Whisper and FluidAudio wrappers hold one sibling at a time, so
+    /// deleting a variant the wrapper is not holding must not shut down the
+    /// resident one — the deleted files were never mapped by it.
+    func unloadTranscriber(for option: BackendOption) async {
+        let identifier = Self.residencyIdentifier(for: option)
+        switch identifier {
+        case "whisper":
+            guard await whisperTranscriber.currentLoadedModelName() == option.model else { return }
+        case "fluidaudio":
+            guard let version = await fluidTranscriber.currentLoadedVersion(),
+                  option.model.contains(version == .v2 ? "v2" : "v3") else { return }
+        default:
+            break
+        }
+        await unloadBackend(identifier)
+    }
+
+    /// Awaited by post-processor model deletion: releases the GGUF weights before
+    /// their files disappear. A processor bound to a different model keeps its
+    /// weights — `reconfigure` already released the old ones when it switched.
+    func unloadLocalPostProcessorModel(ifUsing url: URL) async {
+        guard postProcessorModelURL == url else { return }
+        if #available(macOS 15, *), let postProcessor = _qwen3PostProcessor as? Qwen3PostProcessor {
+            await postProcessor.shutdown()
         }
     }
 
@@ -135,6 +210,11 @@ actor TranscriptionCoordinator {
     private var postProcessorModelId: String = PostProcessorOption.defaultOption.id
     private var postProcessorBackend: TranscriptCleanupBackendOption = .local
     private var postProcessorConfig: AppConfig = AppConfig()
+
+    private var postProcessorIdleUnloadMinutes = PostProcessorIdleUnloadPolicy.defaultIdleMinutes
+    private var isMeetingActive = false
+    private var postProcessorInvocationsInFlight = 0
+    private var idleUnloadTask: Task<Void, Never>?
 
     private struct PostProcessorSnapshot {
         let backend: TranscriptCleanupBackendOption
@@ -173,6 +253,11 @@ actor TranscriptionCoordinator {
         postProcessorBackend = backend
         postProcessorSystemPrompt = systemPrompt
         postProcessorConfig = config
+        postProcessorIdleUnloadMinutes = PostProcessorIdleUnloadPolicy
+            .resolvedIdleMinutes(config.postProcessorIdleUnloadMinutes)
+        // A settings change restarts the countdown against the new value, and
+        // re-arms it for a model still resident from a previously selected backend.
+        scheduleIdleUnload()
 
         if backend == .gemma4LiteRT {
             postProcessorModelId = Gemma4LiteRTModelStore.repoID
@@ -185,6 +270,10 @@ actor TranscriptionCoordinator {
         } else if backend.llmBackend != nil {
             postProcessorModelId = TranscriptCleanupClient.configuredModel(for: backend, config: config)
         }
+
+        // Moving off Gemma cleanup drops the only claim on its engine when ASR uses
+        // something else, so the switch itself is what releases those ~1.4 GB.
+        await reconcileBackendResidency(reason: "cleanup backend changed")
     }
 
     private struct PostProcPairLogEntry: Encodable {
@@ -283,6 +372,18 @@ actor TranscriptionCoordinator {
         }
         try Task.checkCancellation()
 
+        try await withBackendInFlight(Self.residencyIdentifier(for: backend)) {
+            try await loadBackendModels(backend: backend, progress: progress)
+        }
+
+        await preloadPostProcessorIfNeeded(enabled: enablePostProcessor, transcriptionBackend: backend)
+        await reconcileBackendResidency(reason: "after preloading \(backend.backend)")
+    }
+
+    private func loadBackendModels(
+        backend: BackendOption,
+        progress: ((Double, String?) -> Void)? = nil
+    ) async throws {
         switch backend.backend {
         case "fluidaudio":
             let version: AsrModelVersion = backend.model.contains("v2") ? .v2 : .v3
@@ -348,8 +449,6 @@ actor TranscriptionCoordinator {
                 NSLocalizedDescriptionKey: "Unknown transcription backend: \(backend.backend)",
             ])
         }
-
-        await preloadPostProcessorIfNeeded(enabled: enablePostProcessor, transcriptionBackend: backend)
     }
 
     func preloadMeetingHelpers(trigger: DiarizerPreloadTrigger = .unspecified) async {
@@ -564,10 +663,15 @@ actor TranscriptionCoordinator {
             case .local:
                 try await qwen3PostProcessor.prepare()
             case .gemma4LiteRT:
-                try await gemma4LiteRTTranscriber.prepare()
+                let transcriber = gemma4LiteRTTranscriber
+                try await withBackendInFlight(BackendOption.gemma4E2BLiteRT.backend) {
+                    try await transcriber.prepare()
+                }
             default:
                 return
             }
+            // A preloaded model that never gets dictated into must still age out.
+            scheduleIdleUnload()
         } catch {
             if postProcessorBackend == .local {
                 Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor preload failed: \(error)")
@@ -575,6 +679,251 @@ actor TranscriptionCoordinator {
                 Gemma4LiteRTLogging.log("Gemma cleanup preload failed: \(error)")
             }
         }
+    }
+
+    // MARK: - Backend residency
+
+    /// Declares which backends the app still needs, then frees the rest.
+    ///
+    /// All three slots are pushed together so a startup that preloads a dictation
+    /// model and a different meeting model does not unload one while designating
+    /// the other. `meetingLiveCaption` is the identifier of the ASR backend behind
+    /// the live-caption engine, or nil when live captions are off or served by a
+    /// model the coordinator does not own (Parakeet EOU).
+    func setDesignatedBackends(
+        dictation: String?,
+        meetingTranscription: String?,
+        meetingLiveCaption: String?
+    ) async {
+        let updated = TranscriptionBackendResidencyPolicy.Designation(
+            dictation: dictation,
+            meetingTranscription: meetingTranscription,
+            meetingLiveCaption: meetingLiveCaption,
+            postProcessor: backendDesignation.postProcessor
+        )
+        guard updated != backendDesignation else { return }
+        backendDesignation = updated
+        await reconcileBackendResidency(reason: "selection changed")
+    }
+
+    /// Releases every loaded backend that no longer serves a designated slot.
+    ///
+    /// Returns the identifiers actually unloaded so callers, notably the memory
+    /// pressure handler, can report what the reclaim bought.
+    @discardableResult
+    func reconcileBackendResidency(reason: String) async -> [String] {
+        var designation = backendDesignation
+        // The Gemma engine serves transcription and cleanup from one instance, so
+        // a cleanup selection designates it even when ASR uses something else.
+        designation.postProcessor = postProcessorBackend.isGemma4LiteRT
+            ? BackendOption.gemma4E2BLiteRT.backend
+            : nil
+        backendDesignation.postProcessor = designation.postProcessor
+
+        let unloadable = TranscriptionBackendResidencyPolicy.backendsToUnload(
+            loaded: loadedBackends,
+            designation: designation,
+            inFlight: Set(backendsInFlight.keys)
+        )
+        for identifier in unloadable {
+            await unloadBackend(identifier)
+            fputs("[coordinator] unloading \(identifier): no longer designated (\(reason))\n", stderr)
+        }
+        return unloadable
+    }
+
+    /// Every wrapper here releases its models and reloads lazily, so the shared
+    /// `let` transcribers are shut down in place rather than discarded.
+    private func unloadBackend(_ identifier: String) async {
+        loadedBackends.remove(identifier)
+        switch identifier {
+        case "fluidaudio":
+            await fluidTranscriber.shutdown()
+        case "whisper":
+            await whisperTranscriber.shutdown()
+        case "sensevoice":
+            await senseVoiceTranscriber.shutdown()
+        case "nemotron35":
+            await unloadNemotron35Transcriber()
+        case "gemma4-litert":
+            await unloadGemma4LiteRTTranscriber()
+        case "qwen":
+            if #available(macOS 15, *), let transcriber = _qwen3Transcriber as? Qwen3AsrTranscriber {
+                await transcriber.shutdown()
+                _qwen3Transcriber = nil
+            }
+        case "cohere":
+            if #available(macOS 15, *), let transcriber = _cohereTranscriber as? CohereTranscribeTranscriber {
+                await transcriber.shutdown()
+                _cohereTranscriber = nil
+            }
+        case "indicasr":
+            if #available(macOS 15, *), let transcriber = _indicASRTranscriber as? IndicASRTranscriber {
+                await transcriber.shutdown()
+                _indicASRTranscriber = nil
+            }
+        default:
+            break
+        }
+    }
+
+    /// `route` falls through to FluidAudio for anything it does not recognise, so
+    /// residency has to be booked against the backend that actually holds models.
+    private static func residencyIdentifier(for backend: BackendOption) -> String {
+        explicitlyRoutedBackendIdentifiers.contains(backend.backend) ? backend.backend : "fluidaudio"
+    }
+
+    /// Marks `identifier` busy for the duration of `body`, so a reconcile running
+    /// in the window where this actor is suspended cannot unload it mid-flight.
+    private func withBackendInFlight<T>(
+        _ identifier: String,
+        _ body: () async throws -> T
+    ) async rethrows -> T {
+        loadedBackends.insert(identifier)
+        backendsInFlight[identifier, default: 0] += 1
+        defer {
+            let remaining = (backendsInFlight[identifier] ?? 1) - 1
+            if remaining > 0 {
+                backendsInFlight[identifier] = remaining
+            } else {
+                backendsInFlight.removeValue(forKey: identifier)
+            }
+        }
+        return try await body()
+    }
+
+    // MARK: - Memory pressure
+
+    /// Frees non-designated backends and idle cleanup models when macOS reports
+    /// pressure. Deliberately minimal: no UI, no config, no new policy — it just
+    /// runs the reclaim paths that already exist, earlier than they otherwise would.
+    func startMemoryPressureMonitoring() {
+        guard memoryPressureSource == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: DispatchQueue.global(qos: .utility)
+        )
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            Task { await self.handleMemoryPressureEvent() }
+        }
+        memoryPressureSource = source
+        source.resume()
+    }
+
+    private func handleMemoryPressureEvent() async {
+        guard let event = memoryPressureSource?.data else { return }
+        let level = event.contains(.critical) ? "critical" : "warning"
+        let unloadedBackends = await reconcileBackendResidency(reason: "memory pressure (\(level))")
+        let unloadedCleanup = await unloadIdlePostProcessorModels(
+            reason: "under memory pressure (\(level))"
+        )
+        let freed = unloadedBackends + unloadedCleanup
+        if freed.isEmpty {
+            fputs("[coordinator] memory pressure \(level): nothing releasable\n", stderr)
+        } else {
+            fputs("[coordinator] memory pressure \(level): freed \(freed.joined(separator: ", "))\n", stderr)
+        }
+    }
+
+    // MARK: - Post-processor idle unload
+
+    /// Pins the on-device cleanup model in memory for the duration of a meeting.
+    ///
+    /// A meeting is exactly when a reload hurts most: the user may dictate notes
+    /// into another app while it records, and the machine is already busy with ASR
+    /// and diarization. The countdown restarts once the meeting is finished.
+    func setMeetingActive(_ active: Bool) {
+        guard isMeetingActive != active else { return }
+        isMeetingActive = active
+        if active {
+            cancelIdleUnload()
+            fputs("[postproc] idle unload suspended while a meeting is active\n", stderr)
+        } else {
+            fputs("[postproc] meeting finished; idle unload countdown restarted\n", stderr)
+            scheduleIdleUnload()
+        }
+    }
+
+    private var isPostProcessorIdle: Bool {
+        postProcessorInvocationsInFlight == 0 && !isMeetingActive
+    }
+
+    private func beginPostProcessorInvocation() {
+        postProcessorInvocationsInFlight += 1
+        cancelIdleUnload()
+    }
+
+    private func endPostProcessorInvocation() {
+        postProcessorInvocationsInFlight = max(0, postProcessorInvocationsInFlight - 1)
+        scheduleIdleUnload()
+    }
+
+    private func cancelIdleUnload() {
+        idleUnloadTask?.cancel()
+        idleUnloadTask = nil
+    }
+
+    /// LSUIElement apps have their timers throttled by App Nap, so this may fire
+    /// late. A late unload only means the memory is held longer than asked, which is
+    /// the same state the app was already in, so no wakeup guarantee is needed.
+    private func scheduleIdleUnload() {
+        cancelIdleUnload()
+        guard postProcessorInvocationsInFlight == 0 else { return }
+        guard let delay = PostProcessorIdleUnloadPolicy.unloadDelaySeconds(
+            idleMinutes: postProcessorIdleUnloadMinutes,
+            isMeetingActive: isMeetingActive
+        ) else { return }
+        idleUnloadTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                // Cancelled by a new cleanup call, a meeting start, or a config change.
+                return
+            }
+            await self?.unloadIdlePostProcessorModels()
+        }
+    }
+
+    /// Releases whichever on-device cleanup model is still resident.
+    ///
+    /// Deliberately not keyed to the selected backend: switching from a local model
+    /// to a hosted one leaves the old weights in memory with nothing else to free
+    /// them. Both lazy-load again on the next cleanup call.
+    /// - Parameter reason: Log suffix. Defaults to the idle-timer phrasing; the
+    ///   memory pressure handler passes its own so the log does not claim a
+    ///   countdown that never elapsed.
+    @discardableResult
+    private func unloadIdlePostProcessorModels(reason: String? = nil) async -> [String] {
+        // `idleUnloadTask` is deliberately left alone: a reschedule can land between
+        // this task waking and running, and clearing the handle here would orphan
+        // that newer timer beyond the reach of cancelIdleUnload().
+        guard isPostProcessorIdle, #available(macOS 15, *) else { return [] }
+        let context = reason ?? "after \(postProcessorIdleUnloadMinutes) idle min"
+        var unloaded: [String] = []
+
+        // `isPostProcessorIdle` is re-read after each await: a dictation can start
+        // while this is suspended, and unloading underneath it would cost that one
+        // dictation its cleanup pass.
+        if let postProcessor = _qwen3PostProcessor as? Qwen3PostProcessor,
+           await postProcessor.isLoaded,
+           isPostProcessorIdle {
+            await postProcessor.shutdown()
+            unloaded.append("local GGUF cleanup model")
+            fputs("[postproc] unloaded local GGUF cleanup model \(context)\n", stderr)
+        }
+
+        if PostProcessorIdleUnloadPolicy.canUnloadGemma4Engine(activeTranscriptionBackend: activeBackend),
+           let gemma4 = _gemma4LiteRTTranscriber as? Gemma4LiteRTTranscriber,
+           await gemma4.isLoaded,
+           isPostProcessorIdle {
+            await gemma4.shutdown()
+            _gemma4LiteRTTranscriber = nil
+            loadedBackends.remove(BackendOption.gemma4E2BLiteRT.backend)
+            unloaded.append("Gemma 4 cleanup engine")
+            fputs("[postproc] unloaded Gemma 4 cleanup engine \(context)\n", stderr)
+        }
+        return unloaded
     }
 
     private func currentPostProcessorSnapshot() -> PostProcessorSnapshot {
@@ -610,7 +959,14 @@ actor TranscriptionCoordinator {
                 fputs("[muesli-native] VAD check failed, transcribing anyway: \(error)\n", stderr)
             }
         }
-        var result = try await route(url: url, backend: backend, cohereLanguage: cohereLanguage, indicASRLanguage: indicASRLanguage)
+        let dictionary = Self.decodeCustomWords(customWords)
+        var result = try await route(
+            url: url,
+            backend: backend,
+            cohereLanguage: cohereLanguage,
+            indicASRLanguage: indicASRLanguage,
+            vocabulary: AsrVocabularyPrompt.build(customWords: dictionary)
+        )
         result = removeArtifacts(result)
         if !result.text.isEmpty {
             Qwen3PostProcessorLogging.logVerbose("Dictation raw transcript after artifact cleanup: \(result.text)")
@@ -622,7 +978,7 @@ actor TranscriptionCoordinator {
             postProcessorSnapshot: postProcessorSnapshot,
             appContext: appContext
         ) ?? removeFillersWithLogging(result)
-        let final = applyCustomWords(result, customWords: customWords)
+        let final = applyCustomWords(result, customWords: dictionary)
         if !final.text.isEmpty {
             Qwen3PostProcessorLogging.logVerbose("Dictation final transcript: \(final.text)")
         }
@@ -633,17 +989,26 @@ actor TranscriptionCoordinator {
         at url: URL,
         backend: BackendOption,
         cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
-        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage
+        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
+        customWords: [CustomWord] = []
     ) async throws -> SpeechTranscriptionResult {
         // Meetings intentionally skip Qwen/custom-word post-processing. Keep deterministic artifact/filler cleanup only.
-        cleanMeetingTranscript(try await route(url: url, backend: backend, cohereLanguage: cohereLanguage, indicASRLanguage: indicASRLanguage))
+        // ASR-stage vocabulary biasing is separate: it conditions the recognizer instead of rewriting its output.
+        cleanMeetingTranscript(try await route(
+            url: url,
+            backend: backend,
+            cohereLanguage: cohereLanguage,
+            indicASRLanguage: indicASRLanguage,
+            vocabulary: AsrVocabularyPrompt.build(customWords: customWords)
+        ))
     }
 
     func transcribeMeetingChunk(
         at url: URL,
         backend: BackendOption,
         cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
-        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage
+        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
+        customWords: [CustomWord] = []
     ) async throws -> SpeechTranscriptionResult {
         // Meeting chunks intentionally skip Qwen/custom-word post-processing for reconciliation.
         // Run VAD to skip silent chunks (prevents hallucinations)
@@ -659,7 +1024,13 @@ actor TranscriptionCoordinator {
                 fputs("[muesli-native] VAD check failed, transcribing anyway: \(error)\n", stderr)
             }
         }
-        return cleanMeetingTranscript(try await route(url: url, backend: backend, cohereLanguage: cohereLanguage, indicASRLanguage: indicASRLanguage))
+        return cleanMeetingTranscript(try await route(
+            url: url,
+            backend: backend,
+            cohereLanguage: cohereLanguage,
+            indicASRLanguage: indicASRLanguage,
+            vocabulary: AsrVocabularyPrompt.build(customWords: customWords)
+        ))
     }
 
     func diarizeSystemAudio(at url: URL) async throws -> DiarizationResult? {
@@ -685,6 +1056,10 @@ actor TranscriptionCoordinator {
     }
 
     func shutdown() async {
+        cancelIdleUnload()
+        memoryPressureSource?.cancel()
+        memoryPressureSource = nil
+        loadedBackends.removeAll()
         await fluidTranscriber.shutdown()
         await whisperTranscriber.shutdown()
         await senseVoiceTranscriber.shutdown()
@@ -705,8 +1080,7 @@ actor TranscriptionCoordinator {
     }
 
     private func removeFillers(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
-        let filtered = FillerWordFilter.apply(result.text)
-        return SpeechTranscriptionResult(text: filtered, segments: result.segments)
+        TranscriptionResultCleanup.removeFillers(result)
     }
 
     private func removeFillersWithLogging(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
@@ -722,12 +1096,15 @@ actor TranscriptionCoordinator {
     }
 
     private func cleanMeetingTranscript(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
-        removeFillers(removeArtifacts(result))
+        let cleaned = TranscriptionResultCleanup.cleanMeetingTranscript(result)
+        if !result.text.isEmpty, cleaned.text.isEmpty {
+            fputs("[muesli-native] dropped non-speech chunk artifact: \"\(result.text)\"\n", stderr)
+        }
+        return cleaned
     }
 
     private func removeArtifacts(_ result: SpeechTranscriptionResult) -> SpeechTranscriptionResult {
-        let filtered = TranscriptionEngineArtifactsFilter.apply(result.text)
-        return SpeechTranscriptionResult(text: filtered, segments: filtered.isEmpty ? [] : result.segments)
+        TranscriptionResultCleanup.removeArtifacts(result)
     }
 
     private func postProcessDictationIfNeeded(
@@ -753,16 +1130,25 @@ actor TranscriptionCoordinator {
             Gemma4LiteRTLogging.log("Gemma cleanup skipped because Gemma is the transcription backend")
             return nil
         }
-        if postProcessorSnapshot.backend.isGemma4LiteRT {
-            return await postProcessDictationWithGemma4(
+        // Hosted backends hold nothing on this machine, so they run outside the
+        // residency window that the on-device models below need.
+        if postProcessorSnapshot.backend.llmBackend != nil {
+            return await postProcessDictationWithHostedBackend(
                 result,
                 backend: backend,
                 postProcessorSnapshot: postProcessorSnapshot,
                 appContext: appContext
             )
         }
-        if postProcessorSnapshot.backend.llmBackend != nil {
-            return await postProcessDictationWithHostedBackend(
+
+        // Every on-device cleanup call passes through here, which makes this the one
+        // place that knows the model is in use. Both paths lazy-load, so a call
+        // arriving after an idle unload transparently reloads the weights.
+        beginPostProcessorInvocation()
+        defer { endPostProcessorInvocation() }
+
+        if postProcessorSnapshot.backend.isGemma4LiteRT {
+            return await postProcessDictationWithGemma4(
                 result,
                 backend: backend,
                 postProcessorSnapshot: postProcessorSnapshot,
@@ -811,11 +1197,7 @@ actor TranscriptionCoordinator {
                 cleanupOutputText: trimmed,
                 elapsedMs: elapsedMs
             )
-            return SpeechTranscriptionResult(
-                text: trimmed,
-                // Original ASR segments describe pre-cleanup text. Keep them only for debug diagnostics.
-                segments: Qwen3PostProcessorLogging.isVerboseEnabled && !trimmed.isEmpty ? result.segments : []
-            )
+            return TranscriptionResultCleanup.replacingText(in: result, with: trimmed)
         } catch {
             Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor failed, falling back: \(error)")
             TranscriptCleanupDebugLogger.append(
@@ -843,12 +1225,14 @@ actor TranscriptionCoordinator {
         }
         do {
             let transcriber = gemma4LiteRTTranscriber
-            try await transcriber.prepare()
-            let cleanup = try await transcriber.cleanTranscript(
-                result.text,
-                systemPrompt: postProcessorSnapshot.systemPrompt,
-                appContext: appContext
-            )
+            let cleanup = try await withBackendInFlight(BackendOption.gemma4E2BLiteRT.backend) {
+                try await transcriber.prepare()
+                return try await transcriber.cleanTranscript(
+                    result.text,
+                    systemPrompt: postProcessorSnapshot.systemPrompt,
+                    appContext: appContext
+                )
+            }
             let elapsedMs = cleanup.processingTime * 1000
             let trimmed = cleanup.text.trimmingCharacters(in: .whitespacesAndNewlines)
             Qwen3PostProcessorLogging.logVerbose(
@@ -872,10 +1256,7 @@ actor TranscriptionCoordinator {
                 cleanupOutputText: trimmed,
                 elapsedMs: elapsedMs
             )
-            return SpeechTranscriptionResult(
-                text: trimmed,
-                segments: Qwen3PostProcessorLogging.isVerboseEnabled && !trimmed.isEmpty ? result.segments : []
-            )
+            return TranscriptionResultCleanup.replacingText(in: result, with: trimmed)
         } catch {
             Gemma4LiteRTLogging.log("Gemma cleanup failed, falling back: \(error)")
             TranscriptCleanupDebugLogger.append(
@@ -936,10 +1317,7 @@ actor TranscriptionCoordinator {
                 cleanupOutputText: trimmed,
                 elapsedMs: elapsedMs
             )
-            return SpeechTranscriptionResult(
-                text: trimmed,
-                segments: Qwen3PostProcessorLogging.isVerboseEnabled && !trimmed.isEmpty ? result.segments : []
-            )
+            return TranscriptionResultCleanup.replacingText(in: result, with: trimmed)
         } catch TranscriptCleanupError.rejectedOutput {
             Qwen3PostProcessorLogging.logVerbose("\(postProcessorSnapshot.backend.label) post-processor output rejected, falling back")
             TranscriptCleanupDebugLogger.append(
@@ -967,27 +1345,52 @@ actor TranscriptionCoordinator {
         }
     }
 
-    private func applyCustomWords(_ result: SpeechTranscriptionResult, customWords: [[String: Any]]) -> SpeechTranscriptionResult {
-        guard !customWords.isEmpty, !result.text.isEmpty else { return result }
-        let entries = customWords.compactMap { dict -> CustomWord? in
+    /// The dictation entry point receives the dictionary as plain dictionaries from the
+    /// controller; decode once so ASR-stage biasing and post-hoc matching share the entries.
+    private static func decodeCustomWords(_ customWords: [[String: Any]]) -> [CustomWord] {
+        customWords.compactMap { dict -> CustomWord? in
             guard let word = dict["word"] as? String else { return nil }
             let threshold = dict["matchingThreshold"] as? Double ?? 0.85
             return CustomWord(word: word, replacement: dict["replacement"] as? String, matchingThreshold: threshold)
         }
-        guard !entries.isEmpty else { return result }
-        let correctedText = CustomWordMatcher.apply(text: result.text, customWords: entries)
-        return SpeechTranscriptionResult(text: correctedText, segments: result.segments)
     }
 
+    private func applyCustomWords(_ result: SpeechTranscriptionResult, customWords: [CustomWord]) -> SpeechTranscriptionResult {
+        guard !customWords.isEmpty, !result.text.isEmpty else { return result }
+        let correctedText = CustomWordMatcher.apply(text: result.text, customWords: customWords)
+        return TranscriptionResultCleanup.replacingText(in: result, with: correctedText)
+    }
+
+    /// `vocabulary` is only honoured by backends that accept recognizer conditioning;
+    /// the rest still rely on post-hoc `CustomWordMatcher` repair.
     private func route(
         url: URL,
         backend: BackendOption,
         cohereLanguage: CohereTranscribeLanguage,
-        indicASRLanguage: IndicASRLanguage
+        indicASRLanguage: IndicASRLanguage,
+        vocabulary: AsrVocabularyPrompt? = nil
+    ) async throws -> SpeechTranscriptionResult {
+        try await withBackendInFlight(Self.residencyIdentifier(for: backend)) {
+            try await routeToBackend(
+                url: url,
+                backend: backend,
+                cohereLanguage: cohereLanguage,
+                indicASRLanguage: indicASRLanguage,
+                vocabulary: vocabulary
+            )
+        }
+    }
+
+    private func routeToBackend(
+        url: URL,
+        backend: BackendOption,
+        cohereLanguage: CohereTranscribeLanguage,
+        indicASRLanguage: IndicASRLanguage,
+        vocabulary: AsrVocabularyPrompt?
     ) async throws -> SpeechTranscriptionResult {
         switch backend.backend {
         case "whisper":
-            return try await transcribeWithWhisperKit(url: url)
+            return try await transcribeWithWhisperKit(url: url, vocabulary: vocabulary)
         case "nemotron35":
             return try await transcribeWithNemotron35(url: url)
         case "qwen":
@@ -1023,9 +1426,9 @@ actor TranscriptionCoordinator {
 
     // MARK: - WhisperKit (Whisper on ANE/GPU via CoreML)
 
-    private func transcribeWithWhisperKit(url: URL) async throws -> SpeechTranscriptionResult {
+    private func transcribeWithWhisperKit(url: URL, vocabulary: AsrVocabularyPrompt? = nil) async throws -> SpeechTranscriptionResult {
         fputs("[muesli-native] transcribing with WhisperKit: \(url.lastPathComponent)\n", stderr)
-        let result = try await whisperTranscriber.transcribe(wavURL: url)
+        let result = try await whisperTranscriber.transcribe(wavURL: url, vocabulary: vocabulary)
         fputs("[muesli-native] WhisperKit result: \(result.text.prefix(80)) (took \(String(format: "%.3f", result.processingTime))s)\n", stderr)
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return SpeechTranscriptionResult(

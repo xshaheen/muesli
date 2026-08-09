@@ -26,10 +26,20 @@ public enum Nemotron35ModelStoreError: Error, LocalizedError {
 /// this top-level CoreML layout. Keeping the downloader and path here prevents
 /// the two products from maintaining separate copies of the same model.
 public enum Nemotron35ModelStore {
+    typealias TreePageRequest = @Sendable (URL) async throws -> (Data, URLResponse)
+    typealias RetryDelay = @Sendable (UInt64) async throws -> Void
+
     public static let repoID = "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML"
     public static let variantPath = "multilingual/2240ms"
     public static let cacheRelativePath = ".cache/muesli/models/nemotron35-multilingual-2240ms"
     public static let requiredFileRelativePath = "encoder.mlmodelc/coremldata.bin"
+    public static let requiredFileRelativePaths = [
+        "preprocessor.mlmodelc/coremldata.bin",
+        requiredFileRelativePath,
+        "decoder.mlmodelc/coremldata.bin",
+        "joint.mlmodelc/coremldata.bin",
+        "tokenizer.json",
+    ]
 
     public static func cacheDirectory(fileManager: FileManager = .default) -> URL {
         fileManager.homeDirectoryForCurrentUser
@@ -41,11 +51,19 @@ public enum Nemotron35ModelStore {
     }
 
     public static func isModelDownloaded(fileManager: FileManager = .default) -> Bool {
-        fileManager.fileExists(
-            atPath: cacheDirectory(fileManager: fileManager)
-                .appendingPathComponent(requiredFileRelativePath)
-                .path
+        isModelDownloaded(
+            at: cacheDirectory(fileManager: fileManager),
+            fileManager: fileManager
         )
+    }
+
+    public static func isModelDownloaded(
+        at directory: URL,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        return requiredFileRelativePaths.allSatisfy { relativePath in
+            fileManager.fileExists(atPath: directory.appendingPathComponent(relativePath).path)
+        }
     }
 
     /// Ensure the app-compatible multilingual/2240ms model exists locally.
@@ -131,11 +149,7 @@ public enum Nemotron35ModelStore {
             throw Nemotron35ModelStoreError.invalidURL(apiURL)
         }
 
-        let (data, response) = try await URLSession.shared.data(from: url)
-        if let httpResponse = response as? HTTPURLResponse,
-           !(200..<300).contains(httpResponse.statusCode) {
-            throw Nemotron35ModelStoreError.httpError(httpResponse.statusCode, apiURL)
-        }
+        let data = try await requestTreePage(from: url)
 
         guard let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             throw Nemotron35ModelStoreError.invalidResponse(apiURL)
@@ -183,6 +197,58 @@ public enum Nemotron35ModelStore {
                 onFileDownloaded?()
             }
         }
+    }
+
+    static func requestTreePage(
+        from url: URL,
+        request: @escaping TreePageRequest = { try await URLSession.shared.data(from: $0) },
+        retryDelay: @escaping RetryDelay = { try await Task.sleep(nanoseconds: $0) }
+    ) async throws -> Data {
+        var lastError: Error?
+
+        for attempt in 0..<3 {
+            if attempt > 0 {
+                try await retryDelay(UInt64(1 << (attempt - 1)) * 1_000_000_000)
+            }
+
+            try Task.checkCancellation()
+
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await request(url)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastError = error
+                continue
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw Nemotron35ModelStoreError.invalidResponse(url.absoluteString)
+            }
+            if (200..<300).contains(httpResponse.statusCode) {
+                return data
+            }
+
+            let error = Nemotron35ModelStoreError.httpError(
+                httpResponse.statusCode,
+                url.absoluteString
+            )
+            guard httpResponse.statusCode == 429 || (500..<600).contains(httpResponse.statusCode) else {
+                throw error
+            }
+            lastError = error
+        }
+
+        throw Nemotron35ModelStoreError.retriesExhausted(
+            url.absoluteString,
+            lastError ?? NSError(
+                domain: "Nemotron35ModelStore",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No tree requests were made"]
+            )
+        )
     }
 
     private static func downloadFile(from url: URL, to destination: URL, path: String) async throws {

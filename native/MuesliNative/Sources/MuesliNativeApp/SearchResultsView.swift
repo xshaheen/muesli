@@ -232,7 +232,7 @@ private struct SearchMeetingRow: View {
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textTertiary)
             }
-            let matchField = bestMatchField()
+            let matchField = MeetingSearchPreview.bestMatchField(for: record, query: query)
             if !matchField.isEmpty {
                 snippetText(from: matchField, highlighting: query)
                     .font(MuesliTheme.callout())
@@ -250,22 +250,6 @@ private struct SearchMeetingRow: View {
         .onTapGesture(perform: onSelect)
     }
 
-    private func bestMatchField() -> String {
-        let q = query.lowercased()
-        if record.title.lowercased().contains(q) {
-            return MeetingPreviewText.plainText(
-                from: record.formattedNotes.isEmpty ? record.rawTranscript : record.formattedNotes
-            )
-        }
-        if record.formattedNotes.lowercased().contains(q) {
-            return MeetingPreviewText.plainText(from: record.formattedNotes)
-        }
-        if record.rawTranscript.lowercased().contains(q) {
-            return MeetingPreviewText.plainText(from: record.rawTranscript)
-        }
-        return ""
-    }
-
     private func formatDuration(_ seconds: Double) -> String {
         let rounded = Int(seconds.rounded())
         if rounded < 60 { return "\(rounded)s" }
@@ -275,6 +259,27 @@ private struct SearchMeetingRow: View {
         let h = m / 60
         let rm = m % 60
         return rm > 0 ? "\(h)h \(rm)m" : "\(h)h"
+    }
+}
+
+enum MeetingSearchPreview {
+    static func bestMatchField(for record: MeetingRecord, query: String) -> String {
+        let q = query.lowercased()
+        if record.title.lowercased().contains(q) {
+            return MeetingPreviewText.plainText(
+                from: record.formattedNotes.isEmpty ? record.displayTranscript : record.formattedNotes
+            )
+        }
+        if record.formattedNotes.lowercased().contains(q) {
+            return MeetingPreviewText.plainText(from: record.formattedNotes)
+        }
+        if record.displayTranscript.lowercased().contains(q) {
+            return MeetingPreviewText.plainText(from: record.displayTranscript)
+        }
+        if record.rawTranscript.lowercased().contains(q) {
+            return MeetingPreviewText.plainText(from: record.displayTranscript)
+        }
+        return ""
     }
 }
 

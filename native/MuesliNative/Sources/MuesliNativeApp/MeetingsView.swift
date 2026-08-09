@@ -29,13 +29,13 @@ enum MeetingBrowserSort: Hashable {
 }
 
 struct MeetingBrowserPresentation {
-    let meetings: [MeetingRecord]
+    let meetings: [MeetingListRecord]
     let meetingIDsWithFollowUps: Set<Int64>
 }
 
 enum MeetingBrowserLogic {
     static func availableFilters(
-        for meetings: [MeetingRecord],
+        for meetings: [MeetingListRecord],
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> [MeetingBrowserFilter] {
@@ -55,12 +55,12 @@ enum MeetingBrowserLogic {
     }
 
     static func filteredMeetings(
-        from meetings: [MeetingRecord],
+        from meetings: [MeetingListRecord],
         filter: MeetingBrowserFilter,
         sort: MeetingBrowserSort,
         now: Date = Date(),
         calendar: Calendar = .current
-    ) -> [MeetingRecord] {
+    ) -> [MeetingListRecord] {
         presentation(
             from: meetings,
             filter: filter,
@@ -71,7 +71,7 @@ enum MeetingBrowserLogic {
     }
 
     static func presentation(
-        from meetings: [MeetingRecord],
+        from meetings: [MeetingListRecord],
         filter: MeetingBrowserFilter,
         sort: MeetingBrowserSort,
         now: Date = Date(),
@@ -79,7 +79,7 @@ enum MeetingBrowserLogic {
     ) -> MeetingBrowserPresentation {
         let threshold = threshold(for: filter, now: now, calendar: calendar)
         var meetingIDsWithFollowUps = Set<Int64>()
-        var filtered: [MeetingRecord] = []
+        var filtered: [MeetingListRecord] = []
 
         for meeting in meetings {
             if let followUpToID = meeting.followUpToID {
@@ -128,7 +128,7 @@ enum MeetingBrowserLogic {
         }
     }
 
-    private static func isAfterThreshold(_ meeting: MeetingRecord, threshold: Date?) -> Bool {
+    private static func isAfterThreshold(_ meeting: MeetingListRecord, threshold: Date?) -> Bool {
         guard let threshold else { return true }
         guard let date = parseDate(meeting.startTime) else { return false }
         return date >= threshold
@@ -196,7 +196,7 @@ struct MeetingsView: View {
     @State private var selectedFilter: MeetingBrowserFilter = .all
     @State private var selectedSort: MeetingBrowserSort = .newestFirst
 
-    private var scopedMeetings: [MeetingRecord] {
+    private var scopedMeetings: [MeetingListRecord] {
         appState.meetingRows
     }
 
@@ -221,7 +221,7 @@ struct MeetingsView: View {
         return controller.meeting(id: id)
     }
 
-    private var activeLiveMeeting: MeetingRecord? {
+    private var activeLiveMeeting: MeetingListRecord? {
         controller.activeLiveMeetingRecord()
     }
 
@@ -684,7 +684,7 @@ struct MeetingsView: View {
     }
 
     @ViewBuilder
-    private func activeMeetingBanner(_ meeting: MeetingRecord) -> some View {
+    private func activeMeetingBanner(_ meeting: MeetingListRecord) -> some View {
         HStack(spacing: MuesliTheme.spacing12) {
             HStack(spacing: 8) {
                 Circle()
@@ -771,12 +771,12 @@ struct MeetingsView: View {
         )
     }
 
-    private func activeMeetingStatusText(for meeting: MeetingRecord) -> String {
+    private func activeMeetingStatusText(for meeting: MeetingListRecord) -> String {
         guard meeting.status == .recording else { return "Finalizing notes" }
         return appState.isMeetingRecordingPaused ? "Recording paused" : "Recording now"
     }
 
-    private func activeMeetingStatusColor(for meeting: MeetingRecord) -> Color {
+    private func activeMeetingStatusColor(for meeting: MeetingListRecord) -> Color {
         guard meeting.status == .recording else { return MuesliTheme.accent }
         return appState.isMeetingRecordingPaused ? MuesliTheme.transcribing : MuesliTheme.recording
     }

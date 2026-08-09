@@ -68,20 +68,20 @@ final class ComputerUseCursorOverlay {
     }
 
     private func appKitOrigin(forQuartzPoint point: CGPoint, size: CGSize) -> CGPoint {
-        let screen = NSScreen.screens.first { screen in
-            let convertedY = screen.frame.maxY - point.y
-            return point.x >= screen.frame.minX
-                && point.x <= screen.frame.maxX
-                && convertedY >= screen.frame.minY
-                && convertedY <= screen.frame.maxY
-        } ?? NSScreen.main
+        // Quartz measures Y from the top of the primary screen, so the flip has
+        // to use screens[0] even when the point lands on a secondary display.
+        let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? 0
+        let converted = CGPoint(x: point.x, y: primaryMaxY - point.y)
+        let origin = CGPoint(x: converted.x - size.width / 2, y: converted.y - size.height / 2)
 
-        guard let screen else {
-            return CGPoint(x: point.x - size.width / 2, y: point.y - size.height / 2)
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(converted) }) ?? NSScreen.main else {
+            return origin
         }
+
+        let bounds = screen.visibleFrame
         return CGPoint(
-            x: point.x - size.width / 2,
-            y: screen.frame.maxY - point.y - size.height / 2
+            x: min(max(origin.x, bounds.minX), max(bounds.minX, bounds.maxX - size.width)),
+            y: min(max(origin.y, bounds.minY), max(bounds.minY, bounds.maxY - size.height))
         )
     }
 }

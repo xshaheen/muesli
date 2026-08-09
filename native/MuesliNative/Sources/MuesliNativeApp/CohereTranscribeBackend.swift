@@ -93,25 +93,38 @@ enum CohereTranscribeUtils {
         return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Trim a hallucinated repetition loop off the tail. A decoder that never gets a clean
+    /// EOS repeats one sentence until the token budget runs out, so only a run of 3+
+    /// identical consecutive sentences that reaches the end of the transcript is trimmed —
+    /// everything before the loop plus one instance is kept. Natural repetition earlier in
+    /// the transcript ("Okay. Okay. Sounds good. Thanks.") is left alone.
     static func trimRepeatedSuffix(_ text: String) -> String {
         let sentences = text.components(separatedBy: ". ")
         guard sentences.count >= 4 else { return text }
 
-        for i in 1..<sentences.count {
-            let current = sentences[i].trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !current.isEmpty else { continue }
-            for j in 0..<i {
-                let earlier = sentences[j].trimmingCharacters(in: .whitespacesAndNewlines)
-                if current == earlier && i - j <= 3 {
-                    let kept = sentences[0..<i].joined(separator: ". ")
-                    if !kept.hasSuffix(".") && !kept.hasSuffix("!") && !kept.hasSuffix("?") {
-                        return kept + "."
-                    }
-                    return kept
-                }
-            }
+        // The final component keeps its terminal punctuation; strip it so it can match the
+        // interior components of the same loop.
+        let normalize: (String) -> String = { sentence in
+            sentence
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+                .trimmingCharacters(in: CharacterSet(charactersIn: ".!?"))
         }
-        return text
+
+        let tail = normalize(sentences[sentences.count - 1])
+        guard !tail.isEmpty else { return text }
+
+        var loopStart = sentences.count - 1
+        while loopStart > 0 && normalize(sentences[loopStart - 1]) == tail {
+            loopStart -= 1
+        }
+        guard sentences.count - loopStart >= 3 else { return text }
+
+        let kept = sentences[0...loopStart].joined(separator: ". ")
+        if !kept.hasSuffix(".") && !kept.hasSuffix("!") && !kept.hasSuffix("?") {
+            return kept + "."
+        }
+        return kept
     }
 }
 
@@ -400,6 +413,12 @@ private final class CohereMelSpectrogram {
     /// Returns `(mel: [Float], realFrameCount: Int)` — flat [nMels * melLength] in row-major order,
     /// normalized over real frames, zero-padded to `melLength` (3500).
     func compute(audio: [Float]) -> (mel: [Float], realFrameCount: Int) {
+        // A zero-length capture would trap on `audio[0]` below; zero real frames masks the
+        // whole encoder input off, so the chunk decodes to an empty transcript.
+        guard !audio.isEmpty else {
+            return ([Float](repeating: 0, count: nMels * CohereTranscribeConfig.melLength), 0)
+        }
+
         let count = audio.count
         let melLength = CohereTranscribeConfig.melLength
 
@@ -861,6 +880,13 @@ private final class CohereTranscribeManager {
         let start = CFAbsoluteTimeGetCurrent()
         let duration = Double(audioSamples.count) / Double(CohereTranscribeConfig.sampleRate)
         var profile = CohereProfilingSummary(audioDurationS: duration)
+
+        // Nothing to transcribe — skip mel + inference entirely rather than running the
+        // encoder over an all-zero chunk.
+        guard !audioSamples.isEmpty else {
+            profile.totalProcessingMs = (CFAbsoluteTimeGetCurrent() - start) * 1000
+            return ("", profile)
+        }
 
         let scheduleStart = CFAbsoluteTimeGetCurrent()
         let chunks = scheduleChunks(samples: audioSamples)

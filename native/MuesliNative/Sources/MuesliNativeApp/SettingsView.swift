@@ -19,6 +19,20 @@ private struct MicrophoneOption: Identifiable {
 }
 
 struct SettingsView: View {
+    private enum FinalTranscriptOption {
+        case liveNemotron
+        case batch(BackendOption)
+
+        var label: String {
+            switch self {
+            case .liveNemotron:
+                return "\(MeetingLiveCaptionBackend.nemotron35.label) (live model)"
+            case .batch(let option):
+                return option.label
+            }
+        }
+    }
+
     private enum PendingDataDestruction {
         case dictations
         case meetings
@@ -129,10 +143,25 @@ struct SettingsView: View {
         return selected.settingsLabel
     }
 
-    private var usesUnifiedMeetingTranscript: Bool {
-        appState.config.enableLiveStreamingPartials
-            && appState.config.resolvedMeetingLiveCaptionBackend == .nemotron35
+    private var usesNemotronLiveTranscript: Bool {
+        appState.config.usesNemotronLiveMeetingTranscript
             && downloadedMeetingLiveCaptionBackends.contains(.nemotron35)
+    }
+
+    private var usesUnifiedMeetingTranscript: Bool {
+        downloadedMeetingLiveCaptionBackends.contains(.nemotron35)
+            && appState.config.usesUnifiedNemotronMeetingTranscript
+    }
+
+    private var finalTranscriptOptions: [FinalTranscriptOption] {
+        [.liveNemotron] + meetingBackendOptions.map(FinalTranscriptOption.batch)
+    }
+
+    private var selectedFinalTranscriptLabel: String {
+        if usesUnifiedMeetingTranscript {
+            return FinalTranscriptOption.liveNemotron.label
+        }
+        return selectedMeetingBackendLabel
     }
 
     private var meetingLiveTranscriptDescription: String {
@@ -143,6 +172,9 @@ struct SettingsView: View {
         }
         if usesUnifiedMeetingTranscript {
             return "Creates the live and final transcript."
+        }
+        if usesNemotronLiveTranscript {
+            return "Creates the live transcript; the selected final model transcribes separately."
         }
         return "Adds a low-latency preview."
     }
@@ -764,11 +796,22 @@ struct SettingsView: View {
             .featureTourTarget(.liveCaptionsSetting)
             Divider().background(MuesliTheme.surfaceBorder)
             settingsRow("Final transcript", controlWidth: meetingControlWidth) {
-                if usesUnifiedMeetingTranscript {
-                    Text("\(MeetingLiveCaptionBackend.nemotron35.label) (same model)")
-                        .font(MuesliTheme.body())
-                        .foregroundStyle(MuesliTheme.textSecondary)
-                        .frame(width: meetingControlWidth, alignment: .trailing)
+                if usesNemotronLiveTranscript {
+                    let options = finalTranscriptOptions
+                    FixedWidthPopUp(
+                        selection: selectedFinalTranscriptLabel,
+                        options: options.map(\.label),
+                        onSelectIndex: { index in
+                            guard options.indices.contains(index) else { return }
+                            switch options[index] {
+                            case .liveNemotron:
+                                controller.selectLiveMeetingTranscriptAsFinal()
+                            case .batch(let option):
+                                controller.selectMeetingFinalTranscriptBackend(option)
+                            }
+                        }
+                    )
+                    .frame(height: 24)
                 } else if meetingBackendOptions.isEmpty {
                     Text("No downloaded models")
                         .font(MuesliTheme.body())
@@ -780,24 +823,27 @@ struct SettingsView: View {
                         options: meetingBackendOptions.map(\.label)
                     ) { label in
                         if let option = meetingBackendOptions.first(where: { $0.label == label }) {
-                            controller.selectMeetingTranscriptionBackend(option)
+                            controller.selectMeetingFinalTranscriptBackend(option)
                         }
                     }
                 }
             }
-            if usesUnifiedMeetingTranscript {
+            if usesNemotronLiveTranscript {
                 Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Language", controlWidth: meetingControlWidth) {
+                settingsRow("Live language", controlWidth: meetingControlWidth) {
                     nemotron35LanguageMenu
                 }
-            } else if appState.selectedMeetingTranscriptionBackend.backend == BackendOption.cohereTranscribe.backend {
+            }
+            if !usesUnifiedMeetingTranscript,
+               appState.selectedMeetingTranscriptionBackend.backend == BackendOption.cohereTranscribe.backend {
                 Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Cohere language", controlWidth: meetingControlWidth) {
+                settingsRow(usesNemotronLiveTranscript ? "Final language" : "Cohere language", controlWidth: meetingControlWidth) {
                     cohereLanguageMenu
                 }
-            } else if appState.selectedMeetingTranscriptionBackend.backend == BackendOption.indicASR.backend {
+            } else if !usesUnifiedMeetingTranscript,
+                      appState.selectedMeetingTranscriptionBackend.backend == BackendOption.indicASR.backend {
                 Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Indic language", controlWidth: meetingControlWidth) {
+                settingsRow(usesNemotronLiveTranscript ? "Final language" : "Indic language", controlWidth: meetingControlWidth) {
                     indicLanguageMenu
                 }
             }
@@ -1034,6 +1080,30 @@ struct SettingsView: View {
                 compactActionButton("Manage Presets…", systemImage: "slider.horizontal.3") {
                     isCleanupPromptManagerPresented = true
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var meetingTranscriptCleanupSection: some View {
+        let backend = appState.selectedPostProcessorBackend
+        let eligible = MeetingTranscriptCleanupPolicy.isEligible(backend)
+        settingsSection("Meeting Transcript Cleanup") {
+            settingsRow(
+                "Repair mixed-language transcripts",
+                description: MeetingTranscriptCleanupPolicy.ineligibilityReason(backend)
+                    ?? MeetingTranscriptCleanupPolicy.disclosure(for: backend, config: appState.config),
+                controlWidth: meetingControlWidth
+            ) {
+                settingsSwitch(
+                    isOn: MeetingTranscriptCleanupPolicy.hasCurrentConsent(
+                        for: backend,
+                        config: appState.config
+                    ) && eligible
+                ) { newValue in
+                    controller.setMeetingTranscriptCleanupEnabled(newValue)
+                }
+                .disabled(!eligible)
             }
         }
     }
@@ -1292,6 +1362,8 @@ struct SettingsView: View {
 
             meetingSummarySettingsSection
 
+            meetingTranscriptCleanupSection
+
             settingsSection("Meeting Notes") {
                 settingsRow("Default template", controlWidth: meetingControlWidth) {
                     meetingTemplateMenu(selectionID: appState.config.defaultMeetingTemplateID) { id in
@@ -1503,7 +1575,11 @@ struct SettingsView: View {
                     ) { label in
                         if label == customIndicatorPositionLabel { return }
                         guard let anchor = IndicatorAnchor.allCases.first(where: { $0.label == label }) else { return }
-                        controller.updateConfig { $0.indicatorAnchor = anchor }
+                        controller.updateConfig {
+                            $0.indicatorAnchor = anchor
+                            // Only presets reach here; a stale origin would decode back to .custom.
+                            $0.indicatorOrigin = nil
+                        }
                         controller.refreshIndicatorVisibility()
                     }
                 }
@@ -1833,24 +1909,24 @@ struct SettingsView: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
 
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        guard let appSupportBase = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            fputs("[muesli-native] Could not resolve Application Support directory\n", stderr)
-            return
-        }
-
-        do {
-            let supportDir = appSupportBase
-                .appendingPathComponent(Bundle.main.infoDictionary?["MuesliSupportDirectoryName"] as? String ?? "Muesli")
-            let destPath = try SoundController.importCustomClip(from: url, supportDir: supportDir)
-            controller.updateConfig {
-                $0.maraudersMapAudioClip = SoundController.customClipID
-                $0.maraudersMapCustomAudioPath = destPath
+        presentOpenPanel(panel) { url in
+            guard let appSupportBase = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+                fputs("[muesli-native] Could not resolve Application Support directory\n", stderr)
+                return
             }
-            controller.updateMaraudersMapAudioClip()
-        } catch {
-            fputs("[muesli-native] Failed to import custom audio: \(error)\n", stderr)
+
+            do {
+                let supportDir = appSupportBase
+                    .appendingPathComponent(Bundle.main.infoDictionary?["MuesliSupportDirectoryName"] as? String ?? "Muesli")
+                let destPath = try SoundController.importCustomClip(from: url, supportDir: supportDir)
+                controller.updateConfig {
+                    $0.maraudersMapAudioClip = SoundController.customClipID
+                    $0.maraudersMapCustomAudioPath = destPath
+                }
+                controller.updateMaraudersMapAudioClip()
+            } catch {
+                fputs("[muesli-native] Failed to import custom audio: \(error)\n", stderr)
+            }
         }
     }
 

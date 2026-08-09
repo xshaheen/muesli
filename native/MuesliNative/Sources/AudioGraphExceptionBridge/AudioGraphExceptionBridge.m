@@ -65,6 +65,31 @@ NSError *MuesliAudioGraphSetInputDevice(AVAudioEngine *engine, AudioObjectID dev
     }
 }
 
+AudioObjectID MuesliAudioGraphCurrentInputDevice(AVAudioEngine *engine) {
+    @try {
+        AudioUnit audioUnit = engine.inputNode.audioUnit;
+        if (audioUnit == NULL) {
+            return kAudioObjectUnknown;
+        }
+        AudioObjectID deviceID = kAudioObjectUnknown;
+        UInt32 size = sizeof(deviceID);
+        OSStatus status = AudioUnitGetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            &size
+        );
+        if (status != noErr) {
+            return kAudioObjectUnknown;
+        }
+        return deviceID;
+    } @catch (NSException *exception) {
+        return kAudioObjectUnknown;
+    }
+}
+
 NSError *MuesliAudioGraphInstallInputTap(
     AVAudioEngine *engine,
     AVAudioNodeBus bus,

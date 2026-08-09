@@ -1140,6 +1140,8 @@ final class MuesliICloudSyncEngine {
             cloud["speakerTranscript"] = nil as NSString?
             cloud["summaryText"] = nil as NSString?
             cloud["manualNotes"] = nil as NSString?
+            cloud["cleanedTranscript"] = nil as NSString?
+            cloud["notesSource"] = nil as NSString?
             cloud["followUpToRecordName"] = nil as NSString?
             return cloud
         }
@@ -1148,6 +1150,8 @@ final class MuesliICloudSyncEngine {
         cloud["speakerTranscript"] = record.speakerTranscript as NSString?
         cloud["summaryText"] = record.summaryText as NSString?
         cloud["manualNotes"] = record.manualNotes as NSString?
+        cloud["cleanedTranscript"] = record.cleanedTranscript as NSString?
+        cloud["notesSource"] = record.notesSource?.rawValue as NSString?
         return cloud
     }
 
@@ -1159,7 +1163,7 @@ final class MuesliICloudSyncEngine {
         fetchedChangeTag != local.cloudChangeTag && remote.updatedAt > local.updatedAt
     }
 
-    private static func syncTextRecord(from record: CKRecord) -> SyncTextRecord? {
+    static func syncTextRecord(from record: CKRecord) -> SyncTextRecord? {
         guard let kind = kind(from: record),
               let createdAt = record["createdAt"] as? Date,
               let updatedAt = record["updatedAt"] as? Date else {
@@ -1177,6 +1181,8 @@ final class MuesliICloudSyncEngine {
             speakerTranscript: record["speakerTranscript"] as? String,
             summaryText: record["summaryText"] as? String,
             manualNotes: record["manualNotes"] as? String,
+            cleanedTranscript: record["cleanedTranscript"] as? String,
+            notesSource: (record["notesSource"] as? String).flatMap(MeetingNotesSource.init(rawValue:)),
             source: record["source"] as? String,
             localSource: record["localSource"] as? String,
             meetingStatus: (record["meetingStatus"] as? String).flatMap(MeetingStatus.init(rawValue:)),
@@ -1313,6 +1319,8 @@ final class MuesliICloudSyncEngine {
             "speakerTranscript",
             "summaryText",
             "manualNotes",
+            "cleanedTranscript",
+            "notesSource",
             "source",
             "localSource",
             "meetingStatus",

@@ -425,6 +425,14 @@ struct ComputerUseToolInvocation: Codable, Equatable {
         )
     }
 
+    /// Far beyond any real multi-display arrangement, but well inside Int range
+    /// so clamped coordinates always survive conversion.
+    private static let coordinateBound: Double = 100_000
+
+    private func hasInvalidCoordinates(_ values: Double?...) -> Bool {
+        values.compactMap { $0 }.contains { !$0.isFinite || abs($0) > Self.coordinateBound }
+    }
+
     func validationFailure() -> String? {
         switch tool {
         case .listApps, .listWindows, .getAppState, .getWindowState, .finish:
@@ -434,6 +442,9 @@ struct ComputerUseToolInvocation: Codable, Equatable {
         case .moveCursor:
             if x == nil || y == nil {
                 return "move_cursor requires x and y"
+            }
+            if hasInvalidCoordinates(x, y) {
+                return "move_cursor requires x and y within screen bounds"
             }
             return trimmed(screenshotID).isEmpty ? "move_cursor requires screenshot_id" : nil
         case .click:
@@ -452,6 +463,9 @@ struct ComputerUseToolInvocation: Codable, Equatable {
             if hasX != hasY {
                 return "click coordinate mode requires both x and y"
             }
+            if hasInvalidCoordinates(x, y) {
+                return "click coordinate mode requires x and y within screen bounds"
+            }
             if hasX && trimmed(screenshotID).isEmpty {
                 return "click coordinate mode requires screenshot_id"
             }
@@ -464,6 +478,9 @@ struct ComputerUseToolInvocation: Codable, Equatable {
         case .clickPoint:
             if x == nil || y == nil {
                 return "click_point requires x and y"
+            }
+            if hasInvalidCoordinates(x, y) {
+                return "click_point requires x and y within screen bounds"
             }
             return trimmed(screenshotID).isEmpty ? "click_point requires screenshot_id" : nil
         case .performSecondaryAction:
@@ -496,6 +513,9 @@ struct ComputerUseToolInvocation: Codable, Equatable {
         case .drag:
             if x == nil || y == nil || toX == nil || toY == nil {
                 return "drag requires x, y, to_x, and to_y"
+            }
+            if hasInvalidCoordinates(x, y, toX, toY) {
+                return "drag requires x, y, to_x, and to_y within screen bounds"
             }
             return trimmed(screenshotID).isEmpty ? "drag requires screenshot_id" : nil
         case .listBrowserTabs:
@@ -533,14 +553,14 @@ struct ComputerUseToolInvocation: Codable, Equatable {
                 if trimmed(label).isEmpty { return true }
                 if screenshotID == nil { return true }
             }
-            return containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
+            return Self.containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
         case .clickElement:
-            return containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
+            return Self.containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
         case .performSecondaryAction, .drag:
-            return containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
+            return Self.containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
         case .pressKey, .hotkey:
             let mods = modifiers ?? []
-            return mods.contains(.command) && ["q", "w"].contains(canonical(key ?? ""))
+            return mods.contains(.command) && ["q", "w"].contains(Self.canonical(key ?? ""))
         case .navigateURL, .navigateActiveBrowserTab:
             return safeHTTPURL(trimmed(url)) == nil
         default:
@@ -653,15 +673,23 @@ struct ComputerUseToolInvocation: Codable, Equatable {
     }
 
     private func coordinateSummary(_ x: Double?, _ y: Double?) -> String {
-        guard let x, let y else { return "unknown" }
-        return "\(Int(x.rounded())),\(Int(y.rounded()))"
+        // Summaries are built before validation runs, so unvalidated planner
+        // coordinates reach here and must never trap the Int conversion.
+        guard let x, let y, x.isFinite, y.isFinite else { return "unknown" }
+        return "\(Self.clampedCoordinate(x)),\(Self.clampedCoordinate(y))"
+    }
+
+    private static func clampedCoordinate(_ value: Double) -> Int {
+        Int(max(-coordinateBound, min(coordinateBound, value)).rounded())
     }
 
     private func elementIndexLabel(_ index: Int) -> String {
         "e\(index)"
     }
 
-    private func containsRiskyWord(_ text: String) -> Bool {
+    /// Shared with the executor so a resolved element's own title can be
+    /// checked against the same list the planner's label is checked against.
+    static func containsRiskyWord(_ text: String) -> Bool {
         let riskyWords = [
             "archive",
             "buy",
@@ -681,7 +709,7 @@ struct ComputerUseToolInvocation: Codable, Equatable {
         return riskyWords.contains { words.contains($0) }
     }
 
-    private func canonical(_ value: String) -> String {
+    private static func canonical(_ value: String) -> String {
         value.lowercased()
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
             .joined(separator: " ")

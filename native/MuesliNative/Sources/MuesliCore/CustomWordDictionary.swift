@@ -62,7 +62,9 @@ public enum CustomWordDictionaryCodec {
         for (index, word) in words.enumerated() {
             let key = normalizedWordKey(word.word)
             guard !key.isEmpty else { continue }
-            indicesByWord[key] = index
+            if indicesByWord[key] == nil {
+                indicesByWord[key] = index
+            }
         }
 
         var addedCount = 0

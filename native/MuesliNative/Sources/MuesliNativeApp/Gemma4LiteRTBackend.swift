@@ -293,6 +293,12 @@ actor Gemma4LiteRTTranscriber {
         }
     }
 
+    /// Whether the multi-GB engine is resident (or on its way in). Lets the idle
+    /// unload skip — and stay silent about — an engine that was never loaded.
+    var isLoaded: Bool {
+        engine != nil || isLoading
+    }
+
     func prepare(progress: ((Double, String?) -> Void)? = nil) async throws {
         if engine != nil { return }
         if isLoading {
@@ -309,8 +315,12 @@ actor Gemma4LiteRTTranscriber {
             isLoading = false
             completeLoadWaiters()
         } catch {
-            isLoading = false
-            completeLoadWaiters(throwing: error)
+            // A stale load (shutdown or a newer prepare() ran while this one was in flight)
+            // must not clear the flag a live load owns, or a third load starts concurrently.
+            if generation == loadGeneration {
+                isLoading = false
+                completeLoadWaiters(throwing: error)
+            }
             throw error
         }
     }
@@ -346,6 +356,15 @@ actor Gemma4LiteRTTranscriber {
 
         guard let loadedEngine = litert_lm_engine_create(settings) else {
             throw TranscriberError.failedToCreateEngine
+        }
+        // The engine holds multi-GB native allocations that only litert_lm_engine_delete
+        // frees, so an orphaned pointer must never be dropped on the floor.
+        guard generation == loadGeneration else {
+            litert_lm_engine_delete(loadedEngine)
+            throw TranscriberError.notLoaded
+        }
+        if let previousEngine = engine {
+            litert_lm_engine_delete(previousEngine)
         }
         engine = loadedEngine
         progress?(1.0, nil)

@@ -69,7 +69,7 @@ struct BackendOption: Equatable {
         model: "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
         label: "Nemotron 3.5 Multilingual",
         sizeLabel: "~665 MB",
-        description: "NVIDIA Nemotron 3.5 streaming RNNT via FluidInference. Multilingual incl. Hindi, Chinese, Japanese + 100+ locales (auto-detect). Native punctuation. Hold-to-talk or double-tap handsfree (live text). For meetings, one continuous transcript is used live and as the final raw transcript. Append-only with no corrections.",
+        description: "NVIDIA Nemotron 3.5 streaming RNNT via FluidInference. Multilingual incl. Hindi, Chinese, Japanese + 100+ locales (auto-detect). Native punctuation. Hold-to-talk or double-tap handsfree (live text). For meetings, its continuous transcript can be used live and as the final raw transcript, or paired with a separate final model. Append-only with no corrections.",
         recommended: false
     )
 
@@ -312,7 +312,7 @@ enum MeetingLiveCaptionBackend: String, CaseIterable, Codable, Sendable {
     var settingsLabel: String {
         switch self {
         case .parakeetRealtimeEOU: return "\(label) (live preview only)"
-        case .nemotron35: return "\(label) (live + final)"
+        case .nemotron35: return "\(label) (live transcript)"
         }
     }
 
@@ -697,12 +697,22 @@ struct CustomTranscriptCleanupPrompt: Codable, Equatable, Identifiable {
 
 enum TranscriptCleanupPrompts {
     static let defaultID = "default"
+    static let mixedLanguageRepairID = "mixed-language-repair"
 
     static let builtIns: [TranscriptCleanupPromptPreset] = [
         TranscriptCleanupPromptPreset(
             id: defaultID,
             name: "Default Cleanup",
             prompt: PostProcessorOption.defaultSystemPrompt,
+            isCustom: false
+        ),
+        // Selectable because the default forbids the word changes this needs. Someone
+        // dictating Arabic with English technical terms gets the same phonetic
+        // mangling a meeting does, and the same repair fixes it.
+        TranscriptCleanupPromptPreset(
+            id: mixedLanguageRepairID,
+            name: "Mixed-Language Repair (Arabic + English)",
+            prompt: MixedLanguageRepairPrompt.dictation,
             isCustom: false
         ),
     ]
@@ -718,6 +728,83 @@ enum TranscriptCleanupPrompts {
     }
 }
 
+/// Cleanup instructions for a finalized meeting transcript.
+///
+/// Deliberately not a `TranscriptCleanupPrompts` preset. The dictation default
+/// forbids paraphrasing, rewording, and adding words -- correct for a sentence
+/// someone just spoke into their own machine, and fatal here, because restoring
+/// `primary key` from البرايمريكية *is* changing the words. Keeping the two
+/// separate also means editing the dictation preset cannot silently change what
+/// meetings send.
+///
+/// It carries no `<APP-CONTEXT>` block: focused app, URL, and OCR text are
+/// dictation concepts with no meaning during a meeting.
+/// Instructions for repairing a transcript whose speech recognizer was monolingual.
+///
+/// Deliberately not a `TranscriptCleanupPrompts` default. The dictation default
+/// forbids paraphrasing, rewording, and adding words -- correct when the recognizer
+/// heard the right language, and fatal here, because restoring `primary key` from
+/// البرايمريكية *is* changing the words.
+enum MixedLanguageRepairPrompt {
+
+    /// The repair instructions themselves, shared by dictation and meetings.
+    ///
+    /// Carries no `<APP-CONTEXT>` block: it is about the words, not about what was
+    /// on screen when they were spoken.
+    static func core(subject: String) -> String {
+        """
+        You repair \(subject) that mix Arabic and English.
+
+        The speech recognizer was monolingual, so foreign-language terms were \
+        transcribed phonetically into the text's own script and are now nonsense. \
+        Your job is to restore them.
+
+        Restore technical terms, product names, and borrowed words to their correct \
+        original spelling. For example, Arabic text reading "البرايمريكية" is the \
+        English term "primary key" written phonetically, and "وأنتو مين" in a \
+        technical discussion is "one-to-many", not the Arabic question it looks like. \
+        Use the surrounding context to decide which reading is meant.
+
+        Add sentence punctuation where it is missing.
+
+        You MUST:
+        - Change words when the recognizer misheard them. This is the entire task.
+        - Keep every other word as the speaker said it, in the language they said it.
+        - Return every line you were given, in the same order.
+        - Return the full text of every line, however long.
+
+        You MUST NOT:
+        - Summarize, shorten, or omit anything.
+        - Translate the text into another language.
+        - Add commentary, headings, or content nobody said.
+        """
+    }
+
+    /// The dictation preset: one snippet in, one snippet out, no wire protocol.
+    static let dictation = core(subject: "dictated text")
+}
+
+enum MeetingTranscriptCleanupPrompt {
+    /// Marker delimiting each unit on the wire.
+    ///
+    /// Unit correspondence has to be exact rather than inferred: the model returns
+    /// free-form text, so without a marker to echo there is nothing to map output
+    /// units back to input units, and a merged or dropped line becomes invisible.
+    /// The sequence is chosen not to occur naturally in Arabic or English prose.
+    static let unitMarker = "<<<U"
+
+    static func marker(for index: Int) -> String { "\(unitMarker)\(index)>>>" }
+
+    /// The shared repair instructions plus the chunking protocol only meetings use.
+    static let systemPrompt = MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")
+        + """
+
+
+        Each line is preceded by a <<<U…>>> marker. Copy every marker exactly as it \
+        appears. Markers are structure, not content: never translate, renumber, \
+        reorder, merge, or drop one.
+        """
+}
 struct DictionarySuggestion: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     var observed: String
@@ -1014,6 +1101,9 @@ struct AppConfig: Codable {
     var indicatorAnchor: IndicatorAnchor = .midTrailing
     var dashboardWindowFrame: WindowFrame? = nil
     var indicatorOrigin: CGPointCodable? = nil
+    /// Bottom-left origin the user last dragged the floating transcript panel to.
+    /// The panel is user-positioned, not pill-attached; nil means never moved.
+    var meetingPanelOrigin: CGPointCodable? = nil
     var openAIAPIKey: String = ""
     var openRouterAPIKey: String = ""
     var openAIModel: String = ""
@@ -1055,7 +1145,19 @@ struct AppConfig: Codable {
     var hiddenCalendarEventSourceHints: [String: String] = [:]
     var disabledCalendarIDs: [String] = []
     var enablePostProcessor: Bool = false
+    /// Whether finalized meeting transcripts get an AI cleanup pass.
+    ///
+    /// Off by default: it costs a model pass per meeting, and depending on the
+    /// configured endpoint it may send the full transcript of a private
+    /// conversation to a third party.
+    var enableMeetingTranscriptCleanup: Bool = false
+    /// SHA-256 identity of the backend and resolved destination the user approved.
+    /// Nil means there is no consent, including configs saved before this field.
+    var meetingTranscriptCleanupConsentFingerprint: String?
     var postProcessorBackend: String = TranscriptCleanupBackendOption.local.backend
+    /// Minutes of dictation-cleanup inactivity before an on-device cleanup model is
+    /// released from memory. 0 keeps it resident for the life of the process.
+    var postProcessorIdleUnloadMinutes: Int = PostProcessorIdleUnloadPolicy.defaultIdleMinutes
     var activePostProcessorId: String = PostProcessorOption.defaultOption.id
     var postProcessorChatGPTModel: String = ""
     var postProcessorOpenAIModel: String = ""
@@ -1072,6 +1174,9 @@ struct AppConfig: Codable {
     /// Enables the explicitly selected live meeting transcription mode.
     var enableLiveStreamingPartials: Bool = false
     var meetingLiveCaptionBackend: String = MeetingLiveCaptionBackend.defaultBackend.rawValue
+    /// Preserves the original unified Nemotron behavior unless the user explicitly
+    /// chooses a separate downloaded model for the final transcript.
+    var useLiveMeetingTranscriptAsFinal: Bool = true
     /// Reveals a compact live transcript beside the meeting waveform while the
     /// pointer is over either floating surface.
     var showMeetingTranscriptOnIndicatorHover: Bool = true
@@ -1134,6 +1239,7 @@ struct AppConfig: Codable {
         case indicatorAnchor = "indicator_anchor"
         case dashboardWindowFrame = "dashboard_window_frame"
         case indicatorOrigin = "indicator_origin"
+        case meetingPanelOrigin = "meeting_panel_origin"
         case openAIAPIKey = "openai_api_key"
         case openRouterAPIKey = "openrouter_api_key"
         case openAIModel = "openai_model"
@@ -1173,7 +1279,10 @@ struct AppConfig: Codable {
         case hiddenCalendarEventSourceHints = "hidden_calendar_event_source_hints"
         case disabledCalendarIDs = "disabled_calendar_ids"
         case enablePostProcessor = "enable_post_processor"
+        case enableMeetingTranscriptCleanup = "enable_meeting_transcript_cleanup"
+        case meetingTranscriptCleanupConsentFingerprint = "meeting_transcript_cleanup_consent_fingerprint"
         case postProcessorBackend = "post_processor_backend"
+        case postProcessorIdleUnloadMinutes = "post_processor_idle_unload_minutes"
         case activePostProcessorId = "active_post_processor_id"
         case postProcessorChatGPTModel = "post_processor_chatgpt_model"
         case postProcessorOpenAIModel = "post_processor_openai_model"
@@ -1189,6 +1298,7 @@ struct AppConfig: Codable {
         case useCoreAudioTap = "use_core_audio_tap"
         case enableLiveStreamingPartials = "enable_live_streaming_partials"
         case meetingLiveCaptionBackend = "meeting_live_caption_backend"
+        case useLiveMeetingTranscriptAsFinal = "use_live_meeting_transcript_as_final"
         case showMeetingTranscriptOnIndicatorHover = "show_meeting_transcript_on_indicator_hover"
         case meetingHookEnabled = "meeting_hook_enabled"
         case meetingHookPath = "meeting_hook_path"
@@ -1287,6 +1397,7 @@ struct AppConfig: Codable {
             ?? ((try? c.decodeIfPresent(CGPointCodable.self, forKey: .indicatorOrigin)) != nil ? .custom : .midTrailing)
         dashboardWindowFrame = try? c.decode(WindowFrame.self, forKey: .dashboardWindowFrame)
         indicatorOrigin = try? c.decode(CGPointCodable.self, forKey: .indicatorOrigin)
+        meetingPanelOrigin = try? c.decode(CGPointCodable.self, forKey: .meetingPanelOrigin)
         openAIAPIKey = (try? c.decode(String.self, forKey: .openAIAPIKey)) ?? defaults.openAIAPIKey
         openRouterAPIKey = (try? c.decode(String.self, forKey: .openRouterAPIKey)) ?? defaults.openRouterAPIKey
         openAIModel = SummaryModelPreset.migratedFromGPT55(
@@ -1346,9 +1457,18 @@ struct AppConfig: Codable {
         )) ?? defaults.hiddenCalendarEventSourceHints
         disabledCalendarIDs = (try? c.decode([String].self, forKey: .disabledCalendarIDs)) ?? defaults.disabledCalendarIDs
         enablePostProcessor = (try? c.decode(Bool.self, forKey: .enablePostProcessor)) ?? defaults.enablePostProcessor
+        enableMeetingTranscriptCleanup = (try? c.decode(Bool.self, forKey: .enableMeetingTranscriptCleanup))
+            ?? defaults.enableMeetingTranscriptCleanup
+        meetingTranscriptCleanupConsentFingerprint = try? c.decode(
+            String.self,
+            forKey: .meetingTranscriptCleanupConsentFingerprint
+        )
         postProcessorBackend = TranscriptCleanupBackendOption
             .resolved(try? c.decode(String.self, forKey: .postProcessorBackend))
             .backend
+        postProcessorIdleUnloadMinutes = PostProcessorIdleUnloadPolicy.resolvedIdleMinutes(
+            (try? c.decode(Int.self, forKey: .postProcessorIdleUnloadMinutes)) ?? defaults.postProcessorIdleUnloadMinutes
+        )
         activePostProcessorId = (try? c.decode(String.self, forKey: .activePostProcessorId)) ?? defaults.activePostProcessorId
         postProcessorChatGPTModel = SummaryModelPreset.supportedChatGPTModel(
             SummaryModelPreset.migratedFromGPT55(
@@ -1376,6 +1496,8 @@ struct AppConfig: Codable {
         meetingLiveCaptionBackend = MeetingLiveCaptionBackend
             .resolved(try? c.decode(String.self, forKey: .meetingLiveCaptionBackend))
             .rawValue
+        useLiveMeetingTranscriptAsFinal = (try? c.decode(Bool.self, forKey: .useLiveMeetingTranscriptAsFinal))
+            ?? defaults.useLiveMeetingTranscriptAsFinal
         showMeetingTranscriptOnIndicatorHover = (try? c.decode(Bool.self, forKey: .showMeetingTranscriptOnIndicatorHover)) ?? defaults.showMeetingTranscriptOnIndicatorHover
         meetingHookEnabled = (try? c.decode(Bool.self, forKey: .meetingHookEnabled)) ?? defaults.meetingHookEnabled
         meetingHookPath = (try? c.decode(String.self, forKey: .meetingHookPath)) ?? defaults.meetingHookPath
@@ -1392,6 +1514,7 @@ struct AppConfig: Codable {
         contributionBuyMeCoffeeClicked = (try? c.decode(Bool.self, forKey: .contributionBuyMeCoffeeClicked)) ?? defaults.contributionBuyMeCoffeeClicked
         contributionTweetClicked = (try? c.decode(Bool.self, forKey: .contributionTweetClicked)) ?? defaults.contributionTweetClicked
         contributionLinkedInClicked = (try? c.decode(Bool.self, forKey: .contributionLinkedInClicked)) ?? defaults.contributionLinkedInClicked
+        MeetingTranscriptCleanupPolicy.reconcileConsent(in: &self)
     }
 
     var resolvedCohereLanguage: CohereTranscribeLanguage {
@@ -1424,6 +1547,17 @@ struct AppConfig: Codable {
 
     var resolvedMeetingRecordingFileFormat: MeetingRecordingFileFormat {
         MeetingRecordingFileFormat.resolved(meetingRecordingFileFormat)
+    }
+}
+
+extension AppConfig {
+    var usesNemotronLiveMeetingTranscript: Bool {
+        enableLiveStreamingPartials
+            && resolvedMeetingLiveCaptionBackend == .nemotron35
+    }
+
+    var usesUnifiedNemotronMeetingTranscript: Bool {
+        usesNemotronLiveMeetingTranscript && useLiveMeetingTranscriptAsFinal
     }
 }
 

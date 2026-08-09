@@ -219,7 +219,7 @@ struct ModelsView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(MuesliTheme.textTertiary)
 
-                Text("Choose one live meeting transcript model. Nemotron is live + final; Parakeet is live preview only.")
+                Text("Choose one live meeting transcript model. Nemotron can also create the final transcript; Parakeet is live preview only.")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
             }
@@ -377,27 +377,33 @@ struct ModelsView: View {
                     }
                 }
                 guard !Task.isCancelled else { return }
-                isLiveCaptionModelDownloaded = true
+                await MainActor.run {
+                    isLiveCaptionModelDownloaded = true
+                }
             } catch is CancellationError {
                 // Cancellation is an expected user action.
             } catch {
                 fputs("[muesli-native] live caption model download failed: \(error)\n", stderr)
             }
-            isDownloadingLiveCaptionModel = false
-            liveCaptionDownloadProgress = 0
-            liveCaptionDownloadTask = nil
+            await MainActor.run {
+                isDownloadingLiveCaptionModel = false
+                liveCaptionDownloadProgress = 0
+                liveCaptionDownloadTask = nil
+            }
         }
     }
 
     private func deleteLiveCaptionModel() {
-        do {
-            try MeetingLiveCaptionModelStore.delete()
-            isLiveCaptionModelDownloaded = false
-            if appState.config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU {
-                controller.updateConfig { $0.enableLiveStreamingPartials = false }
+        Task {
+            do {
+                try await ModelDeletionExecutor.execute(.liveCaption)
+                isLiveCaptionModelDownloaded = false
+                if appState.config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU {
+                    controller.updateConfig { $0.enableLiveStreamingPartials = false }
+                }
+            } catch {
+                fputs("[muesli-native] live caption model delete failed: \(error)\n", stderr)
             }
-        } catch {
-            fputs("[muesli-native] live caption model delete failed: \(error)\n", stderr)
         }
     }
 
@@ -1204,8 +1210,18 @@ struct ModelsView: View {
                 controller.setPostProcessorEnabled(false)
             }
         }
-        try? FileManager.default.removeItem(at: option.cacheDirectory)
+        // Cleared up front so the card cannot offer "Set Active" for a model
+        // whose files are about to disappear.
         downloadedPostProcModels.remove(option.id)
+        let plan = ModelDeletionPlan.postProcessor(option)
+        Task {
+            // Release the loaded GGUF before its files disappear; deletion
+            // stays best effort. The re-scan afterwards reconciles anything
+            // that interleaved with the pending deletion (e.g. a re-download).
+            await controller.transcriptionCoordinator.unloadLocalPostProcessorModel(ifUsing: option.modelURL)
+            try? await ModelDeletionExecutor.execute(plan)
+            checkDownloadedPostProcModels()
+        }
     }
 
     private func checkDownloadedPostProcModels() {
@@ -1235,7 +1251,7 @@ struct ModelsView: View {
                         downloadProgress[option.model] = max(progress, 0.05)
                     }
                 }
-                guard isModelDownloaded(option, fm: FileManager.default) else {
+                guard option.isDownloaded else {
                     throw NSError(
                         domain: "MuesliModelDownload",
                         code: 1,
@@ -1293,15 +1309,14 @@ struct ModelsView: View {
     /// Re-download Nemotron 3.5 to pick up a newer upstream build: delete the cached
     /// files (so the download isn't skipped), then start a fresh download.
     private func updateNemotron35(_ option: BackendOption) {
+        let deletionPlan = ModelDeletionPlan.backend(option)
         Task {
             do {
-                await controller.transcriptionCoordinator.unloadNemotron35Transcriber()
-                try await deleteModelFiles(option)
-                await MainActor.run {
-                    downloadedModels.remove(option.model)
-                    nemotron35UpdateAvailable = false
-                    startDownload(option)
-                }
+                await controller.transcriptionCoordinator.unloadTranscriber(for: option)
+                try await ModelDeletionExecutor.execute(deletionPlan)
+                downloadedModels.remove(option.model)
+                nemotron35UpdateAvailable = false
+                startDownload(option)
             } catch {
                 fputs("[muesli-native] model update cleanup failed for \(option.backend)/\(option.model): \(error)\n", stderr)
             }
@@ -1322,69 +1337,27 @@ struct ModelsView: View {
                 .first ?? .parakeetMultilingual
             controller.selectBackend(fallback)
         }
-        // Remove cached model files
+        let deletionPlan = ModelDeletionPlan.backend(option)
         Task {
             do {
-                try await deleteModelFiles(option)
-                await MainActor.run {
-                    _ = downloadedModels.remove(option.model)
-                }
+                // Release the transcriber's file mappings (and RAM) before
+                // deleting the files it maps; shutdown serializes behind any
+                // in-flight transcription on that backend.
+                await controller.transcriptionCoordinator.unloadTranscriber(for: option)
+                try await ModelDeletionExecutor.execute(deletionPlan)
+                _ = downloadedModels.remove(option.model)
+                controller.refreshMeetingTranscriptionSelectionAfterDeleting(option)
             } catch {
                 fputs("[muesli-native] model delete failed for \(option.backend)/\(option.model): \(error)\n", stderr)
             }
         }
     }
 
-    private func deleteModelFiles(_ option: BackendOption) async throws {
-        let fm = FileManager.default
-        switch option.backend {
-        case "whisper":
-            WhisperKitTranscriber.deleteModel(option.model)
-        case "nemotron35":
-            try removeItemIfPresent(at: Nemotron35ModelStore.cacheDirectory(fileManager: fm), fileManager: fm)
-        case "cohere":
-            try removeItemIfPresent(at: CohereTranscribeModelStore.cacheDirectory(), fileManager: fm)
-        case "indicasr":
-            if IndicASRModelStore.localOverrideDirectory() == nil {
-                try removeItemIfPresent(at: IndicASRModelStore.cacheDirectory(), fileManager: fm)
-            }
-        case "sensevoice":
-            SenseVoiceTranscriber.deleteModelFiles(fileManager: fm)
-        case "gemma4-litert":
-            await controller.transcriptionCoordinator.unloadGemma4LiteRTTranscriber()
-            try Gemma4LiteRTModelStore.deleteModelFiles(fileManager: fm)
-        case "fluidaudio":
-            // FluidAudio models are in ~/Library/Application Support/FluidAudio/Models/
-            let supportDir = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models")
-            if option.model.contains("parakeet") {
-                let version = option.model.contains("v2") ? "v2" : "v3"
-                if let contents = try? fm.contentsOfDirectory(at: supportDir, includingPropertiesForKeys: nil) {
-                    for dir in contents where dir.lastPathComponent.contains("parakeet") && dir.lastPathComponent.contains(version) {
-                        try removeItemIfPresent(at: dir, fileManager: fm)
-                    }
-                }
-            }
-        case "qwen":
-            let path = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models/qwen3-asr-0.6b-coreml")
-            try removeItemIfPresent(at: path, fileManager: fm)
-        default:
-            break
-        }
-    }
-
-    private func removeItemIfPresent(at url: URL, fileManager: FileManager) throws {
-        guard fileManager.fileExists(atPath: url.path) else { return }
-        try fileManager.removeItem(at: url)
-    }
-
     // MARK: - Check Downloaded Status
 
     private func checkDownloadedModels() {
-        let fm = FileManager.default
         for option in BackendOption.all {
-            if isModelDownloaded(option, fm: fm) {
+            if option.isDownloaded {
                 downloadedModels.insert(option.model)
             }
         }
@@ -1394,7 +1367,7 @@ struct ModelsView: View {
     /// installed for Nemotron 3.5? Never auto-downloads — just surfaces a badge.
     private func checkNemotron35Update() {
         guard #available(macOS 15, *),
-              isModelDownloaded(.nemotron35Multilingual, fm: FileManager.default) else { return }
+              BackendOption.nemotron35Multilingual.isDownloaded else { return }
         Task {
             let available = await Nemotron35StreamingTranscriber.updateAvailable()
             await MainActor.run { nemotron35UpdateAvailable = available }
@@ -1414,40 +1387,6 @@ struct ModelsView: View {
         }
     }
 
-    private func isModelDownloaded(_ option: BackendOption, fm: FileManager) -> Bool {
-        switch option.backend {
-        case "whisper":
-            return WhisperKitTranscriber.isModelDownloaded(option.model)
-        case "nemotron35":
-            return Nemotron35ModelStore.isModelDownloaded(fileManager: fm)
-        case "fluidaudio":
-            // Check FluidAudio's cache
-            let supportDir = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models")
-            if option.model.contains("parakeet") {
-                let version = option.model.contains("v2") ? "v2" : "v3"
-                if let contents = try? fm.contentsOfDirectory(at: supportDir, includingPropertiesForKeys: nil) {
-                    return contents.contains { $0.lastPathComponent.contains("parakeet") && $0.lastPathComponent.contains(version) }
-                }
-            }
-            return false
-        case "qwen":
-            let supportDir = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models/qwen3-asr-0.6b-coreml")
-            return fm.fileExists(atPath: supportDir.appendingPathComponent("int8/vocab.json").path)
-                || fm.fileExists(atPath: supportDir.appendingPathComponent("f32/vocab.json").path)
-        case "cohere":
-            return CohereTranscribeModelStore.isAvailableLocally()
-        case "indicasr":
-            return IndicASRModelStore.isAvailableLocally()
-        case "sensevoice":
-            return SenseVoiceTranscriber.isModelDownloaded()
-        case "gemma4-litert":
-            return Gemma4LiteRTModelStore.isAvailableLocally(fileManager: fm)
-        default:
-            return false
-        }
-    }
 }
 
 private final class URLSessionInvalidator: @unchecked Sendable {

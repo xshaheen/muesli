@@ -20,6 +20,7 @@ struct SidebarView: View {
     @State private var dragOrderedFolders: [MeetingFolder]?
     @State private var collapsedFolderIDs: Set<Int64> = []
     @FocusState private var isSearchFieldFocused: Bool
+    @FocusState private var isRenameFieldFocused: Bool
 
     private var searchTextBinding: Binding<String> {
         Binding(
@@ -520,12 +521,20 @@ struct SidebarView: View {
             TextField("Folder name", text: $renamingFolderName)
                 .font(MuesliTheme.callout())
                 .textFieldStyle(.plain)
-                .onSubmit {
-                    let trimmed = renamingFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        controller.renameFolder(id: folder.id, name: trimmed)
+                .focused($isRenameFieldFocused)
+                .onSubmit { commitFolderRename(folder) }
+                .onExitCommand { cancelFolderRename(folder) }
+                .onChange(of: isRenameFieldFocused) { _, isFocused in
+                    // Clicking away commits, the way Finder ends an inline rename.
+                    // The guard keeps the teardown after submit/cancel from committing twice.
+                    if !isFocused, renamingFolderID == folder.id {
+                        commitFolderRename(folder)
                     }
-                    renamingFolderID = nil
+                }
+                .task {
+                    // A newly created folder opens straight into this field, so it has to
+                    // take focus itself — otherwise the row is an inert box until clicked.
+                    isRenameFieldFocused = true
                 }
         }
         .padding(.horizontal, sidebarRowHorizontalPadding)
@@ -534,6 +543,19 @@ struct SidebarView: View {
             RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                 .fill(MuesliTheme.surfaceSelected.opacity(0.6))
         )
+    }
+
+    private func commitFolderRename(_ folder: MeetingFolder) {
+        let trimmed = renamingFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            controller.renameFolder(id: folder.id, name: trimmed)
+        }
+        renamingFolderID = nil
+    }
+
+    private func cancelFolderRename(_ folder: MeetingFolder) {
+        renamingFolderName = folder.name
+        renamingFolderID = nil
     }
 
     private func formattedCount(_ count: Int) -> String {

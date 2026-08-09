@@ -6,7 +6,7 @@ import Foundation
 struct MeetingNotesInlineMarkdownTests {
 
     private func rendered(_ markdown: String) -> String {
-        String(MeetingNotesView.inline(markdown).characters)
+        String(MeetingMarkdownContent.inline(markdown).characters)
     }
 
     @Test("bold, italic, and code markers are consumed")
@@ -18,7 +18,7 @@ struct MeetingNotesInlineMarkdownTests {
 
     @Test("bold applies emphasis rather than dropping the text")
     func boldCarriesEmphasis() {
-        let attributed = MeetingNotesView.inline("Owner: **Priya**")
+        let attributed = MeetingMarkdownContent.inline("Owner: **Priya**")
         let bolded = attributed.runs.filter { $0.inlinePresentationIntent == .stronglyEmphasized }
 
         #expect(bolded.count == 1)
@@ -27,7 +27,7 @@ struct MeetingNotesInlineMarkdownTests {
 
     @Test("italic applies emphasis")
     func italicCarriesEmphasis() {
-        let attributed = MeetingNotesView.inline("Marked *urgent*")
+        let attributed = MeetingMarkdownContent.inline("Marked *urgent*")
         let italics = attributed.runs.filter { $0.inlinePresentationIntent == .emphasized }
 
         #expect(italics.map { String(attributed[$0.range].characters) } == ["urgent"])
@@ -35,7 +35,7 @@ struct MeetingNotesInlineMarkdownTests {
 
     @Test("a link keeps its label and resolves its destination")
     func linksResolve() {
-        let attributed = MeetingNotesView.inline("See [the spec](https://example.com)")
+        let attributed = MeetingMarkdownContent.inline("See [the spec](https://example.com)")
 
         #expect(String(attributed.characters) == "See the spec")
         #expect(attributed.runs.contains { $0.link == URL(string: "https://example.com") })
@@ -44,7 +44,7 @@ struct MeetingNotesInlineMarkdownTests {
     @Test("non-web links stay visible and inert")
     func nonWebLinksStayLiteral() {
         for markdown in ["Open [the agenda](muesli://agenda)", "Read [item 4](internal)"] {
-            let attributed = MeetingNotesView.inline(markdown)
+            let attributed = MeetingMarkdownContent.inline(markdown)
 
             #expect(String(attributed.characters) == markdown)
             #expect(!attributed.runs.contains { $0.link != nil })
@@ -80,12 +80,12 @@ struct MeetingNotesInlineMarkdownTests {
     @Test("headings keep their level and parse inline formatting")
     func headingsParseInlineFormatting() throws {
         for (line, expectedLevel) in [("# **Status**", 1), ("## **Status**", 2), ("### **Status**", 3)] {
-            let heading = try #require(MeetingNotesView.headingContent(from: line))
+            let heading = try #require(MeetingMarkdownContent.headingContent(from: line))
 
             #expect(heading.level == expectedLevel)
             #expect(String(heading.text.characters) == "Status")
             #expect(heading.text.runs.contains { $0.inlinePresentationIntent == .stronglyEmphasized })
         }
-        #expect(MeetingNotesView.headingContent(from: "Ticket #123") == nil)
+        #expect(MeetingMarkdownContent.headingContent(from: "Ticket #123") == nil)
     }
 }

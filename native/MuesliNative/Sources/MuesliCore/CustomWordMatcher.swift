@@ -253,7 +253,6 @@ public struct CustomWordMatcher {
         var matches: Double = 0
         var transpositions: Double = 0
 
-        // Find matches
         for i in 0..<chars1.count {
             let start = max(0, i - matchWindow)
             let end = min(chars2.count - 1, i + matchWindow)
@@ -270,7 +269,6 @@ public struct CustomWordMatcher {
 
         guard matches > 0 else { return 0.0 }
 
-        // Count transpositions
         var k = 0
         for i in 0..<chars1.count {
             guard s1Matches[i] else { continue }

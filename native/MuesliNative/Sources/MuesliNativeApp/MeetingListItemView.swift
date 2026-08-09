@@ -2,7 +2,7 @@ import SwiftUI
 import MuesliCore
 
 struct MeetingListItemView: View {
-    let record: MeetingRecord
+    let record: MeetingListRecord
     let isSelected: Bool
     let hasFollowUps: Bool
     let folders: [MeetingFolder]
@@ -19,7 +19,7 @@ struct MeetingListItemView: View {
     @State private var newFolderName = ""
 
     init(
-        record: MeetingRecord,
+        record: MeetingListRecord,
         isSelected: Bool,
         hasFollowUps: Bool,
         folders: [MeetingFolder],
@@ -354,14 +354,7 @@ struct MeetingListItemView: View {
     }
 
     private func previewText() -> String {
-        let source: String
-        if !record.manualNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           record.status != .completed {
-            source = record.manualNotes
-        } else {
-            source = record.formattedNotes.isEmpty ? record.rawTranscript : record.formattedNotes
-        }
-        return MeetingPreviewText.snippet(from: source)
+        MeetingPreviewText.snippet(from: record.preview)
     }
 
 }

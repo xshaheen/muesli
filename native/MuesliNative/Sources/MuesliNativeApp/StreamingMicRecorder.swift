@@ -64,7 +64,11 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
     private var graphPreparedInputDeviceID: AudioObjectID?
     private var isGraphPrepared = false
     private var configurationChangeObserver: (any NSObjectProtocol)?
-    private let configurationChangeQueue = DispatchQueue(label: "com.muesli.streaming-mic-recorder-config-change")
+    private let configurationChangeQueue: DispatchQueue
+    private let configurationChangeSettleDelay: TimeInterval
+    private let scheduleConfigurationChangeRestart: (TimeInterval, DispatchWorkItem) -> Void
+    /// Confined to `configurationChangeQueue`.
+    private var pendingConfigurationChangeRestart: DispatchWorkItem?
 
     private struct FailureState {
         var activeRecordingID: UUID?
@@ -84,10 +88,18 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
 
     init(
         directoryName: String = "muesli-meeting-mic",
-        recoversFromInputConfigurationChanges: Bool = false
+        recoversFromInputConfigurationChanges: Bool = false,
+        configurationChangeSettleDelay: TimeInterval = 0.5,
+        configurationChangeRestartScheduler: ((TimeInterval, DispatchWorkItem) -> Void)? = nil
     ) {
         self.directoryName = directoryName
         self.recoversFromInputConfigurationChanges = recoversFromInputConfigurationChanges
+        self.configurationChangeSettleDelay = configurationChangeSettleDelay
+        let queue = DispatchQueue(label: "com.muesli.streaming-mic-recorder-config-change")
+        self.configurationChangeQueue = queue
+        self.scheduleConfigurationChangeRestart = configurationChangeRestartScheduler ?? { delay, work in
+            queue.asyncAfter(deadline: .now() + delay, execute: work)
+        }
     }
 
     deinit {
@@ -336,15 +348,35 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
             queue: nil
         ) { [weak self] _ in
             callbackQueue.async { [weak self] in
-                self?.handleEngineConfigurationChange(recordingID: recordingID)
+                self?.debounceConfigurationChangeRestart(recordingID: recordingID)
             }
         }
+    }
+
+    /// Runs on `configurationChangeQueue`. A device transition (AirPods
+    /// connecting, for instance) posts a burst of configuration changes —
+    /// device added, default input flipped, sample rate renegotiated — and
+    /// restarting the engine once per notification oscillates the capture
+    /// graph: the mic indicator flaps and every reopen of a Bluetooth mic
+    /// re-triggers its profile negotiation, muting system audio for seconds.
+    /// Coalesce the burst and restart once after the route settles.
+    func debounceConfigurationChangeRestart(recordingID: UUID) {
+        pendingConfigurationChangeRestart?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.handleEngineConfigurationChange(recordingID: recordingID)
+        }
+        pendingConfigurationChangeRestart = work
+        scheduleConfigurationChangeRestart(configurationChangeSettleDelay, work)
     }
 
     private func removeConfigurationChangeObserverIfNeeded() {
         guard let observer = configurationChangeObserver else { return }
         NotificationCenter.default.removeObserver(observer)
         configurationChangeObserver = nil
+        configurationChangeQueue.async { [weak self] in
+            self?.pendingConfigurationChangeRestart?.cancel()
+            self?.pendingConfigurationChangeRestart = nil
+        }
     }
 
     private func handleEngineConfigurationChange(recordingID: UUID) {
@@ -356,6 +388,14 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
             $0.activeRecordingID == recordingID && !$0.hasReportedFailure
         }
         guard mayRestart else { return }
+
+        // Our own restart posts another configuration change. Restarting for it
+        // would keep the oscillation going, so bail when the engine is already
+        // running against the device the route resolves to now.
+        if engine.isRunning, !inputDeviceNeedsRebind() {
+            fputs("[streaming-mic] configuration change ignored; capture already on the current input\n", stderr)
+            return
+        }
 
         fputs("[streaming-mic] engine configuration changed; restarting input capture\n", stderr)
         emitLatency("engine_config_change_restart_begin")
@@ -381,6 +421,19 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
             runState.markConfigurationChangeRestartFailed()
             reportRecordingFailure(error, recordingID: recordingID)
         }
+    }
+
+    /// Whether the engine's input unit is bound to a different device than the
+    /// one the route currently resolves to (the explicit preference, or the
+    /// system default input when following automatically). Unreadable state
+    /// answers true so a genuinely broken graph still restarts.
+    private func inputDeviceNeedsRebind() -> Bool {
+        let bound = MuesliAudioGraphCurrentInputDevice(engine)
+        guard bound != kAudioObjectUnknown else { return true }
+        let desired = preferredInputDeviceID
+            ?? CoreAudioDeviceInspector().defaultInputDeviceID()
+        guard let desired, desired != kAudioObjectUnknown else { return true }
+        return bound != desired
     }
 
     /// Rotate to a new file. Returns the completed WAV URL. No audio gap.

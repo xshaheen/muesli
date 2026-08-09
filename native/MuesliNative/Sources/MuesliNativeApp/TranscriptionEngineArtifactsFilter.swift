@@ -16,6 +16,17 @@ struct TranscriptionEngineArtifactsFilter {
         #"(?i)\bif a word is unclear,?\s*use the most likely word that fits well within the context of the overall sentence(?:\s+transcription)?\.?"#,
     ]
 
+    /// True for punctuation/symbol-only output that is hallucinated filler rather
+    /// than speech. Numbers in every Unicode numeric category are meaningful
+    /// transcript content, even when no letters accompany them.
+    static func isNonSpeechArtifact(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed.unicodeScalars.allSatisfy { scalar in
+            !CharacterSet.letters.contains(scalar) && scalar.properties.numericType == nil
+        }
+    }
+
     /// Removes known engine control tokens and non-speech annotations, then strips
     /// prompt leakage while preserving ordinary transcript text.
     static func apply(_ text: String) -> String {

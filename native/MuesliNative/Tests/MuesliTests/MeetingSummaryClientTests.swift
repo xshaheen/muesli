@@ -1025,4 +1025,19 @@ struct MeetingSummaryClientTests {
 
         #expect(title == nil)
     }
+
+    @Test("OpenAI summary request opts out of server-side storage")
+    func openAISummaryBodyDisablesStorage() {
+        let body = MeetingSummaryClient.openAISummaryBody(
+            instructions: "Summarize.",
+            userPrompt: "Transcript here",
+            model: "gpt-5-mini"
+        )
+
+        #expect(body["store"] as? Bool == false)
+        #expect(body["model"] as? String == "gpt-5-mini")
+        let input = body["input"] as? [[String: String]]
+        #expect(input?.count == 2)
+        #expect(input?.first?["role"] == "system")
+    }
 }

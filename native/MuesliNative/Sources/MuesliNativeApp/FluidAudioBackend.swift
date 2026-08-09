@@ -19,6 +19,12 @@ actor FluidAudioTranscriber {
         }
     }
 
+    /// The Parakeet version currently resident, if any. Model deletion consults
+    /// this so removing one version's files never unloads a resident sibling.
+    func currentLoadedVersion() -> AsrModelVersion? {
+        asrManager == nil ? nil : loadedVersion
+    }
+
     /// Downloads models (if needed) and initializes the ASR manager.
     /// - Parameter version: .v3 for multilingual (25 langs), .v2 for English-only
     func loadModels(version: AsrModelVersion = .v3, progress: ((Double, String?) -> Void)? = nil) async throws {

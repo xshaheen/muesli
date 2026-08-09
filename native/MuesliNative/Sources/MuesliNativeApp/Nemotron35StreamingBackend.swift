@@ -240,14 +240,15 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
     }
 
     private func ensureModelsDownloaded(progress: ((Double, String?) -> Void)? = nil) async throws -> URL {
-        let modelDir = Self.cacheDir
         if Nemotron35ModelStore.isModelDownloaded() {
             fputs("[nemotron35] models already cached\n", stderr)
-            return modelDir
+            return Self.cacheDir
         }
 
+        // An interrupted download leaves part of the tree on disk. The tree walk below skips
+        // files that already exist, so this resumes rather than re-downloading everything.
         fputs("[nemotron35] downloading multilingual/2240ms variant from HuggingFace...\n", stderr)
-        _ = try await Nemotron35ModelStore.ensureDownloaded(progress: progress)
+        let modelDir = try await Nemotron35ModelStore.ensureDownloaded(progress: progress)
 
         fputs("[nemotron35] download complete\n", stderr)
         return modelDir

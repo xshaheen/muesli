@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 import MuesliCore
@@ -72,6 +73,28 @@ struct MuesliCLITests {
         #expect(detailPayload.selectedTemplatePrompt == "## Weekly Overview")
     }
 
+    @Test("meeting detail payload exposes raw and cleaned transcript state")
+    func meetingDetailPayloadIncludesCleanupState() {
+        let record = MeetingRecord(
+            id: 43,
+            title: "Customer follow-up",
+            startTime: "2026-03-22T11:00:00Z",
+            durationSeconds: 1800,
+            rawTranscript: "[10:00:00] Speaker 1: البرايمريكية",
+            formattedNotes: "## Summary",
+            wordCount: 3,
+            folderID: nil,
+            cleanedTranscript: "[10:00:00] Speaker 1: primary key",
+            notesSource: .cleaned
+        )
+
+        let detailPayload = MeetingDetailPayload(record)
+
+        #expect(detailPayload.rawTranscript == record.rawTranscript)
+        #expect(detailPayload.cleanedTranscript == record.cleanedTranscript)
+        #expect(detailPayload.notesSource == "cleaned")
+    }
+
     @Test("transcribe validation rejects unsupported file extensions")
     func transcribeRejectsUnsupportedExtension() {
         #expect(throws: Error.self) {
@@ -99,6 +122,37 @@ struct MuesliCLITests {
         #expect(TranscribeOutputFormat(argument: "json") == .json)
         #expect(TranscribeOutputFormat(argument: "markdown") == .markdown)
         #expect(TranscribeOutputFormat(argument: "xml") == nil)
+    }
+
+    @Test("streaming WAV reader emits ordered fixed chunks and pads only the tail")
+    func streamingWavReaderChunksIncrementally() async throws {
+        let chunkSamples = 5_120
+        let tailSamples = 137
+        let samples = [Float](repeating: 0.1, count: chunkSamples)
+            + [Float](repeating: 0.2, count: chunkSamples)
+            + [Float](repeating: 0.3, count: tailSamples)
+        let url = try CLIWavWriter.writeTemporaryWAV(
+            samples: samples,
+            directoryName: "muesli-cli-streaming-reader-tests"
+        )
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var chunks: [[Float]] = []
+        let result = try await CLIWavReader.forEachMonoFloatChunk(
+            url: url,
+            chunkSamples: chunkSamples
+        ) { buffer in
+            let channel = buffer.floatChannelData![0]
+            chunks.append(Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))))
+        }
+
+        #expect(result.sampleCount == samples.count)
+        #expect(result.chunkCount == 3)
+        #expect(chunks.count == 3)
+        #expect(abs(chunks[0][0] - 0.1) < 0.001)
+        #expect(abs(chunks[1][0] - 0.2) < 0.001)
+        #expect(abs(chunks[2][0] - 0.3) < 0.001)
+        #expect(chunks[2][tailSamples...].allSatisfy { $0 == 0 })
     }
 
     @Test("--dictionary parses into the request")
@@ -435,6 +489,60 @@ struct MuesliCLITests {
         #expect(FileManager.default.fileExists(atPath: savedRecordingPath))
         #expect(URL(fileURLWithPath: savedRecordingPath).pathExtension == fixture.sourceURL.pathExtension)
         #expect(posted == 1)
+    }
+
+    @Test("summary config decodes the snake_case keys the app writes")
+    func summaryConfigDecodesAppConfigKeys() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-cli-config-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let json = """
+        {
+          "meeting_summary_backend": "ollama",
+          "openai_api_key": "sk-openai",
+          "openrouter_api_key": "sk-openrouter",
+          "openai_model": "gpt-5.4",
+          "openrouter_model": "stepfun/step-3.5-flash",
+          "ollama_url": "http://localhost:9999",
+          "ollama_model": "qwen3.5:14b",
+          "lmstudio_url": "http://localhost:4321",
+          "lmstudio_model": "local-model",
+          "custom_llm_url": "https://llm.example.com/v1",
+          "custom_llm_api_key": "sk-custom",
+          "custom_llm_model": "custom-model",
+          "custom_llm_format": "anthropic"
+        }
+        """
+        try json.write(to: directory.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+
+        let config = CLISummaryConfig.load(from: directory)
+
+        #expect(config.meetingSummaryBackend == "ollama")
+        #expect(config.openAIAPIKey == "sk-openai")
+        #expect(config.openRouterAPIKey == "sk-openrouter")
+        #expect(config.openAIModel == "gpt-5.4")
+        #expect(config.openRouterModel == "stepfun/step-3.5-flash")
+        #expect(config.ollamaURL == "http://localhost:9999")
+        #expect(config.ollamaModel == "qwen3.5:14b")
+        #expect(config.lmStudioURL == "http://localhost:4321")
+        #expect(config.lmStudioModel == "local-model")
+        #expect(config.customLLMURL == "https://llm.example.com/v1")
+        #expect(config.customLLMAPIKey == "sk-custom")
+        #expect(config.customLLMModel == "custom-model")
+        #expect(config.customLLMFormat == "anthropic")
+    }
+
+    @Test("summary config falls back to defaults when config.json is missing")
+    func summaryConfigFallsBackToDefaults() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-cli-config-missing-\(UUID().uuidString)", isDirectory: true)
+
+        let config = CLISummaryConfig.load(from: directory)
+
+        #expect(config.meetingSummaryBackend == "chatgpt")
+        #expect(config.openAIAPIKey.isEmpty)
+        #expect(config.ollamaURL == "http://localhost:11434")
+        #expect(config.lmStudioURL == "http://localhost:1234")
     }
 
     @Test("transcribe output writes file content")

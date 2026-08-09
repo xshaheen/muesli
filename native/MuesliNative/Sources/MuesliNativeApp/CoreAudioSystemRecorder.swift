@@ -10,12 +10,15 @@ import os
 /// Protocol for system audio capture backends (ScreenCaptureKit vs CoreAudio tap).
 protocol SystemAudioCapturing: AnyObject {
     var onPCMSamples: (([Int16]) -> Void)? { get set }
+    /// Called when capture dies mid-recording and cannot be recovered, so the
+    /// owner can tell the user the "Others" side is gone.
+    var onSystemAudioFailure: ((Error) -> Void)? { get set }
     var isRecording: Bool { get }
     var isPaused: Bool { get }
     func start() async throws
     func pause()
     func resume()
-    func stop() -> URL?
+    func stop() async -> URL?
 }
 
 /// Captures system audio via CoreAudio process tap + aggregate device.
@@ -27,6 +30,7 @@ protocol SystemAudioCapturing: AnyObject {
 /// - Hardware-synchronized with mic input when used in an aggregate device
 final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnosticsProviding {
     var onPCMSamples: (([Int16]) -> Void)?
+    var onSystemAudioFailure: ((Error) -> Void)?
 
     private var tapID: AudioObjectID = kAudioObjectUnknown
     private var aggregateDeviceID: AudioDeviceID = kAudioObjectUnknown
@@ -35,6 +39,9 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
     private let deviceIOQueue = DispatchQueue(label: "com.muesli.system-audio-tap.io", qos: .userInitiated)
     private let processingQueue = DispatchQueue(label: "com.muesli.system-audio-tap")
     private var defaultOutputDeviceListenerBlock: AudioObjectPropertyListenerBlock?
+    /// Bumped per output-device change so a retry chain from an earlier change
+    /// abandons itself once a newer change takes over. Processing queue only.
+    private var tapRestartGeneration: UInt64 = 0
 
     private var outputFile: FileHandle?
     private var outputURL: URL?
@@ -52,6 +59,9 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
     }
 
     private static let targetSampleRate: Double = 16_000
+    /// Output-device transitions are transient; a rebuild that lands mid-switch
+    /// usually succeeds a moment later.
+    private static let tapRestartRetryDelays: [Double] = [0.5, 1.0, 2.0]
 
     /// Source format from the tap (queried at setup time).
     private var sourceSampleRate: Double = 48_000
@@ -99,7 +109,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
             || aggregateDeviceID != kAudioObjectUnknown
             || tapID != kAudioObjectUnknown
         {
-            _ = stop()
+            _ = performStop()
         }
     }
 
@@ -133,7 +143,13 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         }
     }
 
-    func stop() -> URL? {
+    func stop() async -> URL? {
+        performStop()
+    }
+
+    /// Teardown is fully synchronous here; `deinit` needs a non-async entry point.
+    @discardableResult
+    private func performStop() -> URL? {
         guard isRecording || outputFile != nil || outputURL != nil else { return nil }
         isRecording = false
         isPaused = false
@@ -142,6 +158,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         processingQueue.sync {
             teardownTapAndAudioDevice()
             onPCMSamples = nil
+            onSystemAudioFailure = nil
         }
 
         if let file = outputFile {
@@ -628,13 +645,13 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         let deadline = clock.now + timeout
         while clock.now < deadline {
             if checkSystemAudioPermission() {
-                _ = recorder.stop()
+                _ = await recorder.stop()
                 return true
             }
             try? await Task.sleep(for: pollInterval)
         }
 
-        _ = recorder.stop()
+        _ = await recorder.stop()
         return checkSystemAudioPermission()
     }
 
@@ -695,7 +712,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
 
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             self?.processingQueue.async { [weak self] in
-                self?.restartTapForDefaultOutputDeviceChange()
+                self?.handleDefaultOutputDeviceChange()
             }
         }
         defaultOutputDeviceListenerBlock = block
@@ -729,10 +746,17 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         defaultOutputDeviceListenerBlock = nil
     }
 
-    private func restartTapForDefaultOutputDeviceChange() {
+    private func handleDefaultOutputDeviceChange() {
         guard isRecording else { return }
 
         fputs("[system-audio] default output device changed; rebuilding tap\n", stderr)
+        tapRestartGeneration &+= 1
+        restartTapForDefaultOutputDeviceChange(generation: tapRestartGeneration, attempt: 0)
+    }
+
+    private func restartTapForDefaultOutputDeviceChange(generation: UInt64, attempt: Int) {
+        guard isRecording, generation == tapRestartGeneration else { return }
+
         teardownTapAndAudioDevice()
         guard isRecording else { return }
 
@@ -742,10 +766,21 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
             fputs("[system-audio] CoreAudio tap capture restarted for default output device\n", stderr)
         } catch {
             teardownTapAndAudioDevice()
+
+            if attempt < Self.tapRestartRetryDelays.count {
+                let delay = Self.tapRestartRetryDelays[attempt]
+                fputs("[system-audio] tap rebuild attempt \(attempt + 1) failed: \(error); retrying in \(delay)s\n", stderr)
+                processingQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    self?.restartTapForDefaultOutputDeviceChange(generation: generation, attempt: attempt + 1)
+                }
+                return
+            }
+
             isRecording = false
             isPaused = false
             onPCMSamples = nil
             fputs("[system-audio] failed to restart after default output device change: \(error)\n", stderr)
+            onSystemAudioFailure?(error)
         }
     }
 
@@ -814,6 +849,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         isRecording = false
         isPaused = false
         onPCMSamples = nil
+        onSystemAudioFailure = nil
 
         removeDefaultOutputDeviceListener()
         teardownTapAndAudioDevice()

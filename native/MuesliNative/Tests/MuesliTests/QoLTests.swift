@@ -179,15 +179,15 @@ struct IndicatorFrameSizeTests {
     @MainActor
     func anchorCentersUseExpectedInsets() {
         let visibleFrame = NSRect(x: 100, y: 50, width: 1200, height: 800)
-        let size = NSSize(width: 44, height: 28)
+        let size = NSSize(width: 44, height: 22)
 
         #expect(
             FloatingIndicatorController.anchorCenter(.topLeading, in: visibleFrame, size: size) ==
-            CGPoint(x: 130, y: 828)
+            CGPoint(x: 130, y: 831)
         )
         #expect(
             FloatingIndicatorController.anchorCenter(.bottomCenter, in: visibleFrame, size: size) ==
-            CGPoint(x: 700, y: 72)
+            CGPoint(x: 700, y: 69)
         )
     }
 
@@ -206,7 +206,7 @@ struct IndicatorFrameSizeTests {
         #expect(short.width >= 190)
         #expect(long.width > short.width)
         #expect(long.width <= 360)
-        #expect(long.height == 32)
+        #expect(long.height == FloatingIndicatorController.compactIndicatorHeight)
     }
 
     @Test("transcribing pill caps to available screen width")
@@ -218,7 +218,33 @@ struct IndicatorFrameSizeTests {
         )
 
         #expect(size.width <= 148)
-        #expect(size.height == 32)
+        #expect(size.height == FloatingIndicatorController.compactIndicatorHeight)
+    }
+
+    @Test("every single-line presentation uses the recording capsule height")
+    @MainActor
+    func singleLinePresentationsShareCompactHeight() {
+        let expected = FloatingIndicatorController.compactIndicatorHeight
+        let sizes = [
+            FloatingIndicatorController.idleIndicatorSize,
+            FloatingIndicatorController.transcribingPillSizeForTesting(
+                title: "Transcribing",
+                screenWidth: 1200
+            ),
+            FloatingIndicatorController.warningPillSizeForTesting(
+                message: "Microphone unavailable",
+                icon: "⚡",
+                screenWidth: 1200
+            ),
+            FloatingIndicatorController.loadingPillSizeForTesting(
+                message: "Loading model",
+                screenWidth: 1200
+            ),
+            FloatingIndicatorController.computerUseCursorSizeForTesting(label: ""),
+            FloatingIndicatorController.computerUseCursorSizeForTesting(label: "Click target")
+        ]
+
+        #expect(sizes.allSatisfy { $0.height == expected })
     }
 
     @Test("CUA transcript pill wraps and grows vertically instead of truncating")
@@ -234,7 +260,7 @@ struct IndicatorFrameSizeTests {
         )
 
         #expect(short.width >= 280)
-        #expect(short.height >= 44)
+        #expect(short.height == FloatingIndicatorController.compactIndicatorHeight)
         #expect(long.width <= 372)
         #expect(long.height > short.height)
     }
@@ -242,84 +268,45 @@ struct IndicatorFrameSizeTests {
 
 @Suite("Floating meeting transcript")
 struct FloatingMeetingTranscriptTests {
-    @Test("overlay routes header controls and leaves transcript body to SwiftUI")
-    func overlayClickRouting() {
-        let frame = NSRect(x: 100, y: 100, width: 360, height: 320)
-
-        #expect(FloatingMeetingTranscriptInteraction.action(
-            at: NSPoint(x: 390, y: 400), in: frame
-        ) == .dismiss)
-        #expect(FloatingMeetingTranscriptInteraction.action(
-            at: NSPoint(x: 430, y: 400), in: frame
-        ) == .copy)
-        #expect(FloatingMeetingTranscriptInteraction.action(
-            at: NSPoint(x: 250, y: 250), in: frame
-        ) == nil)
-        #expect(FloatingMeetingTranscriptInteraction.action(
-            at: NSPoint(x: 90, y: 250), in: frame
-        ) == nil)
-    }
-
-    @Test("floating panel can receive controls without becoming the main window")
+    @Test("floating panel can take keys without becoming the main window")
     @MainActor
     func floatingPanelIsInteractive() {
+        // A borderless panel refuses key status by default, which would leave chat's
+        // composer untypable. Becoming main is the part that must stay off: it would
+        // pull activation away from the call the user is in.
         let panel = InteractiveFloatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 360, height: 320),
             styleMask: .borderless,
             backing: .buffered,
             defer: false
         )
-        var receivedMouseDown: NSPoint?
-        panel.leftMouseDownHandler = { point in
-            receivedMouseDown = point
-            return true
-        }
-        let event = NSEvent.mouseEvent(
-            with: .leftMouseDown,
-            location: NSPoint(x: 20, y: 20),
-            modifierFlags: [],
-            timestamp: 0,
-            windowNumber: panel.windowNumber,
-            context: nil,
-            eventNumber: 1,
-            clickCount: 1,
-            pressure: 1
-        )
-        if let event {
-            panel.sendEvent(event)
-        }
 
         #expect(panel.canBecomeKey)
         #expect(!panel.canBecomeMain)
-        #expect(!panel.becomesKeyOnlyIfNeeded)
-        #expect(!panel.styleMask.contains(.nonactivatingPanel))
-        #expect(receivedMouseDown == NSPoint(x: 20, y: 20))
     }
 
-    @Test("shown overlay retains its hosting view and routes dismissal")
+    @Test("the transcript overlay shows in a window of its own")
     @MainActor
-    func shownOverlayRoutesDismissal() {
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 320),
-            styleMask: .borderless,
-            backing: .buffered,
-            defer: false
-        )
-        let container = NSView(frame: panel.contentView?.bounds ?? .zero)
-        panel.contentView = container
+    func shownOverlayUsesItsOwnWindow() {
+        // The transcript used to be a subview of the indicator's window, which forced
+        // that window to be the union of both and made every indicator resize a
+        // geometry negotiation. It owns a window now, so showing it cannot move the
+        // pill, and its buttons are ordinary SwiftUI buttons rather than coordinates
+        // matched against a hit-region table.
         var dismissCount = 0
         let controller = FloatingMeetingTranscriptPanelController(
-            onHoverChanged: { _ in },
             onOpenNotes: {},
             onDismiss: { dismissCount += 1 }
         )
 
-        controller.show(in: container, frame: container.bounds)
+        controller.show(at: NSRect(x: 120, y: 240, width: 360, height: 320))
 
         #expect(controller.isVisible)
-        #expect(!controller.handleClick(atWindowPoint: NSPoint(x: 180, y: 160)))
-        #expect(controller.handleClick(atWindowPoint: NSPoint(x: 290, y: 300)))
-        #expect(dismissCount == 1)
+
+        controller.hide()
+
+        #expect(controller.isVisible == false)
+        #expect(dismissCount == 0)
     }
 
     @Test("panel prefers the open side and remains inside the screen")
@@ -337,8 +324,9 @@ struct FloatingMeetingTranscriptTests {
             visibleFrame: screen
         )
 
-        #expect(leftFrame.maxX == trailingIndicator.minX)
-        #expect(rightFrame.minX == leadingIndicator.maxX)
+        let gap = FloatingMeetingTranscriptPlacement.gap
+        #expect(leftFrame.maxX == trailingIndicator.minX - gap)
+        #expect(rightFrame.minX == leadingIndicator.maxX + gap)
         #expect(screen.insetBy(dx: 8, dy: 8).contains(leftFrame))
         #expect(screen.insetBy(dx: 8, dy: 8).contains(rightFrame))
     }
@@ -407,13 +395,26 @@ struct FloatingIndicatorPointerInteractionTests {
     @Test("small pointer movement remains a click while deliberate movement drags")
     func dragThreshold() {
         let start = NSPoint(x: 100, y: 100)
+        // Click jitter of a few points must not start a drag: starting one collapses
+        // the hover-expanded pill under the pointer, so a misread click visibly
+        // displaces the pill.
         #expect(!FloatingIndicatorPointerIntent.isDrag(
             from: start,
-            to: NSPoint(x: 102, y: 102)
+            to: NSPoint(x: 104, y: 100)
         ))
         #expect(FloatingIndicatorPointerIntent.isDrag(
             from: start,
-            to: NSPoint(x: 104, y: 100)
+            to: NSPoint(x: 106, y: 100)
+        ))
+        // A drag that never travels the deliberate distance is snapped back and
+        // delivered as a click on release.
+        #expect(!FloatingIndicatorPointerIntent.isDeliberateDrag(
+            from: start,
+            to: NSPoint(x: 108, y: 100)
+        ))
+        #expect(FloatingIndicatorPointerIntent.isDeliberateDrag(
+            from: start,
+            to: NSPoint(x: 112, y: 100)
         ))
     }
 
