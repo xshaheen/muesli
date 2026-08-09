@@ -21,12 +21,12 @@ struct DashboardRootView: View {
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button {
-                    columnVisibility = columnVisibility == .all ? .detailOnly : .all
+                    columnVisibility = Self.toggledColumnVisibility(after: columnVisibility)
                 } label: {
                     Image(systemName: "sidebar.leading")
                 }
-                .keyboardShortcut("s", modifiers: .command)
-                .help("Toggle Sidebar (⌘S)")
+                .keyboardShortcut("s", modifiers: [.control, .command])
+                .help("Toggle Sidebar (⌃⌘S)")
             }
         }
         .frame(minWidth: 640, minHeight: 480)
@@ -120,6 +120,12 @@ struct DashboardRootView: View {
                 onDismiss: { controller.dismissDiagnosticIncidentPrompt() }
             )
         }
+    }
+
+    static func toggledColumnVisibility(
+        after visibility: NavigationSplitViewVisibility
+    ) -> NavigationSplitViewVisibility {
+        visibility == .all ? .detailOnly : .all
     }
 
     @ViewBuilder

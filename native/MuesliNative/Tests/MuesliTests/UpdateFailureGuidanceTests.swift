@@ -260,13 +260,20 @@ struct UpdateActionRoutingTests {
 
 @Suite("Sidebar hit areas")
 struct SidebarHitAreaTests {
+    @Test("sidebar toggle restores or hides the navigation column")
+    func sidebarVisibilityToggleCycles() {
+        #expect(DashboardRootView.toggledColumnVisibility(after: .all) == .detailOnly)
+        #expect(DashboardRootView.toggledColumnVisibility(after: .detailOnly) == .all)
+        #expect(DashboardRootView.toggledColumnVisibility(after: .automatic) == .all)
+    }
+
     @Test("primary sidebar rows use their full highlighted surface as the hit target")
     func primarySidebarRowsExpandBeforeApplyingHitShape() throws {
-        let source = try sidebarViewSource()
+        let source = try source(named: "SidebarView.swift")
         let sidebarItem = try sourceSection(
             in: source,
             from: "private func sidebarItem",
-            to: "private var darkModeToggle"
+            to: "private func meetingFilterRow"
         )
 
         #expect(sidebarItem.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
@@ -276,9 +283,21 @@ struct SidebarHitAreaTests {
             index(of: ".contentShape(Rectangle())", in: sidebarItem))
     }
 
+    @Test("promotion and appearance controls stay out of the sidebar")
+    func sidebarKeepsSecondaryControlsInSettings() throws {
+        let sidebarSource = try source(named: "SidebarView.swift")
+        let settingsSource = try source(named: "SettingsView.swift")
+
+        #expect(!sidebarSource.contains("Spread the Word"))
+        #expect(!sidebarSource.contains("Tweet about Muesli"))
+        #expect(!sidebarSource.contains("Post on LinkedIn"))
+        #expect(!sidebarSource.contains("darkModeToggle"))
+        #expect(settingsSource.contains("settingsRow(\"Dark mode\")"))
+    }
+
     @Test("meeting filter rows use the full row width as the hit target")
     func meetingFilterRowsExpandBeforeApplyingHitShape() throws {
-        let source = try sidebarViewSource()
+        let source = try source(named: "SidebarView.swift")
         let meetingFilterRow = try sourceSection(
             in: source,
             from: "private func meetingFilterRow",
@@ -292,17 +311,17 @@ struct SidebarHitAreaTests {
             index(of: ".contentShape(Rectangle())", in: meetingFilterRow))
     }
 
-    private func sidebarViewSource() throws -> String {
+    private func source(named fileName: String) throws -> String {
         let testFileURL = URL(fileURLWithPath: #filePath)
         let packageRoot = testFileURL
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        let sidebarViewURL = packageRoot
+        let sourceURL = packageRoot
             .appendingPathComponent("Sources")
             .appendingPathComponent("MuesliNativeApp")
-            .appendingPathComponent("SidebarView.swift")
-        return try String(contentsOf: sidebarViewURL, encoding: .utf8)
+            .appendingPathComponent(fileName)
+        return try String(contentsOf: sourceURL, encoding: .utf8)
     }
 
     private func sourceSection(in source: String, from start: String, to end: String) throws -> String {

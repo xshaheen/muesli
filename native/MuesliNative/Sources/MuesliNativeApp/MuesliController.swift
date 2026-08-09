@@ -1515,35 +1515,6 @@ final class MuesliController: NSObject {
         )
     }
 
-    func openContributionSidebarShare(_ action: ContributionMilestoneAction) {
-        guard let wordCount = ContributionSocialShare.completedWordMilestone(
-            totalWords: appState.dictationStats.totalWords
-        ) else { return }
-        openContributionSocialAction(action, wordCount: wordCount)
-        updateConfig { config in
-            switch action {
-            case .tweetAboutMuesli:
-                config.contributionTweetClicked = true
-            case .postOnLinkedIn:
-                config.contributionLinkedInClicked = true
-            case .githubStar, .buyMeCoffee:
-                break
-            }
-            if config.contributionGitHubStarClicked && config.contributionBuyMeCoffeeClicked &&
-                config.contributionTweetClicked && config.contributionLinkedInClicked {
-                config.contributionPromptNextWordCount = nil
-            }
-        }
-        refreshContributionMilestonePrompt(
-            totalWords: appState.dictationStats.totalWords,
-            totalMeetings: appState.meetingStats.totalMeetings
-        )
-        TelemetryDeck.signal("contribution_sidebar_share_clicked", parameters: [
-            "action": action.rawValue,
-            "count": "\(wordCount)",
-        ])
-    }
-
     private func openContributionSocialAction(_ action: ContributionMilestoneAction, wordCount: Int) {
         switch action {
         case .tweetAboutMuesli:
