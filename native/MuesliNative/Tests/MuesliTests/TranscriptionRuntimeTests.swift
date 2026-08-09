@@ -174,6 +174,22 @@ struct DictationCleanupPolicyTests {
         }
     }
 
+    @Test("readiness distinguishes user-disabled from unavailable before invocation")
+    func readinessOutcomes() {
+        let cases: [(DictationCleanupReadiness, DictationCleanupOutcome?)] = [
+            (.disabled, .skippedDisabled),
+            (.unavailable, .skippedUnavailable),
+            (.ready, nil),
+        ]
+
+        for (readiness, outcome) in cases {
+            #expect(readiness.skippedAttempt?.outcome == outcome)
+        }
+        #expect(DictationCleanupReadiness.resolve(isEnabled: false, isAvailable: true) == .disabled)
+        #expect(DictationCleanupReadiness.resolve(isEnabled: true, isAvailable: false) == .unavailable)
+        #expect(DictationCleanupReadiness.resolve(isEnabled: true, isAvailable: true) == .ready)
+    }
+
     @Test("custom words remain the final stage after applied cleanup")
     func customWordsFollowAppliedCleanup() {
         let applied = SpeechTranscriptionResult(text: "Send this to museli", segments: [])
@@ -221,6 +237,29 @@ struct DictationCleanupPolicyTests {
             current: model,
             next: URL(fileURLWithPath: "/tmp/other.gguf")
         ))
+    }
+
+    @available(macOS 15, *)
+    @Test("concurrent Qwen requests retain their pinned model URLs")
+    func concurrentQwenModelSelection() async {
+        let first = URL(fileURLWithPath: "/tmp/first.gguf")
+        let second = URL(fileURLWithPath: "/tmp/second.gguf")
+
+        let resolved = await withTaskGroup(of: URL.self, returning: Set<URL>.self) { group in
+            group.addTask {
+                Qwen3PostProcessor.resolvedRequestModelURL(requested: first, devOverride: nil)
+            }
+            group.addTask {
+                Qwen3PostProcessor.resolvedRequestModelURL(requested: second, devOverride: nil)
+            }
+            var values = Set<URL>()
+            for await value in group {
+                values.insert(value)
+            }
+            return values
+        }
+
+        #expect(resolved == [first, second])
     }
 }
 

@@ -58,34 +58,123 @@ enum DictationCleanupPromptComposer {
         </STYLE-INSTRUCTIONS>
         """
     }
+
+    /// Appends the user's dictionary as model-visible restoration targets.
+    /// Literal post-processing cannot repair a garbled or transliterated span
+    /// unless the cleanup model first knows the intended vocabulary.
+    static func appendingSpeakerVocabulary(
+        to systemPrompt: String,
+        customWords: [CustomWord]
+    ) -> String {
+        let terms = customWords
+            .map { ($0.replacement?.isEmpty == false ? $0.replacement! : $0.word) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !terms.isEmpty else { return systemPrompt }
+        let capped = terms.prefix(80).joined(separator: ", ")
+        return systemPrompt + """
+
+
+        Speaker vocabulary — terms this user dictates often. When a garbled or \
+        transliterated span plausibly matches one of these, restore it to this exact \
+        spelling: \(capped)
+        """
+    }
+}
+
+enum DictationCleanupReadiness: Equatable, Sendable {
+    case disabled
+    case unavailable
+    case ready
+
+    static func resolve(isEnabled: Bool, isAvailable: Bool) -> Self {
+        guard isEnabled else { return .disabled }
+        return isAvailable ? .ready : .unavailable
+    }
+
+    var skippedAttempt: DictationCleanupAttempt? {
+        switch self {
+        case .disabled: .skippedDisabled
+        case .unavailable: .skippedUnavailable
+        case .ready: nil
+        }
+    }
 }
 
 struct DictationCleanupPolicy: Equatable, Sendable {
-    let enabled: Bool
+    let readiness: DictationCleanupReadiness
     /// Immutable prompt captured for this dictation. Callers that resolve a style
     /// use `init(enabled:selection:)`; legacy callers retain their global prompt.
     let systemPromptSnapshot: String
     let provenance: DictationCleanupStyleProvenance?
 
     init(
-        enabled: Bool,
+        readiness: DictationCleanupReadiness,
         systemPromptSnapshot: String,
         provenance: DictationCleanupStyleProvenance? = nil
     ) {
-        self.enabled = enabled
+        self.readiness = readiness
         self.systemPromptSnapshot = systemPromptSnapshot
         self.provenance = provenance
     }
 
+    init(
+        enabled: Bool,
+        systemPromptSnapshot: String,
+        provenance: DictationCleanupStyleProvenance? = nil
+    ) {
+        self.init(
+            readiness: enabled ? .ready : .disabled,
+            systemPromptSnapshot: systemPromptSnapshot,
+            provenance: provenance
+        )
+    }
+
     init(enabled: Bool, selection: DictationStyleSelectionResult) {
         self.init(
-            enabled: enabled,
+            readiness: enabled ? .ready : .disabled,
             systemPromptSnapshot: DictationCleanupPromptComposer.compose(
                 styleInstructions: selection.prompt
             ),
             provenance: DictationCleanupStyleProvenance(selection: selection)
         )
     }
+}
+
+struct DictationCleanupRuntimeSnapshot {
+    let readiness: DictationCleanupReadiness
+    let backend: TranscriptCleanupBackendOption
+    let modelID: String
+    let modelURL: URL?
+    let option: PostProcessorOption?
+    let config: AppConfig
+
+    init(
+        readiness: DictationCleanupReadiness,
+        backend: TranscriptCleanupBackendOption,
+        option: PostProcessorOption?,
+        config: AppConfig
+    ) {
+        self.readiness = readiness
+        self.backend = backend
+        self.option = option
+        self.config = config
+        if backend == .local {
+            modelID = option?.id ?? config.activePostProcessorId
+            modelURL = option?.modelURL
+        } else if backend == .gemma4LiteRT {
+            modelID = Gemma4LiteRTModelStore.repoID
+            modelURL = nil
+        } else {
+            modelID = TranscriptCleanupClient.configuredModel(for: backend, config: config)
+            modelURL = nil
+        }
+    }
+}
+
+struct DictationCleanupRequestSnapshot {
+    let runtime: DictationCleanupRuntimeSnapshot
+    let policy: DictationCleanupPolicy
 }
 
 struct DictationTranscriptionResult: Sendable {
@@ -358,6 +447,7 @@ actor TranscriptionCoordinator {
         let backend: TranscriptCleanupBackendOption
         let systemPrompt: String
         let modelId: String
+        let modelURL: URL?
         let config: AppConfig
     }
 
@@ -1069,7 +1159,22 @@ actor TranscriptionCoordinator {
             backend: postProcessorBackend,
             systemPrompt: postProcessorSystemPrompt,
             modelId: postProcessorModelId,
+            modelURL: postProcessorBackend == .local ? postProcessorModelURL : nil,
             config: postProcessorConfig
+        )
+    }
+
+    private func postProcessorSnapshot(
+        from request: DictationCleanupRequestSnapshot?
+    ) -> PostProcessorSnapshot {
+        guard let request else { return currentPostProcessorSnapshot() }
+        let runtime = request.runtime
+        return PostProcessorSnapshot(
+            backend: runtime.backend,
+            systemPrompt: request.policy.systemPromptSnapshot,
+            modelId: runtime.modelID,
+            modelURL: runtime.modelURL,
+            config: runtime.config
         )
     }
 
@@ -1080,6 +1185,7 @@ actor TranscriptionCoordinator {
         indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
         enablePostProcessor: Bool = false,
         cleanupPolicy: DictationCleanupPolicy? = nil,
+        cleanupRequestSnapshot: DictationCleanupRequestSnapshot? = nil,
         customWords: [[String: Any]] = [],
         appContext: String? = nil
     ) async throws -> SpeechTranscriptionResult {
@@ -1090,6 +1196,7 @@ actor TranscriptionCoordinator {
             indicASRLanguage: indicASRLanguage,
             enablePostProcessor: enablePostProcessor,
             cleanupPolicy: cleanupPolicy,
+            cleanupRequestSnapshot: cleanupRequestSnapshot,
             customWords: customWords,
             appContext: appContext
         ).transcription
@@ -1102,11 +1209,12 @@ actor TranscriptionCoordinator {
         indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
         enablePostProcessor: Bool = false,
         cleanupPolicy: DictationCleanupPolicy? = nil,
+        cleanupRequestSnapshot: DictationCleanupRequestSnapshot? = nil,
         customWords: [[String: Any]] = [],
         appContext: String? = nil
     ) async throws -> DictationTranscriptionResult {
-        let postProcessorSnapshot = currentPostProcessorSnapshot()
-        let policy = cleanupPolicy ?? DictationCleanupPolicy(
+        let postProcessorSnapshot = postProcessorSnapshot(from: cleanupRequestSnapshot)
+        let policy = cleanupRequestSnapshot?.policy ?? cleanupPolicy ?? DictationCleanupPolicy(
             enabled: enablePostProcessor,
             systemPromptSnapshot: postProcessorSnapshot.systemPrompt
         )
@@ -1119,8 +1227,9 @@ actor TranscriptionCoordinator {
                 if !hasSpeech {
                     fputs("[muesli-native] VAD: dictation is silent, skipping Cohere transcription\n", stderr)
                     let empty = SpeechTranscriptionResult(text: "", segments: [])
+                    let skippedOutcome = policy.readiness.skippedAttempt?.outcome ?? .skippedUnavailable
                     logSkippedCleanup(
-                        policy.enabled ? .skippedUnavailable : .skippedDisabled,
+                        skippedOutcome,
                         result: empty,
                         backend: backend,
                         policy: policy,
@@ -1128,7 +1237,7 @@ actor TranscriptionCoordinator {
                     )
                     return DictationTranscriptionResult(
                         transcription: empty,
-                        cleanupOutcome: policy.enabled ? .skippedUnavailable : .skippedDisabled,
+                        cleanupOutcome: skippedOutcome,
                         cleanupStyle: policy.provenance
                     )
                 }
@@ -1298,10 +1407,11 @@ actor TranscriptionCoordinator {
         postProcessorSnapshot: PostProcessorSnapshot,
         appContext: String? = nil
     ) async -> DictationCleanupAttempt {
-        guard policy.enabled else {
-            Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor disabled for dictation")
-            logSkippedCleanup(.skippedDisabled, result: result, backend: backend, policy: policy, snapshot: postProcessorSnapshot)
-            return .skippedDisabled
+        if let skippedAttempt = policy.readiness.skippedAttempt {
+            let outcome = skippedAttempt.outcome
+            Qwen3PostProcessorLogging.logVerbose("Post-processor skipped before invocation: \(outcome.rawValue)")
+            logSkippedCleanup(outcome, result: result, backend: backend, policy: policy, snapshot: postProcessorSnapshot)
+            return skippedAttempt
         }
         guard backend.backend != "indicasr" else {
             Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor skipped: Indic ASR output is not English post-processor safe")
@@ -1360,6 +1470,7 @@ actor TranscriptionCoordinator {
             let start = CFAbsoluteTimeGetCurrent()
             let processed = try await qwen3PostProcessor.process(
                 result.text,
+                modelURL: postProcessorSnapshot.modelURL,
                 systemPrompt: policy.systemPromptSnapshot,
                 appContext: appContext
             )

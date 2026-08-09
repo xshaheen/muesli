@@ -55,17 +55,20 @@ struct DictationStyleSessionSnapshot {
     let target: DictationSessionTarget?
     let config: AppConfig
     let mode: DictationStyleSessionMode
+    let cleanupRuntime: DictationCleanupRuntimeSnapshot?
 
     init(
         id: UUID = UUID(),
         target: DictationSessionTarget?,
         config: AppConfig,
-        mode: DictationStyleSessionMode
+        mode: DictationStyleSessionMode,
+        cleanupRuntime: DictationCleanupRuntimeSnapshot? = nil
     ) {
         self.id = id
         self.target = target
         self.config = config
         self.mode = mode
+        self.cleanupRuntime = cleanupRuntime
     }
 
     func matchingContext(_ result: DictationSessionContextResult?) -> DictationContext? {
@@ -89,11 +92,43 @@ struct DictationStyleSessionSnapshot {
     }
 
     func cleanupPolicy(
+        readiness: DictationCleanupReadiness,
+        context result: DictationSessionContextResult?
+    ) -> DictationCleanupPolicy? {
+        guard mode.allowsAdaptiveStyles else { return nil }
+        let selection = resolveStyle(context: result)
+        let basePrompt = config.adaptiveDictationStylesEnabled
+            ? DictationCleanupPromptComposer.compose(styleInstructions: selection.prompt)
+            : config.postProcessorSystemPrompt
+        return DictationCleanupPolicy(
+            readiness: readiness,
+            systemPromptSnapshot: DictationCleanupPromptComposer.appendingSpeakerVocabulary(
+                to: basePrompt,
+                customWords: config.customWords
+            ),
+            provenance: DictationCleanupStyleProvenance(selection: selection)
+        )
+    }
+
+    func cleanupPolicy(
         enabled: Bool,
         context result: DictationSessionContextResult?
     ) -> DictationCleanupPolicy? {
-        guard mode.allowsAdaptiveStyles, config.adaptiveDictationStylesEnabled else { return nil }
-        return DictationCleanupPolicy(enabled: enabled, selection: resolveStyle(context: result))
+        cleanupPolicy(
+            readiness: enabled ? .ready : .disabled,
+            context: result
+        )
+    }
+
+    func cleanupRequest(
+        context result: DictationSessionContextResult?
+    ) -> DictationCleanupRequestSnapshot? {
+        guard let cleanupRuntime,
+              let policy = cleanupPolicy(readiness: cleanupRuntime.readiness, context: result)
+        else {
+            return nil
+        }
+        return DictationCleanupRequestSnapshot(runtime: cleanupRuntime, policy: policy)
     }
 }
 

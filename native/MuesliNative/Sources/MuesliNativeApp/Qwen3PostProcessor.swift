@@ -405,11 +405,16 @@ actor Qwen3PostProcessor {
 
     func process(
         _ text: String,
+        modelURL requestedModelURL: URL? = nil,
         systemPrompt: String? = nil,
         appContext: String? = nil
     ) async throws -> String {
         let requestPrompt = systemPrompt ?? self.systemPrompt
-        let manager = try await loadManager()
+        let manager = if let requestedModelURL {
+            try await loadManager(for: requestedModelURL)
+        } else {
+            try await loadManager()
+        }
         return try await manager.process(
             text,
             systemPrompt: requestPrompt,
@@ -419,6 +424,13 @@ actor Qwen3PostProcessor {
 
     static func requiresModelReload(current: URL, next: URL) -> Bool {
         current != next
+    }
+
+    static func resolvedRequestModelURL(
+        requested: URL,
+        devOverride: URL? = Qwen3PostProcessorConfig.devOverrideURL()
+    ) -> URL {
+        devOverride ?? requested
     }
 
     func shutdown() {
@@ -431,20 +443,35 @@ actor Qwen3PostProcessor {
         if let manager { return manager }
         if let loadTask { return try await finishLoad(loadTask) }
 
-        let url = self.modelURL
-        let task = Task<Qwen3PostProcessorManager, Error> {
-            guard FileManager.default.fileExists(atPath: url.path) else {
-                throw Qwen3PostProcessorError.unavailable(
-                    "Post-processor model not found at \(url.path). Download it from the Models tab."
-                )
-            }
-            let manager = Qwen3PostProcessorManager(modelURL: url)
-            try await manager.warm()
-            return manager
-        }
+        let url = modelURL
+        let task = makeLoadTask(modelURL: url)
         let state = LoadTaskState(modelURL: url, task: task)
         loadTask = state
         return try await finishLoad(state)
+    }
+
+    /// Returns a manager bound to the request's model even if settings reconfigure
+    /// the global default while ASR or model loading is suspended. A request for
+    /// the current model still reuses its resident weights.
+    private func loadManager(for requestedModelURL: URL) async throws -> Qwen3PostProcessorManager {
+        let requestedModelURL = Self.resolvedRequestModelURL(requested: requestedModelURL)
+        if requestedModelURL == modelURL {
+            if let loadTask, loadTask.modelURL == requestedModelURL {
+                do {
+                    return try await finishRequestLoad(loadTask, cacheIfCurrent: true)
+                } catch is CancellationError {
+                    // A concurrent settings change cancelled the global preload.
+                    // Retry below against the request's URL, not the new default.
+                    return try await loadManager(for: requestedModelURL)
+                }
+            }
+            return try await loadManager()
+        }
+
+        let url = requestedModelURL
+        let task = makeLoadTask(modelURL: url)
+        let state = LoadTaskState(modelURL: url, task: task)
+        return try await finishRequestLoad(state, cacheIfCurrent: url == modelURL)
     }
 
     private func finishLoad(_ state: LoadTaskState) async throws -> Qwen3PostProcessorManager {
@@ -460,6 +487,38 @@ actor Qwen3PostProcessor {
             guard loadTask?.id == state.id else { throw CancellationError() }
             manager = loaded
             loadTask = nil
+            return loaded
+        } catch {
+            if loadTask?.id == state.id {
+                loadTask = nil
+            }
+            throw error
+        }
+    }
+
+    private func makeLoadTask(modelURL: URL) -> Task<Qwen3PostProcessorManager, Error> {
+        Task<Qwen3PostProcessorManager, Error> {
+            guard FileManager.default.fileExists(atPath: modelURL.path) else {
+                throw Qwen3PostProcessorError.unavailable(
+                    "Post-processor model not found at \(modelURL.path). Download it from the Models tab."
+                )
+            }
+            let manager = Qwen3PostProcessorManager(modelURL: modelURL)
+            try await manager.warm()
+            return manager
+        }
+    }
+
+    private func finishRequestLoad(
+        _ state: LoadTaskState,
+        cacheIfCurrent: Bool
+    ) async throws -> Qwen3PostProcessorManager {
+        do {
+            let loaded = try await state.task.value
+            if cacheIfCurrent, state.modelURL == modelURL {
+                if let manager { return manager }
+                manager = loaded
+            }
             return loaded
         } catch {
             if loadTask?.id == state.id {

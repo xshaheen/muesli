@@ -1,4 +1,5 @@
 import Foundation
+import MuesliCore
 import Testing
 @testable import MuesliNativeApp
 
@@ -195,15 +196,71 @@ struct DictationStyleSessionTests {
         }
     }
 
-    @Test("adaptive styles disabled preserves the legacy global policy path")
-    func disabledAdaptiveStylesPassesNoPolicy() {
+    @Test("adaptive styles disabled preserves legacy prompt bytes with global provenance")
+    func disabledAdaptiveStylesRetainsGlobalProvenance() throws {
         var config = adaptiveConfig()
         config.adaptiveDictationStylesEnabled = false
+        config.activeTranscriptCleanupPromptId = TranscriptCleanupPrompts.emailID
+        config.postProcessorSystemPrompt = "Legacy prompt bytes"
+        config.customWords = [CustomWord(word: "muesli", replacement: "Muesli")]
         let hold = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard)
         let toggle = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard)
 
-        #expect(hold.cleanupPolicy(enabled: true, context: nil) == nil)
-        #expect(toggle.cleanupPolicy(enabled: true, context: nil) == nil)
+        let expectedPrompt = DictationCleanupPromptComposer.appendingSpeakerVocabulary(
+            to: config.postProcessorSystemPrompt,
+            customWords: config.customWords
+        )
+        for snapshot in [hold, toggle] {
+            let policy = try #require(snapshot.cleanupPolicy(enabled: true, context: nil))
+            #expect(policy.systemPromptSnapshot == expectedPrompt)
+            #expect(policy.provenance?.styleID == TranscriptCleanupPrompts.emailID)
+            #expect(policy.provenance?.source == .global)
+        }
+    }
+
+    @Test("adaptive prompt freezes speaker vocabulary at recording start")
+    func adaptivePromptFreezesSpeakerVocabulary() throws {
+        var config = adaptiveConfig()
+        config.customWords = (0 ..< 79).map {
+            CustomWord(word: "term-\($0)", replacement: "Term \($0)")
+        } + [
+            CustomWord(word: "included", replacement: "Included Boundary"),
+            CustomWord(word: "excluded", replacement: "Excluded Boundary"),
+        ]
+        let snapshot = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard)
+
+        config.customWords = [CustomWord(word: "later", replacement: "Later Edit")]
+
+        let policy = try #require(snapshot.cleanupPolicy(enabled: true, context: nil))
+        #expect(policy.systemPromptSnapshot.contains("Speaker vocabulary"))
+        #expect(policy.systemPromptSnapshot.contains("Included Boundary"))
+        #expect(!policy.systemPromptSnapshot.contains("Excluded Boundary"))
+        #expect(!policy.systemPromptSnapshot.contains("Later Edit"))
+    }
+
+    @Test("cleanup request keeps the recording-start local model")
+    func cleanupRequestPinsLocalModel() throws {
+        var config = adaptiveConfig()
+        config.activePostProcessorId = PostProcessorOption.finetunedV2.id
+        let runtime = DictationCleanupRuntimeSnapshot(
+            readiness: .ready,
+            backend: .local,
+            option: .finetunedV2,
+            config: config
+        )
+        let snapshot = DictationStyleSessionSnapshot(
+            target: mailTarget,
+            config: config,
+            mode: .standard,
+            cleanupRuntime: runtime
+        )
+
+        config.activePostProcessorId = PostProcessorOption.qwen35_0_8b.id
+
+        let request = try #require(snapshot.cleanupRequest(context: nil))
+        #expect(request.runtime.modelID == PostProcessorOption.finetunedV2.id)
+        #expect(request.runtime.modelURL == PostProcessorOption.finetunedV2.modelURL)
+        #expect(request.runtime.config.activePostProcessorId == PostProcessorOption.finetunedV2.id)
     }
 
     private func adaptiveConfig() -> AppConfig {

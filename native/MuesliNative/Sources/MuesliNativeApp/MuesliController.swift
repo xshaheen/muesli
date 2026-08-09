@@ -2354,22 +2354,38 @@ final class MuesliController: NSObject {
         transcriptionBackend: BackendOption? = nil,
         cleanupBackend: TranscriptCleanupBackendOption? = nil
     ) -> Bool {
+        transcriptCleanupReadiness(
+            option: option,
+            config: runtimeConfig,
+            transcriptionBackend: transcriptionBackend,
+            cleanupBackend: cleanupBackend
+        ) == .ready
+    }
+
+    private func transcriptCleanupReadiness(
+        option: PostProcessorOption?,
+        config runtimeConfig: AppConfig? = nil,
+        transcriptionBackend: BackendOption? = nil,
+        cleanupBackend: TranscriptCleanupBackendOption? = nil
+    ) -> DictationCleanupReadiness {
         let runtimeConfig = runtimeConfig ?? config
         let transcriptionBackend = transcriptionBackend ?? selectedBackend
         let cleanupBackend = cleanupBackend ?? selectedPostProcessorBackend
-        guard runtimeConfig.enablePostProcessor,
-              cleanupBackend.isCompatible(with: transcriptionBackend) else { return false }
+        guard runtimeConfig.enablePostProcessor else { return .disabled }
+        guard cleanupBackend.isCompatible(with: transcriptionBackend) else { return .unavailable }
+        let isAvailable: Bool
         if cleanupBackend == .local {
-            return option != nil
+            isAvailable = option != nil
+        } else if cleanupBackend == .gemma4LiteRT {
+            isAvailable = Gemma4LiteRTModelStore.isAvailableLocally()
+        } else {
+            isAvailable = TranscriptCleanupClient.hasRequiredSettings(
+                for: cleanupBackend,
+                config: runtimeConfig,
+                isChatGPTAuthenticated: chatGPTAuth.isAuthenticated
+            )
         }
-        if cleanupBackend == .gemma4LiteRT {
-            return Gemma4LiteRTModelStore.isAvailableLocally()
-        }
-        return TranscriptCleanupClient.hasRequiredSettings(
-            for: cleanupBackend,
-            config: runtimeConfig,
-            isChatGPTAuthenticated: chatGPTAuth.isAuthenticated
-        )
+        return .resolve(isEnabled: true, isAvailable: isAvailable)
     }
 
     private func configureTranscriptCleanupForRuntime(
@@ -2382,33 +2398,12 @@ final class MuesliController: NSObject {
         await transcriptionCoordinator.configurePostProcessor(
             backend: backend,
             option: option ?? runtimePostProcessorOption(config: runtimeConfig, backend: backend),
-            systemPrompt: Self.systemPromptWithSpeakerVocabulary(
-                runtimeConfig.postProcessorSystemPrompt,
+            systemPrompt: DictationCleanupPromptComposer.appendingSpeakerVocabulary(
+                to: runtimeConfig.postProcessorSystemPrompt,
                 customWords: runtimeConfig.customWords
             ),
             config: runtimeConfig
         )
-    }
-
-    /// Appends the user's dictionary to the cleanup prompt as restoration targets.
-    ///
-    /// The literal matcher can only fix spans that already contain the term; a
-    /// transliterated one — «ريفا كتير» for "refactor" — never matches it. The model
-    /// can make that phonetic leap, but only if it knows the speaker's vocabulary.
-    static func systemPromptWithSpeakerVocabulary(_ systemPrompt: String, customWords: [CustomWord]) -> String {
-        let terms = customWords
-            .map { ($0.replacement?.isEmpty == false ? $0.replacement! : $0.word) }
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard !terms.isEmpty else { return systemPrompt }
-        let capped = terms.prefix(80).joined(separator: ", ")
-        return systemPrompt + """
-
-
-        Speaker vocabulary — terms this user dictates often. When a garbled or \
-        transliterated span plausibly matches one of these, restore it to this exact \
-        spelling: \(capped)
-        """
     }
 
     func setPostProcessorEnabled(_ enabled: Bool) {
@@ -8411,12 +8406,31 @@ final class MuesliController: NSObject {
                 ? lastExternalApp
                 : frontmostApplication
         )
+        let sessionConfig = config
+        let cleanupBackend = TranscriptCleanupBackendOption.resolved(sessionConfig.postProcessorBackend)
+        let cleanupOption = runtimePostProcessorOption(config: sessionConfig, backend: cleanupBackend)
+        let transcriptionBackend = BackendOption.resolve(
+            backend: sessionConfig.sttBackend,
+            model: sessionConfig.sttModel
+        ) ?? selectedBackend
+        let cleanupRuntime = DictationCleanupRuntimeSnapshot(
+            readiness: transcriptCleanupReadiness(
+                option: cleanupOption,
+                config: sessionConfig,
+                transcriptionBackend: transcriptionBackend,
+                cleanupBackend: cleanupBackend
+            ),
+            backend: cleanupBackend,
+            option: cleanupOption,
+            config: sessionConfig
+        )
         activeDictationStyleSession = DictationStyleSessionSnapshot(
             target: target,
-            config: config,
+            config: sessionConfig,
             mode: isDictationTestMode
                 ? .dictationTest
-                : (currentDictationOutputMode == .voiceNote ? .voiceNote : mode)
+                : (currentDictationOutputMode == .voiceNote ? .voiceNote : mode),
+            cleanupRuntime: cleanupRuntime
         )
         activeDictationContextResult = nil
         stoppedDictationStyleSession = nil
@@ -8861,33 +8875,32 @@ final class MuesliController: NSObject {
             }
 
             do {
-                let cleanupBackend = TranscriptCleanupBackendOption.resolved(sessionConfig.postProcessorBackend)
-                let ppOption = self.runtimePostProcessorOption(
-                    config: sessionConfig,
-                    backend: cleanupBackend
-                )
+                let cleanupRuntime = styleSession?.mode.allowsAdaptiveStyles == true
+                    ? styleSession?.cleanupRuntime
+                    : nil
+                let cleanupBackend = cleanupRuntime?.backend
+                    ?? TranscriptCleanupBackendOption.resolved(sessionConfig.postProcessorBackend)
+                let ppOption = cleanupRuntime?.option
+                    ?? self.runtimePostProcessorOption(config: sessionConfig, backend: cleanupBackend)
                 await self.configureTranscriptCleanupForRuntime(
                     option: ppOption,
                     config: sessionConfig,
                     backend: cleanupBackend
                 )
-                let enableTranscriptCleanup = self.canRunTranscriptCleanup(
+                let readiness = cleanupRuntime?.readiness ?? self.transcriptCleanupReadiness(
                     option: ppOption,
                     config: sessionConfig,
                     transcriptionBackend: transcriptionBackend,
                     cleanupBackend: cleanupBackend
                 )
-                let cleanupPolicy = styleSession?.cleanupPolicy(
-                    enabled: enableTranscriptCleanup,
-                    context: contextResult
-                )
+                let cleanupRequest = styleSession?.cleanupRequest(context: contextResult)
                 let result = try await self.transcriptionCoordinator.transcribeDictationWithCleanupOutcome(
                     at: wavURL,
                     backend: transcriptionBackend,
                     cohereLanguage: transcriptionLanguage,
                     indicASRLanguage: indicTranscriptionLanguage,
-                    enablePostProcessor: enableTranscriptCleanup,
-                    cleanupPolicy: cleanupPolicy,
+                    enablePostProcessor: readiness == .ready,
+                    cleanupRequestSnapshot: cleanupRequest,
                     customWords: self.serializedCustomWords(from: sessionConfig),
                     appContext: promptContext
                 )
