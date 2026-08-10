@@ -67,7 +67,6 @@ struct SettingsView: View {
     @State private var downloadedMeetingLiveCaptionBackends: [MeetingLiveCaptionBackend] = []
     @State private var audioInputDevices: [AudioInputDeviceInfo] = []
     @State private var permissionPollTimer: Timer?
-    @State private var isCleanupPromptManagerPresented = false
     @State private var isDictationStyleRulesPresented = false
     @State private var dictationStyleSettingsError: String?
     @State private var micGranted = false
@@ -338,15 +337,8 @@ struct SettingsView: View {
             } message: {
                 Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, then relaunch Muesli to turn suggestions on.")
             }
-            .sheet(isPresented: $isCleanupPromptManagerPresented) {
-                TranscriptCleanupPromptsManagerView(
-                    appState: appState,
-                    controller: controller,
-                    onClose: { isCleanupPromptManagerPresented = false }
-                )
-            }
             .sheet(isPresented: $isDictationStyleRulesPresented) {
-                DictationStyleRulesView(
+                WritingStylesView(
                     appState: appState,
                     controller: controller,
                     onClose: { isDictationStyleRulesPresented = false }
@@ -1015,7 +1007,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             settingsRow(
                 "Global style",
-                description: "The fallback cleanup style when no enabled Adaptive Styles rule matches.",
+                description: "The fallback cleanup style when no enabled Writing Styles group or exception matches.",
                 controlWidth: meetingControlWidth
             ) {
                 FixedWidthPopUp(
@@ -1049,15 +1041,15 @@ struct SettingsView: View {
                 )
 
             HStack {
-                compactActionButton("Manage Styles…", systemImage: "slider.horizontal.3") {
-                    isCleanupPromptManagerPresented = true
+                compactActionButton("Open Writing Styles…", systemImage: "slider.horizontal.3") {
+                    isDictationStyleRulesPresented = true
                 }
                 Spacer()
             }
 
             settingsRow(
                 "Adaptive Styles",
-                description: "Use category, exact application, and exact website rules for normal dictation.",
+                description: "Use your Writing Styles groups and exact exceptions for normal dictation.",
                 controlWidth: meetingControlWidth
             ) {
                 HStack(spacing: MuesliTheme.spacing8) {
@@ -1067,11 +1059,11 @@ struct SettingsView: View {
                         )
                     }
                     .accessibilityLabel("Adaptive Styles")
-                    compactActionButton("Manage…", systemImage: "app.badge") {
+                    compactActionButton("Open workspace…", systemImage: "app.badge") {
                         isDictationStyleRulesPresented = true
                     }
-                    .accessibilityLabel("Manage Adaptive Styles")
-                    .accessibilityHint("Opens category, exact application, and exact website style rules")
+                    .accessibilityLabel("Open Writing Styles workspace")
+                    .accessibilityHint("Opens global styles, groups, exact exceptions, and JSON portability")
                 }
             }
 

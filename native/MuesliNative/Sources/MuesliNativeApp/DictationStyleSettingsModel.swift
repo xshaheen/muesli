@@ -11,6 +11,8 @@ struct DictationStyleDeletionImpact: Equatable {
     let categoryCount: Int
     let appCount: Int
     let domainCount: Int
+    let groupCount: Int
+    let exceptionCount: Int
 
     var confirmationMessage: String {
         var parts: [String] = []
@@ -18,10 +20,22 @@ struct DictationStyleDeletionImpact: Equatable {
         if categoryCount > 0 { parts.append("\(categoryCount) category assignment\(categoryCount == 1 ? "" : "s")") }
         if appCount > 0 { parts.append("\(appCount) app rule\(appCount == 1 ? "" : "s")") }
         if domainCount > 0 { parts.append("\(domainCount) website rule\(domainCount == 1 ? "" : "s")") }
+        if groupCount > 0 { parts.append("\(groupCount) group assignment\(groupCount == 1 ? "" : "s")") }
+        if exceptionCount > 0 { parts.append("\(exceptionCount) exact exception\(exceptionCount == 1 ? "" : "s")") }
         guard !parts.isEmpty else {
             return "This custom style will be permanently removed. Existing dictations are not affected."
         }
         return "This custom style will be permanently removed and repair \(parts.joined(separator: ", ")). Existing dictations are not affected."
+    }
+}
+
+struct DictationStyleGroupDeletionImpact: Equatable {
+    let matcherCount: Int
+    let knownTargetCount: Int
+    let survivingExceptionCount: Int
+
+    var confirmationMessage: String {
+        "This removes \(matcherCount) matcher\(matcherCount == 1 ? "" : "s") affecting \(knownTargetCount) currently known target\(knownTargetCount == 1 ? "" : "s"). \(survivingExceptionCount) independent exception\(survivingExceptionCount == 1 ? "" : "s") will remain."
     }
 }
 
@@ -41,6 +55,9 @@ enum DictationStyleSettingsError: LocalizedError, Equatable {
     case missingStyleName
     case duplicateStyleName
     case missingStyleInstructions
+    case missingGroupName
+    case duplicateGroupName
+    case missingGroup
 
     var errorDescription: String? {
         switch self {
@@ -52,11 +69,93 @@ enum DictationStyleSettingsError: LocalizedError, Equatable {
         case .missingStyleName: "Enter a style name."
         case .duplicateStyleName: "Use a unique style name."
         case .missingStyleInstructions: "Enter cleanup instructions for this style."
+        case .missingGroupName: "Enter a group name."
+        case .duplicateGroupName: "Use a unique group name."
+        case .missingGroup: "That group no longer exists."
         }
     }
 }
 
 enum DictationStyleSettingsModel {
+    static func addingGroup(
+        name: String,
+        styleID: String,
+        id: String,
+        to config: AppConfig
+    ) throws -> AppConfig {
+        let normalizedName = normalizedDisplayName(name)
+        guard !normalizedName.isEmpty else { throw DictationStyleSettingsError.missingGroupName }
+        guard !hasGroupNamed(normalizedName, excludingID: nil, in: config) else {
+            throw DictationStyleSettingsError.duplicateGroupName
+        }
+        var candidate = config
+        candidate.dictationStyleGroups.append(DictationStyleGroup(id: id, name: normalizedName, styleID: styleID))
+        return candidate
+    }
+
+    static func renamingGroup(id: String, name: String, in config: AppConfig) throws -> AppConfig {
+        let normalizedName = normalizedDisplayName(name)
+        guard !normalizedName.isEmpty else { throw DictationStyleSettingsError.missingGroupName }
+        guard !hasGroupNamed(normalizedName, excludingID: id, in: config) else {
+            throw DictationStyleSettingsError.duplicateGroupName
+        }
+        var candidate = config
+        guard let index = candidate.dictationStyleGroups.firstIndex(where: { $0.id == id }) else {
+            throw DictationStyleSettingsError.missingGroup
+        }
+        candidate.dictationStyleGroups[index].name = normalizedName
+        return candidate
+    }
+
+    static func duplicatingGroup(id: String, newID: String, in config: AppConfig) throws -> AppConfig {
+        guard let source = config.dictationStyleGroups.first(where: { $0.id == id }) else {
+            throw DictationStyleSettingsError.missingGroup
+        }
+        var suffix = 2
+        var name = "\(source.name) Copy"
+        while hasGroupNamed(name, excludingID: nil, in: config) {
+            name = "\(source.name) Copy \(suffix)"
+            suffix += 1
+        }
+        // Matchers intentionally start empty: copying them would immediately
+        // create an equal-specificity cross-group conflict.
+        return try addingGroup(name: name, styleID: source.styleID, id: newID, to: config)
+    }
+
+    static func deletingGroup(id: String, from config: AppConfig) -> AppConfig {
+        var candidate = config
+        candidate.dictationStyleGroups.removeAll { $0.id == id }
+        return candidate
+    }
+
+    static func groupDeletionImpact(
+        id: String,
+        knownTargets: [DictationStyleTarget],
+        in config: AppConfig
+    ) throws -> DictationStyleGroupDeletionImpact {
+        guard let group = config.dictationStyleGroups.first(where: { $0.id == id }) else {
+            throw DictationStyleSettingsError.missingGroup
+        }
+        let matchedTargets = knownTargets.filter { target in
+            group.matchers.contains { DictationStyleResolver.matches($0, target: target) }
+        }
+        let matchedTargetKeys = Set(matchedTargets.map { "\($0.bundleID ?? "")|\($0.hostname ?? "")" })
+        let survivingExceptions = config.dictationStyleExactExceptions.filter { exception in
+            group.matchers.contains { matcher in
+                matcher.kind == exception.kind
+                    && DictationStyleResolver.matches(matcher, target: DictationStyleTarget(
+                        bundleID: exception.kind == .bundleID ? exception.target : nil,
+                        hostname: exception.kind == .hostname ? exception.target : nil
+                    ))
+            }
+        }
+        return DictationStyleGroupDeletionImpact(
+            matcherCount: group.matchers.count,
+            knownTargetCount: matchedTargetKeys.count,
+            survivingExceptionCount: survivingExceptions.count
+        )
+    }
+
     static func previewingRulesetReplacement(
         _ imported: DictationStyleRuleset,
         replacing current: AppConfig
@@ -242,7 +341,9 @@ enum DictationStyleSettingsModel {
             repairsGlobal: config.activeTranscriptCleanupPromptId == styleID,
             categoryCount: config.dictationStyleCategoryAssignments.values.filter { $0 == styleID }.count,
             appCount: config.dictationStyleAppRules.filter { $0.styleID == styleID }.count,
-            domainCount: config.dictationStyleDomainRules.filter { $0.styleID == styleID }.count
+            domainCount: config.dictationStyleDomainRules.filter { $0.styleID == styleID }.count,
+            groupCount: config.dictationStyleGroups.filter { $0.styleID == styleID }.count,
+            exceptionCount: config.dictationStyleExactExceptions.filter { $0.styleID == styleID }.count
         )
     }
 
@@ -289,9 +390,21 @@ enum DictationStyleSettingsModel {
     }
 
     static func normalizedStyleName(_ name: String) -> String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines)
+        normalizedDisplayName(name)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .lowercased()
+    }
+
+    static func hasGroupNamed(_ name: String, excludingID: String?, in config: AppConfig) -> Bool {
+        let normalizedName = normalizedStyleName(name)
+        return config.dictationStyleGroups.contains {
+            $0.id != excludingID && normalizedStyleName($0.name) == normalizedName
+        }
+    }
+
+    private static func normalizedDisplayName(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
     }
 
     private static func nonEmpty(_ value: String?) -> String? {

@@ -172,6 +172,97 @@ struct DictationStyleSettingsTests {
         #expect(!persisted)
     }
 
+    @Test("canonical group effective state is textual and independent of exceptions")
+    func canonicalGroupEffectiveState() {
+        var config = AppConfig()
+        config.adaptiveDictationStylesEnabled = true
+        config.dictationStyleRulesetInitialized = true
+        config.customTranscriptCleanupPrompts = [
+            CustomTranscriptCleanupPrompt(id: "group-style", name: "Group style", prompt: "Group prompt"),
+        ]
+        config.activeTranscriptCleanupPromptId = "group-style"
+        config.postProcessorSystemPrompt = "Group prompt"
+        config.dictationStyleGroups = [
+            DictationStyleGroup(
+                id: "group",
+                name: "Client Work",
+                styleID: "group-style",
+                matchers: [DictationStyleMatcher(id: "matcher", kind: .bundleID, pattern: "com.example.app")]
+            ),
+        ]
+
+        let inherited = DictationStyleSettingsModel.effectiveState(config: config, bundleID: "com.example.app", hostname: nil)
+        #expect(inherited.sourceLabel == "Group")
+        #expect(inherited.accessibilityDescription.contains("Group"))
+
+        config.dictationStyleExactExceptions = [
+            DictationStyleExactException(id: "exception", kind: .bundleID, target: "com.example.app", styleID: "group-style"),
+        ]
+        let exact = DictationStyleSettingsModel.effectiveState(config: config, bundleID: "com.example.app", hostname: nil)
+        #expect(exact.sourceLabel == "Exact exception")
+    }
+
+    @Test("group workspace mutations preserve identities and deletion boundaries")
+    func groupWorkspaceMutations() throws {
+        var config = AppConfig()
+        config.adaptiveDictationStylesEnabled = true
+        config.dictationStyleRulesetInitialized = true
+        config = try DictationStyleSettingsModel.addingGroup(
+            name: "  Client   Work ",
+            styleID: TranscriptCleanupPrompts.defaultID,
+            id: "group-a",
+            to: config
+        )
+        config = try DictationStyleSettingsModel.renamingGroup(
+            id: "group-a",
+            name: "Client Writing",
+            in: config
+        )
+        config.dictationStyleGroups[0].matchers = [
+            DictationStyleMatcher(id: "matcher-a", kind: .bundleID, pattern: "com.example.*"),
+        ]
+        config.dictationStyleExactExceptions = [
+            DictationStyleExactException(
+                id: "exception-a",
+                kind: .bundleID,
+                target: "com.example.mail",
+                styleID: TranscriptCleanupPrompts.defaultID
+            ),
+        ]
+        config = try DictationStyleSettingsModel.duplicatingGroup(
+            id: "group-a",
+            newID: "group-b",
+            in: config
+        )
+
+        #expect(config.dictationStyleGroups.map(\.id) == ["group-a", "group-b"])
+        #expect(config.dictationStyleGroups[0].name == "Client Writing")
+        #expect(config.dictationStyleGroups[1].name == "Client Writing Copy")
+        #expect(config.dictationStyleGroups[1].matchers.isEmpty)
+        #expect(throws: DictationStyleSettingsError.self) {
+            try DictationStyleSettingsModel.renamingGroup(id: "group-b", name: "client writing", in: config)
+        }
+
+        let impact = try DictationStyleSettingsModel.groupDeletionImpact(
+            id: "group-a",
+            knownTargets: [DictationStyleTarget(bundleID: "com.example.mail", hostname: nil)],
+            in: config
+        )
+        #expect(impact.matcherCount == 1)
+        #expect(impact.knownTargetCount == 1)
+        #expect(impact.survivingExceptionCount == 1)
+
+        var persistenceCount = 0
+        let committed = try DictationStyleSettingsModel.committing(
+            current: config,
+            mutate: { $0 = DictationStyleSettingsModel.deletingGroup(id: "group-a", from: $0) },
+            persist: { candidate in persistenceCount += 1; return candidate }
+        )
+        #expect(persistenceCount == 1)
+        #expect(committed.dictationStyleGroups.map(\.id) == ["group-b"])
+        #expect(committed.dictationStyleExactExceptions.map(\.id) == ["exception-a"])
+    }
+
     private func configuredStyles() -> AppConfig {
         var config = AppConfig()
         config.adaptiveDictationStylesEnabled = true

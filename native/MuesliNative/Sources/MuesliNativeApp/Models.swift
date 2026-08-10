@@ -785,8 +785,8 @@ enum DictationStyleMatcherKind: String, Codable, CaseIterable, Sendable {
     case hostname
 }
 
-/// A full-value target matcher. U1 deliberately accepts exact targets only; the
-/// resolver owns normalization so persisted values are portable and deterministic.
+/// An exact or full-value wildcard target matcher. The resolver owns
+/// normalization so persisted values are portable and deterministic.
 struct DictationStyleMatcher: Codable, Equatable, Identifiable, Sendable {
     var id: String
     var kind: DictationStyleMatcherKind

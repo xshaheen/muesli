@@ -469,6 +469,12 @@ enum DictationStyleResolver {
         }
     }
 
+    static func matches(_ matcher: DictationStyleMatcher, target: DictationStyleTarget) -> Bool {
+        let value = matcher.kind == .bundleID ? target.bundleID : target.hostname
+        guard let value else { return false }
+        return matchesFullPattern(matcher.pattern, target: value)
+    }
+
     private static func normalizedTarget(_ value: String, kind: DictationStyleMatcherKind) -> String? {
         switch kind {
         case .bundleID: return normalizeBundleID(value)
