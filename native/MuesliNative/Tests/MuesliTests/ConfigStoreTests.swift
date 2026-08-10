@@ -61,4 +61,26 @@ struct ConfigStoreTests {
 
         #expect(permissions?.intValue == 0o600)
     }
+
+    @Test("invalid canonical rulesets are quarantined and cannot be overwritten")
+    func invalidCanonicalRulesetIsQuarantined() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let original = """
+        {"dictation_style_ruleset_initialized":true,"dictation_style_groups":[{"id":"","name":"Broken","style_id":"default","matchers":[]}]}
+        """
+        try Data(original.utf8).write(to: directory.appendingPathComponent("config.json"))
+        let store = ConfigStore(supportDirectory: directory)
+
+        if case .quarantined(let fallback, _) = store.loadResult() {
+            #expect(!fallback.adaptiveDictationStylesEnabled)
+        } else {
+            Issue.record("Expected invalid canonical ruleset to be quarantined")
+        }
+        var unrelated = AppConfig()
+        unrelated.openAIModel = "must-not-overwrite"
+        store.save(unrelated)
+        #expect(try String(contentsOf: directory.appendingPathComponent("config.json")) == original)
+    }
 }

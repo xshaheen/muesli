@@ -710,8 +710,8 @@ struct AppConfigTests {
         #expect(config.dictationStyleDomainRules.isEmpty)
     }
 
-    @Test("dictation style fields round-trip with snake-case keys")
-    func dictationStyleFieldsRoundTrip() throws {
+    @Test("legacy style fields migrate and encode only canonical snake-case keys")
+    func dictationStyleFieldsMigrateAndRoundTripCanonically() throws {
         var config = AppConfig()
         config.adaptiveDictationStylesEnabled = true
         config.dictationStyleCategoryAssignments = ["messages": "message"]
@@ -726,19 +726,23 @@ struct AppConfigTests {
         config.dictationStyleDomainRules = [
             DictationStyleDomainRule(hostname: "docs.google.com", categoryID: "writing", styleID: "writing"),
         ]
+        config = DictationStyleResolver.enablingAdaptiveStyles(in: config)
 
         let data = try JSONEncoder().encode(config)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
 
         #expect(object["adaptive_dictation_styles_enabled"] != nil)
-        #expect(object["dictation_style_category_assignments"] != nil)
-        #expect(object["dictation_style_app_rules"] != nil)
-        #expect(object["dictation_style_domain_rules"] != nil)
+        #expect(object["dictation_style_category_assignments"] == nil)
+        #expect(object["dictation_style_app_rules"] == nil)
+        #expect(object["dictation_style_domain_rules"] == nil)
+        #expect(object["dictation_style_ruleset_initialized"] != nil)
+        #expect(object["dictation_style_groups"] != nil)
+        #expect(object["dictation_style_exact_exceptions"] != nil)
         #expect(decoded.adaptiveDictationStylesEnabled)
-        #expect(decoded.dictationStyleCategoryAssignments == config.dictationStyleCategoryAssignments)
-        #expect(decoded.dictationStyleAppRules == config.dictationStyleAppRules)
-        #expect(decoded.dictationStyleDomainRules == config.dictationStyleDomainRules)
+        #expect(decoded.dictationStyleRulesetInitialized)
+        #expect(!decoded.dictationStyleGroups.isEmpty)
+        #expect(!decoded.dictationStyleExactExceptions.isEmpty)
     }
 
     @Test("reserved duplicate IDs and normalized target collisions sanitize deterministically")
@@ -1114,9 +1118,12 @@ struct AppConfigTests {
         #expect(json["active_transcript_cleanup_prompt_id"] != nil)
         #expect(json["custom_transcript_cleanup_prompts"] != nil)
         #expect(json["adaptive_dictation_styles_enabled"] != nil)
-        #expect(json["dictation_style_category_assignments"] != nil)
-        #expect(json["dictation_style_app_rules"] != nil)
-        #expect(json["dictation_style_domain_rules"] != nil)
+        #expect(json["dictation_style_category_assignments"] == nil)
+        #expect(json["dictation_style_app_rules"] == nil)
+        #expect(json["dictation_style_domain_rules"] == nil)
+        #expect(json["dictation_style_ruleset_initialized"] != nil)
+        #expect(json["dictation_style_groups"] != nil)
+        #expect(json["dictation_style_exact_exceptions"] != nil)
         #expect(json["enable_screen_context"] != nil)
         #expect(json["enable_dictation_ocr_context"] != nil)
         #expect(json["enable_live_streaming_partials"] != nil)

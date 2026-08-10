@@ -780,6 +780,65 @@ struct DictationStyleDomainRule: Codable, Equatable, Identifiable {
     }
 }
 
+enum DictationStyleMatcherKind: String, Codable, CaseIterable, Sendable {
+    case bundleID = "bundle_id"
+    case hostname
+}
+
+/// A full-value target matcher. U1 deliberately accepts exact targets only; the
+/// resolver owns normalization so persisted values are portable and deterministic.
+struct DictationStyleMatcher: Codable, Equatable, Identifiable, Sendable {
+    var id: String
+    var kind: DictationStyleMatcherKind
+    var pattern: String
+
+    init(id: String, kind: DictationStyleMatcherKind, pattern: String) {
+        self.id = id
+        self.kind = kind
+        self.pattern = pattern
+    }
+
+    enum CodingKeys: String, CodingKey { case id; case kind; case pattern }
+}
+
+struct DictationStyleGroup: Codable, Equatable, Identifiable, Sendable {
+    var id: String
+    var name: String
+    var styleID: String
+    var matchers: [DictationStyleMatcher]
+
+    init(id: String, name: String, styleID: String, matchers: [DictationStyleMatcher] = []) {
+        self.id = id
+        self.name = name
+        self.styleID = styleID
+        self.matchers = matchers
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, matchers
+        case styleID = "style_id"
+    }
+}
+
+struct DictationStyleExactException: Codable, Equatable, Identifiable, Sendable {
+    var id: String
+    var kind: DictationStyleMatcherKind
+    var target: String
+    var styleID: String
+
+    init(id: String, kind: DictationStyleMatcherKind, target: String, styleID: String) {
+        self.id = id
+        self.kind = kind
+        self.target = target
+        self.styleID = styleID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, kind, target
+        case styleID = "style_id"
+    }
+}
+
 enum DictationStyleSelectionSource: String, Codable, Equatable, Sendable {
     case domain
     case app
@@ -1333,6 +1392,13 @@ struct AppConfig: Codable {
     var customTranscriptCleanupPrompts: [CustomTranscriptCleanupPrompt] = []
     var postProcessorSystemPrompt: String = PostProcessorOption.defaultSystemPrompt
     var adaptiveDictationStylesEnabled: Bool = false
+    /// The only authority for deciding whether starter groups may be seeded.
+    var dictationStyleRulesetInitialized: Bool = false
+    var dictationStyleGroups: [DictationStyleGroup] = []
+    var dictationStyleExactExceptions: [DictationStyleExactException] = []
+    /// Decode/load-only state. It is intentionally outside CodingKeys so a bad
+    /// on-disk canonical ruleset can never be overwritten by an unrelated save.
+    var dictationStyleRulesetQuarantineReason: String? = nil
     var dictationStyleCategoryAssignments: [String: String] = [:]
     var dictationStyleAppRules: [DictationStyleAppRule] = []
     var dictationStyleDomainRules: [DictationStyleDomainRule] = []
@@ -1459,9 +1525,9 @@ struct AppConfig: Codable {
         case customTranscriptCleanupPrompts = "custom_transcript_cleanup_prompts"
         case postProcessorSystemPrompt = "post_processor_system_prompt"
         case adaptiveDictationStylesEnabled = "adaptive_dictation_styles_enabled"
-        case dictationStyleCategoryAssignments = "dictation_style_category_assignments"
-        case dictationStyleAppRules = "dictation_style_app_rules"
-        case dictationStyleDomainRules = "dictation_style_domain_rules"
+        case dictationStyleRulesetInitialized = "dictation_style_ruleset_initialized"
+        case dictationStyleGroups = "dictation_style_groups"
+        case dictationStyleExactExceptions = "dictation_style_exact_exceptions"
         case enableScreenContext = "enable_screen_context"
         case enableDictationOCRContext = "enable_dictation_ocr_context"
         case useCoreAudioTap = "use_core_audio_tap"
@@ -1485,10 +1551,17 @@ struct AppConfig: Codable {
         case contributionLinkedInClicked = "contribution_linkedin_clicked"
     }
 
+    private enum LegacyDictationStyleCodingKeys: String, CodingKey {
+        case dictationStyleCategoryAssignments = "dictation_style_category_assignments"
+        case dictationStyleAppRules = "dictation_style_app_rules"
+        case dictationStyleDomainRules = "dictation_style_domain_rules"
+    }
+
     init() {}
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let legacy = try decoder.container(keyedBy: LegacyDictationStyleCodingKeys.self)
         let defaults = AppConfig()
         dictationHotkey = (try? c.decode(HotkeyConfig.self, forKey: .dictationHotkey)) ?? defaults.dictationHotkey
         computerUseHotkey = (try? c.decode(HotkeyConfig.self, forKey: .computerUseHotkey))
@@ -1654,9 +1727,18 @@ struct AppConfig: Codable {
         activeTranscriptCleanupPromptId = (try? c.decode(String.self, forKey: .activeTranscriptCleanupPromptId)) ?? defaults.activeTranscriptCleanupPromptId
         postProcessorSystemPrompt = (try? c.decode(String.self, forKey: .postProcessorSystemPrompt)) ?? defaults.postProcessorSystemPrompt
         adaptiveDictationStylesEnabled = (try? c.decode(Bool.self, forKey: .adaptiveDictationStylesEnabled)) ?? defaults.adaptiveDictationStylesEnabled
-        dictationStyleCategoryAssignments = (try? c.decode([String: String].self, forKey: .dictationStyleCategoryAssignments)) ?? defaults.dictationStyleCategoryAssignments
-        dictationStyleAppRules = (try? c.decode([DictationStyleAppRule].self, forKey: .dictationStyleAppRules)) ?? defaults.dictationStyleAppRules
-        dictationStyleDomainRules = (try? c.decode([DictationStyleDomainRule].self, forKey: .dictationStyleDomainRules)) ?? defaults.dictationStyleDomainRules
+        dictationStyleRulesetInitialized = (try? c.decode(Bool.self, forKey: .dictationStyleRulesetInitialized)) ?? false
+        if c.contains(.dictationStyleGroups) {
+            do { dictationStyleGroups = try c.decode([DictationStyleGroup].self, forKey: .dictationStyleGroups) }
+            catch { dictationStyleGroups = []; dictationStyleRulesetQuarantineReason = "Invalid dictation_style_groups: \(error.localizedDescription)" }
+        }
+        if c.contains(.dictationStyleExactExceptions) {
+            do { dictationStyleExactExceptions = try c.decode([DictationStyleExactException].self, forKey: .dictationStyleExactExceptions) }
+            catch { dictationStyleExactExceptions = []; dictationStyleRulesetQuarantineReason = "Invalid dictation_style_exact_exceptions: \(error.localizedDescription)" }
+        }
+        dictationStyleCategoryAssignments = (try? legacy.decode([String: String].self, forKey: .dictationStyleCategoryAssignments)) ?? defaults.dictationStyleCategoryAssignments
+        dictationStyleAppRules = (try? legacy.decode([DictationStyleAppRule].self, forKey: .dictationStyleAppRules)) ?? defaults.dictationStyleAppRules
+        dictationStyleDomainRules = (try? legacy.decode([DictationStyleDomainRule].self, forKey: .dictationStyleDomainRules)) ?? defaults.dictationStyleDomainRules
         enableScreenContext = (try? c.decode(Bool.self, forKey: .enableScreenContext)) ?? defaults.enableScreenContext
         enableDictationOCRContext = (try? c.decode(Bool.self, forKey: .enableDictationOCRContext)) ?? defaults.enableDictationOCRContext
         useCoreAudioTap = (try? c.decode(Bool.self, forKey: .useCoreAudioTap)) ?? defaults.useCoreAudioTap
@@ -1685,6 +1767,14 @@ struct AppConfig: Codable {
         dictationStyleCategoryAssignments = sanitizedStyles.dictationStyleCategoryAssignments
         dictationStyleAppRules = sanitizedStyles.dictationStyleAppRules
         dictationStyleDomainRules = sanitizedStyles.dictationStyleDomainRules
+        if !dictationStyleRulesetInitialized,
+           dictationStyleGroups.isEmpty,
+           dictationStyleExactExceptions.isEmpty {
+            let migration = DictationStyleResolver.projectLegacyConfiguration(self)
+            dictationStyleRulesetInitialized = migration.initialized
+            dictationStyleGroups = migration.groups
+            dictationStyleExactExceptions = migration.exceptions
+        }
         if TranscriptCleanupPrompts.resolveOptional(
             id: activeTranscriptCleanupPromptId,
             custom: customTranscriptCleanupPrompts

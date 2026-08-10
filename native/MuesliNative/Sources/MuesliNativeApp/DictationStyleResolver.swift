@@ -1,6 +1,19 @@
 import Foundation
 
 enum DictationStyleResolver {
+    enum ConfigurationError: Error, Equatable, LocalizedError {
+        case invalidCanonical(String)
+
+        var errorDescription: String? {
+            switch self { case .invalidCanonical(let message): message }
+        }
+    }
+
+    struct LegacyProjection: Equatable {
+        let initialized: Bool
+        let groups: [DictationStyleGroup]
+        let exceptions: [DictationStyleExactException]
+    }
     // Keep this catalog intentionally small. Every bundle ID is already used by
     // Muesli source, and unknown targets remain configurable by the user.
     static let curatedBundleCategories: [String: DictationStyleCategory] = [
@@ -97,6 +110,24 @@ enum DictationStyleResolver {
         let category = category(for: target, config: config)
 
         if config.adaptiveDictationStylesEnabled {
+            if config.dictationStyleRulesetInitialized {
+                if let hostname = target.hostname,
+                   let exception = config.dictationStyleExactExceptions.last(where: {
+                       $0.kind == .hostname && $0.target == hostname
+                   }), let result = selection(styleID: exception.styleID, source: .domain, category: nil, customStyles: customStyles) {
+                    return result
+                }
+                if let bundleID = target.bundleID,
+                   let exception = config.dictationStyleExactExceptions.last(where: {
+                       $0.kind == .bundleID && $0.target == bundleID
+                   }), let result = selection(styleID: exception.styleID, source: .app, category: nil, customStyles: customStyles) {
+                    return result
+                }
+                if let group = firstMatchingGroup(config.dictationStyleGroups, target: target),
+                   let result = selection(styleID: group.styleID, source: .category, category: nil, customStyles: customStyles) {
+                    return result
+                }
+            } else {
             if let hostname = target.hostname,
                let rule = lastDomainRule(for: hostname, in: config.dictationStyleDomainRules),
                let result = selection(
@@ -127,6 +158,7 @@ enum DictationStyleResolver {
                    customStyles: customStyles
                ) {
                 return result
+            }
             }
         }
 
@@ -170,16 +202,19 @@ enum DictationStyleResolver {
     }
 
     static func enablingAdaptiveStyles(in config: AppConfig) -> AppConfig {
-        guard !config.adaptiveDictationStylesEnabled else { return config }
+        guard !config.adaptiveDictationStylesEnabled || !config.dictationStyleRulesetInitialized else { return config }
         var candidate = config
         candidate.adaptiveDictationStylesEnabled = true
-        for category in DictationStyleCategory.allCases {
-            let assignedID = candidate.dictationStyleCategoryAssignments[category.rawValue]?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if assignedID?.isEmpty != false {
-                candidate.dictationStyleCategoryAssignments[category.rawValue] = category.defaultStyleID
-            }
+        if candidate.dictationStyleRulesetInitialized { return candidate }
+        let migration = projectLegacyConfiguration(candidate)
+        if migration.initialized {
+            candidate.dictationStyleRulesetInitialized = true
+            candidate.dictationStyleGroups = migration.groups
+            candidate.dictationStyleExactExceptions = migration.exceptions
+            return candidate
         }
+        candidate.dictationStyleRulesetInitialized = true
+        candidate.dictationStyleGroups = starterGroups()
         return candidate
     }
 
@@ -196,6 +231,8 @@ enum DictationStyleResolver {
             candidate.activeTranscriptCleanupPromptId = TranscriptCleanupPrompts.defaultID
             candidate.postProcessorSystemPrompt = PostProcessorOption.defaultSystemPrompt
         }
+        candidate.dictationStyleGroups.removeAll { normalizedReference($0.styleID) == id }
+        candidate.dictationStyleExactExceptions.removeAll { normalizedReference($0.styleID) == id }
         candidate.dictationStyleCategoryAssignments = candidate.dictationStyleCategoryAssignments.filter {
             normalizedReference($0.value) != id
         }
@@ -221,6 +258,129 @@ enum DictationStyleResolver {
         candidate.dictationStyleAppRules = sanitizedAppRules(config.dictationStyleAppRules)
         candidate.dictationStyleDomainRules = sanitizedDomainRules(config.dictationStyleDomainRules)
         return candidate
+    }
+
+    /// Strict, pure preparation for settings commits and import. It never
+    /// normalizes away canonical conflicts: callers must fix those explicitly.
+    static func prepareCanonicalConfiguration(_ config: AppConfig) throws -> AppConfig {
+        guard config.dictationStyleRulesetQuarantineReason == nil else {
+            throw ConfigurationError.invalidCanonical(config.dictationStyleRulesetQuarantineReason!)
+        }
+        guard config.dictationStyleRulesetInitialized else {
+            var migrated = sanitizeConfiguration(config)
+            let projection = projectLegacyConfiguration(migrated)
+            if projection.initialized {
+                migrated.dictationStyleRulesetInitialized = true
+                migrated.dictationStyleGroups = projection.groups
+                migrated.dictationStyleExactExceptions = projection.exceptions
+            }
+            return migrated
+        }
+        let styles = sanitizedCustomStyles(config.customTranscriptCleanupPrompts)
+        var ids = Set<String>()
+        var targets = Set<String>()
+        for group in config.dictationStyleGroups {
+            guard !group.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  ids.insert(group.id).inserted,
+                  !group.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  TranscriptCleanupPrompts.resolveOptional(id: group.styleID, custom: styles) != nil
+            else { throw ConfigurationError.invalidCanonical("Invalid writing-style group") }
+            var matcherIDs = Set<String>()
+            for matcher in group.matchers {
+                guard !matcher.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      matcherIDs.insert(matcher.id).inserted,
+                      normalizedTarget(matcher.pattern, kind: matcher.kind) == matcher.pattern
+                else { throw ConfigurationError.invalidCanonical("Invalid writing-style matcher") }
+            }
+        }
+        for exception in config.dictationStyleExactExceptions {
+            guard !exception.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  ids.insert(exception.id).inserted,
+                  TranscriptCleanupPrompts.resolveOptional(id: exception.styleID, custom: styles) != nil,
+                  normalizedTarget(exception.target, kind: exception.kind) == exception.target,
+                  targets.insert("\(exception.kind.rawValue):\(exception.target)").inserted
+            else { throw ConfigurationError.invalidCanonical("Invalid writing-style exact exception") }
+        }
+        return config
+    }
+
+    /// Projects only valid legacy records. This is intentionally the sole
+    /// lossy path; persisted canonical rules never pass through it.
+    static func projectLegacyConfiguration(_ config: AppConfig) -> LegacyProjection {
+        let sanitized = sanitizeConfiguration(config)
+        let styles = sanitized.customTranscriptCleanupPrompts
+        let validStyle: (String?) -> String? = { styleID in
+            TranscriptCleanupPrompts.resolveOptional(id: styleID, custom: styles)?.id
+        }
+        var exactTargets = Set<String>()
+        var exceptions: [DictationStyleExactException] = []
+        for rule in sanitized.dictationStyleDomainRules {
+            if let styleID = validStyle(rule.styleID), let target = normalizeHostname(rule.hostname) {
+                exactTargets.insert("hostname:\(target)")
+                exceptions.append(DictationStyleExactException(id: "legacy-exception-hostname-\(target)", kind: .hostname, target: target, styleID: styleID))
+            }
+        }
+        for rule in sanitized.dictationStyleAppRules {
+            if let styleID = validStyle(rule.styleID), let target = normalizeBundleID(rule.bundleID) {
+                exactTargets.insert("bundle_id:\(target)")
+                exceptions.append(DictationStyleExactException(id: "legacy-exception-bundle-id-\(target)", kind: .bundleID, target: target, styleID: styleID))
+            }
+        }
+        var groups: [DictationStyleGroup] = []
+        for legacyCategory in DictationStyleCategory.allCases {
+            guard let styleID = validStyle(sanitized.dictationStyleCategoryAssignments[legacyCategory.rawValue]) else { continue }
+            var matchers: [DictationStyleMatcher] = []
+            for (target, mapped) in curatedHostnameCategories where mapped == legacyCategory && !exactTargets.contains("hostname:\(target)") {
+                matchers.append(DictationStyleMatcher(id: "legacy-group-\(legacyCategory.rawValue)-hostname-\(target)", kind: .hostname, pattern: target))
+            }
+            for (target, mapped) in curatedBundleCategories where mapped == legacyCategory && !exactTargets.contains("bundle_id:\(target)") {
+                matchers.append(DictationStyleMatcher(id: "legacy-group-\(legacyCategory.rawValue)-bundle-id-\(target)", kind: .bundleID, pattern: target))
+            }
+            for rule in sanitized.dictationStyleDomainRules where category(id: rule.categoryID) == legacyCategory {
+                if let target = normalizeHostname(rule.hostname) {
+                    matchers.append(DictationStyleMatcher(id: "legacy-group-\(legacyCategory.rawValue)-hostname-\(target)", kind: .hostname, pattern: target))
+                }
+            }
+            for rule in sanitized.dictationStyleAppRules where category(id: rule.categoryID) == legacyCategory {
+                if let target = normalizeBundleID(rule.bundleID) {
+                    matchers.append(DictationStyleMatcher(id: "legacy-group-\(legacyCategory.rawValue)-bundle-id-\(target)", kind: .bundleID, pattern: target))
+                }
+            }
+            var seen = Set<String>()
+            matchers = matchers.filter { seen.insert("\($0.kind.rawValue):\($0.pattern)").inserted }
+            groups.append(DictationStyleGroup(id: "legacy-group-\(legacyCategory.rawValue)", name: legacyCategory.displayName, styleID: styleID, matchers: matchers))
+        }
+        return LegacyProjection(initialized: !groups.isEmpty || !exceptions.isEmpty, groups: groups, exceptions: exceptions)
+    }
+
+    static func starterGroups() -> [DictationStyleGroup] {
+        DictationStyleCategory.allCases.map { category in
+            let bundleMatchers = curatedBundleCategories.compactMap { target, mapped in
+                mapped == category ? DictationStyleMatcher(id: "starter-\(category.rawValue)-bundle-id-\(target)", kind: .bundleID, pattern: target) : nil
+            }
+            let hostnameMatchers = curatedHostnameCategories.compactMap { target, mapped in
+                mapped == category ? DictationStyleMatcher(id: "starter-\(category.rawValue)-hostname-\(target)", kind: .hostname, pattern: target) : nil
+            }
+            return DictationStyleGroup(id: "starter-group-\(category.rawValue)", name: category.displayName, styleID: category.defaultStyleID, matchers: bundleMatchers + hostnameMatchers)
+        }
+    }
+
+    private static func normalizedTarget(_ value: String, kind: DictationStyleMatcherKind) -> String? {
+        switch kind {
+        case .bundleID: return normalizeBundleID(value)
+        case .hostname: return normalizeHostname(value)
+        }
+    }
+
+    private static func firstMatchingGroup(_ groups: [DictationStyleGroup], target: DictationStyleTarget) -> DictationStyleGroup? {
+        groups.first { group in
+            group.matchers.contains { matcher in
+                switch matcher.kind {
+                case .bundleID: matcher.pattern == target.bundleID
+                case .hostname: matcher.pattern == target.hostname
+                }
+            }
+        }
     }
 
     private static func globalSelection(
