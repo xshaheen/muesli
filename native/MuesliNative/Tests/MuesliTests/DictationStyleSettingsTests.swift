@@ -263,6 +263,41 @@ struct DictationStyleSettingsTests {
         #expect(committed.dictationStyleExactExceptions.map(\.id) == ["exception-a"])
     }
 
+    @Test("known targets include exact group matchers and deduplicate configured identities")
+    func knownTargetsIncludeExactGroupMatchers() {
+        let targets = DictationStyleSettingsModel.knownTargets(
+            appBundleIDs: ["com.example.mail"],
+            groups: [DictationStyleGroup(id: "group", name: "Group", styleID: "default", matchers: [
+                DictationStyleMatcher(id: "exact-app", kind: .bundleID, pattern: "com.example.mail"),
+                DictationStyleMatcher(id: "exact-site", kind: .hostname, pattern: "docs.example.com"),
+                DictationStyleMatcher(id: "wildcard", kind: .hostname, pattern: "*.example.com"),
+            ])],
+            exactExceptions: [
+                DictationStyleExactException(id: "duplicate", kind: .hostname, target: "docs.example.com", styleID: "default"),
+            ]
+        )
+
+        #expect(targets == [
+            DictationStyleTarget(bundleID: "com.example.mail", hostname: nil),
+            DictationStyleTarget(bundleID: nil, hostname: "docs.example.com"),
+        ])
+    }
+
+    @Test("style editor detects unapplied field changes")
+    func styleEditorDirtyState() {
+        var config = AppConfig()
+        config.customTranscriptCleanupPrompts = [
+            CustomTranscriptCleanupPrompt(id: "custom", name: "Custom", prompt: "Original"),
+        ]
+
+        #expect(!DictationStyleSettingsModel.hasUnappliedStyleChanges(
+            styleID: "custom", name: "Custom", instructions: "Original", in: config
+        ))
+        #expect(DictationStyleSettingsModel.hasUnappliedStyleChanges(
+            styleID: "custom", name: "Custom", instructions: "Changed", in: config
+        ))
+    }
+
     private func configuredStyles() -> AppConfig {
         var config = AppConfig()
         config.adaptiveDictationStylesEnabled = true

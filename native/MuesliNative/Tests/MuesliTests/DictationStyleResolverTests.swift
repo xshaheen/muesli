@@ -282,6 +282,25 @@ struct DictationStyleResolverTests {
         _ = try DictationStyleResolver.prepareCanonicalConfiguration(sameGroup)
     }
 
+    @Test("exact matcher outranks an overlapping wildcard with equal literal specificity")
+    func exactMatcherOutranksEqualSpecificityWildcard() throws {
+        var config = canonicalConfig()
+        config.dictationStyleGroups = [
+            group("wildcard", styleID: "broad", matcher: matcher("wildcard-matcher", .bundleID, "com.microsoft.word*")),
+            group("exact", styleID: "narrow", matcher: matcher("exact-matcher", .bundleID, "com.microsoft.word")),
+        ]
+
+        _ = try DictationStyleResolver.prepareCanonicalConfiguration(config)
+        let result = DictationStyleResolver.resolve(
+            config: config,
+            bundleID: "com.microsoft.word",
+            hostname: nil
+        )
+
+        #expect(result.styleID == "narrow")
+        #expect(result.groupID == "exact")
+    }
+
     @Test("canonical hostname groups outrank app groups and conflicts fall through")
     func canonicalTieringAndConflictFallback() throws {
         var config = canonicalConfig()

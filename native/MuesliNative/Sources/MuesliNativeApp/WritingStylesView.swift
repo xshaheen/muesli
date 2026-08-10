@@ -52,7 +52,20 @@ struct WritingStylesView: View {
     }
 
     private func canSave(_ validationMessage: String?) -> Bool {
-        isDirty && validationMessage == nil
+        hasUnsavedChanges && validationMessage == nil
+    }
+
+    private var hasUnappliedStyleChanges: Bool {
+        DictationStyleSettingsModel.hasUnappliedStyleChanges(
+            styleID: editingStyleID,
+            name: styleDraftName,
+            instructions: styleDraftPrompt,
+            in: draft
+        )
+    }
+
+    private var hasUnsavedChanges: Bool {
+        isDirty || hasUnappliedStyleChanges
     }
 
     private var appCandidates: [DictationStyleAppCandidate] {
@@ -67,13 +80,11 @@ struct WritingStylesView: View {
     }
 
     private var knownTargets: [DictationStyleTarget] {
-        appCandidates.map { DictationStyleTarget(bundleID: $0.bundleID, hostname: nil) }
-            + draft.dictationStyleExactExceptions.map { exception in
-                DictationStyleTarget(
-                    bundleID: exception.kind == .bundleID ? exception.target : nil,
-                    hostname: exception.kind == .hostname ? exception.target : nil
-                )
-            }
+        DictationStyleSettingsModel.knownTargets(
+            appBundleIDs: appCandidates.map(\.bundleID),
+            groups: draft.dictationStyleGroups,
+            exactExceptions: draft.dictationStyleExactExceptions
+        )
     }
 
     var body: some View {
@@ -140,11 +151,11 @@ struct WritingStylesView: View {
             Spacer()
             Button("Import", systemImage: "square.and.arrow.down", action: importRuleset)
                 .accessibilityHint("Choose a Writing Styles JSON file and review its replacement preview")
-                .disabled(isDirty)
+                .disabled(hasUnsavedChanges)
             Button("Export", systemImage: "square.and.arrow.up", action: exportRuleset)
                 .accessibilityHint("Save the current Writing Styles configuration as JSON")
-                .disabled(isDirty)
-            Button("Cancel", action: cancelDraft).disabled(!isDirty)
+                .disabled(hasUnsavedChanges)
+            Button("Cancel", action: cancelDraft).disabled(!hasUnsavedChanges)
             Button("Save", action: saveDraft).disabled(!canSave(validationMessage)).keyboardShortcut("s", modifiers: .command)
             Button("Done", action: requestClose).keyboardShortcut(.defaultAction)
         }
@@ -382,6 +393,8 @@ struct WritingStylesView: View {
             Text("Edit custom style").font(MuesliTheme.captionMedium())
             TextField("Style name", text: $styleDraftName).textFieldStyle(.roundedBorder)
             TextEditor(text: $styleDraftPrompt).font(.system(size: 12, design: .monospaced))
+                .accessibilityLabel("Style instructions")
+                .accessibilityHint("Describe how Muesli should clean up dictation that uses this style")
                 .frame(minHeight: 120).padding(MuesliTheme.spacing8).background(MuesliTheme.backgroundBase)
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 .overlay(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall).strokeBorder(MuesliTheme.surfaceBorder))
@@ -485,10 +498,38 @@ struct WritingStylesView: View {
         }
     }
     private func mutate(_ change: (inout AppConfig) -> Void) { change(&draft); isDirty = true; errorMessage = nil }
-    private func cancelDraft() { draft = appState.config; isDirty = false; errorMessage = nil }
-    private func requestClose() { isDirty ? (showCloseConfirmation = true) : onClose() }
+    private func cancelDraft() { draft = appState.config; isDirty = false; editingStyleID = nil; styleDraftName = ""; styleDraftPrompt = ""; errorMessage = nil }
+    private func requestClose() { hasUnsavedChanges ? (showCloseConfirmation = true) : onClose() }
     private func saveAndClose() { saveDraft(); if errorMessage == nil { onClose() } }
-    private func saveDraft() { do { try controller.updateDictationStyleConfiguration { $0 = draft }; draft = appState.config; isDirty = false; errorMessage = nil } catch { errorMessage = "Could not save Writing Styles. Your previous settings are unchanged. \(error.localizedDescription)" } }
+    private func saveDraft() {
+        do {
+            try applyPendingStyleEdits()
+            try controller.updateDictationStyleConfiguration { $0 = draft }
+            draft = appState.config
+            isDirty = false
+            errorMessage = nil
+        } catch {
+            errorMessage = "Could not save Writing Styles. Your previous settings are unchanged. \(error.localizedDescription)"
+        }
+    }
+
+    private func applyPendingStyleEdits() throws {
+        guard let editingStyleID, hasUnappliedStyleChanges else { return }
+        try DictationStyleSettingsModel.validateStyle(
+            name: styleDraftName,
+            instructions: styleDraftPrompt,
+            excludingID: editingStyleID,
+            config: draft
+        )
+        guard let index = draft.customTranscriptCleanupPrompts.firstIndex(where: { $0.id == editingStyleID }) else { return }
+        draft.customTranscriptCleanupPrompts[index].name = styleDraftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft.customTranscriptCleanupPrompts[index].prompt = styleDraftPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if draft.activeTranscriptCleanupPromptId == editingStyleID {
+            draft.postProcessorSystemPrompt = draft.customTranscriptCleanupPrompts[index].prompt
+        }
+        self.editingStyleID = nil
+        isDirty = true
+    }
     private func styleName(_ id: String) -> String { styles.first(where: { $0.id == id })?.name ?? "Missing style" }
     private func suggestedStyleName(_ base: String, in config: AppConfig) -> String { var suffix = 2; var candidate = "\(base) Copy"; while DictationStyleSettingsModel.hasStyleNamed(candidate, excludingID: nil, in: config) { candidate = "\(base) Copy \(suffix)"; suffix += 1 }; return candidate }
     private var groupDeletionMessage: String {
@@ -552,7 +593,7 @@ struct WritingStylesView: View {
 
     private func importRuleset() {
         let panel = NSOpenPanel(); panel.title = "Import Writing Styles"; panel.prompt = "Import"; panel.allowedContentTypes = [.json]; panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
-        panel.begin { response in guard response == .OK, let url = panel.url else { return }; do { let ruleset = try DictationStyleRulesetCodec.decode(Data(contentsOf: url)); importPreview = try DictationStyleSettingsModel.previewingRulesetReplacement(ruleset, replacing: appState.config) } catch { errorMessage = "Could not import Writing Styles. \(error.localizedDescription)" } }
+        panel.begin { response in guard response == .OK, let url = panel.url else { return }; do { let ruleset = try DictationStyleRulesetCodec.decode(contentsOf: url); importPreview = try DictationStyleSettingsModel.previewingRulesetReplacement(ruleset, replacing: appState.config) } catch { errorMessage = "Could not import Writing Styles. \(error.localizedDescription)" } }
     }
     private func exportRuleset() {
         let panel = NSSavePanel(); panel.title = "Export Writing Styles"; panel.prompt = "Export"; panel.nameFieldStringValue = "muesli-writing-styles.json"; panel.allowedContentTypes = [.json]

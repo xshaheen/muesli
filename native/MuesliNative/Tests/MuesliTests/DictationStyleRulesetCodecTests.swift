@@ -65,6 +65,57 @@ struct DictationStyleRulesetCodecTests {
         #expect(candidate.dictationStyleGroups[0].styleID == "default")
     }
 
+    @Test("preview resolves wildcard witnesses instead of treating patterns as targets")
+    func previewUsesValidWildcardWitnesses() throws {
+        var current = sampleConfig()
+        current.adaptiveDictationStylesEnabled = true
+        current.dictationStyleGroups[0].matchers = [
+            DictationStyleMatcher(id: "work-mail", kind: .hostname, pattern: "*.example.com"),
+        ]
+        var imported = try DictationStyleRulesetCodec.ruleset(from: current)
+        imported.groups[0].styleID = "default"
+
+        let preview = try DictationStyleRulesetCodec.preview(imported: imported, replacing: current)
+
+        #expect(preview.effectiveChanges == ["Effective style changed for a.example.com"])
+    }
+
+    @Test("preview reports source changes even when the effective style is unchanged")
+    func previewIncludesSelectionProvenance() throws {
+        var current = sampleConfig()
+        current.adaptiveDictationStylesEnabled = true
+        current.dictationStyleGroups = [
+            DictationStyleGroup(id: "mail", name: "Mail", styleID: "email", matchers: [
+                DictationStyleMatcher(id: "mail-app", kind: .bundleID, pattern: "com.apple.mail"),
+            ]),
+        ]
+        current.dictationStyleExactExceptions = [
+            DictationStyleExactException(id: "mail-exception", kind: .bundleID, target: "com.apple.mail", styleID: "email"),
+        ]
+        var imported = try DictationStyleRulesetCodec.ruleset(from: current)
+        imported.exactExceptions = []
+
+        let preview = try DictationStyleRulesetCodec.preview(imported: imported, replacing: current)
+
+        #expect(preview.effectiveChanges == ["Effective style changed for com.apple.mail"])
+    }
+
+    @Test("URL import rejects oversized and non-regular files before decoding")
+    func boundedURLImport() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let oversized = directory.appendingPathComponent("oversized.json")
+        try Data(repeating: 0x20, count: DictationStyleRulesetCodec.maximumFileBytes + 1).write(to: oversized)
+
+        #expect(throws: DictationStyleRulesetCodec.Error.fileTooLarge) {
+            try DictationStyleRulesetCodec.decode(contentsOf: oversized)
+        }
+        #expect(throws: DictationStyleRulesetCodec.Error.invalidFormat) {
+            try DictationStyleRulesetCodec.decode(contentsOf: directory)
+        }
+    }
+
     @Test("unmodified export and import keep the portable projection equivalent")
     func unchangedRoundTripIsEquivalent() throws {
         let config = sampleConfig()

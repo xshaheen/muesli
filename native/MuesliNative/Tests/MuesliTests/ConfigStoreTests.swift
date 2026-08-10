@@ -100,4 +100,52 @@ struct ConfigStoreTests {
         }
         #expect(!FileManager.default.fileExists(atPath: store.configPath().path))
     }
+
+    @Test("ruleset persistence creates and replaces the config atomically")
+    func rulesetPersistenceCreatesAndReplacesConfig() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConfigStore(supportDirectory: directory)
+
+        var initial = AppConfig()
+        initial.dictationStyleRulesetInitialized = true
+        initial.customTranscriptCleanupPrompts = [
+            CustomTranscriptCleanupPrompt(id: "formal", name: "Formal", prompt: "Use a formal tone."),
+        ]
+        initial.dictationStyleGroups = [
+            DictationStyleGroup(
+                id: "work",
+                name: "Work",
+                styleID: "formal",
+                matchers: [
+                    DictationStyleMatcher(
+                        id: "work-mail",
+                        kind: .hostname,
+                        pattern: "mail.example.com"
+                    ),
+                ]
+            ),
+        ]
+        let initialRuleset = try DictationStyleRulesetCodec.ruleset(from: initial)
+
+        _ = try store.saveDictationStyleRulesetConfiguration(initial, expectedRuleset: initialRuleset)
+
+        #expect(FileManager.default.fileExists(atPath: store.configPath().path))
+        let initialReload = ConfigStore(supportDirectory: directory).load()
+        #expect(try DictationStyleRulesetCodec.ruleset(from: initialReload) == initialRuleset)
+
+        var replacement = initial
+        replacement.customTranscriptCleanupPrompts[0].prompt = "Use a concise professional tone."
+        replacement.dictationStyleGroups[0].name = "Customer Work"
+        replacement.dictationStyleGroups[0].matchers[0].pattern = "*.example.com"
+        let replacementRuleset = try DictationStyleRulesetCodec.ruleset(from: replacement)
+
+        _ = try store.saveDictationStyleRulesetConfiguration(
+            replacement,
+            expectedRuleset: replacementRuleset
+        )
+
+        let replacementReload = ConfigStore(supportDirectory: directory).load()
+        #expect(try DictationStyleRulesetCodec.ruleset(from: replacementReload) == replacementRuleset)
+    }
 }

@@ -84,6 +84,26 @@ enum DictationStyleRulesetCodec {
         return canonicalized(document)
     }
 
+    static func decode(contentsOf url: URL) throws -> DictationStyleRuleset {
+        guard url.isFileURL,
+              let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
+              values.isRegularFile == true,
+              values.isSymbolicLink != true
+        else { throw Error.invalidFormat }
+        if let fileSize = values.fileSize, fileSize > maximumFileBytes {
+            throw Error.fileTooLarge
+        }
+
+        let handle: FileHandle
+        do { handle = try FileHandle(forReadingFrom: url) }
+        catch { throw Error.invalidFormat }
+        defer { try? handle.close() }
+        let data: Data
+        do { data = try handle.read(upToCount: maximumFileBytes + 1) ?? Data() }
+        catch { throw Error.invalidFormat }
+        return try decode(data)
+    }
+
     static func ruleset(from config: AppConfig) throws -> DictationStyleRuleset {
         let prepared = try DictationStyleResolver.prepareCanonicalConfiguration(config)
         let ruleset = DictationStyleRuleset(
@@ -161,15 +181,42 @@ enum DictationStyleRulesetCodec {
     }
 
     private static func effectiveChanges(from current: AppConfig, to candidate: AppConfig) -> [String] {
-        let targets = Set((current.dictationStyleExactExceptions + candidate.dictationStyleExactExceptions).map { "\($0.kind.rawValue):\($0.target)" }
-            + (current.dictationStyleGroups + candidate.dictationStyleGroups).flatMap { group in group.matchers.map { "\($0.kind.rawValue):\($0.pattern)" } })
+        let targets = Set((current.dictationStyleExactExceptions + candidate.dictationStyleExactExceptions).map {
+            "\($0.kind.rawValue):\($0.target)"
+        } + (current.dictationStyleGroups + candidate.dictationStyleGroups).flatMap { group in
+            group.matchers.compactMap { matcher in
+                validWitness(for: matcher).map { "\(matcher.kind.rawValue):\($0)" }
+            }
+        })
         return targets.sorted().compactMap { encoded in
             let pieces = encoded.split(separator: ":", maxSplits: 1).map(String.init)
             guard pieces.count == 2, let kind = DictationStyleMatcherKind(rawValue: pieces[0]) else { return nil }
             let before = DictationStyleResolver.resolve(config: current, bundleID: kind == .bundleID ? pieces[1] : nil, hostname: kind == .hostname ? pieces[1] : nil)
             let after = DictationStyleResolver.resolve(config: candidate, bundleID: kind == .bundleID ? pieces[1] : nil, hostname: kind == .hostname ? pieces[1] : nil)
-            return before.styleID == after.styleID && before.prompt == after.prompt ? nil : "Effective style changed for \(pieces[1])"
+            return before == after ? nil : "Effective style changed for \(pieces[1])"
         }
+    }
+
+    private static func validWitness(for matcher: DictationStyleMatcher) -> String? {
+        var candidate = matcher.pattern.replacingOccurrences(of: "*", with: "a")
+        if matcher.kind == .bundleID,
+           DictationStyleResolver.normalizeBundleID(candidate) == nil {
+            candidate += ".a"
+        }
+        let normalized = switch matcher.kind {
+        case .bundleID: DictationStyleResolver.normalizeBundleID(candidate)
+        case .hostname: DictationStyleResolver.normalizeHostname(candidate)
+        }
+        guard let normalized,
+              DictationStyleResolver.matches(
+                matcher,
+                target: DictationStyleTarget(
+                    bundleID: matcher.kind == .bundleID ? normalized : nil,
+                    hostname: matcher.kind == .hostname ? normalized : nil
+                )
+              )
+        else { return nil }
+        return normalized
     }
 
     private static func canonicalized(_ ruleset: DictationStyleRuleset) -> DictationStyleRuleset {

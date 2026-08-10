@@ -77,6 +77,43 @@ enum DictationStyleSettingsError: LocalizedError, Equatable {
 }
 
 enum DictationStyleSettingsModel {
+    static func knownTargets(
+        appBundleIDs: [String],
+        groups: [DictationStyleGroup],
+        exactExceptions: [DictationStyleExactException]
+    ) -> [DictationStyleTarget] {
+        var seen = Set<String>()
+        let appTargets = appBundleIDs.compactMap { bundleID -> DictationStyleTarget? in
+            guard let bundleID = DictationStyleResolver.normalizeBundleID(bundleID),
+                  seen.insert("bundle_id:\(bundleID)").inserted
+            else { return nil }
+            return DictationStyleTarget(bundleID: bundleID, hostname: nil)
+        }
+        let configuredTargets = (groups.flatMap(\.matchers).compactMap { matcher -> (DictationStyleMatcherKind, String)? in
+            guard !matcher.pattern.contains("*") else { return nil }
+            return (matcher.kind, matcher.pattern)
+        } + exactExceptions.map { ($0.kind, $0.target) }).compactMap { kind, value -> DictationStyleTarget? in
+            guard seen.insert("\(kind.rawValue):\(value)").inserted else { return nil }
+            return DictationStyleTarget(
+                bundleID: kind == .bundleID ? value : nil,
+                hostname: kind == .hostname ? value : nil
+            )
+        }
+        return appTargets + configuredTargets
+    }
+
+    static func hasUnappliedStyleChanges(
+        styleID: String?,
+        name: String,
+        instructions: String,
+        in config: AppConfig
+    ) -> Bool {
+        guard let styleID,
+              let style = config.customTranscriptCleanupPrompts.first(where: { $0.id == styleID })
+        else { return false }
+        return style.name != name || style.prompt != instructions
+    }
+
     static func addingGroup(
         name: String,
         styleID: String,

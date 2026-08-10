@@ -345,9 +345,12 @@ enum DictationStyleResolver {
             for rightIndex in matchers.indices.dropFirst(leftIndex + 1) {
                 let left = matchers[leftIndex]
                 let right = matchers[rightIndex]
+                let leftRank = matcherRank(left.matcher.pattern)
+                let rightRank = matcherRank(right.matcher.pattern)
                 guard left.groupID != right.groupID,
                       left.matcher.kind == right.matcher.kind,
-                      matcherSpecificity(left.matcher.pattern) == matcherSpecificity(right.matcher.pattern),
+                      leftRank.exact == rightRank.exact,
+                      leftRank.specificity == rightRank.specificity,
                       patternsOverlap(left.matcher.pattern, right.matcher.pattern)
                 else { continue }
                 throw ConfigurationError.invalidCanonical("Ambiguous writing-style matchers")
