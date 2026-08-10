@@ -83,4 +83,21 @@ struct ConfigStoreTests {
         store.save(unrelated)
         #expect(try String(contentsOf: directory.appendingPathComponent("config.json")) == original)
     }
+
+    @Test("ruleset persistence rejects a preview fidelity mismatch before writing")
+    func rulesetPersistenceRejectsFidelityMismatch() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConfigStore(supportDirectory: directory)
+        var config = AppConfig()
+        config.dictationStyleRulesetInitialized = true
+        let expected = try DictationStyleRulesetCodec.ruleset(from: config)
+        var mismatched = expected
+        mismatched.globalDefault.prompt = "Different"
+
+        #expect(throws: DictationStyleRulesetCodec.Error.self) {
+            _ = try store.saveDictationStyleRulesetConfiguration(config, expectedRuleset: mismatched)
+        }
+        #expect(!FileManager.default.fileExists(atPath: store.configPath().path))
+    }
 }

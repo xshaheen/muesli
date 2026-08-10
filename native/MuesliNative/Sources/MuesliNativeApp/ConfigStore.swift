@@ -110,6 +110,20 @@ final class ConfigStore {
         return candidate
     }
 
+    /// Import uses this seam to prove that the exact portable projection it
+    /// previewed is also the one that reaches disk. The comparison happens
+    /// before staging a replacement file, so a mismatch cannot partially save.
+    func saveDictationStyleRulesetConfiguration(
+        _ config: AppConfig,
+        expectedRuleset: DictationStyleRuleset
+    ) throws -> AppConfig {
+        let candidate = try DictationStyleResolver.prepareCanonicalConfiguration(config)
+        guard try DictationStyleRulesetCodec.ruleset(from: candidate) == expectedRuleset else {
+            throw DictationStyleRulesetCodec.Error.fidelityMismatch
+        }
+        return try saveDictationStyleConfiguration(candidate)
+    }
+
     func configPath() -> URL {
         configURL
     }

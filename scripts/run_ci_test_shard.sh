@@ -29,6 +29,7 @@ case "${shard}" in
       AppConfigTests
       DictationStyleResolverTests
       DictationStyleSettingsTests
+      DictationStyleRulesetCodecTests
       CGPointCodableTests
       UpdateFailureGuidanceTests
       WordCountTests

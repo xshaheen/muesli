@@ -57,6 +57,20 @@ enum DictationStyleSettingsError: LocalizedError, Equatable {
 }
 
 enum DictationStyleSettingsModel {
+    static func previewingRulesetReplacement(
+        _ imported: DictationStyleRuleset,
+        replacing current: AppConfig
+    ) throws -> DictationStyleRulesetPreview {
+        try DictationStyleRulesetCodec.preview(imported: imported, replacing: current)
+    }
+
+    static func replacementCandidate(
+        for preview: DictationStyleRulesetPreview,
+        replacing current: AppConfig
+    ) throws -> AppConfig {
+        try DictationStyleRulesetCodec.candidate(from: preview.ruleset, replacing: current)
+    }
+
     static func committing(
         current: AppConfig,
         mutate: (inout AppConfig) -> Void,

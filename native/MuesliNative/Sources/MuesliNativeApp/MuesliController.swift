@@ -1427,6 +1427,27 @@ final class MuesliController: NSObject {
         statusBarController?.refresh()
     }
 
+    /// Applies a previously reviewed portable replacement in the same
+    /// validate-write-publish transaction used by local Writing Styles edits.
+    /// Cancellation never calls this method and therefore has no side effects.
+    func replaceDictationStyleRuleset(_ preview: DictationStyleRulesetPreview) throws {
+        let candidate = try DictationStyleSettingsModel.replacementCandidate(
+            for: preview,
+            replacing: config
+        )
+        let expected = try DictationStyleRulesetCodec.ruleset(from: candidate)
+        guard expected == preview.ruleset else {
+            throw DictationStyleRulesetCodec.Error.fidelityMismatch
+        }
+        let persisted = try configStore.saveDictationStyleRulesetConfiguration(
+            candidate,
+            expectedRuleset: expected
+        )
+        config = persisted
+        appState.config = persisted
+        statusBarController?.refresh()
+    }
+
     private func applyConfigRuntimeSideEffects(
         wasICloudSyncEnabled: Bool,
         hotkeyTriggerThresholdChanged: Bool,
