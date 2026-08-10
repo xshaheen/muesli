@@ -114,13 +114,13 @@ enum DictationStyleResolver {
                 if let hostname = target.hostname,
                    let exception = config.dictationStyleExactExceptions.last(where: {
                        $0.kind == .hostname && $0.target == hostname
-                   }), let result = selection(styleID: exception.styleID, source: .domain, category: nil, customStyles: customStyles) {
+                   }), let result = selection(styleID: exception.styleID, source: .exception, category: nil, customStyles: customStyles) {
                     return result
                 }
                 if let bundleID = target.bundleID,
                    let exception = config.dictationStyleExactExceptions.last(where: {
                        $0.kind == .bundleID && $0.target == bundleID
-                   }), let result = selection(styleID: exception.styleID, source: .app, category: nil, customStyles: customStyles) {
+                   }), let result = selection(styleID: exception.styleID, source: .exception, category: nil, customStyles: customStyles) {
                     return result
                 }
                 if let hostname = target.hostname,
@@ -129,7 +129,7 @@ enum DictationStyleResolver {
                        kind: .hostname,
                        target: hostname
                    ),
-                   let result = selection(styleID: group.styleID, source: .category, category: nil, customStyles: customStyles) {
+                   let result = selection(styleID: group.styleID, source: .group, category: nil, groupID: group.id, customStyles: customStyles) {
                     return result
                 }
                 if let bundleID = target.bundleID,
@@ -138,7 +138,7 @@ enum DictationStyleResolver {
                        kind: .bundleID,
                        target: bundleID
                    ),
-                   let result = selection(styleID: group.styleID, source: .category, category: nil, customStyles: customStyles) {
+                   let result = selection(styleID: group.styleID, source: .group, category: nil, groupID: group.id, customStyles: customStyles) {
                     return result
                 }
             } else {
@@ -629,6 +629,7 @@ enum DictationStyleResolver {
         styleID: String?,
         source: DictationStyleSelectionSource,
         category: DictationStyleCategory?,
+        groupID: String? = nil,
         customStyles: [CustomTranscriptCleanupPrompt]
     ) -> DictationStyleSelectionResult? {
         guard let style = TranscriptCleanupPrompts.resolveOptional(id: styleID, custom: customStyles) else {
@@ -640,7 +641,8 @@ enum DictationStyleResolver {
             prompt: style.prompt,
             isCustom: style.isCustom,
             source: source,
-            categoryID: category?.rawValue
+            categoryID: category?.rawValue,
+            groupID: groupID
         )
     }
 

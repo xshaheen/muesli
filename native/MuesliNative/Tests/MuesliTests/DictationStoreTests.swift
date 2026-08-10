@@ -278,6 +278,16 @@ struct DictationStoreTests {
             startedAt: now.addingTimeInterval(20),
             endedAt: now.addingTimeInterval(21)
         )
+        _ = try store.insertDictation(
+            text: "Legacy app provenance",
+            durationSeconds: 1,
+            dictationStyleID: "legacy-style",
+            dictationStyleName: "Legacy Style",
+            dictationStyleSelectionSource: "app",
+            dictationCleanupOutcome: "applied",
+            startedAt: now.addingTimeInterval(22),
+            endedAt: now.addingTimeInterval(23)
+        )
 
         let rows = try store.recentDictations(limit: 20)
         for (index, outcome) in outcomes.enumerated() {
@@ -285,7 +295,7 @@ struct DictationStoreTests {
             #expect(row.dictationCleanupOutcome == outcome)
             #expect(row.dictationStyleName == (index == outcomes.count - 1 ? nil : "Saved Name \(index)"))
         }
-        let applied = try #require(rows.first { $0.dictationCleanupOutcome == "applied" })
+        let applied = try #require(rows.first { $0.rawText == "Outcome applied" })
         let appliedBadge = try #require(DictationStyleHistoryBadgeContent.make(for: applied))
         #expect(appliedBadge.label == "Saved Name 0")
         #expect(appliedBadge.accessibilityDescription.contains("Selected from the global style"))
@@ -295,6 +305,9 @@ struct DictationStoreTests {
         #expect(future.dictationStyleSelectionSource == "future_source")
         #expect(future.dictationCleanupOutcome == "future_outcome")
         #expect(DictationStyleHistoryBadgeContent.make(for: future) == nil)
+
+        let legacyApp = try #require(rows.first { $0.dictationStyleSelectionSource == "app" })
+        #expect(DictationStyleHistoryBadgeContent.make(for: legacyApp)?.accessibilityDescription.contains("app rule") == true)
     }
 
     @Test("sync excludes provenance and preserves it only for same-text acknowledgement")

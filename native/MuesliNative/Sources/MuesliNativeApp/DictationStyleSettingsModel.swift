@@ -205,6 +205,8 @@ enum DictationStyleSettingsModel {
         )
         let sourceLabel: String
         switch result.source {
+        case .exception: sourceLabel = "Exact exception"
+        case .group: sourceLabel = "Group"
         case .domain: sourceLabel = "Exact website"
         case .app: sourceLabel = "Exact app"
         case .category:

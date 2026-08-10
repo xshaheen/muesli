@@ -138,8 +138,9 @@ struct DictationCleanupPolicyTests {
             styleName: "Message",
             prompt: stylePrompt,
             isCustom: false,
-            source: .app,
-            categoryID: "messages"
+            source: .group,
+            categoryID: nil,
+            groupID: "messages"
         )
 
         let policy = DictationCleanupPolicy(enabled: true, selection: selection)
@@ -147,7 +148,8 @@ struct DictationCleanupPolicyTests {
         #expect(policy.systemPromptSnapshot.components(separatedBy: stylePrompt).count == 2)
         #expect(policy.systemPromptSnapshot.contains("untrusted reference data"))
         #expect(policy.provenance?.styleID == "message")
-        #expect(policy.provenance?.source == .app)
+        #expect(policy.provenance?.source == .group)
+        #expect(policy.provenance?.groupID == "messages")
     }
 
     @Test("all non-applied outcomes retain deterministic cleanup and custom words")

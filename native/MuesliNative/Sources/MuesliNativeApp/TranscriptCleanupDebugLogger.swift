@@ -16,6 +16,7 @@ enum TranscriptCleanupDebugLogger {
         let selectedStyleID: String?
         let styleSelectionSource: String?
         let styleCategoryID: String?
+        let styleGroupID: String?
         let appContextText: String?
         let rawASRText: String
         let rawCleanupOutputText: String?
@@ -53,6 +54,7 @@ enum TranscriptCleanupDebugLogger {
             selectedStyleID: styleProvenance?.styleID,
             styleSelectionSource: styleProvenance?.source.rawValue,
             styleCategoryID: styleProvenance?.categoryID,
+            styleGroupID: styleProvenance?.groupID,
             appContextText: appContextText.map(bounded),
             rawASRText: bounded(rawASRText),
             rawCleanupOutputText: rawCleanupOutputText.map(bounded),

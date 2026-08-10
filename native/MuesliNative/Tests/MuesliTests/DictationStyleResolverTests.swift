@@ -235,7 +235,8 @@ struct DictationStyleResolverTests {
 
         let result = DictationStyleResolver.resolve(config: config, bundleID: nil, hostname: "docs.example.com")
         #expect(result.styleID == "narrow")
-        #expect(result.source == .category)
+        #expect(result.source == .group)
+        #expect(result.groupID == "narrow")
     }
 
     @Test("equal-specificity overlaps conflict while safe overlaps remain valid")

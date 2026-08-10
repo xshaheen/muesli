@@ -24,13 +24,22 @@ struct DictationStyleHistoryBadgeContent: Equatable {
     }
 
     private static func sourceLabel(_ rawValue: String?) -> String? {
-        guard let rawValue, let source = DictationStyleSelectionSource(rawValue: rawValue) else { return nil }
-        return switch source {
-        case .domain: "Selected by website rule"
-        case .app: "Selected by app rule"
-        case .category: "Selected by category"
-        case .global: "Selected from the global style"
-        case .builtInFallback: "Selected as the built-in fallback"
+        guard let rawValue else { return nil }
+        return switch rawValue {
+        case DictationStyleSelectionSource.exception.rawValue: "Selected by an exact exception"
+        case DictationStyleSelectionSource.group.rawValue: "Selected by a writing style group"
+        case DictationStyleSelectionSource.domain.rawValue:
+            "Selected by website rule"
+        case DictationStyleSelectionSource.app.rawValue:
+            "Selected by app rule"
+        case DictationStyleSelectionSource.category.rawValue:
+            "Selected by category"
+        case DictationStyleSelectionSource.global.rawValue:
+            "Selected from the global style"
+        case DictationStyleSelectionSource.builtInFallback.rawValue:
+            "Selected as the built-in fallback"
+        default:
+            nil
         }
     }
 

@@ -5,7 +5,7 @@ import Testing
 @Suite("Dictation style observability")
 struct DictationStyleObservabilityTests {
     private let sources: [DictationStyleSelectionSource] = [
-        .domain, .app, .category, .global, .builtInFallback,
+        .exception, .group, .global, .builtInFallback,
     ]
 
     @Test("telemetry uses one coarse allowlist for every style and outcome")
@@ -38,7 +38,7 @@ struct DictationStyleObservabilityTests {
     func excludesSensitiveKeys() {
         let parameters = DictationStyleObservability.parameters(
             for: DictationStyleObservabilityInput(
-                selectionSource: .domain,
+                selectionSource: .exception,
                 isCustomStyle: true,
                 cleanupOutcome: .fallbackError,
                 cleanupBackend: .hosted(.openAI)
@@ -80,8 +80,9 @@ struct DictationStyleObservabilityTests {
             styleName: "Private Style Name",
             prompt: "private prompt",
             isCustom: true,
-            source: .app,
-            categoryID: "messages"
+            source: .group,
+            categoryID: "messages",
+            groupID: "stable-group-id"
         )
         let provenance = DictationCleanupStyleProvenance(selection: selection)
         let longText = String(repeating: "x", count: TranscriptCleanupDebugLogger.maxLoggedTextCharacters + 10)
@@ -131,8 +132,9 @@ struct DictationStyleObservabilityTests {
             .map { try JSONDecoder().decode(TranscriptCleanupDebugLogger.Entry.self, from: Data($0.utf8)) }
         #expect(entries.map(\.cleanupOutcome) == ["applied", "fallback_error"])
         #expect(entries.allSatisfy { $0.selectedStyleID == "private-style-id" })
-        #expect(entries.allSatisfy { $0.styleSelectionSource == "app" })
+        #expect(entries.allSatisfy { $0.styleSelectionSource == "group" })
         #expect(entries.allSatisfy { $0.styleCategoryID == "messages" })
+        #expect(entries.allSatisfy { $0.styleGroupID == "stable-group-id" })
         #expect(entries[0].rawASRText.hasSuffix("...[truncated]"))
     }
 

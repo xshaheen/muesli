@@ -29,6 +29,7 @@ struct DictationCleanupStyleProvenance: Equatable, Sendable {
     let isCustom: Bool
     let source: DictationStyleSelectionSource
     let categoryID: String?
+    let groupID: String?
 
     init(selection: DictationStyleSelectionResult) {
         styleID = selection.styleID
@@ -36,6 +37,7 @@ struct DictationCleanupStyleProvenance: Equatable, Sendable {
         isCustom = selection.isCustom
         source = selection.source
         categoryID = selection.categoryID
+        groupID = selection.groupID
     }
 }
 

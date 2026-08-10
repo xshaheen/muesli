@@ -840,6 +840,8 @@ struct DictationStyleExactException: Codable, Equatable, Identifiable, Sendable 
 }
 
 enum DictationStyleSelectionSource: String, Codable, Equatable, Sendable {
+    case exception
+    case group
     case domain
     case app
     case category
@@ -854,6 +856,25 @@ struct DictationStyleSelectionResult: Equatable {
     let isCustom: Bool
     let source: DictationStyleSelectionSource
     let categoryID: String?
+    let groupID: String?
+
+    init(
+        styleID: String,
+        styleName: String,
+        prompt: String,
+        isCustom: Bool,
+        source: DictationStyleSelectionSource,
+        categoryID: String?,
+        groupID: String? = nil
+    ) {
+        self.styleID = styleID
+        self.styleName = styleName
+        self.prompt = prompt
+        self.isCustom = isCustom
+        self.source = source
+        self.categoryID = categoryID
+        self.groupID = groupID
+    }
 }
 
 struct DictationStyleTarget: Equatable {

@@ -263,6 +263,48 @@ struct DictationStyleSessionTests {
         #expect(request.runtime.config.activePostProcessorId == PostProcessorOption.finetunedV2.id)
     }
 
+    @Test("cleanup request commits the available hostname without waiting for later context")
+    func cleanupRequestDoesNotChangeAfterCommit() throws {
+        var config = adaptiveConfig()
+        config.dictationStyleRulesetInitialized = true
+        config.dictationStyleGroups = [
+            DictationStyleGroup(
+                id: "docs",
+                name: "Docs",
+                styleID: TranscriptCleanupPrompts.writingID,
+                matchers: [DictationStyleMatcher(id: "docs-host", kind: .hostname, pattern: "docs.google.com")]
+            ),
+            DictationStyleGroup(
+                id: "browser",
+                name: "Browser",
+                styleID: TranscriptCleanupPrompts.codeID,
+                matchers: [DictationStyleMatcher(id: "chrome-app", kind: .bundleID, pattern: "com.google.chrome")]
+            ),
+        ]
+        let runtime = DictationCleanupRuntimeSnapshot(
+            readiness: .ready,
+            backend: .local,
+            option: .finetunedV2,
+            config: config
+        )
+        let snapshot = DictationStyleSessionSnapshot(
+            target: browserTarget,
+            config: config,
+            mode: .standard,
+            cleanupRuntime: runtime
+        )
+
+        let committed = try #require(snapshot.cleanupRequest(context: nil))
+        let lateContext = matchingContext(snapshot: snapshot, target: browserTarget, hostname: "docs.google.com")
+        let laterRequest = try #require(snapshot.cleanupRequest(context: lateContext))
+
+        #expect(committed.policy.provenance?.source == .group)
+        #expect(committed.policy.provenance?.groupID == "browser")
+        #expect(laterRequest.policy.provenance?.source == .group)
+        #expect(laterRequest.policy.provenance?.groupID == "docs")
+        #expect(committed.policy.systemPromptSnapshot != laterRequest.policy.systemPromptSnapshot)
+    }
+
     private func adaptiveConfig() -> AppConfig {
         var config = AppConfig()
         config.enablePostProcessor = true
