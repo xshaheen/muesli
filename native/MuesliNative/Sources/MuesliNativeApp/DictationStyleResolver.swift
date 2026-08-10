@@ -123,7 +123,21 @@ enum DictationStyleResolver {
                    }), let result = selection(styleID: exception.styleID, source: .app, category: nil, customStyles: customStyles) {
                     return result
                 }
-                if let group = firstMatchingGroup(config.dictationStyleGroups, target: target),
+                if let hostname = target.hostname,
+                   let group = bestMatchingGroup(
+                       config.dictationStyleGroups,
+                       kind: .hostname,
+                       target: hostname
+                   ),
+                   let result = selection(styleID: group.styleID, source: .category, category: nil, customStyles: customStyles) {
+                    return result
+                }
+                if let bundleID = target.bundleID,
+                   let group = bestMatchingGroup(
+                       config.dictationStyleGroups,
+                       kind: .bundleID,
+                       target: bundleID
+                   ),
                    let result = selection(styleID: group.styleID, source: .category, category: nil, customStyles: customStyles) {
                     return result
                 }
@@ -276,30 +290,68 @@ enum DictationStyleResolver {
             }
             return migrated
         }
-        let styles = sanitizedCustomStyles(config.customTranscriptCleanupPrompts)
-        var ids = Set<String>()
+        let styles = config.customTranscriptCleanupPrompts
+        var styleIDs = Set<String>()
+        var styleNames = Set<String>()
+        for style in styles {
+            guard let id = nonEmpty(style.id),
+                  id == style.id,
+                  !TranscriptCleanupPrompts.reservedIDs.contains(id),
+                  styleIDs.insert(id).inserted,
+                  let name = nonEmpty(style.name),
+                  !TranscriptCleanupPrompts.builtIns.contains(where: {
+                      normalizedStyleName($0.name) == normalizedStyleName(name)
+                  }),
+                  styleNames.insert(normalizedStyleName(name)).inserted,
+                  nonEmpty(style.prompt) != nil
+            else { throw ConfigurationError.invalidCanonical("Invalid custom writing style") }
+        }
+        guard validStyleID(config.activeTranscriptCleanupPromptId, customStyles: styles),
+              nonEmpty(config.postProcessorSystemPrompt) != nil
+        else { throw ConfigurationError.invalidCanonical("Invalid global writing style") }
+
+        var entityIDs = Set<String>()
+        var groupNames = Set<String>()
+        var matcherIDs = Set<String>()
+        var matcherPatterns = Set<String>()
         var targets = Set<String>()
+        var matchers: [(groupID: String, matcher: DictationStyleMatcher)] = []
         for group in config.dictationStyleGroups {
             guard !group.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  ids.insert(group.id).inserted,
-                  !group.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  TranscriptCleanupPrompts.resolveOptional(id: group.styleID, custom: styles) != nil
+                  entityIDs.insert(group.id).inserted,
+                  let name = nonEmpty(group.name),
+                  groupNames.insert(normalizedStyleName(name)).inserted,
+                  validStyleID(group.styleID, customStyles: styles)
             else { throw ConfigurationError.invalidCanonical("Invalid writing-style group") }
-            var matcherIDs = Set<String>()
             for matcher in group.matchers {
                 guard !matcher.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                       matcherIDs.insert(matcher.id).inserted,
-                      normalizedTarget(matcher.pattern, kind: matcher.kind) == matcher.pattern
+                      let pattern = canonicalPattern(matcher.pattern, kind: matcher.kind),
+                      pattern == matcher.pattern,
+                      matcherPatterns.insert("\(matcher.kind.rawValue):\(pattern)").inserted
                 else { throw ConfigurationError.invalidCanonical("Invalid writing-style matcher") }
+                matchers.append((group.id, matcher))
             }
         }
         for exception in config.dictationStyleExactExceptions {
             guard !exception.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  ids.insert(exception.id).inserted,
-                  TranscriptCleanupPrompts.resolveOptional(id: exception.styleID, custom: styles) != nil,
+                  entityIDs.insert(exception.id).inserted,
+                  validStyleID(exception.styleID, customStyles: styles),
                   normalizedTarget(exception.target, kind: exception.kind) == exception.target,
                   targets.insert("\(exception.kind.rawValue):\(exception.target)").inserted
             else { throw ConfigurationError.invalidCanonical("Invalid writing-style exact exception") }
+        }
+        for leftIndex in matchers.indices {
+            for rightIndex in matchers.indices.dropFirst(leftIndex + 1) {
+                let left = matchers[leftIndex]
+                let right = matchers[rightIndex]
+                guard left.groupID != right.groupID,
+                      left.matcher.kind == right.matcher.kind,
+                      matcherSpecificity(left.matcher.pattern) == matcherSpecificity(right.matcher.pattern),
+                      patternsOverlap(left.matcher.pattern, right.matcher.pattern)
+                else { continue }
+                throw ConfigurationError.invalidCanonical("Ambiguous writing-style matchers")
+            }
         }
         return config
     }
@@ -365,6 +417,58 @@ enum DictationStyleResolver {
         }
     }
 
+    static func canonicalPattern(_ value: String?, kind: DictationStyleMatcherKind) -> String? {
+        guard let value = nonEmpty(value) else { return nil }
+        if !value.contains("*") {
+            return normalizedTarget(value, kind: kind)
+        }
+        guard var pattern = nonEmpty(value)?.lowercased(),
+              pattern.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+              pattern.rangeOfCharacter(from: CharacterSet(charactersIn: "/?#@:")) == nil
+        else { return nil }
+        if kind == .hostname, pattern.hasSuffix(".") {
+            pattern.removeLast()
+        }
+        guard !pattern.isEmpty else { return nil }
+        while pattern.contains("**") {
+            pattern = pattern.replacingOccurrences(of: "**", with: "*")
+        }
+        let labels = pattern.split(separator: ".", omittingEmptySubsequences: false)
+        guard !labels.isEmpty,
+              labels.allSatisfy({ label in
+                  !label.isEmpty && label.allSatisfy { character in
+                      character.isASCII
+                          && (character == "*" || character == "-" || character.isLetter || character.isNumber)
+                  }
+              }),
+              patternCanMatchValidTarget(pattern, kind: kind)
+        else { return nil }
+        if kind == .bundleID, !pattern.contains("*"), labels.count < 2 {
+            return nil
+        }
+        return pattern
+    }
+
+    private static func patternCanMatchValidTarget(
+        _ pattern: String,
+        kind: DictationStyleMatcherKind
+    ) -> Bool {
+        let labels = pattern.split(separator: ".", omittingEmptySubsequences: false)
+        guard kind == .hostname || labels.count > 1 || pattern.contains("*") else { return false }
+        return labels.allSatisfy { label in
+            let witness = label.replacingOccurrences(of: "*", with: "a")
+            return witness.first != "-"
+                && witness.last != "-"
+                && witness.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+        }
+    }
+
+    static func matcherSpecificity(_ pattern: String) -> Int {
+        pattern.reduce(into: 0) { count, character in
+            if character != "*" { count += 1 }
+        }
+    }
+
     private static func normalizedTarget(_ value: String, kind: DictationStyleMatcherKind) -> String? {
         switch kind {
         case .bundleID: return normalizeBundleID(value)
@@ -372,15 +476,128 @@ enum DictationStyleResolver {
         }
     }
 
-    private static func firstMatchingGroup(_ groups: [DictationStyleGroup], target: DictationStyleTarget) -> DictationStyleGroup? {
-        groups.first { group in
-            group.matchers.contains { matcher in
-                switch matcher.kind {
-                case .bundleID: matcher.pattern == target.bundleID
-                case .hostname: matcher.pattern == target.hostname
+    private static func bestMatchingGroup(
+        _ groups: [DictationStyleGroup],
+        kind: DictationStyleMatcherKind,
+        target: String
+    ) -> DictationStyleGroup? {
+        let candidates = groups.compactMap { group -> (DictationStyleGroup, Int, Bool)? in
+            let matching = group.matchers.filter {
+                $0.kind == kind && matchesFullPattern($0.pattern, target: target)
+            }
+            guard let best = matching.max(by: { isHigherRank(matcherRank($1.pattern), than: matcherRank($0.pattern)) }) else {
+                return nil
+            }
+            return (group, matcherSpecificity(best.pattern), !best.pattern.contains("*"))
+        }
+        guard let best = candidates.max(by: { isHigherRank(candidateRank($1), than: candidateRank($0)) }) else { return nil }
+        let tiedGroups = candidates.filter { candidateRank($0).exact == candidateRank(best).exact && candidateRank($0).specificity == candidateRank(best).specificity }
+        guard tiedGroups.count == 1 else { return nil }
+        return best.0
+    }
+
+    private static func matcherRank(_ pattern: String) -> (exact: Bool, specificity: Int) {
+        (!pattern.contains("*"), matcherSpecificity(pattern))
+    }
+
+    private static func candidateRank(_ candidate: (DictationStyleGroup, Int, Bool)) -> (exact: Bool, specificity: Int) {
+        (candidate.2, candidate.1)
+    }
+
+    private static func isHigherRank(
+        _ left: (exact: Bool, specificity: Int),
+        than right: (exact: Bool, specificity: Int)
+    ) -> Bool {
+        left.exact != right.exact ? left.exact : left.specificity > right.specificity
+    }
+
+    private static func matchesFullPattern(_ pattern: String, target: String) -> Bool {
+        var patternIndex = pattern.startIndex
+        var targetIndex = target.startIndex
+        var wildcardIndex: String.Index?
+        var retryTargetIndex: String.Index?
+
+        while targetIndex < target.endIndex {
+            if patternIndex < pattern.endIndex, pattern[patternIndex] == target[targetIndex] {
+                pattern.formIndex(after: &patternIndex)
+                target.formIndex(after: &targetIndex)
+            } else if patternIndex < pattern.endIndex, pattern[patternIndex] == "*" {
+                wildcardIndex = patternIndex
+                pattern.formIndex(after: &patternIndex)
+                retryTargetIndex = targetIndex
+            } else if let wildcard = wildcardIndex, let retry = retryTargetIndex {
+                patternIndex = pattern.index(after: wildcard)
+                let nextTargetIndex = target.index(after: retry)
+                retryTargetIndex = nextTargetIndex
+                targetIndex = nextTargetIndex
+            } else {
+                return false
+            }
+        }
+        while patternIndex < pattern.endIndex, pattern[patternIndex] == "*" {
+            pattern.formIndex(after: &patternIndex)
+        }
+        return patternIndex == pattern.endIndex
+    }
+
+    private static func patternsOverlap(_ left: String, _ right: String) -> Bool {
+        let alphabet = Set(left.filter { $0 != "*" } + right.filter { $0 != "*" })
+            .union(Set<Character>(["a", "0", "-", "."]))
+        let leftCharacters = Array(left)
+        let rightCharacters = Array(right)
+        var pending = [(0, 0)]
+        var visited = Set<[Int]>()
+
+        while let state = pending.popLast() {
+            guard visited.insert([state.0, state.1]).inserted else { continue }
+            if canFinish(leftCharacters, from: state.0), canFinish(rightCharacters, from: state.1) {
+                return true
+            }
+            if state.0 < leftCharacters.count, leftCharacters[state.0] == "*" {
+                pending.append((state.0 + 1, state.1))
+            }
+            if state.1 < rightCharacters.count, rightCharacters[state.1] == "*" {
+                pending.append((state.0, state.1 + 1))
+            }
+            let leftTransitions = patternTransitions(leftCharacters, from: state.0, alphabet: alphabet)
+            let rightTransitions = patternTransitions(rightCharacters, from: state.1, alphabet: alphabet)
+            for (character, nextLeft) in leftTransitions {
+                for (otherCharacter, nextRight) in rightTransitions where character == otherCharacter {
+                    pending.append((nextLeft, nextRight))
                 }
             }
         }
+        return false
+    }
+
+    private static func canFinish(_ pattern: [Character], from index: Int) -> Bool {
+        pattern[index...].allSatisfy { $0 == "*" }
+    }
+
+    private static func patternTransitions(
+        _ pattern: [Character],
+        from index: Int,
+        alphabet: Set<Character>
+    ) -> [(Character, Int)] {
+        guard index < pattern.count else { return [] }
+        if pattern[index] == "*" {
+            return alphabet.map { ($0, index) }
+        }
+        return [(pattern[index], index + 1)]
+    }
+
+    private static func validStyleID(_ id: String, customStyles: [CustomTranscriptCleanupPrompt]) -> Bool {
+        TranscriptCleanupPrompts.resolveOptional(id: id, custom: customStyles) != nil
+    }
+
+    private static func normalizedStyleName(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .lowercased()
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        normalizedReference(value)
     }
 
     private static func globalSelection(

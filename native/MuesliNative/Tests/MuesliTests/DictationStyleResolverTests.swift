@@ -214,6 +214,182 @@ struct DictationStyleResolverTests {
         #expect(!DictationStyleResolver.projectLegacyConfiguration(legacy).initialized)
     }
 
+    @Test("canonical wildcard patterns normalize and resolve by specificity")
+    func canonicalWildcardResolution() throws {
+        #expect(DictationStyleResolver.canonicalPattern(" COM.MICROSOFT.*** ", kind: .bundleID) == "com.microsoft.*")
+        #expect(DictationStyleResolver.canonicalPattern("*.Google.COM.", kind: .hostname) == "*.google.com")
+        #expect(DictationStyleResolver.canonicalPattern("docs.google.com/path", kind: .hostname) == nil)
+        #expect(DictationStyleResolver.canonicalPattern("com..microsoft", kind: .bundleID) == nil)
+        #expect(DictationStyleResolver.canonicalPattern("éxample.*", kind: .hostname) == nil)
+        #expect(DictationStyleResolver.canonicalPattern("-invalid*", kind: .hostname) == nil)
+
+        var config = canonicalConfig()
+        config.dictationStyleGroups = [
+            group("broad", styleID: "broad", matcher: matcher("broad-matcher", .hostname, "*.example.com")),
+            group("narrow", styleID: "narrow", matcher: matcher("narrow-matcher", .hostname, "docs.example.com")),
+        ]
+        let prepared = try DictationStyleResolver.prepareCanonicalConfiguration(config)
+        #expect(prepared.dictationStyleGroups == config.dictationStyleGroups)
+        #expect(prepared.dictationStyleExactExceptions == config.dictationStyleExactExceptions)
+        #expect(prepared.customTranscriptCleanupPrompts == config.customTranscriptCleanupPrompts)
+
+        let result = DictationStyleResolver.resolve(config: config, bundleID: nil, hostname: "docs.example.com")
+        #expect(result.styleID == "narrow")
+        #expect(result.source == .category)
+    }
+
+    @Test("equal-specificity overlaps conflict while safe overlaps remain valid")
+    func canonicalOverlapValidation() throws {
+        var conflict = canonicalConfig()
+        conflict.dictationStyleGroups = [
+            group("left", styleID: "broad", matcher: matcher("left-matcher", .hostname, "a*.example.com")),
+            group("right", styleID: "narrow", matcher: matcher("right-matcher", .hostname, "*a.example.com")),
+        ]
+        #expect(throws: DictationStyleResolver.ConfigurationError.self) {
+            _ = try DictationStyleResolver.prepareCanonicalConfiguration(conflict)
+        }
+
+        var unequal = canonicalConfig()
+        unequal.dictationStyleGroups = [
+            group("broad", styleID: "broad", matcher: matcher("broad-matcher", .hostname, "*.example.com")),
+            group("narrow", styleID: "narrow", matcher: matcher("narrow-matcher", .hostname, "docs*.example.com")),
+        ]
+        _ = try DictationStyleResolver.prepareCanonicalConfiguration(unequal)
+        #expect(DictationStyleResolver.resolve(
+            config: unequal,
+            bundleID: nil,
+            hostname: "docs.example.com"
+        ).styleID == "narrow")
+
+        unequal.dictationStyleGroups.reverse()
+        #expect(DictationStyleResolver.resolve(
+            config: unequal,
+            bundleID: nil,
+            hostname: "docs.example.com"
+        ).styleID == "narrow")
+
+        var sameGroup = canonicalConfig()
+        sameGroup.dictationStyleGroups = [DictationStyleGroup(
+            id: "one",
+            name: "One",
+            styleID: "broad",
+            matchers: [
+                matcher("one-left", .hostname, "a*.example.com"),
+                matcher("one-right", .hostname, "*a.example.com"),
+            ]
+        )]
+        _ = try DictationStyleResolver.prepareCanonicalConfiguration(sameGroup)
+    }
+
+    @Test("canonical hostname groups outrank app groups and conflicts fall through")
+    func canonicalTieringAndConflictFallback() throws {
+        var config = canonicalConfig()
+        config.dictationStyleGroups = [
+            group("host-one", styleID: "broad", matcher: matcher("host-one-matcher", .hostname, "*.example.com")),
+            group("host-two", styleID: "narrow", matcher: matcher("host-two-matcher", .hostname, "*.example.com")),
+            group("app", styleID: "app", matcher: matcher("app-matcher", .bundleID, "com.example.browser")),
+        ]
+
+        #expect(throws: DictationStyleResolver.ConfigurationError.self) {
+            _ = try DictationStyleResolver.prepareCanonicalConfiguration(config)
+        }
+        let fallback = DictationStyleResolver.resolve(
+            config: config,
+            bundleID: "com.example.browser",
+            hostname: "docs.example.com"
+        )
+        #expect(fallback.styleID == "app")
+
+        config.dictationStyleGroups.remove(at: 1)
+        let hostnameWinner = DictationStyleResolver.resolve(
+            config: config,
+            bundleID: "com.example.browser",
+            hostname: "docs.example.com"
+        )
+        #expect(hostnameWinner.styleID == "broad")
+    }
+
+    @Test("canonical validation rejects duplicate and invalid rule data")
+    func strictCanonicalValidation() {
+        var duplicateNames = canonicalConfig()
+        duplicateNames.dictationStyleGroups = [
+            group("one", styleID: "broad", matcher: matcher("one-matcher", .bundleID, "com.example.one")),
+            group("two", name: "ONE", styleID: "narrow", matcher: matcher("two-matcher", .bundleID, "com.example.two")),
+        ]
+        #expect(throws: DictationStyleResolver.ConfigurationError.self) {
+            _ = try DictationStyleResolver.prepareCanonicalConfiguration(duplicateNames)
+        }
+
+        var duplicateMatcherID = canonicalConfig()
+        duplicateMatcherID.dictationStyleGroups = [
+            group("one", styleID: "broad", matcher: matcher("same", .bundleID, "com.example.one")),
+            group("two", styleID: "narrow", matcher: matcher("same", .bundleID, "com.example.two")),
+        ]
+        #expect(throws: DictationStyleResolver.ConfigurationError.self) {
+            _ = try DictationStyleResolver.prepareCanonicalConfiguration(duplicateMatcherID)
+        }
+
+        var duplicatePattern = canonicalConfig()
+        duplicatePattern.dictationStyleGroups = [
+            group("one", styleID: "broad", matcher: matcher("one-matcher", .bundleID, "com.example.*")),
+            group("two", styleID: "narrow", matcher: matcher("two-matcher", .bundleID, "com.example.*")),
+        ]
+        #expect(throws: DictationStyleResolver.ConfigurationError.self) {
+            _ = try DictationStyleResolver.prepareCanonicalConfiguration(duplicatePattern)
+        }
+
+        var duplicateStyles = canonicalConfig()
+        duplicateStyles.customTranscriptCleanupPrompts.append(
+            CustomTranscriptCleanupPrompt(id: "broad", name: "Different", prompt: "Duplicate ID")
+        )
+        #expect(throws: DictationStyleResolver.ConfigurationError.self) {
+            _ = try DictationStyleResolver.prepareCanonicalConfiguration(duplicateStyles)
+        }
+
+        var duplicateStyleName = canonicalConfig()
+        duplicateStyleName.customTranscriptCleanupPrompts.append(
+            CustomTranscriptCleanupPrompt(id: "other", name: " broad ", prompt: "Duplicate name")
+        )
+        #expect(throws: DictationStyleResolver.ConfigurationError.self) {
+            _ = try DictationStyleResolver.prepareCanonicalConfiguration(duplicateStyleName)
+        }
+
+        var reservedStyleID = canonicalConfig()
+        reservedStyleID.customTranscriptCleanupPrompts.append(
+            CustomTranscriptCleanupPrompt(id: TranscriptCleanupPrompts.defaultID, name: "Reserved", prompt: "Reserved ID")
+        )
+        #expect(throws: DictationStyleResolver.ConfigurationError.self) {
+            _ = try DictationStyleResolver.prepareCanonicalConfiguration(reservedStyleID)
+        }
+
+        var emptyPrompt = canonicalConfig()
+        emptyPrompt.customTranscriptCleanupPrompts[0].prompt = "  "
+        #expect(throws: DictationStyleResolver.ConfigurationError.self) {
+            _ = try DictationStyleResolver.prepareCanonicalConfiguration(emptyPrompt)
+        }
+
+        var invalidGlobal = canonicalConfig()
+        invalidGlobal.activeTranscriptCleanupPromptId = "missing"
+        #expect(throws: DictationStyleResolver.ConfigurationError.self) {
+            _ = try DictationStyleResolver.prepareCanonicalConfiguration(invalidGlobal)
+        }
+    }
+
+    @Test("exact exception removal restores group effective state")
+    func exceptionRemovalRestoresInheritance() {
+        var config = canonicalConfig()
+        config.dictationStyleGroups = [
+            group("group", styleID: "broad", matcher: matcher("group-matcher", .bundleID, "com.example.app")),
+        ]
+        config.dictationStyleExactExceptions = [
+            DictationStyleExactException(id: "exception", kind: .bundleID, target: "com.example.app", styleID: "narrow"),
+        ]
+        #expect(DictationStyleResolver.resolve(config: config, bundleID: "com.example.app", hostname: nil).styleID == "narrow")
+
+        config.dictationStyleExactExceptions.removeAll()
+        #expect(DictationStyleResolver.resolve(config: config, bundleID: "com.example.app", hostname: nil).styleID == "broad")
+    }
+
     private func resolve(_ config: AppConfig) -> DictationStyleSelectionResult {
         DictationStyleResolver.resolve(
             config: config,
@@ -249,5 +425,37 @@ struct DictationStyleResolverTests {
             ),
         ]
         return config
+    }
+
+    private func canonicalConfig() -> AppConfig {
+        var config = AppConfig()
+        config.adaptiveDictationStylesEnabled = true
+        config.dictationStyleRulesetInitialized = true
+        config.customTranscriptCleanupPrompts = [
+            CustomTranscriptCleanupPrompt(id: "broad", name: "Broad", prompt: "Broad prompt"),
+            CustomTranscriptCleanupPrompt(id: "narrow", name: "Narrow", prompt: "Narrow prompt"),
+            CustomTranscriptCleanupPrompt(id: "app", name: "App", prompt: "App prompt"),
+            CustomTranscriptCleanupPrompt(id: "global", name: "Global", prompt: "Global prompt"),
+        ]
+        config.activeTranscriptCleanupPromptId = "global"
+        config.postProcessorSystemPrompt = "Global prompt"
+        return config
+    }
+
+    private func group(
+        _ id: String,
+        name: String? = nil,
+        styleID: String,
+        matcher: DictationStyleMatcher
+    ) -> DictationStyleGroup {
+        DictationStyleGroup(id: id, name: name ?? id, styleID: styleID, matchers: [matcher])
+    }
+
+    private func matcher(
+        _ id: String,
+        _ kind: DictationStyleMatcherKind,
+        _ pattern: String
+    ) -> DictationStyleMatcher {
+        DictationStyleMatcher(id: id, kind: kind, pattern: pattern)
     }
 }

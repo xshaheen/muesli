@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Dictation style settings")
 struct DictationStyleSettingsTests {
-    @Test("adaptive toggle seeds categories and disabling preserves assignments")
+    @Test("adaptive toggle seeds groups and disabling preserves configuration")
     func adaptiveTogglePreservesConfiguration() {
         var config = AppConfig()
         config.activeTranscriptCleanupPromptId = TranscriptCleanupPrompts.emailID
@@ -13,10 +13,11 @@ struct DictationStyleSettingsTests {
         let disabled = DictationStyleSettingsModel.enabledConfiguration(from: enabled, enabled: false)
 
         #expect(enabled.adaptiveDictationStylesEnabled)
-        #expect(enabled.dictationStyleCategoryAssignments.count == DictationStyleCategory.allCases.count)
+        #expect(enabled.dictationStyleRulesetInitialized)
+        #expect(enabled.dictationStyleGroups.count == DictationStyleCategory.allCases.count)
         #expect(enabled.activeTranscriptCleanupPromptId == TranscriptCleanupPrompts.emailID)
         #expect(disabled.adaptiveDictationStylesEnabled == false)
-        #expect(disabled.dictationStyleCategoryAssignments == enabled.dictationStyleCategoryAssignments)
+        #expect(disabled.dictationStyleGroups == enabled.dictationStyleGroups)
     }
 
     @Test("hostname input accepts URLs and normalizes exact hosts")
@@ -143,6 +144,32 @@ struct DictationStyleSettingsTests {
             #expect(error as? PersistenceFailure == .expected)
         }
         #expect(live.adaptiveDictationStylesEnabled == false)
+    }
+
+    @Test("invalid canonical settings candidate never reaches persistence")
+    func invalidCanonicalCandidateIsRejectedBeforePersistence() {
+        var current = AppConfig()
+        current.dictationStyleRulesetInitialized = true
+        current.customTranscriptCleanupPrompts = [
+            CustomTranscriptCleanupPrompt(id: "custom", name: "Custom", prompt: "Prompt"),
+        ]
+        current.activeTranscriptCleanupPromptId = "custom"
+        current.postProcessorSystemPrompt = "Prompt"
+        var persisted = false
+
+        #expect(throws: DictationStyleResolver.ConfigurationError.self) {
+            _ = try DictationStyleSettingsModel.committing(
+                current: current,
+                mutate: { $0.dictationStyleGroups = [
+                    DictationStyleGroup(id: "group", name: "Group", styleID: "missing"),
+                ] },
+                persist: { candidate in
+                    persisted = true
+                    return candidate
+                }
+            )
+        }
+        #expect(!persisted)
     }
 
     private func configuredStyles() -> AppConfig {

@@ -64,6 +64,7 @@ enum DictationStyleSettingsModel {
     ) throws -> AppConfig {
         var candidate = current
         mutate(&candidate)
+        candidate = try DictationStyleResolver.prepareCanonicalConfiguration(candidate)
         return try persist(candidate)
     }
 
@@ -206,7 +207,10 @@ enum DictationStyleSettingsModel {
         switch result.source {
         case .domain: sourceLabel = "Exact website"
         case .app: sourceLabel = "Exact app"
-        case .category: sourceLabel = result.categoryID.flatMap(DictationStyleCategory.init(rawValue:))?.displayName ?? "Category"
+        case .category:
+            sourceLabel = config.dictationStyleRulesetInitialized
+                ? "Group"
+                : result.categoryID.flatMap(DictationStyleCategory.init(rawValue:))?.displayName ?? "Category"
         case .global: sourceLabel = "Global style"
         case .builtInFallback: sourceLabel = "Default fallback"
         }
