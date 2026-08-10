@@ -59,7 +59,7 @@ Live transcription is off by default. Download Parakeet Realtime EOU or Nemotron
 - **Meeting templates** — Built-in and custom templates for meeting notes. Choose a template before or after recording — re-summarize any meeting with a different template.
 - **Dismiss calendar events** — Hide irrelevant events from Coming Up, status bar, and menu bar. Dismissed events are pruned automatically.
 - **iCloud Text Sync & iPhone Bridge** — Privately sync dictation text, meeting transcripts, notes, summaries, and manual notes with Muesli for iPhone through iCloud. Audio recordings are never synced.
-- **Adaptive Dictation Styles** — Opt in to local app/category and exact website rules that select built-in or custom cleanup instructions from the target captured at recording start. Style rules and local history provenance do not sync to iCloud.
+- **Writing Styles** — Opt in to editable app groups with exact or full-value wildcard bundle-ID and hostname matchers, plus exact target exceptions and a global fallback. Matching is deterministic and local; versioned JSON import/export moves only styles, groups, matchers, exceptions, and the global default. Style rules and local history provenance do not sync to iCloud.
 - **Local or hosted AI cleanup** — Keep cleanup on-device with Qwen/Gemma, or configure a hosted provider. Hosted cleanup receives transcript text plus the selected style instructions; separately enabled App Context is included only when that feature is on.
 - **Filler word removal** — Automatically strips "uh", "um", "er", "hmm" and verbal disfluencies.
 - **AI meeting notes** — BYOK with OpenAI or OpenRouter, sign in with your ChatGPT Plus/Pro subscription (no API key needed), or use local Ollama models. Auto-generated meeting titles. Re-summarize any meeting.
@@ -361,8 +361,8 @@ Muesli needs these macOS permissions (guided during onboarding):
 |---|---|
 | **Microphone** | Record audio for dictation and meetings |
 | **System Audio Recording** | Capture call audio from Zoom/Meet/Teams |
-| **Accessibility** | Simulate Cmd+V to paste; when App Context is enabled, read bounded focused-app text and browser URL context. Bundle-ID style matching does not need it. |
-| **Screen Recording** *(OCR opt-in)* | Capture OCR screen context separately from Accessibility; OCR is not used for style selection |
+| **Accessibility** | Simulate Cmd+V to paste; when App Context is enabled, read bounded focused-app text and browser URL context. Bundle-ID matching does not need it; hostname matching only reuses an already available browser hostname. |
+| **Screen Recording** *(OCR opt-in)* | Capture OCR screen context separately from Accessibility; Writing Styles never trigger or use OCR |
 | **Input Monitoring** | Detect hotkey presses globally |
 | **Camera** *(implicit)* | Detect webcam activation for meeting detection |
 | **Calendar** *(optional)* | Show upcoming meetings from Google Calendar |
@@ -387,12 +387,12 @@ Muesli needs these macOS permissions (guided during onboarding):
 | Calendar | Google Calendar API (OAuth 2.0) |
 | Sync | CloudKit private database for text-only iCloud sync |
 | Automation | Computer Use planner and post-meeting executable hooks |
-| Export | PDF (NSPrintOperation, paginated US Letter) + Markdown |
+| Export | Meeting PDF/Markdown + versioned Writing Styles JSON |
 | Word correction | Jaro-Winkler similarity (native Swift) |
 | Storage | SQLite (WAL mode) |
 | Signing | Developer ID + hardened runtime (notarization ready) |
 
-Adaptive Styles affect standard record-then-transcribe dictation. Nemotron double-tap streaming remains live and skips Adaptive Style cleanup; local history records that limitation as `skipped_streaming`.
+Writing Styles affect standard record-then-transcribe dictation. Nemotron double-tap streaming remains live and skips adaptive cleanup; local history records that limitation as `skipped_streaming`. The exported Writing Styles JSON excludes credentials, backend/model settings, App Context preferences, telemetry settings, history, and transcript data, but it does contain configured app/site identities, group and style names, and custom instructions—share it intentionally.
 
 TelemetryDeck receives only coarse enum values for dictation backend, paste method, style-selection source, built-in/custom class, cleanup outcome, and cleanup backend. It never receives app or website identity, style IDs/names, prompts, transcripts, URLs, selected text, OCR, or App Context. Optional developer cleanup JSONL logs remain local, may contain bounded transcript/context and style provenance, and rotate after 5 MB. See the [privacy policy](docs/privacy.html) for the complete data-flow boundaries.
 

@@ -116,7 +116,7 @@
   <a href="./" class="back">&larr; freedspeech.xyz</a>
 
   <h1>Privacy Policy</h1>
-  <p class="updated">Last updated: August 9, 2026</p>
+  <p class="updated">Last updated: August 11, 2026</p>
 
   <div class="highlight">
     <p><strong>Muesli is local-first.</strong> Speech-to-text processing runs on your Mac and audio is not sent to a transcription service. Optional hosted cleanup, meeting-note, calendar, update, telemetry, and private iCloud features exchange only the data described below.</p>
@@ -130,21 +130,22 @@
   <ul>
     <li><strong>Audio recordings</strong> &mdash; microphone and system audio captured during dictation and meetings</li>
     <li><strong>Transcripts and meeting notes</strong> &mdash; stored in a local SQLite database; text can also be copied to your private iCloud database when text sync is enabled</li>
-    <li><strong>Configuration and preferences</strong> &mdash; stored in a local JSON file. Adaptive Style definitions, app/hostname rules, and history provenance are not synced to iCloud.</li>
+    <li><strong>Configuration and preferences</strong> &mdash; stored in a local JSON file. Writing Style definitions, groups, exact exceptions, app/hostname matchers, and history provenance are not synced to iCloud.</li>
     <li><strong>Speech-to-text models</strong> &mdash; downloaded once from public model repositories (HuggingFace) and cached locally</li>
   </ul>
+  <p>Writing Styles can be exported to a versioned JSON file. That file excludes credentials, cleanup backend and model settings, App Context and telemetry preferences, history, transcripts, URL paths and queries, and OCR text. It does contain the configured app/site identities, group and style names, custom instructions, and global default, so review and share it intentionally.</p>
 
   <h2>Optional Cloud Services</h2>
   <p>Muesli offers optional integrations that connect to external services. These are opt-in and require explicit user action:</p>
   <ul>
-    <li><strong>Hosted dictation cleanup</strong> &mdash; if you select ChatGPT, OpenAI, OpenRouter, or another configured hosted provider, Muesli sends the transcript and the selected style instructions to that provider. Separately enabled App Context is included only when that setting is on. Bundle IDs and hostnames are used locally for style matching and are not added to telemetry.</li>
+    <li><strong>Hosted dictation cleanup</strong> &mdash; if you select ChatGPT, OpenAI, OpenRouter, or another configured hosted provider, Muesli sends the transcript and the locally selected style instructions to that provider. Separately enabled App Context is included only when that setting is on. Group names, matcher rules, bundle IDs, and hostnames are not sent merely to classify or select a style and are not added to telemetry.</li>
     <li><strong>Meeting summarization (OpenAI API / OpenRouter)</strong> &mdash; if configured, meeting transcripts are sent to the selected API provider to generate summaries. This is governed by the respective provider's privacy policy.</li>
     <li><strong>Meeting summarization (ChatGPT subscription)</strong> &mdash; if you sign in with your ChatGPT account, transcripts are sent to OpenAI's API for summarization using your existing subscription.</li>
     <li><strong>Sparkle update checks</strong> &mdash; Muesli checks for new versions via an appcast feed hosted on GitHub. No personal data is transmitted.</li>
   </ul>
 
   <h2>Private iCloud Text Sync</h2>
-  <p>When enabled, Muesli syncs dictation text, meeting transcripts, notes, summaries, and manual notes through your CloudKit private database. Audio, Adaptive Style definitions and rules, and local style-selection or cleanup-outcome provenance are excluded from sync.</p>
+  <p>When enabled, Muesli syncs dictation text, meeting transcripts, notes, summaries, and manual notes through your CloudKit private database. Audio, Writing Style definitions and rules, and local style-selection or cleanup-outcome provenance are excluded from sync.</p>
 
   <h2>Google Calendar Integration</h2>
   <p>Muesli can optionally connect to your Google Calendar to display upcoming meetings in the status bar and auto-detect meeting start times. When you connect Google Calendar:</p>
@@ -160,8 +161,8 @@
   <p>Muesli requests the following macOS permissions, each for a specific purpose:</p>
   <ul>
     <li><strong>Microphone</strong> &mdash; to capture your voice for dictation and meeting transcription</li>
-    <li><strong>Screen Recording</strong> &mdash; to capture system audio during meetings (via ScreenCaptureKit) and, only when separately enabled, OCR screen text for dictation App Context. OCR is not used to select an Adaptive Style.</li>
-    <li><strong>Accessibility</strong> &mdash; to paste transcribed text and, when App Context is enabled, read bounded focused-app text and browser URL context. Bundle-ID style matching itself does not require Accessibility.</li>
+    <li><strong>Screen Recording</strong> &mdash; to capture system audio during meetings (via ScreenCaptureKit) and, only when separately enabled, OCR screen text for dictation App Context. Writing Styles never trigger or use OCR.</li>
+    <li><strong>Accessibility</strong> &mdash; to paste transcribed text and, when App Context is enabled, read bounded focused-app text and browser URL context. Bundle-ID matching itself does not require Accessibility; hostname matching only reuses an already available browser hostname and falls back when it is unavailable.</li>
     <li><strong>Input Monitoring</strong> &mdash; to detect the global dictation hotkey</li>
     <li><strong>Calendar</strong> &mdash; to read upcoming events from your local macOS calendar (EventKit)</li>
   </ul>
@@ -170,7 +171,7 @@
   <p>Muesli uses <a href="https://telemetrydeck.com">TelemetryDeck</a> to collect minimal, anonymized usage signals (e.g., which features are used and app launch counts). Dictation completion reports only coarse enum values for transcription backend, paste method, style-selection source, built-in/custom classification, cleanup outcome, and cleanup backend. It never sends bundle IDs, hostnames, app or style names, style IDs, prompts, transcripts, URLs, selected text, OCR text, or App Context. Hard-failure diagnostics use a separate allowlist and never include raw error messages, audio, transcripts, meeting or calendar titles, clipboard or screen contents, API keys, auth tokens, local file paths, raw logs, or database contents. TelemetryDeck does not store IP addresses, and identifiers used for anonymous user and session counts cannot be traced back to a person. You can learn more about TelemetryDeck's privacy practices on their <a href="https://telemetrydeck.com/privacy">privacy page</a>.</p>
 
   <h2>Optional Local Debug Logs</h2>
-  <p>Transcript-cleanup debug JSONL is off by default and can be enabled only through Muesli's developer environment flags. It is written locally in the app support directory and may contain bounded transcript, cleanup output, App Context, error text, and selected style ID/source/category provenance. The file rotates when it exceeds 5 MB. These debug entries are not sent to TelemetryDeck.</p>
+  <p>Transcript-cleanup debug JSONL is off by default and can be enabled only through Muesli's developer environment flags. It is written locally in the app support directory and may contain bounded transcript, cleanup output, App Context, error text, and selected style ID/source/group provenance. The file rotates when it exceeds 5 MB. These debug entries are not sent to TelemetryDeck.</p>
 
   <h2>No Personal Data Collection</h2>
   <p><strong>Muesli does not operate a server that stores your transcripts or audio.</strong> Data is transmitted only when you enable or use the optional hosted cleanup, meeting-note, private iCloud text-sync, calendar, update-check, or anonymous telemetry features described above. Local transcription, local cleanup, and local style matching work without sending their content to Muesli.</p>
