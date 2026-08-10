@@ -51,7 +51,9 @@ struct WritingStylesView: View {
         catch { return error.localizedDescription }
     }
 
-    private var canSave: Bool { isDirty && validationMessage == nil }
+    private func canSave(_ validationMessage: String?) -> Bool {
+        isDirty && validationMessage == nil
+    }
 
     private var appCandidates: [DictationStyleAppCandidate] {
         var seen = Set<String>()
@@ -75,19 +77,20 @@ struct WritingStylesView: View {
     }
 
     var body: some View {
+        let validationMessage = validationMessage
         VStack(spacing: 0) {
-            header
+            header(validationMessage: validationMessage)
             Divider().background(MuesliTheme.surfaceBorder)
             HStack(spacing: 0) {
                 sidebar
                 Divider().background(MuesliTheme.surfaceBorder)
-                detail
+                detail(validationMessage: validationMessage)
             }
         }
         .frame(minWidth: 900, minHeight: 620)
         .background(MuesliTheme.backgroundBase)
         .confirmationDialog("Discard unsaved Writing Styles changes?", isPresented: $showCloseConfirmation, titleVisibility: .visible) {
-            Button("Save") { saveAndClose() }.disabled(!canSave)
+            Button("Save") { saveAndClose() }.disabled(!canSave(validationMessage))
             Button("Discard", role: .destructive) { onClose() }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -127,7 +130,7 @@ struct WritingStylesView: View {
         }
     }
 
-    private var header: some View {
+    private func header(validationMessage: String?) -> some View {
         HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Writing Styles").font(MuesliTheme.title2()).foregroundStyle(MuesliTheme.textPrimary)
@@ -142,7 +145,7 @@ struct WritingStylesView: View {
                 .accessibilityHint("Save the current Writing Styles configuration as JSON")
                 .disabled(isDirty)
             Button("Cancel", action: cancelDraft).disabled(!isDirty)
-            Button("Save", action: saveDraft).disabled(!canSave).keyboardShortcut("s", modifiers: .command)
+            Button("Save", action: saveDraft).disabled(!canSave(validationMessage)).keyboardShortcut("s", modifiers: .command)
             Button("Done", action: requestClose).keyboardShortcut(.defaultAction)
         }
         .buttonStyle(.bordered)
@@ -162,7 +165,7 @@ struct WritingStylesView: View {
         .accessibilityLabel("Writing Styles navigation")
     }
 
-    @ViewBuilder private var detail: some View {
+    @ViewBuilder private func detail(validationMessage: String?) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                 if let errorMessage { statusMessage(errorMessage, color: MuesliTheme.recording) }
@@ -237,7 +240,8 @@ struct WritingStylesView: View {
     }
 
     private func selectedGroupPane(_ group: DictationStyleGroup) -> some View {
-        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+        let candidates = appCandidates
+        return VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             Divider()
             Text("Selected group").font(MuesliTheme.headline())
             TextField("Group name", text: bindingForGroupName(group.id)).textFieldStyle(.roundedBorder)
@@ -252,10 +256,10 @@ struct WritingStylesView: View {
             if matcherKind == .bundleID {
                 HStack {
                     Menu("Add running app") {
-                        if appCandidates.isEmpty {
+                        if candidates.isEmpty {
                             Text("No applications available")
                         } else {
-                            ForEach(appCandidates) { candidate in
+                            ForEach(candidates) { candidate in
                                 Button("\(candidate.displayName) — \(candidate.bundleID)") {
                                     addApplicationMatcher(candidate, to: group.id)
                                 }
@@ -424,17 +428,41 @@ struct WritingStylesView: View {
             selectedGroupID = newID
         } catch { errorMessage = error.localizedDescription }
     }
-    private func addMatcher(to groupID: String) { mutate { candidate in
+    private func addMatcher(to groupID: String) {
         let input = matcherInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let pattern = DictationStyleResolver.canonicalPattern(input, kind: matcherKind), let index = candidate.dictationStyleGroups.firstIndex(where: { $0.id == groupID }) else { errorMessage = "Enter a valid full app or hostname pattern."; return }
-        candidate.dictationStyleGroups[index].matchers.append(DictationStyleMatcher(id: UUID().uuidString, kind: matcherKind, pattern: pattern)); matcherInput = ""
-    } }
+        guard let pattern = DictationStyleResolver.canonicalPattern(input, kind: matcherKind),
+              let index = draft.dictationStyleGroups.firstIndex(where: { $0.id == groupID })
+        else {
+            errorMessage = "Enter a valid full app or hostname pattern."
+            return
+        }
+        mutate { candidate in
+            candidate.dictationStyleGroups[index].matchers.append(
+                DictationStyleMatcher(id: UUID().uuidString, kind: matcherKind, pattern: pattern)
+            )
+        }
+        matcherInput = ""
+    }
     private func removeMatcher(_ matcherID: String, from groupID: String) { mutate { candidate in guard let index = candidate.dictationStyleGroups.firstIndex(where: { $0.id == groupID }) else { return }; candidate.dictationStyleGroups[index].matchers.removeAll { $0.id == matcherID } } }
-    private func addException(_ styleID: String) { mutate { candidate in
+    private func addException(_ styleID: String) {
         let input = exceptionInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let target = exceptionKind == .hostname ? DictationStyleSettingsModel.normalizedHostnameInput(input) : DictationStyleResolver.normalizeBundleID(input) else { errorMessage = "Enter one exact app bundle ID or hostname."; return }
-        candidate.dictationStyleExactExceptions.append(DictationStyleExactException(id: UUID().uuidString, kind: exceptionKind, target: target, styleID: styleID)); exceptionInput = ""
-    } }
+        guard let target = exceptionKind == .hostname
+            ? DictationStyleSettingsModel.normalizedHostnameInput(input)
+            : DictationStyleResolver.normalizeBundleID(input)
+        else {
+            errorMessage = "Enter one exact app bundle ID or hostname."
+            return
+        }
+        mutate { candidate in
+            candidate.dictationStyleExactExceptions.append(DictationStyleExactException(
+                id: UUID().uuidString,
+                kind: exceptionKind,
+                target: target,
+                styleID: styleID
+            ))
+        }
+        exceptionInput = ""
+    }
     private func removeException(_ id: String) { mutate { $0.dictationStyleExactExceptions.removeAll { $0.id == id } } }
     private func duplicateStyle(name: String, prompt: String) { mutate { candidate in candidate.customTranscriptCleanupPrompts.append(CustomTranscriptCleanupPrompt(id: UUID().uuidString, name: suggestedStyleName(name, in: candidate), prompt: prompt)) } }
     private func beginEditingStyle(_ id: String) { guard let style = draft.customTranscriptCleanupPrompts.first(where: { $0.id == id }) else { return }; editingStyleID = id; styleDraftName = style.name; styleDraftPrompt = style.prompt }

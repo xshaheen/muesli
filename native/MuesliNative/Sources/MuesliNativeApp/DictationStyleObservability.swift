@@ -8,19 +8,26 @@ struct DictationStyleObservabilityInput {
 }
 
 enum DictationStyleObservability {
+    private enum Key {
+        static let selectionSource = "style_selection_source"
+        static let styleClass = "style_class"
+        static let cleanupOutcome = "cleanup_outcome"
+        static let cleanupBackend = "cleanup_backend"
+    }
+
     static let parameterKeys: Set<String> = [
-        "style_selection_source",
-        "style_class",
-        "cleanup_outcome",
-        "cleanup_backend",
+        Key.selectionSource,
+        Key.styleClass,
+        Key.cleanupOutcome,
+        Key.cleanupBackend,
     ]
 
     static func parameters(for input: DictationStyleObservabilityInput) -> [String: String] {
         [
-            "style_selection_source": input.selectionSource?.rawValue ?? "none",
-            "style_class": input.isCustomStyle.map { $0 ? "custom" : "built_in" } ?? "none",
-            "cleanup_outcome": input.cleanupOutcome.rawValue,
-            "cleanup_backend": input.cleanupBackend.backend,
+            Key.selectionSource: input.selectionSource?.rawValue ?? "none",
+            Key.styleClass: input.isCustomStyle.map { $0 ? "custom" : "built_in" } ?? "none",
+            Key.cleanupOutcome: input.cleanupOutcome.rawValue,
+            Key.cleanupBackend: input.cleanupBackend.backend,
         ]
     }
 }

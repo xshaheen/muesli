@@ -190,20 +190,6 @@ enum DictationStyleSettingsModel {
         return DictationStyleResolver.enablingAdaptiveStyles(in: config)
     }
 
-    static func settingCategoryStyle(
-        _ styleID: String?,
-        category: DictationStyleCategory,
-        in config: AppConfig
-    ) -> AppConfig {
-        var candidate = config
-        if let styleID, !styleID.isEmpty {
-            candidate.dictationStyleCategoryAssignments[category.rawValue] = styleID
-        } else {
-            candidate.dictationStyleCategoryAssignments.removeValue(forKey: category.rawValue)
-        }
-        return candidate
-    }
-
     static func addingAppRule(
         bundleID: String?,
         displayName: String,
@@ -224,31 +210,6 @@ enum DictationStyleSettingsModel {
             displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines),
             styleID: nil
         ))
-        return candidate
-    }
-
-    static func settingAppRule(
-        bundleID: String,
-        categoryID: String?,
-        styleID: String?,
-        in config: AppConfig
-    ) -> AppConfig {
-        var candidate = config
-        guard let index = candidate.dictationStyleAppRules.firstIndex(where: {
-            DictationStyleResolver.normalizeBundleID($0.bundleID)
-                == DictationStyleResolver.normalizeBundleID(bundleID)
-        }) else { return config }
-        candidate.dictationStyleAppRules[index].categoryID = nonEmpty(categoryID)
-        candidate.dictationStyleAppRules[index].styleID = nonEmpty(styleID)
-        return candidate
-    }
-
-    static func removingAppRule(bundleID: String, from config: AppConfig) -> AppConfig {
-        var candidate = config
-        let normalized = DictationStyleResolver.normalizeBundleID(bundleID)
-        candidate.dictationStyleAppRules.removeAll {
-            DictationStyleResolver.normalizeBundleID($0.bundleID) == normalized
-        }
         return candidate
     }
 
@@ -278,31 +239,6 @@ enum DictationStyleSettingsModel {
             hostname: hostname,
             styleID: nil
         ))
-        return candidate
-    }
-
-    static func settingDomainRule(
-        hostname: String,
-        categoryID: String?,
-        styleID: String?,
-        in config: AppConfig
-    ) -> AppConfig {
-        var candidate = config
-        guard let index = candidate.dictationStyleDomainRules.firstIndex(where: {
-            DictationStyleResolver.normalizeHostname($0.hostname)
-                == DictationStyleResolver.normalizeHostname(hostname)
-        }) else { return config }
-        candidate.dictationStyleDomainRules[index].categoryID = nonEmpty(categoryID)
-        candidate.dictationStyleDomainRules[index].styleID = nonEmpty(styleID)
-        return candidate
-    }
-
-    static func removingDomainRule(hostname: String, from config: AppConfig) -> AppConfig {
-        var candidate = config
-        let normalized = DictationStyleResolver.normalizeHostname(hostname)
-        candidate.dictationStyleDomainRules.removeAll {
-            DictationStyleResolver.normalizeHostname($0.hostname) == normalized
-        }
         return candidate
     }
 
@@ -407,9 +343,4 @@ enum DictationStyleSettingsModel {
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
     }
 
-    private static func nonEmpty(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
 }
