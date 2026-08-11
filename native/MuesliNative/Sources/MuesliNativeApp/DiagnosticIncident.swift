@@ -1,5 +1,9 @@
 import Foundation
 
+enum DictationTranscriptionDiagnosticError: Error {
+    case emptyResultAfterDetectedSpeech
+}
+
 enum DiagnosticIncidentKind: String, Codable, CaseIterable, Sendable {
     case manualReport = "manual_report"
     case dictationAudioFailed = "dictation_audio_failed"

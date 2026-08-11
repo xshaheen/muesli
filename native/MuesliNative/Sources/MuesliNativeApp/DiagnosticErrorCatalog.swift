@@ -37,6 +37,8 @@ enum DiagnosticErrorCatalog {
             match = nemotronMatch(for: nemotronError)
         } else if let coreAudioError = error as? CoreAudioSystemRecorder.RecorderError {
             match = coreAudioTapMatch(for: coreAudioError)
+        } else if let dictationError = error as? DictationTranscriptionDiagnosticError {
+            match = dictationTranscriptionMatch(for: dictationError)
         } else {
             let nsError = error as NSError
             match = lookup(domain: nsError.domain, code: String(nsError.code))
@@ -52,6 +54,21 @@ enum DiagnosticErrorCatalog {
             safeCode: match.safeCode,
             isKnown: true
         )
+    }
+
+    private static func dictationTranscriptionMatch(
+        for error: DictationTranscriptionDiagnosticError
+    ) -> Match {
+        switch error {
+        case .emptyResultAfterDetectedSpeech:
+            return fixedMatch(
+                signature: "dictation_empty_after_detected_speech",
+                summary: "Speech was detected but transcription returned no text",
+                area: "transcription_inference",
+                domain: "DictationTranscriptionDiagnosticError",
+                code: "empty_after_detected_speech"
+            )
+        }
     }
 
     static func meaning(domain: String, code: String) -> DiagnosticErrorMeaning? {

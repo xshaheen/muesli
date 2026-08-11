@@ -105,6 +105,25 @@ struct DiagnosticIncidentTests {
         #expect(incident.errorCode == "0")
     }
 
+    @Test("speech-bearing empty dictation has a stable privacy-safe fingerprint")
+    func emptySpeechBearingDictationFingerprint() {
+        let incident = DiagnosticIncident(
+            kind: .dictationTranscriptionFailed,
+            severity: .warning,
+            stage: .standardDictationTranscribe,
+            backendOption: .whisper,
+            error: DictationTranscriptionDiagnosticError.emptyResultAfterDetectedSpeech,
+            metadata: metadata
+        )
+
+        #expect(incident.errorFingerprint.signature == "dictation_empty_after_detected_speech")
+        #expect(incident.errorFingerprint.area == "transcription_inference")
+        #expect(incident.errorDomain == "DictationTranscriptionDiagnosticError")
+        #expect(incident.errorCode == "empty_after_detected_speech")
+        #expect(!incident.issueBody.contains("/Users/"))
+        #expect(!incident.issueBody.contains("private dictated content"))
+    }
+
     @Test("nil underlying errors use app-state category and allowlisted signature")
     func nilErrorUsesAppStateCategory() {
         let incident = DiagnosticIncident(

@@ -20,7 +20,7 @@ enum TranscriptCleanupError: LocalizedError {
     }
 }
 
-struct TranscriptCleanupResult {
+struct TranscriptCleanupResult: Sendable {
     let rawOutput: String
     let cleanedOutput: String
     let model: String
@@ -51,6 +51,9 @@ struct TranscriptCleanupRequestOptions {
     /// Preserve line structure in the response instead of collapsing whitespace.
     /// Dictation wants the collapse; a transcript is destroyed by it.
     var preserveLineStructure: Bool = false
+    /// Bounds the provider request itself. Dictation sets this to match its
+    /// user-visible cleanup deadline; meeting cleanup keeps the existing default.
+    var timeoutInterval: TimeInterval?
 
     static let dictationDefaults = TranscriptCleanupRequestOptions()
 }
@@ -62,6 +65,10 @@ enum TranscriptCleanupClient {
     private static let requestTimeout: TimeInterval = 120
     static let defaultMaxOutputTokens = 1000
     private static let hostedAppContextCharacterLimit = 5_000
+
+    private static func timeoutInterval(for options: TranscriptCleanupRequestOptions) -> TimeInterval {
+        min(max(options.timeoutInterval ?? requestTimeout, 0.1), requestTimeout)
+    }
 
     /// Refuses every redirect.
     ///
@@ -229,7 +236,8 @@ enum TranscriptCleanupClient {
                 userPrompt: userPrompt,
                 model: model,
                 logCategory: "postproc",
-                maxOutputTokens: options.maxOutputTokens
+                maxOutputTokens: options.maxOutputTokens,
+                timeoutInterval: timeoutInterval(for: options)
             )
             response = TranscriptCleanupRawResponse(
                 text: chatGPTResult.text,
@@ -396,7 +404,7 @@ enum TranscriptCleanupClient {
             body["reasoning"] = ["effort": effort]
         }
         var request = URLRequest(url: openAIResponsesURL)
-        request.timeoutInterval = requestTimeout
+        request.timeoutInterval = timeoutInterval(for: options)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -450,7 +458,7 @@ enum TranscriptCleanupClient {
             options: options
         )
         var request = URLRequest(url: chatURL)
-        request.timeoutInterval = requestTimeout
+        request.timeoutInterval = timeoutInterval(for: options)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -505,7 +513,7 @@ enum TranscriptCleanupClient {
         let tokenKey = requestURL.host?.contains("openai.com") == true ? "max_completion_tokens" : "max_tokens"
         body[tokenKey] = options.maxOutputTokens ?? defaultMaxOutputTokens
         var request = URLRequest(url: requestURL)
-        request.timeoutInterval = requestTimeout
+        request.timeoutInterval = timeoutInterval(for: options)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -555,7 +563,7 @@ enum TranscriptCleanupClient {
             options: options
         )
         var request = URLRequest(url: requestURL)
-        request.timeoutInterval = requestTimeout
+        request.timeoutInterval = timeoutInterval(for: options)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")

@@ -176,6 +176,21 @@ struct DictationCleanupPolicyTests {
         }
     }
 
+    @Test("deadline fallback preserves the recognizer transcript")
+    func deadlineFallbackPreservesRawTranscript() {
+        let result = DictationCleanupFinalizer.finalize(
+            original: original,
+            attempt: .fallbackDeadline,
+            customWords: [CustomWord(word: "museli", replacement: "Muesli")],
+            provenance: nil,
+            fallbackResult: original
+        )
+
+        #expect(result.cleanupOutcome == .fallbackDeadline)
+        #expect(result.text == "Um send this to Muesli")
+        #expect(DictationCleanupAttempt.fallbackDeadline.stageOutcome == .deadlineExceeded)
+    }
+
     @Test("readiness distinguishes user-disabled from unavailable before invocation")
     func readinessOutcomes() {
         let cases: [(DictationCleanupReadiness, DictationCleanupOutcome?)] = [
@@ -319,6 +334,126 @@ struct TranscriptionCoordinatorTests {
     func allBackendsCovered() {
         let backends = Set(BackendOption.all.map(\.backend))
         #expect(backends == TranscriptionCoordinator.explicitlyRoutedBackendIdentifiers.union(["fluidaudio"]))
+    }
+}
+
+@Suite("Hosted dictation cleanup deadline")
+struct HostedDictationCleanupDeadlineTests {
+    @Test("uses a short five-second production deadline")
+    func productionDeadline() {
+        #expect(HostedDictationCleanupDeadline.defaultTimeout == .seconds(5))
+    }
+
+    @Test("normalizes provider timeout errors to the deadline fallback")
+    func providerTimeoutClassification() {
+        #expect(HostedDictationCleanupDeadline.isDeadlineError(URLError(.timedOut)))
+        #expect(!HostedDictationCleanupDeadline.isDeadlineError(URLError(.notConnectedToInternet)))
+    }
+
+    @Test("returns cleanup completed before the deadline")
+    func cleanupWins() async throws {
+        let value = try await HostedDictationCleanupDeadline.run(timeout: .milliseconds(100)) {
+            "cleaned"
+        }
+
+        #expect(value == "cleaned")
+    }
+
+    @Test("expires slow cleanup instead of blocking dictation")
+    func deadlineWins() async {
+        do {
+            let _: String = try await HostedDictationCleanupDeadline.run(timeout: .milliseconds(10)) {
+                try await Task.sleep(for: .seconds(1))
+                return "too late"
+            }
+            Issue.record("Expected hosted cleanup to exceed its deadline")
+        } catch let error as HostedDictationCleanupDeadlineError {
+            #expect(error == .timedOut)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test("returns on time when cleanup ignores task cancellation")
+    func deadlineDoesNotAwaitUncooperativeCleanup() async {
+        let completion = AsyncCompletionProbe()
+
+        do {
+            let _: String = try await HostedDictationCleanupDeadline.run(timeout: .milliseconds(10)) {
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+                        continuation.resume(returning: ())
+                    }
+                }
+                await completion.markCompleted()
+                return "too late"
+            }
+            Issue.record("Expected hosted cleanup to exceed its deadline")
+        } catch is HostedDictationCleanupDeadlineError {
+            let cleanupCompleted = await completion.isCompleted
+            #expect(!cleanupCompleted)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+}
+
+private actor AsyncCompletionProbe {
+    private(set) var isCompleted = false
+
+    func markCompleted() {
+        isCompleted = true
+    }
+}
+
+@Suite("Dictation transcription stage diagnostics")
+struct DictationTranscriptionStageDiagnosticsTests {
+    @Test("stage events include outcome, duration, and output size")
+    func eventDescription() {
+        let event = DictationTranscriptionStageEvent(
+            stage: .speechRecognition,
+            outcome: .completed,
+            elapsedMilliseconds: 237,
+            outputCharacterCount: 42
+        )
+
+        #expect(event.latencyEvent == "stage:speech_recognition:completed stage_ms:237 chars:42")
+    }
+
+    @Test("only completed empty speech-recognition stages qualify as empty results")
+    func emptyCompletedSpeechRecognitionClassification() {
+        let completedEmpty = DictationTranscriptionStageEvent(
+            stage: .speechRecognition,
+            outcome: .completed,
+            elapsedMilliseconds: 10,
+            outputCharacterCount: 0
+        )
+        let skippedEmpty = DictationTranscriptionStageEvent(
+            stage: .speechRecognition,
+            outcome: .skipped,
+            elapsedMilliseconds: 10,
+            outputCharacterCount: 0
+        )
+        let completedText = DictationTranscriptionStageEvent(
+            stage: .speechRecognition,
+            outcome: .completed,
+            elapsedMilliseconds: 10,
+            outputCharacterCount: 1
+        )
+
+        #expect(completedEmpty.isEmptyCompletedSpeechRecognition)
+        #expect(!skippedEmpty.isEmptyCompletedSpeechRecognition)
+        #expect(!completedText.isEmptyCompletedSpeechRecognition)
+    }
+
+    @Test("cleanup stage uses the applied transcript character count")
+    func appliedCleanupCharacterCount() {
+        let attempt = DictationCleanupAttempt.applied(
+            SpeechTranscriptionResult(text: "short", segments: [])
+        )
+
+        #expect(attempt.outputCharacterCount(fallback: 200) == 5)
+        #expect(DictationCleanupAttempt.fallbackDeadline.outputCharacterCount(fallback: 200) == 200)
     }
 }
 

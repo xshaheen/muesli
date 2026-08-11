@@ -28,7 +28,7 @@ enum DictationAudioSessionEvent {
     case audioRestored(UUID?)
     case cancelled(UUID?, reason: String)
     case failed(UUID?, error: Error)
-    case latency(String, Date)
+    case latency(UUID?, String, Date)
 }
 
 enum DictationWarmupIntent: Equatable {
@@ -611,7 +611,7 @@ final class DictationAudioSessionManager: @unchecked Sendable {
     }
 
     private func emitLatency(_ event: String, at date: Date = Date()) {
-        emit(.latency(event, date))
+        emit(.latency(stateStorage.sessionID, event, date))
     }
 
     private func emit(_ event: DictationAudioSessionEvent) {

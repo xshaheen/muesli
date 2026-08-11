@@ -22,6 +22,55 @@ private enum DictationOutputMode {
     }
 }
 
+private struct DictationLatencyTraceSnapshot {
+    let id: UUID
+    let startedAt: Date
+    let profile: String
+    let routeDescription: String
+}
+
+private struct PendingStandardDictationStop {
+    let id: UUID
+    let sequence: UInt64
+    let startedAt: Date
+    let isTestMode: Bool
+    let outputMode: DictationOutputMode
+    let backend: BackendOption
+    let cohereLanguage: CohereTranscribeLanguage
+    let indicASRLanguage: IndicASRLanguage
+    let promptContext: String?
+    let storageContext: String
+    let correctionTargetApp: DictationSessionTarget?
+    let customWords: [[String: Any]]
+    let cleanupRequest: DictationCleanupRequestSnapshot
+    let detectedSpeech: Bool
+    let latencyTrace: DictationLatencyTraceSnapshot?
+}
+
+private enum CompletedStandardDictationStop {
+    case job(StandardDictationJob)
+    case discarded
+}
+
+private struct StandardDictationJob: Identifiable {
+    let id: UUID
+    let wavURL: URL
+    let startedAt: Date
+    let duration: TimeInterval
+    let isTestMode: Bool
+    let outputMode: DictationOutputMode
+    let backend: BackendOption
+    let cohereLanguage: CohereTranscribeLanguage
+    let indicASRLanguage: IndicASRLanguage
+    let promptContext: String?
+    let storageContext: String
+    let correctionTargetApp: DictationSessionTarget?
+    let customWords: [[String: Any]]
+    let cleanupRequest: DictationCleanupRequestSnapshot
+    let detectedSpeech: Bool
+    let latencyTrace: DictationLatencyTraceSnapshot?
+}
+
 enum DictationBackendReadiness: Equatable {
     case preparing
     case ready
@@ -260,9 +309,11 @@ private final class DictationLatencyLogWriter: @unchecked Sendable {
         guard let fileSize = attributes?[.size] as? UInt64,
               fileSize > maxBytes else { return }
 
-        let data = try Data(contentsOf: url)
-        let keepCount = min(data.count, Int(maxBytes / 2))
-        let tail = data.suffix(keepCount)
+        let keepCount = Int(maxBytes / 2)
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: fileSize - UInt64(keepCount))
+        let tail = try handle.read(upToCount: keepCount) ?? Data()
         let newlineIndex = tail.firstIndex(of: UInt8(ascii: "\n"))
         let trimmed = newlineIndex.map { tail[tail.index(after: $0)...] } ?? tail[...]
         try Data(trimmed).write(to: url, options: .atomic)
@@ -303,6 +354,18 @@ final class MuesliController: NSObject {
         recorder: dictationRecorder,
         duckingController: audioDuckingController,
         routingController: dictationAudioRoutingController
+    )
+    private lazy var standardDictationJobQueue = OrderedDictationJobQueue<StandardDictationJob>(
+        handler: { [weak self] job in
+            await self?.processStandardDictationJob(job)
+        },
+        onCancel: { [weak self] job in
+            try? FileManager.default.removeItem(at: job.wavURL)
+            self?.dictationTestJobIDs.remove(job.id)
+        },
+        onCountChanged: { [weak self] count in
+            self?.standardDictationJobCountChanged(count)
+        }
     )
     private lazy var computerUseAudioSessionManager = DictationAudioSessionManager(
         recorder: computerUseRecorder,
@@ -377,9 +440,10 @@ final class MuesliController: NSObject {
     private var dictationLatencyTraceID: UUID?
     private var dictationLatencyTraceStartedAt: Date?
     private var currentDictationOutputMode: DictationOutputMode = .paste
-    private var pendingDictationStopStartedAt: Date?
-    private var pendingDictationStopSessionID: UUID?
-    private var pendingReleaseSoundSessionID: UUID?
+    private var pendingStandardDictationStops: [UUID: PendingStandardDictationStop] = [:]
+    private var completedStandardDictationStops = OrderedCompletionBuffer<CompletedStandardDictationStop>()
+    private var nextStandardDictationStopSequence: UInt64 = 0
+    private var pendingReleaseSoundSessionIDs: Set<UUID> = []
     private var pendingPreparingIndicatorWorkItem: DispatchWorkItem?
     private var activeComputerUseAudioSessionID: UUID?
     private var computerUseCommandStartedAt: Date?
@@ -3755,21 +3819,30 @@ final class MuesliController: NSObject {
     var dictationTestRecordingStarted: (() -> Void)?
     var dictationTestBackend: BackendOption?
     var dictationTestCohereLanguage: CohereTranscribeLanguage?
-    private var dictationTestTask: Task<Void, Never>?
+    private var dictationTestJobIDs: Set<UUID> = []
 
     var isDictationTestMode: Bool { dictationTestCallback != nil }
 
     func cancelTestDictation() {
-        dictationTestTask?.cancel()
-        dictationTestTask = nil
+        for jobID in Array(dictationTestJobIDs) {
+            standardDictationJobQueue.cancel(id: jobID)
+        }
+        dictationTestJobIDs.removeAll()
+        let pendingTestStops = pendingStandardDictationStops.values.filter(\.isTestMode)
+        for pendingStop in pendingTestStops {
+            pendingStandardDictationStops.removeValue(forKey: pendingStop.id)
+            pendingReleaseSoundSessionIDs.remove(pendingStop.id)
+            if let trace = pendingStop.latencyTrace {
+                markDictationLatency("pipeline_cancelled", trace: trace)
+            }
+            completeStandardDictationStop(.discarded, sequence: pendingStop.sequence)
+        }
         dictationAudioSessionManager.cancel(reason: "test-cancel")
-        dictationStartedAt = nil
-        pendingDictationStopSessionID = nil
-        pendingDictationStopStartedAt = nil
-        pendingReleaseSoundSessionID = nil
-        clearCapturedDictationSessionContext()
         resetDictationOutputMode()
-        setState(.idle)
+        clearCapturedDictationSessionContext()
+        dictationStartedAt = nil
+        finishDictationLatencyTrace("test_cancelled")
+        standardDictationWorkChanged()
     }
 
     func startHotkeyMonitor(keyCode: UInt16? = nil) {
@@ -7850,7 +7923,7 @@ final class MuesliController: NSObject {
             || computerUseCommandTask != nil
         let dictationIsActive = dictationAudioSessionManager.hasActiveSession
             || dictationStartedAt != nil
-            || pendingDictationStopSessionID != nil
+            || !pendingStandardDictationStops.isEmpty
             || isNemotron35Streaming
             || (!computerUseIsActive && dictationState != .idle)
         return InteractiveAudioSessionOwnership(
@@ -8251,6 +8324,35 @@ final class MuesliController: NSObject {
         dictationLatencyTraceStartedAt = nil
     }
 
+    private func detachDictationLatencyTrace(_ event: String) -> DictationLatencyTraceSnapshot? {
+        markDictationLatency(event)
+        guard let id = dictationLatencyTraceID,
+              let startedAt = dictationLatencyTraceStartedAt else { return nil }
+        let routeKind = dictationAudioRoutingController.currentOutputRouteKindForDebug()
+        let snapshot = DictationLatencyTraceSnapshot(
+            id: id,
+            startedAt: startedAt,
+            profile: dictationLatencyProfile(routeKind: routeKind),
+            routeDescription: dictationAudioRoutingController.currentRouteDebugDescription()
+        )
+        dictationLatencyTraceID = nil
+        dictationLatencyTraceStartedAt = nil
+        return snapshot
+    }
+
+    private func markDictationLatency(
+        _ event: String,
+        trace: DictationLatencyTraceSnapshot,
+        at date: Date = Date()
+    ) {
+        let elapsedMS = max(Int(date.timeIntervalSince(trace.startedAt) * 1_000), 0)
+        let timestamp = dictationLatencyTimestampFormatter.string(from: date)
+        let line = "[dictation-latency] ts=\(timestamp) id=\(trace.id.uuidString) "
+            + "event=\(event) elapsed_ms=\(elapsedMS) profile=\(trace.profile) \(trace.routeDescription)"
+        fputs("\(line)\n", stderr)
+        appendDictationLatencyLog(line)
+    }
+
     private func cachedPreferredDictationInputDeviceID() -> AudioObjectID? {
         dictationAudioRoutingController.cachedPreferredInputDeviceIDForDictation()
     }
@@ -8314,7 +8416,7 @@ final class MuesliController: NSObject {
             setState(.idle)
             meetingMonitor.resumeAfterCooldown()
             meetingMonitor.refreshState()
-        case .latency(let event, _):
+        case .latency(_, let event, _):
             fputs("[cua-audio] \(event)\n", stderr)
         }
     }
@@ -8333,35 +8435,43 @@ final class MuesliController: NSObject {
         case .noAudioTimeout:
             statusBarController?.setStatus("Mic waiting for speech")
         case .stopped(let eventSessionID, let wavURL):
-            guard pendingDictationStopSessionID == eventSessionID else {
+            guard let eventSessionID,
+                  let pendingStop = pendingStandardDictationStops.removeValue(forKey: eventSessionID) else {
                 fputs("[muesli-native] ignoring stale stopped event\n", stderr)
                 if let wavURL {
                     try? FileManager.default.removeItem(at: wavURL)
                 }
                 break
             }
-            guard dictationAudioSessionManager.currentSessionID == nil else {
-                fputs("[muesli-native] ignoring stopped event while a new session is active\n", stderr)
-                if let wavURL {
-                    try? FileManager.default.removeItem(at: wavURL)
-                }
-                break
-            }
-            let startedAt = pendingDictationStopStartedAt ?? dictationStartedAt ?? Date()
-            pendingDictationStopSessionID = nil
-            pendingDictationStopStartedAt = nil
-            finishStandardDictationStop(wavURL: wavURL, startedAt: startedAt)
+            finishStandardDictationStop(wavURL: wavURL, pendingStop: pendingStop)
         case .audioRestored(let eventSessionID):
-            guard pendingReleaseSoundSessionID == eventSessionID else { break }
-            pendingReleaseSoundSessionID = nil
+            guard let eventSessionID,
+                  pendingReleaseSoundSessionIDs.remove(eventSessionID) != nil else { break }
             guard dictationAudioSessionManager.currentSessionID == nil else { break }
             // Reuse the insert cue as the hotkey-release cue once ducked audio has
             // been restored; waiting for transcription would make release feedback lag.
             SoundController.playDictationInsert(enabled: shouldPlayDictationLifecycleSounds)
         case .cancelled:
             break
-        case .failed(_, let error):
+        case .failed(let sessionID, let error):
             fputs("[muesli-native] recorder start failed: \(error)\n", stderr)
+            if let sessionID,
+               let pendingStop = pendingStandardDictationStops.removeValue(forKey: sessionID) {
+                if !pendingStop.isTestMode {
+                    recordDiagnosticIncident(
+                        kind: .dictationAudioFailed,
+                        stage: .dictationAudioSession,
+                        backend: pendingStop.backend,
+                        error: error
+                    )
+                }
+                if let trace = pendingStop.latencyTrace {
+                    markDictationLatency("audio_session_failed", trace: trace)
+                }
+                pendingReleaseSoundSessionIDs.remove(sessionID)
+                completeStandardDictationStop(.discarded, sequence: pendingStop.sequence)
+                break
+            }
             if !isDictationTestMode {
                 recordDiagnosticIncident(
                     kind: .dictationAudioFailed,
@@ -8372,16 +8482,19 @@ final class MuesliController: NSObject {
             }
             resetDictationOutputMode()
             dictationStartedAt = nil
-            pendingDictationStopSessionID = nil
-            pendingDictationStopStartedAt = nil
-            pendingReleaseSoundSessionID = nil
+            if let sessionID {
+                pendingReleaseSoundSessionIDs.remove(sessionID)
+            }
             clearCapturedDictationSessionContext()
-            setState(.idle)
-            meetingMonitor.resumeAfterCooldown()
-            meetingMonitor.refreshState()
             finishDictationLatencyTrace("audio_session_failed")
-        case .latency(let event, let date):
-            markDictationLatency(event, at: date)
+            standardDictationWorkChanged()
+        case .latency(let sessionID, let event, let date):
+            if let sessionID,
+               let pendingTrace = pendingStandardDictationStops[sessionID]?.latencyTrace {
+                markDictationLatency(event, trace: pendingTrace, at: date)
+            } else if sessionID == dictationAudioSessionManager.currentSessionID {
+                markDictationLatency(event, at: date)
+            }
         }
     }
 
@@ -8667,11 +8780,11 @@ final class MuesliController: NSObject {
         dictationAudioSessionManager.endExternalSession(reason: "nemotron-start-failed")
         indicator.setToggleDictation(false, config: config)
         resetDictationOutputMode()
-        setState(.idle)
-        meetingMonitor.resumeAfterCooldown()
-        meetingMonitor.refreshState()
         finishDictationLatencyTrace("nemotron_start_failed")
-        syncDictationRecorderWarmup(intent: .idlePrewarm(.backendRecovery))
+        standardDictationWorkChanged()
+        if standardDictationWorkCount == 0 {
+            syncDictationRecorderWarmup(intent: .idlePrewarm(.backendRecovery))
+        }
     }
 
     @MainActor
@@ -8695,11 +8808,11 @@ final class MuesliController: NSObject {
         dictationAudioSessionManager.endExternalSession(reason: "nemotron-runtime-failed")
         indicator.setToggleDictation(false, config: config)
         resetDictationOutputMode()
-        setState(.idle)
-        meetingMonitor.resumeAfterCooldown()
-        meetingMonitor.refreshState()
         finishDictationLatencyTrace("nemotron_runtime_failed")
-        syncDictationRecorderWarmup(intent: .idlePrewarm(.backendRecovery))
+        standardDictationWorkChanged()
+        if standardDictationWorkCount == 0 {
+            syncDictationRecorderWarmup(intent: .idlePrewarm(.backendRecovery))
+        }
     }
 
     private func handleCancel() {
@@ -8721,14 +8834,11 @@ final class MuesliController: NSObject {
         dictationAudioSessionManager.cancel(reason: "user-cancel")
         clearCapturedDictationSessionContext()
         dictationStartedAt = nil
-        pendingDictationStopSessionID = nil
-        pendingDictationStopStartedAt = nil
-        pendingReleaseSoundSessionID = nil
-        setState(.idle)
-        meetingMonitor.resumeAfterCooldown()
-        meetingMonitor.refreshState()
         finishDictationLatencyTrace("cancelled")
-        syncDictationRecorderWarmup(intent: .postDictation(.cancel))
+        standardDictationWorkChanged()
+        if standardDictationWorkCount == 0 {
+            syncDictationRecorderWarmup(intent: .postDictation(.cancel))
+        }
     }
 
     private func handleToggleStart(outputMode: DictationOutputMode? = nil) {
@@ -8787,7 +8897,7 @@ final class MuesliController: NSObject {
     func toggleVoiceNoteRecording() {
         if dictationStartedAt != nil || dictationAudioSessionManager.hasActiveSession || isNemotron35Streaming {
             handleToggleStop()
-        } else if dictationState == .idle {
+        } else if dictationState == .idle || dictationState == .transcribing {
             handleToggleStart(outputMode: .voiceNote)
         }
     }
@@ -8835,12 +8945,103 @@ final class MuesliController: NSObject {
         // optional OCR enrichment, and late capture completions are rejected.
         freezeDictationStyleSessionAtStop()
         markDictationLatency("sound_release_requested:stop")
-        pendingDictationStopSessionID = dictationAudioSessionManager.currentSessionID
-        pendingReleaseSoundSessionID = shouldPlayDictationLifecycleSounds && !isDictationTestMode
-            ? pendingDictationStopSessionID
-            : nil
-        pendingDictationStopStartedAt = startedAt
+        guard let sessionID = dictationAudioSessionManager.currentSessionID else {
+            fputs("[muesli-native] stop requested without an active audio session\n", stderr)
+            finishDictationLatencyTrace("stop_without_session")
+            settleStandardDictationSessionWithoutJob(intent: .postDictation(.stopWithoutWav))
+            return
+        }
+        pendingStandardDictationStops[sessionID] = capturePendingStandardDictationStop(
+            id: sessionID,
+            startedAt: startedAt
+        )
+        if shouldPlayDictationLifecycleSounds && !isDictationTestMode {
+            pendingReleaseSoundSessionIDs.insert(sessionID)
+        }
+        clearCapturedDictationSessionContext()
+        resetDictationOutputMode()
         dictationAudioSessionManager.stop()
+    }
+
+    private func capturePendingStandardDictationStop(
+        id: UUID,
+        startedAt: Date
+    ) -> PendingStandardDictationStop {
+        let sequence = nextStandardDictationStopSequence
+        nextStandardDictationStopSequence &+= 1
+        let isTestMode = isDictationTestMode
+        let styleSession = stoppedDictationStyleSession
+        let contextResult = stoppedDictationContextResult
+        let sessionConfig = styleSession?.config ?? config
+        let configuredBackend = BackendOption.resolve(
+            backend: sessionConfig.sttBackend,
+            model: sessionConfig.sttModel
+        ) ?? selectedBackend
+        let transcriptionBackend = isTestMode
+            ? (dictationTestBackend ?? configuredBackend)
+            : configuredBackend
+        let capturedContext = styleSession?.matchingContext(contextResult)
+        let correctionTargetApp = styleSession?.target
+        let cleanupRuntime = styleSession?.mode.allowsAdaptiveStyles == true
+            ? styleSession?.cleanupRuntime
+            : nil
+        let cleanupBackend = cleanupRuntime?.backend
+            ?? TranscriptCleanupBackendOption.resolved(sessionConfig.postProcessorBackend)
+        let ppOption = cleanupRuntime?.option
+            ?? runtimePostProcessorOption(config: sessionConfig, backend: cleanupBackend)
+        let cleanupReadiness = cleanupRuntime?.readiness ?? transcriptCleanupReadiness(
+            option: ppOption,
+            config: sessionConfig,
+            transcriptionBackend: transcriptionBackend,
+            cleanupBackend: cleanupBackend
+        )
+        let cleanupPolicy = styleSession?.cleanupPolicy(
+            readiness: cleanupReadiness,
+            context: contextResult
+        ) ?? DictationCleanupPolicy(
+            readiness: cleanupReadiness,
+            systemPromptSnapshot: DictationCleanupPromptComposer.appendingSpeakerVocabulary(
+                to: sessionConfig.postProcessorSystemPrompt,
+                customWords: sessionConfig.customWords
+            )
+        )
+        let cleanupRuntimeSnapshot = cleanupRuntime ?? DictationCleanupRuntimeSnapshot(
+            readiness: cleanupReadiness,
+            backend: cleanupBackend,
+            option: ppOption,
+            config: sessionConfig
+        )
+        let cleanupRequest = DictationCleanupRequestSnapshot(
+            runtime: cleanupRuntimeSnapshot,
+            policy: cleanupPolicy
+        )
+        let detectedSpeech: Bool
+        if case .speechDetected(let sessionID) = dictationAudioSessionManager.currentState {
+            detectedSpeech = sessionID == id
+        } else {
+            detectedSpeech = false
+        }
+        return PendingStandardDictationStop(
+            id: id,
+            sequence: sequence,
+            startedAt: startedAt,
+            isTestMode: isTestMode,
+            outputMode: currentDictationOutputMode,
+            backend: transcriptionBackend,
+            cohereLanguage: isTestMode
+                ? (dictationTestCohereLanguage ?? sessionConfig.resolvedCohereLanguage)
+                : sessionConfig.resolvedCohereLanguage,
+            indicASRLanguage: sessionConfig.resolvedIndicASRLanguage,
+            promptContext: capturedContext.map { DictationContextCapture.formatForPrompt($0) },
+            storageContext: capturedContext.map { DictationContextCapture.formatForStorage($0) }
+                ?? correctionTargetApp?.appContext
+                ?? "",
+            correctionTargetApp: correctionTargetApp,
+            customWords: serializedCustomWords(from: sessionConfig),
+            cleanupRequest: cleanupRequest,
+            detectedSpeech: detectedSpeech,
+            latencyTrace: detachDictationLatencyTrace("stop_requested")
+        )
     }
 
     private func cancelDictationAudioSessionForMeetingRecordingIfNeeded() {
@@ -8870,9 +9071,6 @@ final class MuesliController: NSObject {
 
         dictationStartedAt = nil
         clearCapturedDictationSessionContext()
-        pendingDictationStopSessionID = nil
-        pendingDictationStopStartedAt = nil
-        pendingReleaseSoundSessionID = nil
         resetDictationOutputMode()
         setState(.idle)
         if activeMeetingID != nil || isStartingMeetingRecording || isMeetingRecording() {
@@ -8921,210 +9119,272 @@ final class MuesliController: NSObject {
         syncAppState()
         clearCapturedDictationSessionContext()
         resetDictationOutputMode()
-        setState(.idle)
-        meetingMonitor.resumeAfterCooldown()
         fputs("[muesli-native] Nemotron streaming done (\(String(format: "%.1f", duration))s)\n", stderr)
         finishDictationLatencyTrace("nemotron_stop")
-        syncDictationRecorderWarmup(intent: .idlePrewarm(.backendRecovery))
+        standardDictationWorkChanged()
+        if standardDictationWorkCount == 0 {
+            syncDictationRecorderWarmup(intent: .idlePrewarm(.backendRecovery))
+        }
     }
 
-    private func finishStandardDictationStop(wavURL stoppedWavURL: URL?, startedAt: Date) {
-        markDictationLatency("stop_finished")
+    private func finishStandardDictationStop(
+        wavURL stoppedWavURL: URL?,
+        pendingStop: PendingStandardDictationStop
+    ) {
+        if let trace = pendingStop.latencyTrace {
+            markDictationLatency("stop_finished", trace: trace)
+        }
         guard let wavURL = stoppedWavURL else {
             fputs("[muesli-native] stop without wav\n", stderr)
-            clearCapturedDictationSessionContext()
-            resetDictationOutputMode()
-            setState(.idle)
-            meetingMonitor.resumeAfterCooldown()
-            finishDictationLatencyTrace("stop_without_wav")
-            syncDictationRecorderWarmup(intent: .postDictation(.stopWithoutWav))
+            if let trace = pendingStop.latencyTrace {
+                markDictationLatency("stop_without_wav", trace: trace)
+            }
+            completeStandardDictationStop(.discarded, sequence: pendingStop.sequence)
             return
         }
-        let duration = max(Date().timeIntervalSince(startedAt), 0)
+        let duration = max(Date().timeIntervalSince(pendingStop.startedAt), 0)
         if duration < 0.3 {
             fputs("[muesli-native] discarded short recording\n", stderr)
             try? FileManager.default.removeItem(at: wavURL)
-            if isDictationTestMode {
+            if pendingStop.isTestMode {
                 dictationTestCallback?("")
             }
-            clearCapturedDictationSessionContext()
-            resetDictationOutputMode()
-            setState(.idle)
-            meetingMonitor.resumeAfterCooldown()
-            finishDictationLatencyTrace("short_recording")
-            syncDictationRecorderWarmup(intent: .postDictation(.shortRecording))
+            if let trace = pendingStop.latencyTrace {
+                markDictationLatency("short_recording", trace: trace)
+            }
+            completeStandardDictationStop(.discarded, sequence: pendingStop.sequence)
             return
         }
 
-        setState(.transcribing)
-        finishDictationLatencyTrace("ready_for_transcription")
-        syncDictationRecorderWarmup(intent: .postDictation(.dictationStop))
-        let isTestMode = isDictationTestMode
-        let outputMode = currentDictationOutputMode
-        let styleSession = stoppedDictationStyleSession
-        let contextResult = stoppedDictationContextResult
-        let sessionConfig = styleSession?.config ?? config
-        let configuredBackend = BackendOption.resolve(
-            backend: sessionConfig.sttBackend,
-            model: sessionConfig.sttModel
-        ) ?? selectedBackend
-        let transcriptionBackend = isTestMode ? (dictationTestBackend ?? configuredBackend) : configuredBackend
-        let transcriptionLanguage = isTestMode
-            ? (dictationTestCohereLanguage ?? sessionConfig.resolvedCohereLanguage)
-            : sessionConfig.resolvedCohereLanguage
-        let indicTranscriptionLanguage = sessionConfig.resolvedIndicASRLanguage
-        let capturedContext = styleSession?.matchingContext(contextResult)
-        let promptContext = capturedContext.map { DictationContextCapture.formatForPrompt($0) }
-        let correctionTargetApp = styleSession?.target
-        let storageContext = capturedContext.map { DictationContextCapture.formatForStorage($0) }
-            ?? correctionTargetApp?.appContext
-            ?? ""
-        let task = Task { [weak self] in
-            guard let self else { return }
-            defer {
-                try? FileManager.default.removeItem(at: wavURL)
-            }
+        let job = StandardDictationJob(
+            id: pendingStop.id,
+            wavURL: wavURL,
+            startedAt: pendingStop.startedAt,
+            duration: duration,
+            isTestMode: pendingStop.isTestMode,
+            outputMode: pendingStop.outputMode,
+            backend: pendingStop.backend,
+            cohereLanguage: pendingStop.cohereLanguage,
+            indicASRLanguage: pendingStop.indicASRLanguage,
+            promptContext: pendingStop.promptContext,
+            storageContext: pendingStop.storageContext,
+            correctionTargetApp: pendingStop.correctionTargetApp,
+            customWords: pendingStop.customWords,
+            cleanupRequest: pendingStop.cleanupRequest,
+            detectedSpeech: pendingStop.detectedSpeech,
+            latencyTrace: pendingStop.latencyTrace
+        )
+        completeStandardDictationStop(.job(job), sequence: pendingStop.sequence)
+    }
 
-            do {
-                let cleanupRuntime = styleSession?.mode.allowsAdaptiveStyles == true
-                    ? styleSession?.cleanupRuntime
-                    : nil
-                let cleanupBackend = cleanupRuntime?.backend
-                    ?? TranscriptCleanupBackendOption.resolved(sessionConfig.postProcessorBackend)
-                let ppOption = cleanupRuntime?.option
-                    ?? self.runtimePostProcessorOption(config: sessionConfig, backend: cleanupBackend)
-                await self.configureTranscriptCleanupForRuntime(
-                    option: ppOption,
-                    config: sessionConfig,
-                    backend: cleanupBackend
-                )
-                let readiness = cleanupRuntime?.readiness ?? self.transcriptCleanupReadiness(
-                    option: ppOption,
-                    config: sessionConfig,
-                    transcriptionBackend: transcriptionBackend,
-                    cleanupBackend: cleanupBackend
-                )
-                let cleanupRequest = styleSession?.cleanupRequest(context: contextResult)
-                let result = try await self.transcriptionCoordinator.transcribeDictationWithCleanupOutcome(
-                    at: wavURL,
-                    backend: transcriptionBackend,
-                    cohereLanguage: transcriptionLanguage,
-                    indicASRLanguage: indicTranscriptionLanguage,
-                    enablePostProcessor: readiness == .ready,
-                    cleanupRequestSnapshot: cleanupRequest,
-                    customWords: self.serializedCustomWords(from: sessionConfig),
-                    appContext: promptContext
-                )
-                // Drop result if test was cancelled (user navigated away)
-                try Task.checkCancellation()
-                let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                // Test mode: route result to callback, skip history/paste
-                if isTestMode {
-                    await MainActor.run {
-                        self.dictationTestCallback?(text)
-                        self.clearCapturedDictationSessionContext()
-                        self.resetDictationOutputMode()
-                        self.setState(.idle)
-                        self.meetingMonitor.resumeAfterCooldown()
-                        self.syncDictationRecorderWarmup(intent: .postDictation(.transcriptionComplete))
-                    }
-                    return
-                }
-
-                if !self.config.maraudersMapUnlocked {
-                    await MainActor.run { self.checkMaraudersMapActivation(text) }
-                }
-                guard !text.isEmpty else {
-                    await MainActor.run {
-                        self.clearCapturedDictationSessionContext()
-                        self.resetDictationOutputMode()
-                        self.setState(.idle)
-                        self.meetingMonitor.resumeAfterCooldown()
-                        self.syncDictationRecorderWarmup(intent: .postDictation(.transcriptionComplete))
-                    }
-                    return
-                }
-                _ = try? self.dictationStore.insertDictation(
-                    text: text,
-                    durationSeconds: duration,
-                    appContext: storageContext,
-                    dictationStyleID: result.cleanupStyle?.styleID,
-                    dictationStyleName: result.cleanupStyle?.styleName,
-                    dictationStyleSelectionSource: result.cleanupStyle?.source.rawValue,
-                    dictationCleanupOutcome: result.cleanupOutcome.rawValue,
-                    startedAt: startedAt,
-                    endedAt: Date()
-                )
-                await MainActor.run {
-                    self.scheduleICloudSyncAfterLocalChange()
-                    self.clearCapturedDictationSessionContext()
-                    self.statusBarController?.refresh()
-                    self.historyWindowController?.reload()
-                    self.syncAppState()
-                    if outputMode != .voiceNote {
-                        PasteController.paste(text: text)
-                        if sessionConfig.enableDictionaryCorrectionPrompts {
-                            // Dictionary correction prompts are an explicit opt-in
-                            // screen-context feature: they briefly read focused app
-                            // text via Accessibility after dictation, then stop when
-                            // the bounded edit monitor session ends.
-                            self.dictationCorrectionMonitor.start(
-                                originalText: text,
-                                appContext: storageContext,
-                                targetApp: correctionTargetApp
-                            ) { [weak self] suggestion in
-                                self?.addDictionarySuggestion(suggestion)
-                            }
-                        }
-                    }
-                    self.resetDictationOutputMode()
-                    self.setState(.idle)
-                    self.meetingMonitor.resumeAfterCooldown()
-                    self.syncDictationRecorderWarmup(intent: .postDictation(.transcriptionComplete))
-                    var telemetryParameters = DictationStyleObservability.parameters(
-                        for: DictationStyleObservabilityInput(
-                            selectionSource: result.cleanupStyle?.source,
-                            isCustomStyle: result.cleanupStyle?.isCustom,
-                            cleanupOutcome: result.cleanupOutcome,
-                            cleanupBackend: cleanupBackend
-                        )
-                    )
-                    telemetryParameters["backend"] = transcriptionBackend.backend
-                    telemetryParameters["paste_method"] = outputMode.pasteMethod
-                    TelemetryDeck.signal("dictation.completed", parameters: telemetryParameters)
-                }
-            } catch is CancellationError {
-                fputs("[muesli-native] test dictation cancelled\n", stderr)
-                await MainActor.run {
-                    self.clearCapturedDictationSessionContext()
-                    self.resetDictationOutputMode()
-                    self.setState(.idle)
-                    self.meetingMonitor.resumeAfterCooldown()
-                    self.syncDictationRecorderWarmup(intent: .postDictation(.transcriptionCancelled))
-                }
-            } catch {
-                fputs("[muesli-native] transcription failed: \(error)\n", stderr)
-                await MainActor.run {
-                    if self.isDictationTestMode {
-                        self.dictationTestFailureCallback?(self.userFacingDictationTestError(error))
-                    } else {
-                        self.recordDiagnosticIncident(
-                            kind: .dictationTranscriptionFailed,
-                            stage: .standardDictationTranscribe,
-                            backend: transcriptionBackend,
-                            error: error
-                        )
-                    }
-                    self.clearCapturedDictationSessionContext()
-                    self.resetDictationOutputMode()
-                    self.setState(.idle)
-                    self.meetingMonitor.resumeAfterCooldown()
-                    self.syncDictationRecorderWarmup(intent: .postDictation(.transcriptionFailed))
-                }
+    private func completeStandardDictationStop(
+        _ completion: CompletedStandardDictationStop,
+        sequence: UInt64
+    ) {
+        for next in completedStandardDictationStops.insert(completion, sequence: sequence) {
+            if case .job(let job) = next {
+                if job.isTestMode { dictationTestJobIDs.insert(job.id) }
+                standardDictationJobQueue.enqueue(job)
             }
         }
-        if isTestMode { dictationTestTask = task }
+        standardDictationWorkChanged()
+    }
+
+    private func settleStandardDictationSessionWithoutJob(intent: DictationWarmupIntent) {
+        standardDictationWorkChanged()
+        if standardDictationWorkCount == 0 {
+            syncDictationRecorderWarmup(intent: intent)
+        }
+    }
+
+    private var standardDictationWorkCount: Int {
+        pendingStandardDictationStops.count
+            + completedStandardDictationStops.count
+            + standardDictationJobQueue.count
+    }
+
+    private func standardDictationJobCountChanged(_: Int) {
+        standardDictationWorkChanged()
+    }
+
+    private func standardDictationWorkChanged() {
+        guard dictationStartedAt == nil,
+              !dictationAudioSessionManager.hasActiveSession,
+              !isNemotron35Streaming else { return }
+        if standardDictationWorkCount > 0 {
+            guard dictationState != .transcribing else { return }
+            setState(.transcribing)
+            meetingMonitor.suppressWhileActive()
+        } else {
+            guard dictationState != .idle else { return }
+            setState(.idle)
+            meetingMonitor.resumeAfterCooldown()
+            meetingMonitor.refreshState()
+            syncDictationRecorderWarmup(intent: .postDictation(.transcriptionComplete))
+        }
+    }
+
+    private func processStandardDictationJob(_ job: StandardDictationJob) async {
+        defer {
+            try? FileManager.default.removeItem(at: job.wavURL)
+            dictationTestJobIDs.remove(job.id)
+        }
+
+        do {
+            let cleanupRuntime = job.cleanupRequest.runtime
+            let cleanupPolicy = job.cleanupRequest.policy
+            await transcriptionCoordinator.configurePostProcessor(
+                backend: cleanupRuntime.backend,
+                option: cleanupRuntime.option,
+                systemPrompt: cleanupPolicy.systemPromptSnapshot,
+                config: cleanupRuntime.config
+            )
+            let stageReporter: TranscriptionCoordinator.DictationStageReporter = { [weak self] event in
+                self?.handleDictationStageEvent(event, for: job)
+            }
+            let result = try await transcriptionCoordinator.transcribeDictationWithCleanupOutcome(
+                at: job.wavURL,
+                backend: job.backend,
+                cohereLanguage: job.cohereLanguage,
+                indicASRLanguage: job.indicASRLanguage,
+                enablePostProcessor: cleanupPolicy.readiness == .ready,
+                cleanupRequestSnapshot: job.cleanupRequest,
+                customWords: job.customWords,
+                appContext: job.promptContext,
+                stageReporter: stageReporter
+            )
+            try Task.checkCancellation()
+            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if job.isTestMode {
+                dictationTestCallback?(text)
+                if let trace = job.latencyTrace {
+                    markDictationLatency("pipeline_completed chars:\(text.count)", trace: trace)
+                }
+                return
+            }
+
+            if !cleanupRuntime.config.maraudersMapUnlocked {
+                checkMaraudersMapActivation(text)
+            }
+            guard !text.isEmpty else {
+                if let trace = job.latencyTrace {
+                    let speechStatus = job.detectedSpeech ? "detected_speech" : "no_detected_speech"
+                    markDictationLatency("empty_result:\(speechStatus)", trace: trace)
+                }
+                return
+            }
+
+            _ = try? dictationStore.insertDictation(
+                text: text,
+                durationSeconds: job.duration,
+                appContext: job.storageContext,
+                dictationStyleID: result.cleanupStyle?.styleID,
+                dictationStyleName: result.cleanupStyle?.styleName,
+                dictationStyleSelectionSource: result.cleanupStyle?.source.rawValue,
+                dictationCleanupOutcome: result.cleanupOutcome.rawValue,
+                startedAt: job.startedAt,
+                endedAt: Date()
+            )
+            scheduleICloudSyncAfterLocalChange()
+            statusBarController?.refresh()
+            historyWindowController?.reload()
+            syncAppState()
+            if job.outputMode != .voiceNote {
+                try await waitForDictationDeliveryWindow()
+                if canPasteDictation(to: job.correctionTargetApp) {
+                    await PasteController.pasteAndWait(text: text)
+                    if cleanupRuntime.config.enableDictionaryCorrectionPrompts {
+                        dictationCorrectionMonitor.start(
+                            originalText: text,
+                            appContext: job.storageContext,
+                            targetApp: job.correctionTargetApp
+                        ) { [weak self] suggestion in
+                            self?.addDictionarySuggestion(suggestion)
+                        }
+                    }
+                } else {
+                    fputs("[muesli-native] dictation saved without paste because the target app changed\n", stderr)
+                    statusBarController?.setStatus("Dictation saved — target app changed")
+                }
+            }
+            if let trace = job.latencyTrace {
+                markDictationLatency("pipeline_completed chars:\(text.count)", trace: trace)
+            }
+            var telemetryParameters = DictationStyleObservability.parameters(
+                for: DictationStyleObservabilityInput(
+                    selectionSource: result.cleanupStyle?.source,
+                    isCustomStyle: result.cleanupStyle?.isCustom,
+                    cleanupOutcome: result.cleanupOutcome,
+                    cleanupBackend: cleanupRuntime.backend
+                )
+            )
+            telemetryParameters["backend"] = job.backend.backend
+            telemetryParameters["paste_method"] = job.outputMode.pasteMethod
+            TelemetryDeck.signal("dictation.completed", parameters: telemetryParameters)
+        } catch is CancellationError {
+            fputs("[muesli-native] test dictation cancelled\n", stderr)
+            if let trace = job.latencyTrace {
+                markDictationLatency("pipeline_cancelled", trace: trace)
+            }
+        } catch {
+            fputs("[muesli-native] transcription failed: \(error)\n", stderr)
+            if job.isTestMode {
+                dictationTestFailureCallback?(userFacingDictationTestError(error))
+            } else {
+                recordDiagnosticIncident(
+                    kind: .dictationTranscriptionFailed,
+                    stage: .standardDictationTranscribe,
+                    backend: job.backend,
+                    error: error
+                )
+            }
+            if let trace = job.latencyTrace {
+                markDictationLatency("pipeline_failed", trace: trace)
+            }
+        }
+    }
+
+    private func waitForDictationDeliveryWindow() async throws {
+        while dictationStartedAt != nil
+            || dictationAudioSessionManager.hasActiveSession
+            || isNemotron35Streaming {
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    private func canPasteDictation(to capturedTarget: DictationSessionTarget?) -> Bool {
+        guard let capturedTarget else { return true }
+        let frontmostApplication = NSWorkspace.shared.frontmostApplication
+        let deliveryApplication = frontmostApplication == NSRunningApplication.current
+            ? lastExternalApp
+            : frontmostApplication
+        return capturedTarget.matches(
+            processID: deliveryApplication?.processIdentifier,
+            bundleID: deliveryApplication?.bundleIdentifier ?? ""
+        )
+    }
+
+    private func handleDictationStageEvent(
+        _ event: DictationTranscriptionStageEvent,
+        for job: StandardDictationJob
+    ) {
+        if event.isEmptyCompletedSpeechRecognition,
+           job.detectedSpeech,
+           !job.isTestMode {
+            recordDiagnosticIncident(
+                kind: .dictationTranscriptionFailed,
+                severity: .warning,
+                stage: .standardDictationTranscribe,
+                backend: job.backend,
+                error: DictationTranscriptionDiagnosticError.emptyResultAfterDetectedSpeech,
+                promptUser: false
+            )
+        }
+        if let trace = job.latencyTrace {
+            markDictationLatency(event.latencyEvent, trace: trace)
+        }
     }
 
     private func userFacingDictationTestError(_ error: Error) -> String {

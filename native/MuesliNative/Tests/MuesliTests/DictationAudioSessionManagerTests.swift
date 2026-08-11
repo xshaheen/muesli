@@ -48,8 +48,9 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.recorder.prepareCalls == 0)
         #expect(harness.recorder.startCalls == 1)
         #expect(harness.events.contains { event in
-            if case .latency(let name, _) = event {
+            if case .latency(let sessionID, let name, _) = event {
                 return name == "activation_reused:start"
+                    && sessionID == harness.manager.currentSessionID
             }
             return false
         })
@@ -74,7 +75,7 @@ struct DictationAudioSessionManagerTests {
             return false
         })
         #expect(harness.events.contains { event in
-            if case .latency(let name, _) = event {
+            if case .latency(_, let name, _) = event {
                 return name == "stale_session_ignored:hold-start"
             }
             return false
@@ -123,7 +124,7 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.recorder.startCalls == 0)
         #expect(harness.recorder.preferredInputDeviceID == 82)
         #expect(harness.events.contains { event in
-            if case .latency(let name, _) = event {
+            if case .latency(_, let name, _) = event {
                 return name == "activation_async_prepare_started:hotkey:app_scoped_route"
             }
             return false
@@ -143,7 +144,7 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.recorder.preferredInputDeviceID == 82)
         #expect(harness.recorder.startCalls == 1)
         #expect(harness.events.contains { event in
-            if case .latency(let name, _) = event {
+            if case .latency(_, let name, _) = event {
                 return name == "activation_prepare_skipped:toggle:app_scoped_route"
             }
             return false
@@ -193,7 +194,7 @@ struct DictationAudioSessionManagerTests {
 
         #expect(harness.route.preferredInputCalls == 2)
         #expect(harness.events.contains { event in
-            if case .latency(let name, _) = event {
+            if case .latency(_, let name, _) = event {
                 return name.hasPrefix("route_snapshot_refreshed:hold-start")
             }
             return false
@@ -304,7 +305,7 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.recorder.startCalls == 0)
         #expect(harness.recorder.activateCalls == 0)
         #expect(harness.events.contains { event in
-            if case .latency(let name, _) = event {
+            if case .latency(_, let name, _) = event {
                 return name == "route_refresh_ignored:idle_routeChange"
             }
             return false
@@ -326,7 +327,7 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.recorder.activateCalls == 0)
         #expect(!harness.recorder.keepsAudioGraphWarm)
         #expect(harness.events.contains { event in
-            if case .latency(let name, _) = event {
+            if case .latency(_, let name, _) = event {
                 return name == "warmup_skipped:idle_startup:risky_default_input"
             }
             return false
@@ -346,7 +347,7 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.recorder.startCalls == 0)
         #expect(!harness.recorder.keepsAudioGraphWarm)
         #expect(harness.events.contains { event in
-            if case .latency(let name, _) = event {
+            if case .latency(_, let name, _) = event {
                 return name == "activation_skipped:hotkey:risky_default_input"
             }
             return false
@@ -365,7 +366,7 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.recorder.startCalls == 1)
         #expect(!harness.recorder.keepsAudioGraphWarm)
         #expect(harness.events.contains { event in
-            if case .latency(let name, _) = event {
+            if case .latency(_, let name, _) = event {
                 return name == "activation_prepare_skipped:toggle:risky_default_input"
             }
             return false
@@ -386,7 +387,7 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.recorder.activateCalls == 0)
         #expect(!harness.recorder.keepsAudioGraphWarm)
         #expect(harness.events.contains { event in
-            if case .latency(let name, _) = event {
+            if case .latency(_, let name, _) = event {
                 return name == "warmup_skipped:idle_startup:risky_route"
             }
             return false
@@ -439,7 +440,7 @@ struct DictationAudioSessionManagerTests {
 
         #expect(harness.recorder.warmUpCalls == 0)
         #expect(harness.events.contains { event in
-            if case .latency(let name, _) = event {
+            if case .latency(_, let name, _) = event {
                 return name == "route_refresh_cancelled:idle_routeChange"
             }
             return false
@@ -498,7 +499,7 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.manager.currentSessionID == nil)
         #expect(harness.events.contains { if case .failed = $0 { return true }; return false })
         #expect(!harness.events.contains { event in
-            if case .latency(let name, _) = event {
+            if case .latency(_, let name, _) = event {
                 return name.hasPrefix("input_fallback_begin:default")
             }
             return false
@@ -524,7 +525,7 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.media.restoreCalls == 1)
         #expect(harness.events.contains { if case .failed = $0 { return true }; return false })
         #expect(harness.events.contains { event in
-            if case .latency(let name, _) = event {
+            if case .latency(_, let name, _) = event {
                 return name == "recorder_failed"
             }
             return false

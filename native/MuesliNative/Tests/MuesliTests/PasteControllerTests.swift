@@ -159,6 +159,33 @@ struct PasteControllerTests {
         #expect(pasteboard.string(forType: .string) == "user-copied-after-paste")
     }
 
+    @Test("awaited paste serializes clipboard restoration")
+    @MainActor
+    func awaitedPasteSerializesClipboardRestoration() async {
+        let pasteboard = makePasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString("original", forType: .string)
+        var pasted: [String] = []
+
+        await PasteController.pasteAndWait(
+            text: "first",
+            pasteboard: pasteboard,
+            simulatePasteAction: {
+                pasted.append(pasteboard.string(forType: .string) ?? "")
+            }
+        )
+        await PasteController.pasteAndWait(
+            text: "second",
+            pasteboard: pasteboard,
+            simulatePasteAction: {
+                pasted.append(pasteboard.string(forType: .string) ?? "")
+            }
+        )
+
+        #expect(pasted == ["first", "second"])
+        #expect(pasteboard.string(forType: .string) == "original")
+    }
+
     private func makePasteboard() -> NSPasteboard {
         let name = NSPasteboard.Name("com.muesli.tests.PasteController.\(UUID().uuidString)")
         return NSPasteboard(name: name)

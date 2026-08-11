@@ -43,7 +43,43 @@ enum PasteController {
         pasteboard: NSPasteboard = .general,
         simulatePasteAction: @escaping () -> Void = PasteController.simulatePaste
     ) {
+        performPaste(
+            text: text,
+            pasteboard: pasteboard,
+            simulatePasteAction: simulatePasteAction,
+            completion: {}
+        )
+    }
+
+    /// Completes after Cmd+V and the guarded clipboard restoration transaction finish.
+    /// Serial dictation queues should await this variant before starting another paste.
+    static func pasteAndWait(
+        text: String,
+        pasteboard: NSPasteboard = .general,
+        simulatePasteAction: @escaping () -> Void = PasteController.simulatePaste
+    ) async {
         guard !text.isEmpty else { return }
+        await withCheckedContinuation { continuation in
+            performPaste(
+                text: text,
+                pasteboard: pasteboard,
+                simulatePasteAction: simulatePasteAction
+            ) {
+                continuation.resume()
+            }
+        }
+    }
+
+    private static func performPaste(
+        text: String,
+        pasteboard: NSPasteboard,
+        simulatePasteAction: @escaping () -> Void,
+        completion: @escaping () -> Void
+    ) {
+        guard !text.isEmpty else {
+            completion()
+            return
+        }
 
         // Save current clipboard contents (all types) so we can restore after paste.
         let savedItems = saveClipboard(pasteboard)
@@ -57,6 +93,7 @@ enum PasteController {
 
             // Restore the original clipboard contents after the receiving app has consumed the paste.
             DispatchQueue.main.asyncAfter(deadline: .now() + clipboardRestoreDelay) {
+                defer { completion() }
                 guard pasteboard.changeCount == pasteChangeCount else { return }
                 restoreClipboard(pasteboard, from: savedItems)
             }

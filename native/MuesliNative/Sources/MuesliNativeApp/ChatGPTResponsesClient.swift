@@ -78,7 +78,8 @@ enum ChatGPTResponsesClient {
         userPrompt: String,
         model: String,
         logCategory: String,
-        maxOutputTokens: Int? = nil
+        maxOutputTokens: Int? = nil,
+        timeoutInterval: TimeInterval = requestTimeout
     ) async throws -> ChatGPTResponsesResult {
         try await respondDetailed(
             messages: [
@@ -87,7 +88,8 @@ enum ChatGPTResponsesClient {
             ],
             model: model,
             logCategory: logCategory,
-            maxOutputTokens: maxOutputTokens
+            maxOutputTokens: maxOutputTokens,
+            timeoutInterval: timeoutInterval
         )
     }
 
@@ -95,13 +97,14 @@ enum ChatGPTResponsesClient {
         messages: [ChatGPTResponsesMessage],
         model: String,
         logCategory: String,
-        maxOutputTokens: Int? = nil
+        maxOutputTokens: Int? = nil,
+        timeoutInterval: TimeInterval = requestTimeout
     ) async throws -> ChatGPTResponsesResult {
         let (token, accountId) = try await ChatGPTAuthManager.shared.validAccessToken()
         let body = requestBody(messages: messages, model: model, maxOutputTokens: maxOutputTokens)
 
         var request = URLRequest(url: whamURL)
-        request.timeoutInterval = requestTimeout
+        request.timeoutInterval = min(max(timeoutInterval, 0.1), requestTimeout)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

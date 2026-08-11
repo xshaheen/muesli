@@ -45,6 +45,7 @@ struct DictationStyleHistoryBadgeContent: Equatable {
         guard let rawValue, let outcome = DictationCleanupOutcome(rawValue: rawValue) else { return nil }
         return switch outcome {
         case .applied: "Cleanup applied"
+        case .fallbackDeadline: "Original dictation kept because cleanup timed out"
         case .fallbackEmpty: "Original dictation kept because cleanup returned no text"
         case .fallbackRejected: "Original dictation kept because cleanup was rejected"
         case .fallbackError: "Original dictation kept because cleanup failed"

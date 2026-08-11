@@ -164,3 +164,25 @@ upstream `main`.
 
 - CloudKit system fields and local Writing Styles provenance coexist in the combined dictation upsert path. Style provenance remains local, survives same-text acknowledgements, and is cleared when remote text replaces the local text or the record is deleted.
 - The meeting Markdown renderer keeps non-web links visible and inert while preserving heading, list, editor, and inline-formatting behavior.
+
+### Dictation reliability and diagnostics
+
+#### Features
+
+- Added independently owned, FIFO-ordered dictation jobs so rapid back-to-back recordings retain their own audio, backend, Writing Style, vocabulary, app context, output mode, and latency trace.
+- Added per-stage timing for speech recognition, artifact cleanup, transcript cleanup, and finalization.
+- Added privacy-safe diagnostics when the recorder detects speech but recognition completes with an empty result.
+- Added a five-second hosted-cleanup deadline with matching provider request timeouts.
+
+#### Changes and fixes
+
+- Fixed overlapping stop callbacks and mutable controller state corrupting or reordering consecutive dictations.
+- Fixed hosted cleanup leaving dictation stuck in Transcribing; the artifact-cleaned recognizer transcript is now used when cleanup exceeds its deadline.
+- Fixed cancellation and short-recording paths leaving stale test-dictation state or blocking later queued work.
+- Fixed queued dictations pasting into a different foreground app; completed text remains in history when its captured target is no longer active.
+- Fixed consecutive queued paste operations overlapping clipboard restoration and replacing the user's original clipboard contents.
+- Fixed provider-side timeout errors bypassing the raw-transcript deadline fallback.
+- Fixed rapid sessions attributing late audio-stage timings to a newer dictation and cleanup stages reporting the pre-cleanup text size.
+- Fixed repeated queue updates causing redundant Transcribing UI refreshes and meeting-monitor suppression work.
+- Fixed large dictation backlogs repeatedly shifting the queue array while preserving unlimited rapid dictation support.
+- Added cleanup-timeout provenance to local dictation history and a clear history label when the original dictation was kept.

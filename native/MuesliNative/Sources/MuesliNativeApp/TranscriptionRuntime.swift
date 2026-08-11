@@ -15,6 +15,7 @@ struct SpeechTranscriptionResult: Sendable {
 
 enum DictationCleanupOutcome: String, Codable, CaseIterable, Sendable {
     case applied
+    case fallbackDeadline = "fallback_deadline"
     case fallbackEmpty = "fallback_empty"
     case fallbackRejected = "fallback_rejected"
     case fallbackError = "fallback_error"
@@ -190,6 +191,7 @@ struct DictationTranscriptionResult: Sendable {
 
 enum DictationCleanupAttempt {
     case applied(SpeechTranscriptionResult)
+    case fallbackDeadline
     case fallbackEmpty
     case fallbackRejected
     case fallbackError
@@ -200,6 +202,7 @@ enum DictationCleanupAttempt {
     var outcome: DictationCleanupOutcome {
         switch self {
         case .applied: .applied
+        case .fallbackDeadline: .fallbackDeadline
         case .fallbackEmpty: .fallbackEmpty
         case .fallbackRejected: .fallbackRejected
         case .fallbackError: .fallbackError
@@ -207,6 +210,22 @@ enum DictationCleanupAttempt {
         case .skippedUnavailable: .skippedUnavailable
         case .skippedStreaming: .skippedStreaming
         }
+    }
+
+    var stageOutcome: DictationTranscriptionStageEvent.Outcome {
+        switch self {
+        case .applied: .completed
+        case .fallbackDeadline: .deadlineExceeded
+        case .fallbackEmpty, .fallbackRejected, .fallbackError: .fallback
+        case .skippedDisabled, .skippedUnavailable, .skippedStreaming: .skipped
+        }
+    }
+
+    func outputCharacterCount(fallback: Int) -> Int {
+        if case .applied(let result) = self {
+            return result.text.count
+        }
+        return fallback
     }
 }
 
@@ -242,6 +261,123 @@ enum DictationCleanupFinalizer {
     }
 }
 
+struct DictationTranscriptionStageEvent: Equatable, Sendable {
+    enum Stage: String, Sendable {
+        case speechRecognition = "speech_recognition"
+        case artifactCleanup = "artifact_cleanup"
+        case transcriptCleanup = "transcript_cleanup"
+        case finalization
+    }
+
+    enum Outcome: String, Sendable {
+        case completed
+        case skipped
+        case fallback
+        case failed
+        case deadlineExceeded = "deadline_exceeded"
+    }
+
+    let stage: Stage
+    let outcome: Outcome
+    let elapsedMilliseconds: Int
+    let outputCharacterCount: Int
+
+    var latencyEvent: String {
+        "stage:\(stage.rawValue):\(outcome.rawValue) "
+            + "stage_ms:\(elapsedMilliseconds) chars:\(outputCharacterCount)"
+    }
+
+    var isEmptyCompletedSpeechRecognition: Bool {
+        stage == .speechRecognition
+            && outcome == .completed
+            && outputCharacterCount == 0
+    }
+}
+
+enum HostedDictationCleanupDeadlineError: Error, Equatable {
+    case timedOut
+}
+
+private actor HostedDictationCleanupDeadlineRace<Value: Sendable> {
+    private var outcome: Result<Value, Error>?
+    private var continuation: CheckedContinuation<Value, Error>?
+
+    func wait() async throws -> Value {
+        try await withCheckedThrowingContinuation { continuation in
+            if let outcome {
+                continuation.resume(with: outcome)
+            } else {
+                self.continuation = continuation
+            }
+        }
+    }
+
+    @discardableResult
+    func resolve(_ outcome: Result<Value, Error>) -> Bool {
+        guard self.outcome == nil else { return false }
+        self.outcome = outcome
+        continuation?.resume(with: outcome)
+        continuation = nil
+        return true
+    }
+}
+
+enum HostedDictationCleanupDeadline {
+    static let defaultTimeout: Duration = .seconds(5)
+    static let requestTimeout: TimeInterval = 5
+
+    static func isDeadlineError(_ error: Error) -> Bool {
+        if error is HostedDictationCleanupDeadlineError {
+            return true
+        }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut
+    }
+
+    static func run<Value: Sendable>(
+        timeout: Duration = defaultTimeout,
+        operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        let race = HostedDictationCleanupDeadlineRace<Value>()
+        let operationTask = Task {
+            do {
+                await race.resolve(.success(try await operation()))
+            } catch {
+                await race.resolve(.failure(error))
+            }
+        }
+        let timeoutTask = Task {
+            do {
+                try await Task.sleep(for: timeout)
+            } catch {
+                return
+            }
+            if await race.resolve(.failure(HostedDictationCleanupDeadlineError.timedOut)) {
+                operationTask.cancel()
+            }
+        }
+
+        return try await withTaskCancellationHandler {
+            do {
+                let value = try await race.wait()
+                operationTask.cancel()
+                timeoutTask.cancel()
+                return value
+            } catch {
+                operationTask.cancel()
+                timeoutTask.cancel()
+                throw error
+            }
+        } onCancel: {
+            operationTask.cancel()
+            timeoutTask.cancel()
+            Task {
+                await race.resolve(.failure(CancellationError()))
+            }
+        }
+    }
+}
+
 /// Keeps aggregate text and timed segments from describing different transcripts.
 /// Cleanup transforms cannot losslessly retime or rewrite arbitrary backend
 /// segments, so any effective text change invalidates those segments.
@@ -274,6 +410,7 @@ struct TranscriptionResultCleanup {
 }
 
 actor TranscriptionCoordinator {
+    typealias DictationStageReporter = @MainActor @Sendable (DictationTranscriptionStageEvent) -> Void
     typealias DiarizerModelLoader = @Sendable (DiarizerRuntimePolicy) async throws -> DiarizerModels
     typealias VADLoader = @Sendable () async throws -> VadManager
 
@@ -1201,7 +1338,8 @@ actor TranscriptionCoordinator {
         cleanupPolicy: DictationCleanupPolicy? = nil,
         cleanupRequestSnapshot: DictationCleanupRequestSnapshot? = nil,
         customWords: [[String: Any]] = [],
-        appContext: String? = nil
+        appContext: String? = nil,
+        stageReporter: DictationStageReporter? = nil
     ) async throws -> SpeechTranscriptionResult {
         try await transcribeDictationWithCleanupOutcome(
             at: url,
@@ -1212,7 +1350,8 @@ actor TranscriptionCoordinator {
             cleanupPolicy: cleanupPolicy,
             cleanupRequestSnapshot: cleanupRequestSnapshot,
             customWords: customWords,
-            appContext: appContext
+            appContext: appContext,
+            stageReporter: stageReporter
         ).transcription
     }
 
@@ -1225,13 +1364,15 @@ actor TranscriptionCoordinator {
         cleanupPolicy: DictationCleanupPolicy? = nil,
         cleanupRequestSnapshot: DictationCleanupRequestSnapshot? = nil,
         customWords: [[String: Any]] = [],
-        appContext: String? = nil
+        appContext: String? = nil,
+        stageReporter: DictationStageReporter? = nil
     ) async throws -> DictationTranscriptionResult {
         let postProcessorSnapshot = postProcessorSnapshot(from: cleanupRequestSnapshot)
         let policy = cleanupRequestSnapshot?.policy ?? cleanupPolicy ?? DictationCleanupPolicy(
             enabled: enablePostProcessor,
             systemPromptSnapshot: postProcessorSnapshot.systemPrompt
         )
+        let speechRecognitionStartedAt = Date()
         // Qwen3 post-processing is intentionally dictation-only. Meeting transcription should keep raw backend/Parakeet output.
         // Cohere decodes hallucinated text from silence — skip if VAD detects no speech
         if backend.backend == "cohere", let vadManager {
@@ -1249,6 +1390,13 @@ actor TranscriptionCoordinator {
                         policy: policy,
                         snapshot: postProcessorSnapshot
                     )
+                    await reportDictationStage(
+                        .speechRecognition,
+                        outcome: .skipped,
+                        startedAt: speechRecognitionStartedAt,
+                        outputCharacterCount: 0,
+                        reporter: stageReporter
+                    )
                     return DictationTranscriptionResult(
                         transcription: empty,
                         cleanupOutcome: skippedOutcome,
@@ -1260,17 +1408,46 @@ actor TranscriptionCoordinator {
             }
         }
         let dictionary = Self.decodeCustomWords(customWords)
-        var result = try await route(
-            url: url,
-            backend: backend,
-            cohereLanguage: cohereLanguage,
-            indicASRLanguage: indicASRLanguage,
-            vocabulary: AsrVocabularyPrompt.build(customWords: dictionary)
+        let resultFromRecognizer: SpeechTranscriptionResult
+        do {
+            resultFromRecognizer = try await route(
+                url: url,
+                backend: backend,
+                cohereLanguage: cohereLanguage,
+                indicASRLanguage: indicASRLanguage,
+                vocabulary: AsrVocabularyPrompt.build(customWords: dictionary)
+            )
+        } catch {
+            await reportDictationStage(
+                .speechRecognition,
+                outcome: .failed,
+                startedAt: speechRecognitionStartedAt,
+                outputCharacterCount: 0,
+                reporter: stageReporter
+            )
+            throw error
+        }
+        var result = resultFromRecognizer
+        await reportDictationStage(
+            .speechRecognition,
+            outcome: .completed,
+            startedAt: speechRecognitionStartedAt,
+            outputCharacterCount: result.text.count,
+            reporter: stageReporter
         )
+        let artifactCleanupStartedAt = Date()
         result = removeArtifacts(result)
+        await reportDictationStage(
+            .artifactCleanup,
+            outcome: .completed,
+            startedAt: artifactCleanupStartedAt,
+            outputCharacterCount: result.text.count,
+            reporter: stageReporter
+        )
         if !result.text.isEmpty {
             Qwen3PostProcessorLogging.logVerbose("Dictation raw transcript after artifact cleanup: \(result.text)")
         }
+        let transcriptCleanupStartedAt = Date()
         let attempt = await postProcessDictationIfNeeded(
             result,
             backend: backend,
@@ -1278,7 +1455,23 @@ actor TranscriptionCoordinator {
             postProcessorSnapshot: postProcessorSnapshot,
             appContext: appContext
         )
-        let fallbackResult = attempt.outcome == .applied ? nil : removeFillersWithLogging(result)
+        await reportDictationStage(
+            .transcriptCleanup,
+            outcome: attempt.stageOutcome,
+            startedAt: transcriptCleanupStartedAt,
+            outputCharacterCount: attempt.outputCharacterCount(fallback: result.text.count),
+            reporter: stageReporter
+        )
+        let fallbackResult: SpeechTranscriptionResult?
+        switch attempt {
+        case .applied:
+            fallbackResult = nil
+        case .fallbackDeadline:
+            fallbackResult = result
+        default:
+            fallbackResult = removeFillersWithLogging(result)
+        }
+        let finalizationStartedAt = Date()
         let final = DictationCleanupFinalizer.finalize(
             original: result,
             attempt: attempt,
@@ -1286,10 +1479,33 @@ actor TranscriptionCoordinator {
             provenance: policy.provenance,
             fallbackResult: fallbackResult
         )
+        await reportDictationStage(
+            .finalization,
+            outcome: .completed,
+            startedAt: finalizationStartedAt,
+            outputCharacterCount: final.text.count,
+            reporter: stageReporter
+        )
         if !final.text.isEmpty {
             Qwen3PostProcessorLogging.logVerbose("Dictation final transcript: \(final.text)")
         }
         return final
+    }
+
+    private func reportDictationStage(
+        _ stage: DictationTranscriptionStageEvent.Stage,
+        outcome: DictationTranscriptionStageEvent.Outcome,
+        startedAt: Date,
+        outputCharacterCount: Int,
+        reporter: DictationStageReporter?
+    ) async {
+        guard let reporter else { return }
+        await reporter(DictationTranscriptionStageEvent(
+            stage: stage,
+            outcome: outcome,
+            elapsedMilliseconds: max(Int(Date().timeIntervalSince(startedAt) * 1_000), 0),
+            outputCharacterCount: outputCharacterCount
+        ))
     }
 
     func transcribeMeeting(
@@ -1636,13 +1852,18 @@ actor TranscriptionCoordinator {
     ) async -> DictationCleanupAttempt {
         do {
             let start = CFAbsoluteTimeGetCurrent()
-            let cleanup = try await TranscriptCleanupClient.clean(
-                text: result.text,
-                systemPrompt: systemPrompt,
-                appContext: appContext,
-                backend: postProcessorSnapshot.backend,
-                config: postProcessorSnapshot.config
-            )
+            let cleanup = try await HostedDictationCleanupDeadline.run {
+                try await TranscriptCleanupClient.clean(
+                    text: result.text,
+                    systemPrompt: systemPrompt,
+                    appContext: appContext,
+                    backend: postProcessorSnapshot.backend,
+                    config: postProcessorSnapshot.config,
+                    options: TranscriptCleanupRequestOptions(
+                        timeoutInterval: HostedDictationCleanupDeadline.requestTimeout
+                    )
+                )
+            }
             let elapsedMs = (CFAbsoluteTimeGetCurrent() - start) * 1000
             let trimmed = cleanup.cleanedOutput.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty, !Qwen3DeletionCueDetector.containsDeletionCue(result.text) {
@@ -1681,6 +1902,22 @@ actor TranscriptionCoordinator {
         } catch TranscriptCleanupError.emptyResponse {
             logCleanupFailure(.fallbackEmpty, status: "fallback_empty_output", result: result, backend: backend, styleProvenance: styleProvenance, snapshot: postProcessorSnapshot)
             return .fallbackEmpty
+        } catch let error where HostedDictationCleanupDeadline.isDeadlineError(error) {
+            Qwen3PostProcessorLogging.logVerbose(
+                "\(postProcessorSnapshot.backend.label) post-processor exceeded the dictation deadline; using raw transcript"
+            )
+            TranscriptCleanupDebugLogger.append(
+                status: "fallback_timeout",
+                cleanupBackend: postProcessorSnapshot.backend,
+                cleanupModel: postProcessorSnapshot.modelId,
+                asrBackend: backend.backend,
+                cleanupOutcome: .fallbackDeadline,
+                styleProvenance: styleProvenance,
+                appContextText: appContext,
+                rawASRText: result.text,
+                elapsedMs: HostedDictationCleanupDeadline.requestTimeout * 1_000
+            )
+            return .fallbackDeadline
         } catch TranscriptCleanupError.rejectedOutput {
             Qwen3PostProcessorLogging.logVerbose("\(postProcessorSnapshot.backend.label) post-processor output rejected, falling back")
             TranscriptCleanupDebugLogger.append(
