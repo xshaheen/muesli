@@ -25,6 +25,80 @@ private enum ManualNotesSaveStatus {
     }
 }
 
+struct MeetingDetailFlowLayout: Layout {
+    let spacing: CGFloat
+
+    func makeCache(subviews: Subviews) -> [CGSize] {
+        subviews.map { $0.sizeThatFits(.unspecified) }
+    }
+
+    func updateCache(_ cache: inout [CGSize], subviews: Subviews) {
+        cache = makeCache(subviews: subviews)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout [CGSize]) -> CGSize {
+        layout(proposal: proposal, sizes: cache).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout [CGSize]
+    ) {
+        let result = layout(
+            proposal: ProposedViewSize(width: bounds.width, height: proposal.height),
+            sizes: cache
+        )
+        for (index, point) in result.points.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
+                anchor: .topLeading,
+                proposal: .unspecified
+            )
+        }
+    }
+
+    func layout(sizes: [CGSize], width: CGFloat) -> (size: CGSize, points: [CGPoint]) {
+        var points = Array(repeating: CGPoint.zero, count: sizes.count)
+        var rowStart = 0
+        var rowY: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var x: CGFloat = 0
+
+        for (index, size) in sizes.enumerated() {
+            if x > 0, x + size.width > width {
+                for rowIndex in rowStart..<index {
+                    points[rowIndex].y = rowY + (rowHeight - sizes[rowIndex].height) / 2
+                }
+                rowY += rowHeight + spacing
+                rowStart = index
+                rowHeight = 0
+                x = 0
+            }
+
+            points[index].x = x
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+
+        for rowIndex in rowStart..<sizes.count {
+            points[rowIndex].y = rowY + (rowHeight - sizes[rowIndex].height) / 2
+        }
+
+        return (CGSize(width: width, height: rowY + rowHeight), points)
+    }
+
+    private func layout(
+        proposal: ProposedViewSize,
+        sizes: [CGSize]
+    ) -> (size: CGSize, points: [CGPoint]) {
+        let idealWidth = sizes.reduce(CGFloat.zero) { $0 + $1.width }
+            + spacing * CGFloat(max(sizes.count - 1, 0))
+        return layout(sizes: sizes, width: proposal.width ?? idealWidth)
+    }
+}
+
 // Wrapper views that isolate observation of liveMeetingTranscript.
 // Without these, MeetingDetailView.body would observe the property and
 // re-evaluate on every chunk (every ~5s), re-rendering the entire detail view.
@@ -335,24 +409,12 @@ struct MeetingDetailView: View {
         for meeting: MeetingRecord,
         appliedTemplate: MeetingTemplateSnapshot
     ) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
-                folderPill(for: meeting)
-                Spacer(minLength: MuesliTheme.spacing16)
-                if showsManualNotesEditor(for: meeting) {
-                    recordingControlGroup(for: meeting)
-                } else {
-                    meetingActionRail(for: meeting, appliedTemplate: appliedTemplate)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                folderPill(for: meeting)
-                if showsManualNotesEditor(for: meeting) {
-                    recordingControlGroup(for: meeting)
-                } else {
-                    meetingActionRail(for: meeting, appliedTemplate: appliedTemplate)
-                }
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            folderPill(for: meeting)
+            if showsManualNotesEditor(for: meeting) {
+                recordingControlGroup(for: meeting)
+            } else {
+                meetingActionRail(for: meeting, appliedTemplate: appliedTemplate)
             }
         }
     }
@@ -361,23 +423,7 @@ struct MeetingDetailView: View {
         for meeting: MeetingRecord,
         appliedTemplate: MeetingTemplateSnapshot
     ) -> some View {
-        ViewThatFits(in: .horizontal) {
-            actionRail(for: meeting, appliedTemplate: appliedTemplate)
-
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                primaryActionRail(for: meeting, appliedTemplate: appliedTemplate)
-                utilityActionRail(for: meeting)
-            }
-
-            extremeNarrowActionRail(for: meeting, appliedTemplate: appliedTemplate)
-        }
-    }
-
-    private func extremeNarrowActionRail(
-        for meeting: MeetingRecord,
-        appliedTemplate: MeetingTemplateSnapshot
-    ) -> some View {
-        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+        MeetingDetailFlowLayout(spacing: MuesliTheme.spacing8) {
             if canShowResumeChooser(for: meeting) {
                 actionRailContainer {
                     resumeRecordingButton(for: meeting)
@@ -645,39 +691,10 @@ struct MeetingDetailView: View {
             && !appState.isMeetingRecording
     }
 
-    private func actionRail(for meeting: MeetingRecord, appliedTemplate: MeetingTemplateSnapshot) -> some View {
-        actionRailContainer {
-            primaryActionRailContent(for: meeting, appliedTemplate: appliedTemplate)
-            railDivider
-            utilityActionRailContent(for: meeting)
-        }
-    }
-
-    private func primaryActionRail(
-        for meeting: MeetingRecord,
-        appliedTemplate: MeetingTemplateSnapshot
-    ) -> some View {
-        actionRailContainer {
-            primaryActionRailContent(for: meeting, appliedTemplate: appliedTemplate)
-        }
-    }
-
     private func utilityActionRail(for meeting: MeetingRecord) -> some View {
         actionRailContainer {
             utilityActionRailContent(for: meeting)
         }
-    }
-
-    @ViewBuilder
-    private func primaryActionRailContent(
-        for meeting: MeetingRecord,
-        appliedTemplate: MeetingTemplateSnapshot
-    ) -> some View {
-        if canShowResumeChooser(for: meeting) {
-            resumeRecordingButton(for: meeting)
-            railDivider
-        }
-        templateAndExportActionRailContent(for: meeting, appliedTemplate: appliedTemplate)
     }
 
     @ViewBuilder
@@ -1120,23 +1137,17 @@ struct MeetingDetailView: View {
                 Label("Export Full Meeting", systemImage: "doc.on.doc")
             }
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("Export")
-                    .font(.system(size: 11, weight: .semibold))
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-            }
-            .foregroundStyle(MuesliTheme.textSecondary)
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .contentShape(Rectangle())
+            Image(systemName: "square.and.arrow.up")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .frame(width: 34, height: 30)
+                .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
         .disabled(isEditingNotes || isEditingTranscript)
+        .accessibilityLabel("Export meeting")
         .help("Export meeting")
     }
 
