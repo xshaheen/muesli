@@ -99,6 +99,167 @@ struct MeetingDetailFlowLayout: Layout {
     }
 }
 
+struct MeetingDetailTopBarLayout: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard subviews.count == 2 else { return .zero }
+        let width = proposal.width ?? idealWidth(subviews: subviews)
+        let measurements = measurements(subviews: subviews, width: width)
+        return CGSize(width: width, height: measurements.height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard subviews.count == 2 else { return }
+        let measurements = measurements(subviews: subviews, width: bounds.width)
+        subviews[0].place(
+            at: CGPoint(x: bounds.minX, y: bounds.minY + measurements.leadingY),
+            anchor: .topLeading,
+            proposal: .unspecified
+        )
+        subviews[1].place(
+            at: CGPoint(x: bounds.minX + measurements.trailingX, y: bounds.minY + measurements.trailingY),
+            anchor: .topLeading,
+            proposal: measurements.trailingProposal
+        )
+    }
+
+    private func idealWidth(subviews: Subviews) -> CGFloat {
+        subviews.reduce(CGFloat.zero) { $0 + $1.sizeThatFits(.unspecified).width }
+            + spacing * CGFloat(max(subviews.count - 1, 0))
+    }
+
+    private func measurements(
+        subviews: Subviews,
+        width: CGFloat
+    ) -> (
+        height: CGFloat,
+        leadingY: CGFloat,
+        trailingX: CGFloat,
+        trailingY: CGFloat,
+        trailingProposal: ProposedViewSize
+    ) {
+        let leading = subviews[0].sizeThatFits(.unspecified)
+        let trailingIdeal = subviews[1].sizeThatFits(.unspecified)
+        if leading.width + spacing + trailingIdeal.width <= width {
+            let height = max(leading.height, trailingIdeal.height)
+            return (
+                height,
+                (height - leading.height) / 2,
+                width - trailingIdeal.width,
+                (height - trailingIdeal.height) / 2,
+                .unspecified
+            )
+        }
+
+        let trailingProposal = ProposedViewSize(width: width, height: nil)
+        let trailing = subviews[1].sizeThatFits(trailingProposal)
+        return (
+            leading.height + spacing + trailing.height,
+            0,
+            0,
+            leading.height + spacing,
+            trailingProposal
+        )
+    }
+}
+
+private enum MeetingDetailRailTone {
+    case primary
+    case secondary
+}
+
+enum MeetingDetailRailMetrics {
+    static let height: CGFloat = 32
+    static let iconWidth: CGFloat = 38
+    static let labeledWidth: CGFloat = 77
+    static let horizontalPadding: CGFloat = 8
+    static let dividerWidth: CGFloat = 1
+    static let groupWidth = labeledWidth + dividerWidth + iconWidth
+}
+
+private struct MeetingDetailRailLabel: View {
+    let systemImage: String
+    var title: String? = nil
+    var trailingImage: String? = nil
+    var maximumTitleWidth: CGFloat? = nil
+    var fixedWidth: CGFloat? = nil
+    var tone: MeetingDetailRailTone = .secondary
+
+    @State private var isHovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        HStack(spacing: title == nil ? 0 : 6) {
+            Image(systemName: systemImage)
+                .font(.system(size: title == nil ? 12 : 11, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+
+            if let title {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: maximumTitleWidth, alignment: .leading)
+            }
+
+            if let trailingImage {
+                Image(systemName: trailingImage)
+                    .font(.system(size: 8, weight: .bold))
+                    .opacity(0.82)
+            }
+        }
+        .foregroundStyle(foregroundStyle)
+        .padding(.horizontal, MeetingDetailRailMetrics.horizontalPadding)
+        .frame(
+            width: fixedWidth ?? (title == nil ? MeetingDetailRailMetrics.iconWidth : nil),
+            height: MeetingDetailRailMetrics.height
+        )
+        .background(backgroundStyle)
+        .contentShape(Rectangle())
+        .opacity(isEnabled ? 1 : 0.45)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovered)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+    }
+
+    private var foregroundStyle: Color {
+        switch tone {
+        case .primary:
+            return MuesliTheme.backgroundBase
+        case .secondary:
+            return isHovered ? MuesliTheme.textPrimary : MuesliTheme.textSecondary
+        }
+    }
+
+    private var backgroundStyle: Color {
+        switch tone {
+        case .primary:
+            return isHovered ? MuesliTheme.accent.opacity(0.86) : MuesliTheme.accent
+        case .secondary:
+            return isHovered ? MuesliTheme.backgroundHover : .clear
+        }
+    }
+}
+
+private struct MeetingDetailRailButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
+            .opacity(configuration.isPressed ? 0.88 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: configuration.isPressed)
+    }
+}
+
 // Wrapper views that isolate observation of liveMeetingTranscript.
 // Without these, MeetingDetailView.body would observe the property and
 // re-evaluate on every chunk (every ~5s), re-rendering the entire detail view.
@@ -363,9 +524,9 @@ struct MeetingDetailView: View {
         for meeting: MeetingRecord,
         appliedTemplate: MeetingTemplateSnapshot
     ) -> some View {
-        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-            headerTitleContent(for: meeting, appliedTemplate: appliedTemplate)
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             headerUtilityBand(for: meeting, appliedTemplate: appliedTemplate)
+            headerTitleContent(for: meeting, appliedTemplate: appliedTemplate)
             threadBreadcrumb
         }
     }
@@ -409,7 +570,7 @@ struct MeetingDetailView: View {
         for meeting: MeetingRecord,
         appliedTemplate: MeetingTemplateSnapshot
     ) -> some View {
-        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+        MeetingDetailTopBarLayout(spacing: MuesliTheme.spacing8) {
             folderPill(for: meeting)
             if showsManualNotesEditor(for: meeting) {
                 recordingControlGroup(for: meeting)
@@ -725,18 +886,26 @@ struct MeetingDetailView: View {
             content()
         }
         .fixedSize()
-        .background(MuesliTheme.surfacePrimary)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .frame(width: MeetingDetailRailMetrics.groupWidth, alignment: .leading)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
+        .shadow(color: .black.opacity(0.08), radius: 1, y: 1)
     }
 
     private var railDivider: some View {
         Rectangle()
             .fill(MuesliTheme.surfaceBorder)
-            .frame(width: 1, height: 18)
+            .frame(width: MeetingDetailRailMetrics.dividerWidth, height: 20)
+    }
+
+    private var primaryRailDivider: some View {
+        Rectangle()
+            .fill(MuesliTheme.backgroundBase.opacity(0.25))
+            .frame(width: MeetingDetailRailMetrics.dividerWidth, height: 20)
     }
 
     @ViewBuilder
@@ -744,7 +913,10 @@ struct MeetingDetailView: View {
         if isSummarizing {
             ProgressView()
                 .controlSize(.small)
-                .frame(width: 34, height: 30)
+                .frame(
+                    width: MeetingDetailRailMetrics.iconWidth,
+                    height: MeetingDetailRailMetrics.height
+                )
                 .accessibilityLabel("Summarizing meeting")
                 .help("Summarizing meeting")
         } else {
@@ -824,13 +996,9 @@ struct MeetingDetailView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(MuesliTheme.textSecondary)
-                .frame(width: 34, height: 30)
-                .contentShape(Rectangle())
+            MeetingDetailRailLabel(systemImage: systemImage)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MeetingDetailRailButtonStyle())
         .accessibilityLabel(label)
         .help(label)
     }
@@ -923,21 +1091,13 @@ struct MeetingDetailView: View {
                 controller.showMeetingTemplatesManager()
             }
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: iconName(forSelectionOn: meeting, appliedTemplate: appliedTemplate))
-                    .font(.system(size: 10, weight: .semibold))
-                Text(templateLabel)
-                    .font(.system(size: 11, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: 120, alignment: .leading)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-            }
-            .foregroundStyle(MuesliTheme.textSecondary)
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .contentShape(Rectangle())
+            MeetingDetailRailLabel(
+                systemImage: iconName(forSelectionOn: meeting, appliedTemplate: appliedTemplate),
+                title: templateLabel,
+                trailingImage: "chevron.down",
+                maximumTitleWidth: 55,
+                fixedWidth: MeetingDetailRailMetrics.labeledWidth
+            )
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -1137,11 +1297,7 @@ struct MeetingDetailView: View {
                 Label("Export Full Meeting", systemImage: "doc.on.doc")
             }
         } label: {
-            Image(systemName: "square.and.arrow.up")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(MuesliTheme.textSecondary)
-                .frame(width: 34, height: 30)
-                .contentShape(Rectangle())
+            MeetingDetailRailLabel(systemImage: "square.and.arrow.up")
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -1178,11 +1334,7 @@ struct MeetingDetailView: View {
                     }
                 }
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(MuesliTheme.textSecondary)
-                    .frame(width: 34, height: 30)
-                    .contentShape(Rectangle())
+                MeetingDetailRailLabel(systemImage: "ellipsis")
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -1296,20 +1448,17 @@ struct MeetingDetailView: View {
             Button {
                 controller.resumeFinishedMeeting(meetingID: meeting.id)
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "record.circle")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text("Resume")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .foregroundStyle(MuesliTheme.backgroundBase)
-                .padding(.horizontal, MuesliTheme.spacing12)
-                .frame(height: 30)
-                .background(MuesliTheme.accent)
-                .contentShape(Rectangle())
+                MeetingDetailRailLabel(
+                    systemImage: "record.circle.fill",
+                    title: "Resume",
+                    fixedWidth: MeetingDetailRailMetrics.labeledWidth,
+                    tone: .primary
+                )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(MeetingDetailRailButtonStyle())
             .help("Resume recording")
+
+            primaryRailDivider
 
             Menu {
                 Button {
@@ -1323,17 +1472,10 @@ struct MeetingDetailView: View {
                     Label("Start a follow-up", systemImage: "arrow.turn.down.right")
                 }
             } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(MuesliTheme.backgroundBase)
-                    .frame(width: 28, height: 30)
-                    .background(MuesliTheme.accent)
-                    .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(MuesliTheme.backgroundBase.opacity(0.25))
-                            .frame(width: 1, height: 18)
-                    }
-                    .contentShape(Rectangle())
+                MeetingDetailRailLabel(
+                    systemImage: "chevron.down",
+                    tone: .primary
+                )
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
