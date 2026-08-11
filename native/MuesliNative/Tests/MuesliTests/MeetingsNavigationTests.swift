@@ -37,6 +37,64 @@ struct MeetingsNavigationTests {
             .appendingPathComponent("muesli-nav-support-\(UUID().uuidString)", isDirectory: true)
     }
 
+    private func makeInFlightCleanupController() throws -> (
+        controller: MuesliController,
+        meetingID: Int64,
+        probe: CancellableMeetingCleanupSenderProbe
+    ) {
+        let store = try makeStore()
+        let transcript = (0..<40).map {
+            "[10:\(String(format: "%02d", $0)):00] Speaker 1: "
+                + String(repeating: "word ", count: 40)
+        }.joined(separator: "\n")
+        let now = Date()
+        let meetingID = try store.insertMeeting(
+            title: "Consent cancellation",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: transcript,
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        let configStore = ConfigStore(supportDirectory: makeSupportDirectory())
+        let backend = TranscriptCleanupBackendOption.hosted(.ollama)
+        var config = AppConfig()
+        config.postProcessorBackend = backend.backend
+        config.ollamaURL = "http://localhost:11434"
+        #expect(MeetingTranscriptCleanupPolicy.grantConsent(for: backend, config: &config))
+        configStore.save(config)
+
+        let probe = CancellableMeetingCleanupSenderProbe()
+        let controller = MuesliController(
+            runtime: RuntimePaths(
+                repoRoot: FileManager.default.temporaryDirectory,
+                menuIcon: nil,
+                appIcon: nil,
+                bundlePath: nil
+            ),
+            dictationStore: store,
+            configStore: configStore,
+            meetingTranscriptCleanupSenderFactory: { _, _ in
+                { payload in try await probe.send(payload) }
+            }
+        )
+        return (controller, meetingID, probe)
+    }
+
+    private func waitForCleanupSend(
+        _ probe: CancellableMeetingCleanupSenderProbe,
+        toFinish: Bool = false
+    ) async {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
+            let reached = toFinish ? await probe.finishedSendCount > 0 : await probe.sendCount > 0
+            if reached { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     @discardableResult
     private func insertMeeting(
         in store: DictationStore,
@@ -71,6 +129,7 @@ struct MeetingsNavigationTests {
 
         #expect(presentation.opensMeetingDocument)
         #expect(presentation.presentsHistoryWindow)
+        #expect(!presentation.presentsFloatingPanelWhenRecordingStarts)
     }
 
     @Test("background meeting starts only transition the recording pill")
@@ -79,6 +138,17 @@ struct MeetingsNavigationTests {
 
         #expect(!presentation.opensMeetingDocument)
         #expect(!presentation.presentsHistoryWindow)
+        #expect(!presentation.presentsFloatingPanelWhenRecordingStarts)
+    }
+
+    @Test("compact control presentation requests floating UI without opening the main window")
+    func compactControlMeetingStartPresentation() {
+        let presentation = MeetingStartPresentation.compactControl
+
+        #expect(presentation == .floatingPanel)
+        #expect(!presentation.opensMeetingDocument)
+        #expect(!presentation.presentsHistoryWindow)
+        #expect(presentation.presentsFloatingPanelWhenRecordingStarts)
     }
 
     @Test("each dashboard statistic opens insights with its originating section")
@@ -131,16 +201,18 @@ struct MeetingsNavigationTests {
         )
     }
 
-    @Test("selectedMeeting resolves the selected row only")
-    func selectedMeetingUsesExplicitSelection() {
+    @Test("selectedMeeting requires the full document record")
+    func selectedMeetingUsesFullDocumentRecord() {
         let appState = AppState()
-        let first = makeMeeting(id: 101, title: "First")
         let second = makeMeeting(id: 202, title: "Second")
-        appState.meetingRows = [first, second]
+        appState.meetingRows = [makeMeetingList(id: 202, title: "Second")]
 
         #expect(appState.selectedMeeting == nil)
 
         appState.selectedMeetingID = 202
+        #expect(appState.selectedMeeting == nil)
+
+        appState.selectedMeetingRecord = second
         #expect(appState.selectedMeeting?.id == 202)
         #expect(appState.selectedMeeting?.title == "Second")
     }
@@ -148,14 +220,39 @@ struct MeetingsNavigationTests {
     @Test("selectedMeeting falls back to the stored document record outside the browser slice")
     func selectedMeetingUsesStoredRecordWhenNotInRows() {
         let appState = AppState()
-        let visible = makeMeeting(id: 101, title: "Visible")
         let selected = makeMeeting(id: 202, title: "Selected Outside Slice")
-        appState.meetingRows = [visible]
+        appState.meetingRows = [makeMeetingList(id: 101, title: "Visible")]
         appState.selectedMeetingID = 202
         appState.selectedMeetingRecord = selected
 
         #expect(appState.selectedMeeting?.id == 202)
         #expect(appState.selectedMeeting?.title == "Selected Outside Slice")
+    }
+
+    @Test("dashboard projection keeps document selection fully hydrated")
+    func dashboardProjectionLoadsFullSelectedMeeting() throws {
+        let store = try makeStore()
+        let transcript = "full transcript " + String(repeating: "x", count: 2_000)
+        let now = Date()
+        let meetingID = try store.insertMeeting(
+            title: "Projected",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: transcript,
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        let controller = makeController(dictationStore: store)
+        controller.appState.selectedMeetingID = meetingID
+
+        controller.syncAppState()
+
+        let listRow = try #require(controller.appState.meetingRows.first { $0.id == meetingID })
+        #expect(listRow.preview.count == MeetingListRecord.previewCharacterLimit)
+        #expect(controller.appState.selectedMeeting?.rawTranscript == transcript)
+        #expect(controller.meeting(id: meetingID)?.rawTranscript == transcript)
     }
 
     @Test("showMeetingDocument enters meetings document route and records selection")
@@ -1141,6 +1238,37 @@ struct MeetingsNavigationTests {
         #expect(controller.appState.config.meetingTranscriptionModel == BackendOption.whisperLargeTurbo.model)
     }
 
+    @Test("batch final selection survives enabling Nemotron live preview")
+    func batchFinalSelectionSurvivesEnablingNemotronLivePreview() {
+        let controller = makeController()
+
+        controller.selectMeetingFinalTranscriptBackend(.whisperLargeTurbo, requireDownloaded: false)
+        controller.updateConfig {
+            $0.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
+            $0.enableLiveStreamingPartials = true
+        }
+
+        #expect(controller.appState.selectedMeetingTranscriptionBackend == .whisperLargeTurbo)
+        #expect(controller.appState.config.useLiveMeetingTranscriptAsFinal == false)
+        #expect(!controller.appState.config.usesUnifiedNemotronMeetingTranscript)
+    }
+
+    @Test("deleting the selected batch final falls back to live Nemotron")
+    func deletingSelectedBatchFinalFallsBackToLiveNemotron() {
+        let controller = makeController()
+
+        controller.selectMeetingFinalTranscriptBackend(.whisperLargeTurbo, requireDownloaded: false)
+        controller.updateConfig {
+            $0.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
+            $0.enableLiveStreamingPartials = true
+        }
+
+        controller.refreshMeetingTranscriptionSelectionAfterDeleting(.whisperLargeTurbo)
+
+        #expect(controller.appState.config.useLiveMeetingTranscriptAsFinal)
+        #expect(controller.appState.config.usesUnifiedNemotronMeetingTranscript)
+    }
+
     @Test("selecting Gemma dictation replaces conflicting Gemma cleanup")
     func selectingGemmaDictationReplacesGemmaCleanup() {
         let controller = makeController()
@@ -1153,6 +1281,76 @@ struct MeetingsNavigationTests {
         #expect(controller.appState.selectedBackend == .gemma4E2BLiteRT)
         #expect(controller.appState.selectedPostProcessorBackend == .local)
         #expect(controller.appState.config.postProcessorBackend == TranscriptCleanupBackendOption.local.backend)
+    }
+
+    @Test("changing the meeting cleanup destination requires renewed consent")
+    func changingMeetingCleanupDestinationRequiresRenewedConsent() {
+        let controller = makeController()
+        controller.selectPostProcessorBackend(.hosted(.ollama))
+        controller.updateConfig { $0.ollamaURL = "http://localhost:11434" }
+        controller.setMeetingTranscriptCleanupEnabled(true)
+
+        #expect(controller.config.enableMeetingTranscriptCleanup)
+        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint != nil)
+
+        controller.updateConfig { $0.ollamaURL = "http://192.168.1.50:11434" }
+
+        #expect(controller.config.enableMeetingTranscriptCleanup == false)
+        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint == nil)
+
+        controller.setMeetingTranscriptCleanupEnabled(true)
+
+        #expect(controller.config.enableMeetingTranscriptCleanup)
+        #expect(MeetingTranscriptCleanupPolicy.hasCurrentConsent(
+            for: .hosted(.ollama),
+            config: controller.config
+        ))
+    }
+
+    @Test("changing the meeting cleanup backend requires renewed consent")
+    func changingMeetingCleanupBackendRequiresRenewedConsent() {
+        let controller = makeController()
+        controller.selectPostProcessorBackend(.hosted(.ollama))
+        controller.setMeetingTranscriptCleanupEnabled(true)
+
+        controller.selectPostProcessorBackend(.hosted(.openAI))
+
+        #expect(controller.config.enableMeetingTranscriptCleanup == false)
+        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint == nil)
+    }
+
+    @Test("changing cleanup destination cancels in-flight chunk uploads")
+    func changingCleanupDestinationCancelsInFlightUploads() async throws {
+        let (controller, meetingID, probe) = try makeInFlightCleanupController()
+        controller.scheduleMeetingTranscriptCleanup(meetingID: meetingID)
+        await waitForCleanupSend(probe)
+        #expect(await probe.sendCount == 1)
+
+        controller.updateConfig { $0.ollamaURL = "http://192.168.1.50:11434" }
+        await waitForCleanupSend(probe, toFinish: true)
+
+        #expect(controller.inFlightMeetingTranscriptCleanupCount == 0)
+        #expect(await probe.sendCount == 1)
+        #expect(await probe.finishedSendCount == 1)
+        #expect(controller.config.enableMeetingTranscriptCleanup == false)
+        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint == nil)
+    }
+
+    @Test("disabling cleanup cancels in-flight chunk uploads")
+    func disablingCleanupCancelsInFlightUploads() async throws {
+        let (controller, meetingID, probe) = try makeInFlightCleanupController()
+        controller.scheduleMeetingTranscriptCleanup(meetingID: meetingID)
+        await waitForCleanupSend(probe)
+        #expect(await probe.sendCount == 1)
+
+        controller.setMeetingTranscriptCleanupEnabled(false)
+        await waitForCleanupSend(probe, toFinish: true)
+
+        #expect(controller.inFlightMeetingTranscriptCleanupCount == 0)
+        #expect(await probe.sendCount == 1)
+        #expect(await probe.finishedSendCount == 1)
+        #expect(controller.config.enableMeetingTranscriptCleanup == false)
+        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint == nil)
     }
 
     @Test("startup repairs a persisted Gemma dictation and cleanup conflict")
@@ -1225,6 +1423,39 @@ struct MeetingsNavigationTests {
             selectedTemplateName: "Auto",
             selectedTemplateKind: .auto,
             selectedTemplatePrompt: ""
+        )
+    }
+
+    private func makeMeetingList(id: Int64, title: String) -> MeetingListRecord {
+        MeetingListRecord(
+            id: id,
+            title: title,
+            startTime: "2026-03-24 10:00",
+            durationSeconds: 1800,
+            folderID: nil,
+            savedRecordingPath: nil,
+            status: .completed,
+            source: .meeting,
+            followUpToID: nil,
+            preview: "Summary"
+        )
+    }
+}
+
+private actor CancellableMeetingCleanupSenderProbe {
+    private(set) var sendCount = 0
+    private(set) var finishedSendCount = 0
+
+    func send(_ payload: String) async throws -> TranscriptCleanupResult {
+        sendCount += 1
+        defer { finishedSendCount += 1 }
+        if sendCount == 1 {
+            try await Task.sleep(for: .seconds(30))
+        }
+        return TranscriptCleanupResult(
+            rawOutput: payload,
+            cleanedOutput: payload,
+            model: "test"
         )
     }
 }
@@ -1324,7 +1555,7 @@ struct MeetingBrowserLogicTests {
         return formatter.string(from: date)
     }
 
-    private func makeMeeting(id: Int64, daysAgo: Int, title: String) -> MeetingRecord {
+    private func makeMeeting(id: Int64, daysAgo: Int, title: String) -> MeetingListRecord {
         let now = Date(timeIntervalSince1970: 1_710_000_000)
         let calendar = Calendar(identifier: .gregorian)
         return makeMeeting(
@@ -1334,23 +1565,18 @@ struct MeetingBrowserLogicTests {
         )
     }
 
-    private func makeMeeting(id: Int64, rawDate: String, title: String) -> MeetingRecord {
-        MeetingRecord(
+    private func makeMeeting(id: Int64, rawDate: String, title: String) -> MeetingListRecord {
+        MeetingListRecord(
             id: id,
             title: title,
             startTime: rawDate,
             durationSeconds: 1800,
-            rawTranscript: "Transcript",
-            formattedNotes: "## Summary",
-            wordCount: 42,
             folderID: nil,
-            calendarEventID: nil,
-            micAudioPath: nil,
-            systemAudioPath: nil,
-            selectedTemplateID: MeetingTemplates.autoID,
-            selectedTemplateName: "Auto",
-            selectedTemplateKind: .auto,
-            selectedTemplatePrompt: ""
+            savedRecordingPath: nil,
+            status: .completed,
+            source: .meeting,
+            followUpToID: nil,
+            preview: "Summary"
         )
     }
 }

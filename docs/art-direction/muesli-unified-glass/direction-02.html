@@ -1,0 +1,15 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Direction 02</title><link rel="stylesheet" href="styles.css"><style>
+.dock-cluster { position:absolute; top:76px; left:50%; transform:translateX(-50%); display:grid; grid-template-columns:46px 360px; gap:10px; align-items:start; }
+.vertical-dock { border-radius:18px; padding:7px; display:flex; flex-direction:column; gap:5px; align-items:center; }
+.vertical-dock .icon-button { width:31px; height:31px; }
+.vertical-dock .sep { height:1px; width:20px; background:var(--line); margin:3px 0; }
+.dock-cluster .panel { display:flex; flex-direction:column; }
+.panel-kicker { font-size:10px; color:var(--faint); margin-bottom:3px; text-transform:uppercase; letter-spacing:.1em; }
+.workspace { position:absolute; left:84px; right:44px; bottom:-142px; height:300px; border-radius:22px 0 0 0; }
+.rail-ghost { position:absolute; left:44px; bottom:0; width:40px; height:158px; border-radius:20px 0 0 0; background:rgba(20,21,24,.86); border:1px solid rgba(255,255,255,.08); }
+</style></head><body><main class="scene">
+<div class="eyebrow">Direction 02</div><div class="caption">A stable tool dock: modes stay visible, content gets the width.</div>
+<section class="dock-cluster"><aside class="vertical-dock glass" aria-label="Meeting tools"><button class="icon-button active" title="Transcript">≡</button><button class="icon-button" title="Chat">◌</button><button class="icon-button" title="Notes">⌑</button><div class="sep"></div><button class="icon-button" title="Pause">Ⅱ</button><button class="icon-button" title="Stop">■</button></aside>
+<article class="panel glass"><header class="panel-head"><div><div class="panel-kicker">Live meeting</div><strong class="panel-title">Transcript</strong></div><div class="status"><span class="live-dot"></span>Listening</div><button class="icon-button">⧉</button><button class="icon-button">×</button></header><div class="feed"><div class="turn"><div class="speaker">Others</div><p>The mode switcher should not compete with the transcript itself.</p></div><div class="turn you"><div class="speaker">You</div><p>Keep the controls in one predictable place.</p></div><div class="turn"><div class="speaker">Others</div><p>The live content can then use a calmer, wider reading column.</p></div></div></article></section>
+<div class="rail-ghost"></div><section class="workspace"><div class="workspace-bar"><span style="font-size:12px;color:var(--muted)">Meetings</span><span style="margin-left:auto;color:var(--faint);font-size:11px">Transcript&nbsp;&nbsp; Chat&nbsp;&nbsp; Notes</span></div><div class="workspace-body"><h1 class="meeting-title">Meeting</h1><div class="meeting-meta">Live now&nbsp;&nbsp; • &nbsp;&nbsp;59 words</div><div class="note-block"><h3>Transcript</h3><div class="note-line"></div><div class="note-line"></div><div class="note-line"></div></div></div></section>
+</main></body></html>

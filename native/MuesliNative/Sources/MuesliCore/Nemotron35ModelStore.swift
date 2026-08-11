@@ -26,6 +26,9 @@ public enum Nemotron35ModelStoreError: Error, LocalizedError {
 /// this top-level CoreML layout. Keeping the downloader and path here prevents
 /// the two products from maintaining separate copies of the same model.
 public enum Nemotron35ModelStore {
+    typealias TreePageRequest = @Sendable (URL) async throws -> (Data, URLResponse)
+    typealias RetryDelay = @Sendable (UInt64) async throws -> Void
+
     public static let repoID = "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML"
     public static let variantPath = "multilingual/2240ms"
     public static let cacheRelativePath = ".cache/muesli/models/nemotron35-multilingual-2240ms"
@@ -61,15 +64,23 @@ public enum Nemotron35ModelStore {
     }
 
     public static func isModelDownloaded(fileManager: FileManager = .default) -> Bool {
-        let directory = cacheDirectory(fileManager: fileManager)
+        isModelDownloaded(
+            at: cacheDirectory(fileManager: fileManager),
+            fileManager: fileManager
+        )
+    }
+
+    public static func isModelDownloaded(
+        at directory: URL,
+        fileManager: FileManager = .default
+    ) -> Bool {
         return requiredFileRelativePaths.allSatisfy { relativePath in
             let url = directory.appendingPathComponent(relativePath)
             guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
-                  let type = attributes[.type] as? FileAttributeType,
-                  type == .typeRegular else {
+                  let type = attributes[.type] as? FileAttributeType else {
                 return false
             }
-            return true
+            return type == .typeRegular
         }
     }
 
@@ -164,11 +175,7 @@ public enum Nemotron35ModelStore {
             throw Nemotron35ModelStoreError.invalidURL(apiURL)
         }
 
-        let (data, response) = try await URLSession.shared.data(from: url)
-        if let httpResponse = response as? HTTPURLResponse,
-           !(200..<300).contains(httpResponse.statusCode) {
-            throw Nemotron35ModelStoreError.httpError(httpResponse.statusCode, apiURL)
-        }
+        let data = try await requestTreePage(from: url)
 
         guard let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             throw Nemotron35ModelStoreError.invalidResponse(apiURL)
@@ -208,5 +215,96 @@ public enum Nemotron35ModelStore {
             }
         }
         return files.sorted { $0.relativePath < $1.relativePath }
+    }
+
+    static func requestTreePage(
+        from url: URL,
+        request: @escaping TreePageRequest = { try await URLSession.shared.data(from: $0) },
+        retryDelay: @escaping RetryDelay = { try await Task.sleep(nanoseconds: $0) }
+    ) async throws -> Data {
+        var lastError: Error?
+
+        for attempt in 0..<3 {
+            if attempt > 0 {
+                try await retryDelay(UInt64(1 << (attempt - 1)) * 1_000_000_000)
+            }
+
+            try Task.checkCancellation()
+
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await request(url)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastError = error
+                continue
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw Nemotron35ModelStoreError.invalidResponse(url.absoluteString)
+            }
+            if (200..<300).contains(httpResponse.statusCode) {
+                return data
+            }
+
+            let error = Nemotron35ModelStoreError.httpError(
+                httpResponse.statusCode,
+                url.absoluteString
+            )
+            guard httpResponse.statusCode == 429 || (500..<600).contains(httpResponse.statusCode) else {
+                throw error
+            }
+            lastError = error
+        }
+
+        throw Nemotron35ModelStoreError.retriesExhausted(
+            url.absoluteString,
+            lastError ?? NSError(
+                domain: "Nemotron35ModelStore",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No tree requests were made"]
+            )
+        )
+    }
+
+    private static func downloadFile(from url: URL, to destination: URL, path: String) async throws {
+        var lastError: Error?
+
+        for attempt in 0..<3 {
+            if attempt > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(1 << (attempt - 1)) * 1_000_000_000)
+            }
+
+            do {
+                try Task.checkCancellation()
+                let (temporaryURL, response) = try await URLSession.shared.download(from: url)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200..<300).contains(httpResponse.statusCode)
+                else {
+                    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                    try? FileManager.default.removeItem(at: temporaryURL)
+                    throw Nemotron35ModelStoreError.httpError(statusCode, path)
+                }
+
+                try? FileManager.default.removeItem(at: destination)
+                try FileManager.default.moveItem(at: temporaryURL, to: destination)
+                return
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastError = error
+            }
+        }
+
+        throw Nemotron35ModelStoreError.retriesExhausted(
+            path,
+            lastError ?? NSError(
+                domain: "Nemotron35ModelStore",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No download attempts were made"]
+            )
+        )
     }
 }

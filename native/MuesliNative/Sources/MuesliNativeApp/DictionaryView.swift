@@ -169,7 +169,7 @@ struct DictionaryView: View {
                     imported,
                     into: appState.config.customWords
                 )
-                controller.updateConfig { $0.customWords = result.words }
+                controller.replaceCustomWords(result.words)
 
                 let totalChanged = result.addedCount + result.updatedCount
                 if totalChanged == 0 {

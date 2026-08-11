@@ -2,21 +2,43 @@ import SwiftUI
 import MuesliCore
 
 struct DashboardRootView: View {
+    static let sidebarMinimumWidth: CGFloat = 260
+    private static let sidebarIdealWidth: CGFloat = 280
+    private static let sidebarMaximumWidth: CGFloat = 320
+
     let appState: AppState
     let controller: MuesliController
     @State private var featureTourTargetFrames: [FeatureTourTarget: CGRect] = [:]
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(appState: appState, controller: controller)
-                .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 300)
+                .frame(minWidth: Self.sidebarMinimumWidth)
+                .navigationSplitViewColumnWidth(
+                    min: Self.sidebarMinimumWidth,
+                    ideal: Self.sidebarIdealWidth,
+                    max: Self.sidebarMaximumWidth
+                )
+                .toolbar(removing: .sidebarToggle)
         } detail: {
             detailContent
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(MuesliTheme.backgroundBase)
         }
         .navigationSplitViewStyle(.balanced)
-        .frame(minWidth: 900, minHeight: 600)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    columnVisibility = Self.toggledColumnVisibility(after: columnVisibility)
+                } label: {
+                    Image(systemName: "sidebar.leading")
+                }
+                .keyboardShortcut("s", modifiers: [.control, .command])
+                .help("Toggle Sidebar (⌃⌘S)")
+            }
+        }
+        .frame(minWidth: 640, minHeight: 480)
         .preferredColorScheme(appState.config.darkMode ? .dark : .light)
         .onPreferenceChange(FeatureTourTargetPreferenceKey.self) { frames in
             guard FeatureTourFrameTracking.hasMeaningfulChange(
@@ -107,6 +129,12 @@ struct DashboardRootView: View {
                 onDismiss: { controller.dismissDiagnosticIncidentPrompt() }
             )
         }
+    }
+
+    static func toggledColumnVisibility(
+        after visibility: NavigationSplitViewVisibility
+    ) -> NavigationSplitViewVisibility {
+        visibility == .all ? .detailOnly : .all
     }
 
     @ViewBuilder

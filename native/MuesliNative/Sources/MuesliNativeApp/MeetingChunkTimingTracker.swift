@@ -19,14 +19,22 @@ struct MeetingChunkTimingTracker: Sendable {
     private var currentChunkStartSampleIndex: Int64?
     private var currentChunkSampleCount: Int64 = 0
 
-    mutating func start() {
-        currentChunkStartSampleIndex = 0
+    mutating func start(atSampleIndex startSampleIndex: Int64 = 0) {
+        guard currentChunkStartSampleIndex == nil else { return }
+        currentChunkStartSampleIndex = max(startSampleIndex, 0)
         currentChunkSampleCount = 0
     }
 
     mutating func append(sampleCount: Int) {
         guard sampleCount > 0, currentChunkStartSampleIndex != nil else { return }
         currentChunkSampleCount += Int64(sampleCount)
+    }
+
+    /// Starts the next chunk at a callback-derived timeline position after an
+    /// interrupted source resumes. The interrupted chunk must be rotated first.
+    mutating func realign(atSampleIndex sampleIndex: Int64) {
+        currentChunkStartSampleIndex = max(sampleIndex, 0)
+        currentChunkSampleCount = 0
     }
 
     mutating func rotate() -> MeetingChunkTimingSnapshot? {

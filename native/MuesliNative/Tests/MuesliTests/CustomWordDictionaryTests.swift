@@ -74,6 +74,28 @@ struct CustomWordDictionaryTests {
         #expect(result.words[1].targetWord == "Kubernetes")
     }
 
+    @Test("updates the first existing duplicate used by matching")
+    func updatesFirstExistingDuplicate() {
+        let firstID = UUID()
+        let secondID = UUID()
+        let existing = [
+            CustomWord(id: firstID, word: "Muesli", replacement: "first"),
+            CustomWord(id: secondID, word: " muesli ", replacement: "second"),
+        ]
+        let imported = [
+            CustomWord(word: "muesli", replacement: "imported"),
+        ]
+
+        let result = CustomWordDictionaryCodec.merge(imported, into: existing)
+
+        #expect(result.updatedCount == 1)
+        #expect(result.words[0].id == firstID)
+        #expect(result.words[0].targetWord == "imported")
+        #expect(result.words[1].id == secondID)
+        #expect(result.words[1].targetWord == "second")
+        #expect(CustomWordMatcher.apply(text: "muesli", customWords: result.words) == "imported")
+    }
+
     @Test("new imported entries receive fresh IDs")
     func newEntriesDoNotReuseImportedIDs() {
         let importedID = UUID()
@@ -99,5 +121,30 @@ struct CustomWordDictionaryTests {
         #expect(imported[0].replacement == "")
         #expect(result.words[0].replacement == "")
         #expect(CustomWordMatcher.apply(text: "delete", customWords: result.words) == "")
+    }
+
+    @Test("dictionary import refreshes the cleanup prompt after bulk replacement")
+    func dictionaryImportUsesRefreshingControllerMutation() throws {
+        let appSources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/MuesliNativeApp")
+        let dictionaryView = try String(
+            contentsOf: appSources.appendingPathComponent("DictionaryView.swift"),
+            encoding: .utf8
+        )
+        let controller = try String(
+            contentsOf: appSources.appendingPathComponent("MuesliController.swift"),
+            encoding: .utf8
+        )
+
+        #expect(dictionaryView.contains("controller.replaceCustomWords(result.words)"))
+        #expect(controller.contains("""
+            func replaceCustomWords(_ words: [CustomWord]) {
+                updateConfig { $0.customWords = words }
+                refreshPostProcessorPromptAfterDictionaryChange()
+            }
+        """))
     }
 }

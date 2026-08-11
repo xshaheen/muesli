@@ -30,7 +30,17 @@ case "${shard}" in
       AppConfigTests
       CGPointCodableTests
       UpdateFailureGuidanceTests
+      SidebarHitAreaTests
       WordCountTests
+      ChatGPTResponsesMessagesTests
+      ChatGPTResponsesTruncationTests
+      FloatingIndicatorAnchorRestoreTests
+      FloatingIndicatorDragTests
+      FloatingIndicatorPlacementTests
+      FloatingIndicatorStyleTests
+      FloatingMeetingChatTests
+      FloatingMeetingTranscriptPlacementTests
+      MarkdownRichTextEditorTests
       CustomWordDictionaryTests
       ModelDownloadCoordinatorTests
       IndicASRBackendTests
@@ -68,6 +78,13 @@ case "${shard}" in
       HotkeyConfigTests
       DictationStateIdleTests
       DictationCorrectionMonitorTests
+      AsrVocabularyPromptTests
+      WhisperBiasingManualReproTests
+      TranscriptionResultCleanupTests
+      TranscriptionBackendResidencyPolicyTests
+      TranscriptCleanupRequestBodyTests
+      PostProcessorIdleUnloadPolicyTests
+      ModelDeletionExecutorTests
       Nemotron35ModelStoreTests
     )
     ;;
@@ -93,6 +110,18 @@ case "${shard}" in
       MeetingTemplateResolutionTests
       MeetingTemplatesDefaultFallbackTests
       RouteAwareMeetingMicRecorderTests
+      StreamingMicRecorderConfigChangeTests
+      SystemAudioRecorderTests
+      MeetingMicFailoverAttemptTrackerTests
+      MeetingMicFailoverPolicyTests
+      MeetingMicSessionRouteStateTests
+      MeetingChatClientTests
+      MeetingChatConversationTests
+      MeetingChatRecipesTests
+      MeetingChatSourceTests
+      MeetingCleanupPromptTests
+      MeetingTranscriptAccessorTests
+      MeetingTranscriptCleanupTests
       DisabledCalendarFilterTests
       GoogleCalendarTests
     )

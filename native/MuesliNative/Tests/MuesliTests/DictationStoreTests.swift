@@ -49,6 +49,49 @@ struct DictationStoreTests {
         NSError(domain: "DictationStoreTests", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
+    @Test("meeting chat turns round-trip and are removed with the meeting")
+    func meetingChatTurnsRoundTripAndClearOnDelete() throws {
+        let store = try makeStore()
+        let now = Date()
+        let meetingID = try store.insertMeeting(
+            title: "Chat persistence",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: "Transcript",
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        let turns = [
+            MeetingChatTurnRecord(
+                id: UUID(),
+                role: .user,
+                displayText: "What did I miss?",
+                sentText: "Summarize the decisions.",
+                wasAnswered: true
+            ),
+            MeetingChatTurnRecord(
+                id: UUID(),
+                role: .assistant,
+                displayText: "The launch moved to Friday.",
+                sentText: "The launch moved to Friday.",
+                wasAnswered: true
+            ),
+        ]
+
+        try store.replaceMeetingChatTurns(meetingID: meetingID, turns: turns)
+        #expect(try store.meetingChatTurns(meetingID: meetingID) == turns)
+
+        try store.deleteMeeting(id: meetingID)
+        #expect(try store.meetingChatTurns(meetingID: meetingID).isEmpty)
+        #expect(try firstTextColumns(
+            store.resolvedDatabaseURL,
+            "SELECT chat_history_json FROM meetings WHERE id = \(meetingID)",
+            count: 1
+        ) == ["[]"])
+    }
+
     private func setFolderParentRaw(folderID: Int64, parentID: Int64, store: DictationStore) throws {
         var db: OpaquePointer?
         guard sqlite3_open(store.databasePath().path, &db) == SQLITE_OK else {
@@ -239,6 +282,140 @@ struct DictationStoreTests {
         #expect(records[dictation.id]?.text == "Batch dictation")
         #expect(records[meeting.id]?.text == "Meeting transcript")
         #expect(records["missing-record"] == nil)
+    }
+
+    @Test("database initialization failures close their SQLite handles")
+    func databaseInitializationFailureClosesHandle() throws {
+        let store = DictationStore(databaseURL: URL(fileURLWithPath: "/dev/null"))
+        let descriptorCountBefore = try devNullDescriptorCount()
+
+        for _ in 0..<32 {
+            #expect(throws: Error.self) {
+                try store.migrateIfNeeded()
+            }
+        }
+
+        let descriptorCountAfter = try devNullDescriptorCount()
+        #expect(descriptorCountAfter <= descriptorCountBefore + 1)
+    }
+
+    /// Descriptors resolving to `/dev/null` — the probe's own database target.
+    /// A raw `/dev/fd` count also sees every file other concurrently running
+    /// suites open, which made this probe flaky under parallel execution;
+    /// nothing else in the test process opens `/dev/null`, so a leak of the 32
+    /// failed handles above still moves this count while neighbors cannot.
+    private func devNullDescriptorCount() throws -> Int {
+        var count = 0
+        for entry in try FileManager.default.contentsOfDirectory(atPath: "/dev/fd") {
+            guard let fd = Int32(entry) else { continue }
+            var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            guard fcntl(fd, F_GETPATH, &buffer) != -1 else { continue }
+            if String(cString: buffer) == "/dev/null" { count += 1 }
+        }
+        return count
+    }
+
+    @Test("meeting list projection applies preview precedence and bounds source text")
+    func meetingListProjectionBoundsPreview() throws {
+        let store = try makeStore()
+        let now = Date()
+        let raw = "raw " + String(repeating: "r", count: 2_000)
+        let formatted = "formatted " + String(repeating: "f", count: 2_000)
+        let manual = "manual " + String(repeating: "m", count: 2_000)
+        let cleaned = "cleaned " + String(repeating: "c", count: 2_000)
+
+        let completedID = try store.insertMeeting(
+            title: "Completed",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: raw,
+            formattedNotes: formatted,
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        try store.updateMeetingManualNotes(id: completedID, manualNotes: manual)
+
+        let failedID = try store.insertMeeting(
+            title: "Failed",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: raw,
+            formattedNotes: formatted,
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        try store.updateMeetingManualNotes(id: failedID, manualNotes: manual)
+        try store.updateMeetingStatus(id: failedID, status: .failed)
+
+        let cleanedID = try store.insertMeeting(
+            title: "Cleaned",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: raw,
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        #expect(try store.storeCleanedMeetingTranscript(
+            id: cleanedID,
+            cleanedTranscript: cleaned,
+            expectedRawTranscript: raw
+        ))
+
+        let rawID = try store.insertMeeting(
+            title: "Raw",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: raw,
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil,
+            source: .iOS
+        )
+
+        let folderID = try store.createFolder(name: "Projected")
+        let followUpID = try store.createLiveMeeting(
+            title: "Follow-up",
+            calendarEventID: nil,
+            startTime: now,
+            folderID: folderID,
+            followUpToID: completedID
+        )
+
+        let rowsByID = Dictionary(uniqueKeysWithValues: try store.recentMeetingList().map { ($0.id, $0) })
+        #expect(rowsByID[completedID]?.preview == String(formatted.prefix(MeetingListRecord.previewCharacterLimit)))
+        #expect(rowsByID[failedID]?.preview == String(manual.prefix(MeetingListRecord.previewCharacterLimit)))
+        #expect(rowsByID[cleanedID]?.preview == String(cleaned.prefix(MeetingListRecord.previewCharacterLimit)))
+        #expect(rowsByID[rawID]?.preview == String(raw.prefix(MeetingListRecord.previewCharacterLimit)))
+        #expect(rowsByID.values.allSatisfy { $0.preview.count <= MeetingListRecord.previewCharacterLimit })
+        #expect(rowsByID[failedID]?.status == .failed)
+        #expect(rowsByID[rawID]?.source == .iOS)
+
+        let folderRows = try store.recentMeetingList(folderID: folderID)
+        #expect(folderRows.map(\.id) == [followUpID])
+        #expect(folderRows.first?.folderID == folderID)
+        #expect(folderRows.first?.followUpToID == completedID)
+        #expect(folderRows.first?.status == .recording)
+
+        let iPhoneRows = try store.recentMeetingList(origin: .fromIPhone)
+        #expect(iPhoneRows.map(\.id) == [rawID])
+
+        let fullRecord = try #require(try store.meeting(id: rawID))
+        #expect(fullRecord.rawTranscript == raw)
+        #expect(fullRecord.rawTranscript.count > MeetingListRecord.previewCharacterLimit)
+
+        let liveRow = try #require(try store.meetingListRecord(id: followUpID))
+        #expect(liveRow.title == "Follow-up")
+        #expect(liveRow.status == .recording)
+        #expect(liveRow.folderID == folderID)
+        #expect(try store.meetingListRecord(id: -1) == nil)
+
+        try store.deleteMeeting(id: rawID)
+        #expect(try store.meetingListRecord(id: rawID) == nil)
     }
 
     @Test("migration replaces calendar event uniqueness with occurrence lookup")
@@ -439,6 +616,10 @@ struct DictationStoreTests {
         )
 
         #expect(record.calendarOccurrence == nil)
+        #expect(record.cleanedTranscript.isEmpty)
+        #expect(record.visualContext.isEmpty)
+        #expect(record.previousMeetingNotes.isEmpty)
+        #expect(record.notesSource == .raw)
     }
 
     @Test("MeetingRecord preserves a calendar occurrence through Codable")
@@ -469,6 +650,35 @@ struct DictationStoreTests {
         )
 
         #expect(decoded.calendarOccurrence == occurrence)
+    }
+
+    @Test("MeetingRecord preserves transcript cleanup state through Codable")
+    func meetingRecordCleanupStateCodableRoundTrip() throws {
+        let original = MeetingRecord(
+            id: 43,
+            title: "Customer follow-up",
+            startTime: "2026-04-10T15:00:00Z",
+            durationSeconds: 1800,
+            rawTranscript: "[10:00:00] Speaker 1: البرايمريكية",
+            formattedNotes: "## Summary",
+            wordCount: 3,
+            folderID: nil,
+            cleanedTranscript: "[10:00:00] Speaker 1: primary key",
+            visualContext: "MUES-42 was open in Safari",
+            previousMeetingNotes: "Agreed to revisit the migration",
+            notesSource: .cleaned
+        )
+
+        let decoded = try JSONDecoder().decode(
+            MeetingRecord.self,
+            from: JSONEncoder().encode(original)
+        )
+
+        #expect(decoded.rawTranscript == original.rawTranscript)
+        #expect(decoded.cleanedTranscript == original.cleanedTranscript)
+        #expect(decoded.visualContext == original.visualContext)
+        #expect(decoded.previousMeetingNotes == original.previousMeetingNotes)
+        #expect(decoded.notesSource == .cleaned)
     }
 
     @Test("migration adds template columns to legacy meeting schema")
@@ -523,6 +733,94 @@ struct DictationStoreTests {
 
         let inserted = try store.recentMeetings(limit: 1).first
         #expect(inserted?.savedRecordingPath == "/tmp/meeting.wav")
+    }
+
+    @Test("migration adds chat history storage to legacy meeting schema")
+    func migrationAddsChatHistoryStorage() throws {
+        let store = try makeLegacyStore()
+        try rawExec(
+            store.resolvedDatabaseURL,
+            """
+            INSERT INTO meetings (id, title, start_time, raw_transcript, formatted_notes)
+            VALUES (42, 'Existing meeting', '2026-08-09T10:00:00Z', 'Existing transcript', 'Existing notes')
+            """
+        )
+
+        try store.migrateIfNeeded()
+        let meetingID: Int64 = 42
+        let turn = MeetingChatTurnRecord(
+            id: UUID(),
+            role: .user,
+            displayText: "Question",
+            sentText: "Question",
+            wasAnswered: false
+        )
+
+        #expect(try store.meetingChatTurns(meetingID: meetingID).isEmpty)
+        #expect(try store.meeting(id: meetingID)?.rawTranscript == "Existing transcript")
+
+        try store.replaceMeetingChatTurns(meetingID: meetingID, turns: [turn])
+        #expect(try store.meetingChatTurns(meetingID: meetingID) == [turn])
+    }
+
+    @Test("recording references project only meetings that still hold a recording")
+    func recordingReferencesProjectOnlyMeetingsWithRecordings() throws {
+        let store = try makeStore()
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+
+        func insert(title: String, savedRecordingPath: String?) throws -> Int64 {
+            try store.insertMeeting(
+                title: title,
+                calendarEventID: nil,
+                startTime: start,
+                endTime: start.addingTimeInterval(60),
+                rawTranscript: "Transcript",
+                formattedNotes: "Notes",
+                micAudioPath: nil,
+                systemAudioPath: nil,
+                savedRecordingPath: savedRecordingPath
+            )
+        }
+
+        let withRecording = try insert(title: "Kept", savedRecordingPath: "/tmp/kept.wav")
+        _ = try insert(title: "No recording", savedRecordingPath: nil)
+        _ = try insert(title: "Blank recording", savedRecordingPath: "   ")
+        let deleted = try insert(title: "Deleted", savedRecordingPath: "/tmp/deleted.wav")
+        try store.deleteMeeting(id: deleted)
+
+        let references = try store.meetingRecordingReferences()
+
+        #expect(references == [MeetingRecordingReference(id: withRecording, savedRecordingPath: "/tmp/kept.wav")])
+    }
+
+    @Test("recording references report every meeting sharing one recording file")
+    func recordingReferencesReportSharedRecordingFiles() throws {
+        let store = try makeStore()
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+
+        func insert(title: String) throws -> Int64 {
+            try store.insertMeeting(
+                title: title,
+                calendarEventID: nil,
+                startTime: start,
+                endTime: start.addingTimeInterval(60),
+                rawTranscript: "Transcript",
+                formattedNotes: "Notes",
+                micAudioPath: nil,
+                systemAudioPath: nil,
+                savedRecordingPath: "/tmp/shared.wav"
+            )
+        }
+
+        let first = try insert(title: "First")
+        let second = try insert(title: "Second")
+
+        let references = try store.meetingRecordingReferences()
+
+        // The delete path decides whether a file is still referenced by another
+        // meeting, so both rows have to survive the projection.
+        #expect(Set(references.map(\.id)) == [first, second])
+        #expect(references.allSatisfy({ $0.savedRecordingPath == "/tmp/shared.wav" }))
     }
 
     @Test("meeting source is persisted")
@@ -1243,8 +1541,13 @@ struct DictationStoreTests {
         #expect(cloud["speakerTranscript"] == nil)
         #expect(cloud["summaryText"] == nil)
         #expect(cloud["manualNotes"] == nil)
+        #expect(cloud["cleanedTranscript"] == nil)
+        #expect(cloud["notesSource"] == nil)
         let changedKeys = Set(cloud.changedKeys())
-        #expect(changedKeys.isSuperset(of: ["title", "text", "speakerTranscript", "summaryText", "manualNotes"]))
+        #expect(changedKeys.isSuperset(of: [
+            "title", "text", "speakerTranscript", "summaryText", "manualNotes",
+            "cleanedTranscript", "notesSource",
+        ]))
     }
 
     @Test("sync cloud record can update an existing server record")
@@ -1413,6 +1716,136 @@ struct DictationStoreTests {
         #expect(meeting.systemAudioPath == nil)
         #expect(meeting.savedRecordingPath == nil)
         #expect(try store.textRecordsNeedingSync().isEmpty)
+    }
+
+    @Test("a remote meeting deletion clears local-only chat history")
+    func remoteMeetingDeletionClearsLocalChatHistory() throws {
+        let (store, url) = try makeStoreWithURL()
+        let startedAt = Date(timeIntervalSince1970: 1_770_000_000)
+        let recordName = "meeting-remote-delete-chat"
+        #expect(try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: recordName,
+            kind: .meeting,
+            title: "Remote meeting",
+            text: "Transcript",
+            source: "ios",
+            meetingStatus: .completed,
+            createdAt: startedAt,
+            updatedAt: startedAt,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(60),
+            durationSeconds: 60,
+            wordCount: 1,
+            cloudChangeTag: "tag-1"
+        )))
+        let meetingID = try #require(try store.recentMeetings(limit: 1).first?.id)
+        try store.replaceMeetingChatTurns(
+            meetingID: meetingID,
+            turns: [MeetingChatTurnRecord(role: .user, displayText: "Private question")]
+        )
+
+        #expect(try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: recordName,
+            kind: .meeting,
+            text: "",
+            source: "ios",
+            createdAt: startedAt,
+            updatedAt: startedAt.addingTimeInterval(60),
+            durationSeconds: 0,
+            wordCount: 0,
+            isDeleted: true,
+            cloudChangeTag: "tag-2"
+        )))
+
+        #expect(try firstTextColumns(
+            url,
+            "SELECT chat_history_json FROM meetings WHERE id = \(meetingID)",
+            count: 1
+        ) == ["[]"])
+    }
+
+    @Test("cleaned meeting state round-trips through CloudKit and survives a raw transcript update")
+    func cleanedMeetingStateRoundTripsThroughCloudKit() throws {
+        let source = try makeStore()
+        let destination = try makeStore()
+        let start = Date(timeIntervalSince1970: 1_770_000_000)
+        let firstRaw = "[10:00:00] Speaker 1: ship the old plan"
+        let firstCleaned = "[10:00:00] Speaker 1: Ship the old plan."
+        let meetingID = try source.insertMeeting(
+            title: "Cleanup sync",
+            calendarEventID: nil,
+            startTime: start,
+            endTime: start.addingTimeInterval(60),
+            rawTranscript: firstRaw,
+            formattedNotes: "Notes from raw",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        #expect(try source.storeCleanedMeetingTranscript(
+            id: meetingID,
+            cleanedTranscript: firstCleaned,
+            expectedRawTranscript: firstRaw
+        ))
+        #expect(try source.storeRegeneratedMeetingNotes(
+            id: meetingID,
+            formattedNotes: "Notes from cleaned v1",
+            expectedCleanedTranscript: firstCleaned,
+            expectedManualNotes: ""
+        ))
+
+        let firstOutbound = try #require(
+            try source.textRecordsNeedingSync().first { $0.kind == .meeting }
+        )
+        let firstCloud = MuesliICloudSyncEngine.syncZoneCloudRecord(from: firstOutbound)
+        #expect(firstCloud["cleanedTranscript"] as? String == firstCleaned)
+        #expect(firstCloud["notesSource"] as? String == MeetingNotesSource.cleaned.rawValue)
+        let firstRemote = try #require(MuesliICloudSyncEngine.syncTextRecord(from: firstCloud))
+        #expect(firstRemote.cleanedTranscript == firstCleaned)
+        #expect(firstRemote.notesSource == .cleaned)
+        #expect(try destination.upsertSyncedTextRecord(firstRemote))
+
+        let secondRaw = "[10:00:00] Speaker 1: ship teh new plan"
+        let secondCleaned = "[10:00:00] Speaker 1: Ship the new plan."
+        try source.updateMeetingTranscript(id: meetingID, rawTranscript: secondRaw)
+        #expect(try source.storeCleanedMeetingTranscript(
+            id: meetingID,
+            cleanedTranscript: secondCleaned,
+            expectedRawTranscript: secondRaw
+        ))
+        #expect(try source.storeRegeneratedMeetingNotes(
+            id: meetingID,
+            formattedNotes: "Notes from cleaned v2",
+            expectedCleanedTranscript: secondCleaned,
+            expectedManualNotes: ""
+        ))
+
+        let secondOutbound = try #require(
+            try source.textRecordsNeedingSync().first { $0.id == firstOutbound.id }
+        )
+        let secondCloud = MuesliICloudSyncEngine.syncZoneCloudRecord(from: secondOutbound)
+        let secondRemote = try #require(MuesliICloudSyncEngine.syncTextRecord(from: secondCloud))
+        #expect(try destination.upsertSyncedTextRecord(secondRemote))
+
+        let imported = try #require(try destination.recentMeetings(limit: 1).first)
+        #expect(imported.rawTranscript == secondRaw)
+        #expect(imported.cleanedTranscript == secondCleaned)
+        #expect(imported.notesSource == .cleaned)
+
+        // An older client can update metadata without the new fields. Their
+        // absence must decode safely and must not erase compatible local state.
+        secondCloud["cleanedTranscript"] = nil as NSString?
+        secondCloud["notesSource"] = nil as NSString?
+        secondCloud["title"] = "Renamed by legacy client" as NSString
+        secondCloud["updatedAt"] = secondOutbound.updatedAt.addingTimeInterval(60) as NSDate
+        let legacyRemote = try #require(MuesliICloudSyncEngine.syncTextRecord(from: secondCloud))
+        #expect(legacyRemote.cleanedTranscript == nil)
+        #expect(legacyRemote.notesSource == nil)
+        #expect(try destination.upsertSyncedTextRecord(legacyRemote))
+
+        let afterLegacyUpdate = try #require(try destination.recentMeetings(limit: 1).first)
+        #expect(afterLegacyUpdate.title == "Renamed by legacy client")
+        #expect(afterLegacyUpdate.cleanedTranscript == secondCleaned)
+        #expect(afterLegacyUpdate.notesSource == .cleaned)
     }
 
     @Test("recent meetings filter by recording device before limit")
@@ -2164,6 +2597,35 @@ struct DictationStoreTests {
         let stats = try store.dictationStats()
         #expect(stats.totalSessions == 2)
         #expect(stats.longestStreakDays == 1)
+    }
+
+    /// Streak days must be bucketed in the user's zone, not UTC.
+    ///
+    /// A dictation just after local midnight falls on a different UTC day for every
+    /// non-zero UTC offset, so grouping by UTC day credited it to the neighbouring
+    /// day and the current streak collapsed to zero.
+    @Test("dictation streaks bucket by local day")
+    func dictationStreaksBucketByLocalDay() throws {
+        let store = try makeStore()
+
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let yesterday = try #require(calendar.date(byAdding: .day, value: -1, to: today))
+        let dayBeforeYesterday = try #require(calendar.date(byAdding: .day, value: -2, to: today))
+
+        for (index, localMidnight) in [dayBeforeYesterday, yesterday].enumerated() {
+            let endedAt = localMidnight.addingTimeInterval(1)
+            try store.insertDictation(
+                text: "just after local midnight \(index)",
+                durationSeconds: 1,
+                startedAt: localMidnight,
+                endedAt: endedAt
+            )
+        }
+
+        let stats = try store.dictationStats()
+        #expect(stats.currentStreakDays == 2)
+        #expect(stats.longestStreakDays == 2)
     }
 
     @Test("meeting stats aggregate correctly")
@@ -3216,6 +3678,40 @@ struct DictationStoreTests {
         #expect(results.map(\.id).contains(id))
     }
 
+    @Test("searchMeetings finds and previews cleaned-only transcript terms")
+    func searchMeetingsCleanedTranscript() throws {
+        let store = try makeStore()
+        let raw = "[10:00:00] Speaker 1: discuss the old codename"
+        let cleaned = "[10:00:00] Speaker 1: Discuss Project Lighthouse."
+        let id = try makeCleanedMeeting(store, raw: raw, cleaned: cleaned)
+
+        let result = try #require(try store.searchMeetings(query: "Lighthouse").first)
+
+        #expect(result.id == id)
+        #expect(result.rawTranscript == raw)
+        #expect(result.displayTranscript == cleaned)
+        #expect(
+            MeetingSearchPreview.bestMatchField(for: result, query: "Lighthouse")
+                .contains("Project Lighthouse")
+        )
+    }
+
+    @Test("raw-only meeting search matches still preview the display transcript")
+    func searchMeetingRawMatchUsesDisplayTranscriptPreview() throws {
+        let store = try makeStore()
+        let raw = "[10:00:00] Speaker 1: discuss the old codename"
+        let cleaned = "[10:00:00] Speaker 1: Discuss Project Lighthouse."
+        _ = try makeCleanedMeeting(store, raw: raw, cleaned: cleaned)
+
+        let result = try #require(try store.searchMeetings(query: "old codename").first)
+
+        #expect(result.displayTranscript == cleaned)
+        #expect(
+            MeetingSearchPreview.bestMatchField(for: result, query: "old codename")
+                == MeetingPreviewText.plainText(from: cleaned)
+        )
+    }
+
     @Test("search is case-insensitive for ASCII")
     func searchCaseInsensitive() throws {
         let store = try makeStore()
@@ -3229,5 +3725,503 @@ struct DictationStoreTests {
         #expect(upper.count == 1)
         #expect(lower.count == 1)
         #expect(mixed.count == 1)
+    }
+
+    // MARK: - Cleaned transcript storage and invalidation
+
+    /// Inserts a meeting and gives it a cleaned transcript, returning its id.
+    private func makeCleanedMeeting(
+        _ store: DictationStore,
+        raw: String = "[10:00:00] Speaker 1: البرايمريكية",
+        cleaned: String = "[10:00:00] Speaker 1: primary key"
+    ) throws -> Int64 {
+        let id = try store.insertMeeting(
+            title: "Cleaned meeting",
+            calendarEventID: nil,
+            startTime: Date(timeIntervalSince1970: 1_775_817_600),
+            endTime: Date(timeIntervalSince1970: 1_775_821_200),
+            rawTranscript: raw,
+            formattedNotes: "notes from raw",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        #expect(try store.storeCleanedMeetingTranscript(
+            id: id,
+            cleanedTranscript: cleaned,
+            expectedRawTranscript: raw
+        ))
+        return id
+    }
+
+    /// A store plus the file backing it, so tests can issue SQL the store's own
+    /// API deliberately does not expose.
+    private func makeStoreWithURL() throws -> (store: DictationStore, url: URL) {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-test-\(UUID().uuidString).db")
+        let store = DictationStore(databaseURL: url)
+        try store.migrateIfNeeded()
+        return (store, url)
+    }
+
+    private func rawExec(_ url: URL, _ sql: String) throws {
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            throw sqliteTestError(String(cString: sqlite3_errmsg(db)))
+        }
+    }
+
+    private func firstTextColumns(_ url: URL, _ sql: String, count: Int) throws -> [String] {
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw sqliteTestError(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            throw sqliteTestError("no row for: \(sql)")
+        }
+        return (0..<count).map { index in
+            guard let text = sqlite3_column_text(statement, Int32(index)) else { return "" }
+            return String(cString: text)
+        }
+    }
+
+    @Test("a pre-existing database gains the cleanup columns with safe defaults")
+    func migrationAddsCleanupColumns() throws {
+        let store = try makeLegacyStore()
+        try store.migrateIfNeeded()
+        let id = try store.insertMeeting(
+            title: "Legacy",
+            calendarEventID: nil,
+            startTime: Date(timeIntervalSince1970: 1_775_817_600),
+            endTime: Date(timeIntervalSince1970: 1_775_821_200),
+            rawTranscript: "raw",
+            formattedNotes: "notes",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        let meeting = try #require(try store.meeting(id: id))
+        #expect(meeting.cleanedTranscript.isEmpty)
+        #expect(meeting.visualContext.isEmpty)
+        #expect(meeting.previousMeetingNotes.isEmpty)
+        #expect(meeting.notesSource == .raw)
+    }
+
+    @Test("migrating twice is a no-op, trigger included")
+    func migrationIsIdempotent() throws {
+        let store = try makeStore()
+        try store.migrateIfNeeded()
+        try store.migrateIfNeeded()
+        let id = try makeCleanedMeeting(store)
+        #expect(try store.meeting(id: id)?.cleanedTranscript == "[10:00:00] Speaker 1: primary key")
+    }
+
+    @Test("a database carrying the first trigger version gets the current body")
+    func migrationReplacesFirstTriggerVersion() throws {
+        // `CREATE TRIGGER IF NOT EXISTS` is a no-op against a name that already
+        // exists, so without the drop every database installed before the rename
+        // would keep clearing only the column and leave notes_source stale.
+        let (store, url) = try makeStoreWithURL()
+        try rawExec(url, """
+        DROP TRIGGER IF EXISTS meetings_clear_cleaned_transcript_v2;
+        CREATE TRIGGER meetings_clear_cleaned_transcript
+        AFTER UPDATE OF raw_transcript ON meetings
+        WHEN new.raw_transcript IS NOT old.raw_transcript
+        BEGIN
+            UPDATE meetings SET cleaned_transcript = '' WHERE id = new.id;
+        END;
+        """)
+
+        try store.migrateIfNeeded()
+
+        let id = try makeCleanedMeeting(store)
+        let meeting = try #require(try store.meeting(id: id))
+        #expect(try store.storeRegeneratedMeetingNotes(
+            id: id,
+            formattedNotes: "notes mentioning primary key",
+            expectedCleanedTranscript: meeting.cleanedTranscript,
+            expectedManualNotes: meeting.manualNotes
+        ))
+
+        try store.updateMeetingTranscript(id: id, rawTranscript: "rewritten after the upgrade")
+
+        #expect(try store.meeting(id: id)?.notesSource == .raw)
+    }
+
+    @Test("storing a cleaned transcript leaves the raw one byte-identical")
+    func storingCleanedLeavesRawIntact() throws {
+        let store = try makeStore()
+        let raw = "[10:00:00] Speaker 1: البرايمريكية والاس ثري"
+        let id = try makeCleanedMeeting(store, raw: raw)
+        #expect(try store.meeting(id: id)?.rawTranscript == raw)
+    }
+
+    @Test("the guarded write is dropped when the transcript changed under it")
+    func guardedWriteRejectsStaleResult() throws {
+        // Cleanup is detached and slow; the user can edit the transcript while it
+        // runs. Publishing the stale result would silently discard their edit.
+        let store = try makeStore()
+        let id = try store.insertMeeting(
+            title: "Edited mid-cleanup",
+            calendarEventID: nil,
+            startTime: Date(timeIntervalSince1970: 1_775_817_600),
+            endTime: Date(timeIntervalSince1970: 1_775_821_200),
+            rawTranscript: "original",
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        try store.updateMeetingTranscript(id: id, rawTranscript: "user edited this")
+
+        let stored = try store.storeCleanedMeetingTranscript(
+            id: id,
+            cleanedTranscript: "cleaned from the original",
+            expectedRawTranscript: "original"
+        )
+
+        #expect(stored == false)
+        #expect(try store.meeting(id: id)?.cleanedTranscript.isEmpty == true)
+        #expect(try store.meeting(id: id)?.rawTranscript == "user edited this")
+    }
+
+    @Test("editing the transcript clears the cleaned copy")
+    func editingTranscriptClearsCleaned() throws {
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+
+        try store.updateMeetingTranscript(id: id, rawTranscript: "a different transcript")
+
+        #expect(try store.meeting(id: id)?.cleanedTranscript.isEmpty == true)
+    }
+
+    @Test("a raw update through an unenumerated statement still clears the cleaned copy")
+    func triggerCoversStatementsThePlanNeverListed() throws {
+        // The property a per-statement convention cannot provide: this UPDATE exists
+        // nowhere in the codebase, and invalidation still holds.
+        let (store, url) = try makeStoreWithURL()
+        let id = try makeCleanedMeeting(store)
+
+        try rawExec(url, "UPDATE meetings SET raw_transcript = 'rewritten elsewhere' WHERE id = \(id)")
+
+        #expect(try store.meeting(id: id)?.cleanedTranscript.isEmpty == true)
+    }
+
+    @Test("re-assigning identical raw text preserves the cleaned copy")
+    func unchangedRawPreservesCleaned() throws {
+        // upsertSyncedMeeting re-assigns raw_transcript on every remote metadata
+        // update, and restoreResumedMeeting writes back its own snapshot. Clearing
+        // on those would destroy a cleanup nothing would ever regenerate.
+        let (store, url) = try makeStoreWithURL()
+        let raw = "[10:00:00] Speaker 1: البرايمريكية"
+        let id = try makeCleanedMeeting(store, raw: raw)
+
+        try rawExec(url, "UPDATE meetings SET raw_transcript = raw_transcript, title = 'Renamed remotely' WHERE id = \(id)")
+
+        #expect(try store.meeting(id: id)?.cleanedTranscript == "[10:00:00] Speaker 1: primary key")
+        #expect(try store.meeting(id: id)?.title == "Renamed remotely")
+    }
+
+    @Test("saving a resume snapshot does not touch the cleaned column")
+    func resumeSnapshotUntouchedByTrigger() throws {
+        // meeting_resume_snapshots has its own raw_transcript and no cleaned column;
+        // a trigger scoped any wider would fail with "no such column".
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+
+        _ = try store.prepareMeetingForResume(id: id)
+
+        #expect(try store.meeting(id: id)?.cleanedTranscript == "[10:00:00] Speaker 1: primary key")
+    }
+
+    @Test("deleting a meeting leaves no cleaned transcript or retained context behind")
+    func deleteClearsCleanupColumns() throws {
+        let (store, url) = try makeStoreWithURL()
+        let id = try makeCleanedMeeting(store)
+        try rawExec(url, "UPDATE meetings SET visual_context = 'screen text', previous_meeting_notes = 'prior notes' WHERE id = \(id)")
+
+        try store.deleteMeeting(id: id)
+
+        let columns = try firstTextColumns(
+            url,
+            "SELECT cleaned_transcript, visual_context, previous_meeting_notes FROM meetings WHERE id = \(id)",
+            count: 3
+        )
+        #expect(columns == ["", "", ""])
+    }
+
+    @Test("clearing all meetings leaves no cleaned transcript behind")
+    func clearMeetingsClearsCleanupColumns() throws {
+        let (store, url) = try makeStoreWithURL()
+        let id = try makeCleanedMeeting(store)
+        try store.replaceMeetingChatTurns(
+            meetingID: id,
+            turns: [MeetingChatTurnRecord(role: .user, displayText: "Private question")]
+        )
+
+        try store.clearMeetings()
+
+        let columns = try firstTextColumns(
+            url,
+            "SELECT cleaned_transcript, chat_history_json FROM meetings WHERE id = \(id)",
+            count: 2
+        )
+        #expect(columns == ["", "[]"])
+    }
+
+    // MARK: - Notes regeneration state
+
+    @Test("regenerated notes are stored and the source is marked cleaned")
+    func regeneratedNotesStored() throws {
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+        let meeting = try #require(try store.meeting(id: id))
+
+        let wrote = try store.storeRegeneratedMeetingNotes(
+            id: id,
+            formattedNotes: "notes mentioning primary key",
+            expectedCleanedTranscript: meeting.cleanedTranscript,
+            expectedManualNotes: meeting.manualNotes
+        )
+
+        #expect(wrote)
+        let after = try #require(try store.meeting(id: id))
+        #expect(after.formattedNotes == "notes mentioning primary key")
+        #expect(after.notesSource == .cleaned)
+    }
+
+    @Test("a user's own note edit survives a concurrent regeneration")
+    func userEditedNotesWin() throws {
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+        let meeting = try #require(try store.meeting(id: id))
+        try store.updateMeetingNotes(id: id, formattedNotes: "what the user wrote")
+
+        let wrote = try store.storeRegeneratedMeetingNotes(
+            id: id,
+            formattedNotes: "what the model wrote",
+            expectedCleanedTranscript: meeting.cleanedTranscript,
+            expectedManualNotes: meeting.manualNotes
+        )
+
+        #expect(wrote == false)
+        #expect(try store.meeting(id: id)?.formattedNotes == "what the user wrote")
+        #expect(try store.meeting(id: id)?.notesSource == .user)
+    }
+
+    @Test("editing the transcript takes regenerated notes back to raw-derived")
+    func transcriptEditResetsCleanedNotesSource() throws {
+        // Those notes summarise text the user has just replaced. Left marked
+        // cleaned they would be presented as settled and the retry sweep would
+        // skip the meeting, stranding the stale summary permanently.
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+        let meeting = try #require(try store.meeting(id: id))
+        #expect(try store.storeRegeneratedMeetingNotes(
+            id: id,
+            formattedNotes: "notes mentioning primary key",
+            expectedCleanedTranscript: meeting.cleanedTranscript,
+            expectedManualNotes: meeting.manualNotes
+        ))
+        #expect(try store.meeting(id: id)?.notesSource == .cleaned)
+
+        try store.updateMeetingTranscript(id: id, rawTranscript: "the user rewrote the whole thing")
+
+        let after = try #require(try store.meeting(id: id))
+        #expect(after.cleanedTranscript.isEmpty)
+        #expect(after.notesSource == .raw)
+    }
+
+    @Test("a user's own notes stay theirs when the transcript is edited")
+    func transcriptEditPreservesUserNotesSource() throws {
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+        try store.updateMeetingNotes(id: id, formattedNotes: "what the user wrote")
+
+        try store.updateMeetingTranscript(id: id, rawTranscript: "a different transcript")
+
+        let after = try #require(try store.meeting(id: id))
+        #expect(after.cleanedTranscript.isEmpty)
+        #expect(after.notesSource == .user)
+        #expect(after.formattedNotes == "what the user wrote")
+    }
+
+    @Test("regeneration is dropped when the transcript it read is gone")
+    func regenerationRejectedAfterTranscriptEdit() throws {
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+        let meeting = try #require(try store.meeting(id: id))
+        try store.updateMeetingTranscript(id: id, rawTranscript: "user rewrote the transcript")
+
+        let wrote = try store.storeRegeneratedMeetingNotes(
+            id: id,
+            formattedNotes: "summary of text that no longer exists",
+            expectedCleanedTranscript: meeting.cleanedTranscript,
+            expectedManualNotes: meeting.manualNotes
+        )
+
+        #expect(wrote == false)
+        #expect(try store.meeting(id: id)?.formattedNotes == "notes from raw")
+    }
+
+    @Test("a manual-notes edit defers regeneration instead of dropping it")
+    func manualNotesEditLeavesMeetingRetryable() throws {
+        // Manual notes are an input to the summary. Rather than publish a summary
+        // built from stale input, leave notes_source at raw so the sweep runs again
+        // with the fresher notes.
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+        let meeting = try #require(try store.meeting(id: id))
+        try store.updateMeetingManualNotes(id: id, manualNotes: "something I typed during the call")
+
+        let wrote = try store.storeRegeneratedMeetingNotes(
+            id: id,
+            formattedNotes: "summary built without my note",
+            expectedCleanedTranscript: meeting.cleanedTranscript,
+            expectedManualNotes: meeting.manualNotes
+        )
+
+        #expect(wrote == false)
+        #expect(try store.meeting(id: id)?.notesSource == .raw)
+        #expect(try store.meetingsAwaitingNotesRegeneration().contains { $0.id == id })
+    }
+
+    @Test("the retry sweep finds cleanups whose notes never caught up")
+    func retrySweepFindsPendingRegeneration() throws {
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+
+        let pending = try store.meetingsAwaitingNotesRegeneration()
+
+        #expect(pending.contains { $0.id == id })
+    }
+
+    @Test("the retry sweep skips meetings already regenerated or user-edited")
+    func retrySweepSkipsSettledMeetings() throws {
+        let store = try makeStore()
+        let regenerated = try makeCleanedMeeting(store)
+        let edited = try makeCleanedMeeting(store)
+        let meeting = try #require(try store.meeting(id: regenerated))
+        #expect(try store.storeRegeneratedMeetingNotes(
+            id: regenerated,
+            formattedNotes: "regenerated",
+            expectedCleanedTranscript: meeting.cleanedTranscript,
+            expectedManualNotes: meeting.manualNotes
+        ))
+        try store.updateMeetingNotes(id: edited, formattedNotes: "mine")
+
+        let pending = try store.meetingsAwaitingNotesRegeneration()
+
+        #expect(pending.contains { $0.id == regenerated } == false)
+        #expect(pending.contains { $0.id == edited } == false)
+    }
+
+    @Test("a re-summarize over a cleaned transcript settles the notes")
+    func reSummarizeOverCleanedTranscriptMarksNotesCleaned() throws {
+        // The user asked for this summary, and it was built from the cleaned text.
+        // Left at raw the meeting stays a candidate and the sweep overwrites it.
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+        let meeting = try #require(try store.meeting(id: id))
+
+        try store.updateMeetingSummary(
+            id: id,
+            title: "Standup",
+            formattedNotes: "## Decisions\n- ship it",
+            selectedTemplateID: "stand-up",
+            selectedTemplateName: "Stand-Up",
+            selectedTemplateKind: .builtin,
+            selectedTemplatePrompt: "## Decisions"
+        )
+
+        #expect(try store.meeting(id: id)?.notesSource == .cleaned)
+        #expect(try store.storeRegeneratedMeetingNotes(
+            id: id,
+            formattedNotes: "what the sweep would have written",
+            expectedCleanedTranscript: meeting.cleanedTranscript,
+            expectedManualNotes: meeting.manualNotes
+        ) == false)
+        #expect(try store.meeting(id: id)?.formattedNotes == "## Decisions\n- ship it")
+        #expect(try store.meetingsAwaitingNotesRegeneration().contains { $0.id == id } == false)
+    }
+
+    @Test("a re-summarize with no cleaned transcript leaves the notes raw-derived")
+    func reSummarizeWithoutCleanedTranscriptStaysRaw() throws {
+        // Nothing was cleaned, so there is no cleanup to call settled -- and a
+        // cleanup landing later must still be able to regenerate.
+        let store = try makeStore()
+        let id = try store.insertMeeting(
+            title: "Never cleaned",
+            calendarEventID: nil,
+            startTime: Date(timeIntervalSince1970: 1_775_817_600),
+            endTime: Date(timeIntervalSince1970: 1_775_821_200),
+            rawTranscript: "raw only",
+            formattedNotes: "notes",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+
+        try store.updateMeetingSummary(
+            id: id,
+            title: "Standup",
+            formattedNotes: "## Decisions\n- ship it",
+            selectedTemplateID: "stand-up",
+            selectedTemplateName: "Stand-Up",
+            selectedTemplateKind: .builtin,
+            selectedTemplatePrompt: "## Decisions"
+        )
+
+        #expect(try store.meeting(id: id)?.notesSource == .raw)
+    }
+
+    @Test("a meeting with no cleaned transcript is not a regeneration candidate")
+    func retrySweepIgnoresUncleanedMeetings() throws {
+        let store = try makeStore()
+        let id = try store.insertMeeting(
+            title: "Never cleaned",
+            calendarEventID: nil,
+            startTime: Date(timeIntervalSince1970: 1_775_817_600),
+            endTime: Date(timeIntervalSince1970: 1_775_821_200),
+            rawTranscript: "raw only",
+            formattedNotes: "notes",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+
+        #expect(try store.meetingsAwaitingNotesRegeneration().contains { $0.id == id } == false)
+    }
+
+    // MARK: - Retained summary inputs
+
+    @Test("the summary inputs a meeting was built from round-trip")
+    func summaryInputsRoundTrip() throws {
+        // Without these, a post-cleanup regeneration cannot reproduce the original
+        // call and would quietly drop screen context and follow-up continuity.
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+
+        try store.storeMeetingSummaryInputs(
+            id: id,
+            visualContext: "Jira MUES-42 open in Safari",
+            previousMeetingNotes: "Last week: agreed on the schema"
+        )
+
+        let meeting = try #require(try store.meeting(id: id))
+        #expect(meeting.visualContext == "Jira MUES-42 open in Safari")
+        #expect(meeting.previousMeetingNotes == "Last week: agreed on the schema")
+    }
+
+    @Test("a meeting with neither input is left alone rather than blanked")
+    func emptySummaryInputsSkipWrite() throws {
+        let store = try makeStore()
+        let id = try makeCleanedMeeting(store)
+        try store.storeMeetingSummaryInputs(id: id, visualContext: "screen", previousMeetingNotes: "")
+
+        try store.storeMeetingSummaryInputs(id: id, visualContext: "", previousMeetingNotes: "")
+
+        #expect(try store.meeting(id: id)?.visualContext == "screen")
     }
 }

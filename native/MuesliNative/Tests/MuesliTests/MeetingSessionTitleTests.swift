@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import MuesliNativeApp
 
@@ -36,6 +37,60 @@ struct MeetingSessionTitleTests {
 
 @Suite("Meeting session recovery policy")
 struct MeetingSessionRecoveryPolicyTests {
+    @Test("active session final authority follows source transitions")
+    func activeSessionFinalAuthorityFollowsSourceTransitions() {
+        var config = AppConfig()
+        config.enableLiveStreamingPartials = true
+        config.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
+        let session = MeetingSession(
+            title: "Authority transition",
+            calendarEventID: nil,
+            backend: .whisperLargeTurbo,
+            runtime: RuntimePaths(
+                repoRoot: FileManager.default.temporaryDirectory,
+                menuIcon: nil,
+                appIcon: nil,
+                bundlePath: nil
+            ),
+            config: config,
+            templateSnapshot: MeetingTemplates.auto.snapshot,
+            transcriptionCoordinator: TranscriptionCoordinator()
+        )
+
+        #expect(session.usesLiveNemotronTranscriptAsFinal())
+
+        session.updateTranscriptionAuthority(
+            backend: .whisperLargeTurbo,
+            usesUnifiedNemotronTranscript: false
+        )
+        #expect(!session.usesLiveNemotronTranscriptAsFinal())
+
+        session.updateTranscriptionAuthority(
+            backend: .whisperLargeTurbo,
+            usesUnifiedNemotronTranscript: true
+        )
+        #expect(session.usesLiveNemotronTranscriptAsFinal())
+    }
+
+    @Test("legacy Nemotron configuration keeps the unified final transcript")
+    func legacyNemotronConfigurationKeepsUnifiedFinalTranscript() {
+        var config = AppConfig()
+        config.enableLiveStreamingPartials = true
+        config.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
+
+        #expect(config.usesUnifiedNemotronMeetingTranscript)
+    }
+
+    @Test("a selected batch model makes Nemotron preview-only")
+    func selectedBatchModelMakesNemotronPreviewOnly() {
+        var config = AppConfig()
+        config.enableLiveStreamingPartials = true
+        config.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
+        config.useLiveMeetingTranscriptAsFinal = false
+
+        #expect(!config.usesUnifiedNemotronMeetingTranscript)
+    }
+
     @Test("Nemotron falls back to system audio when streaming produced no segments")
     func unifiedNemotronRecoversEmptySystemTranscript() {
         #expect(MeetingSession.shouldAttemptSystemRecovery(

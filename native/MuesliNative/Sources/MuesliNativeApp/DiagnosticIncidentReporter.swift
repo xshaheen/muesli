@@ -12,6 +12,8 @@ final class DiagnosticIncidentReporter {
     private let automaticPromptEnabled: @MainActor () -> Bool
     private let onPrompt: PromptHandler
     private let calendar: Calendar
+    private static let incidentHistoryKey = "diagnosticIncidentHistory.v1"
+    private static let maximumIncidentHistoryCount = 50
 
     init(
         appState: AppState,
@@ -45,6 +47,7 @@ final class DiagnosticIncidentReporter {
             backendOption: backend,
             error: error
         )
+        persist(incident)
         telemetrySink(incident)
         if promptUser, automaticPromptEnabled(), shouldPrompt(for: incident) {
             markPrompted(for: incident)
@@ -62,7 +65,17 @@ final class DiagnosticIncidentReporter {
             backendOption: nil,
             error: nil
         )
+        persist(incident)
         appState.pendingDiagnosticIncident = incident
+    }
+
+    /// Returns the bounded, privacy-safe incident envelopes retained locally.
+    /// DiagnosticIncident encoding excludes arbitrary error descriptions.
+    func recentIncidents() -> [DiagnosticIncident] {
+        guard let data = defaults.data(forKey: Self.incidentHistoryKey),
+              let incidents = try? JSONDecoder().decode([DiagnosticIncident].self, from: data)
+        else { return [] }
+        return incidents
     }
 
     func dismissCurrentPrompt() {
@@ -85,6 +98,12 @@ final class DiagnosticIncidentReporter {
     private func dayBucket(for date: Date) -> String {
         let components = calendar.dateComponents([.year, .month, .day], from: date)
         return "\(components.year ?? 0)-\(components.month ?? 0)-\(components.day ?? 0)"
+    }
+
+    private func persist(_ incident: DiagnosticIncident) {
+        let incidents = Array((recentIncidents() + [incident]).suffix(Self.maximumIncidentHistoryCount))
+        guard let data = try? JSONEncoder().encode(incidents) else { return }
+        defaults.set(data, forKey: Self.incidentHistoryKey)
     }
 
     private static func sendTelemetry(_ incident: DiagnosticIncident) {

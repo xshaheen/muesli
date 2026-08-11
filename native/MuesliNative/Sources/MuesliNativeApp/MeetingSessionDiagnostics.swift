@@ -51,6 +51,17 @@ struct AudioSampleStats: Codable {
     }
 }
 
+enum MeetingMicSignalClassifier {
+    static let nonZeroPeakThreshold = 0.0001
+    static let zeroRatioThreshold = 0.999
+
+    static func containsSignal(_ stats: AudioSampleStatsSnapshot) -> Bool {
+        guard stats.sampleCount > 0 else { return false }
+        let zeroRatio = Double(stats.zeroSampleCount) / Double(stats.sampleCount)
+        return stats.peak > nonZeroPeakThreshold || zeroRatio < zeroRatioThreshold
+    }
+}
+
 struct SystemAudioCaptureDiagnosticsSnapshot: Codable {
     let backend: String
     let callbackCount: Int

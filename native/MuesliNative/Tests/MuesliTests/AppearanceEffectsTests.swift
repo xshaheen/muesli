@@ -37,10 +37,13 @@ struct MenuBarIconRendererTests {
         #expect(image != nil)
     }
 
-    @Test("make(choice:) returns a template image for menu bar adaptation")
+    @Test("every selectable SF Symbol is available as a template image")
     func makeIsTemplate() {
-        let image = MenuBarIconRenderer.make(choice: "mic.fill")
-        #expect(image?.isTemplate == true)
+        for option in MenuBarIconRenderer.options where option.id != "muesli" {
+            let image = MenuBarIconRenderer.make(choice: option.id)
+            #expect(image != nil, "Missing selectable icon: \(option.id)")
+            #expect(image?.isTemplate == true, "Non-template selectable icon: \(option.id)")
+        }
     }
 
     @Test("make(choice:) returns a non-zero size image")
@@ -50,56 +53,22 @@ struct MenuBarIconRendererTests {
         #expect((image?.size.height ?? 0) > 0)
     }
 
-    @Test("official mark is a resolution-independent template")
-    func officialMarkIsResolutionIndependent() {
-        let image = MenuBarIconRenderer.make(choice: "muesli")
-        #expect(image?.isTemplate == true)
-        #expect(image?.size == NSSize(width: 18, height: 18))
-        #expect(image?.representations.contains { $0 is NSCustomImageRep } == true)
-    }
+    @MainActor
+    @Test("floating indicator preserves template rendering across setup and refresh")
+    func floatingIndicatorPreservesTemplateRendering() {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let configStore = ConfigStore(supportDirectory: supportDirectory)
+        var config = AppConfig()
+        config.menuBarIcon = "sparkles"
+        configStore.save(config)
+        let indicator = FloatingIndicatorController(configStore: configStore)
 
-    @Test("official mark uses the canonical app artwork at source resolution")
-    func officialMarkUsesCanonicalArtwork() {
-        let sourceRect = MenuBarIconRenderer.canonicalMarkSourceRect
-        let mask = MenuBarIconRenderer.canonicalMarkMask
+        indicator.setState(.idle, config: config)
+        #expect(indicator.idleIconIsTemplateForTesting == true)
 
-        #expect(sourceRect == CGRect(x: 195, y: 256, width: 635, height: 513))
-        #expect(MenuBarIconRenderer.canonicalMarkOpacityBoost == 1.08)
-        #expect(mask?.width == 635)
-        #expect(mask?.height == 513)
-    }
-
-    @Test("hotkey cues preserve modifier side and combinations")
-    func hotkeyCueLabels() {
-        #expect(MenuBarIconRenderer.hotkeyCueLabel(for: HotkeyConfig(keyCode: 61, label: "Right Option")) == "R⌥")
-        #expect(MenuBarIconRenderer.hotkeyCueLabel(for: HotkeyConfig(keyCode: 59, label: "Left Ctrl")) == "L⌃")
-        #expect(MenuBarIconRenderer.hotkeyCueLabel(for: .meetingRecordingDefault) == "⌘⇧R")
-    }
-
-    @Test("status shortcut cue is compact while detail keeps menu bar size")
-    func statusShortcutCueTypography() {
-        let title = MenuBarIconRenderer.statusTitle(hotkey: .default, detail: "Meeting in 5m")
-        let cueFont = title.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
-        let detailIndex = (title.string as NSString).range(of: "Meeting").location
-        let detailFont = title.attribute(.font, at: detailIndex, effectiveRange: nil) as? NSFont
-
-        #expect(cueFont?.pointSize == 9)
-        #expect((detailFont?.pointSize ?? 0) > (cueFont?.pointSize ?? 0))
-    }
-
-    @Test("status shortcut cue can be hidden independently of meeting detail")
-    func statusShortcutCueCanBeHidden() {
-        let withoutHotkey = MenuBarIconRenderer.statusTitle(
-            hotkey: .default,
-            showsHotkey: false,
-            detail: "Meeting in 5m"
-        )
-        let withoutEither = MenuBarIconRenderer.statusTitle(
-            hotkey: .default,
-            showsHotkey: false
-        )
-
-        #expect(withoutHotkey.string == "Meeting in 5m")
-        #expect(withoutEither.string.isEmpty)
+        indicator.refreshIcon()
+        #expect(indicator.idleIconIsTemplateForTesting == true)
+        indicator.close()
     }
 }

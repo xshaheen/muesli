@@ -15,7 +15,7 @@ struct BackendOption: Equatable {
         model: "FluidInference/parakeet-tdt-0.6b-v3-coreml",
         label: "Parakeet v3",
         sizeLabel: "~450 MB",
-        description: "The best default for everyday dictation: quick enough to feel responsive, reliable in normal rooms, and able to follow 25 languages.",
+        description: "Fast everyday transcription with an excellent balance of speed and accuracy. Supports 25 languages.",
         recommended: true
     )
 
@@ -24,34 +24,16 @@ struct BackendOption: Equatable {
         model: "FluidInference/parakeet-tdt-0.6b-v2-coreml",
         label: "Parakeet v2",
         sizeLabel: "~450 MB",
-        description: "A quick, dependable English-only option. Choose it if you mainly dictate in English and prefer the older Parakeet model.",
+        description: "Fast English transcription with a strong balance of speed and accuracy.",
         recommended: false
     )
 
     static let whisperSmall = BackendOption(
         backend: "whisper",
-        model: "small",
-        label: "Whisper Small Multilingual",
+        model: "small.en",
+        label: "Whisper Small",
         sizeLabel: "~250 MB",
-        description: "A balanced multilingual Whisper option for everyday notes. It handles accents and background noise better than Tiny while keeping the download modest. Auto-detect language by default, or choose one yourself.",
-        recommended: false
-    )
-
-    static let whisperTiny = BackendOption(
-        backend: "whisper",
-        model: "tiny",
-        label: "Whisper Tiny Multilingual",
-        sizeLabel: "~153 MB",
-        description: "The quickest Whisper download and lightest multilingual option for occasional notes. It gives up some accuracy on accents, noise, and longer speech. Auto-detect language by default, or choose one yourself.",
-        recommended: false
-    )
-
-    static let whisperLargeTurbo = BackendOption(
-        backend: "whisper",
-        model: "large-v3-v20240930_626MB",
-        label: "Whisper Large Turbo Multilingual",
-        sizeLabel: "~626 MB",
-        description: "Whisper's strongest multilingual option. Better for mixed languages and difficult audio, with a larger download and more processing time than Small. Auto-detect language by default, or pin a language.",
+        description: "Fast, English-optimized. Runs on Apple Neural Engine via CoreML.",
         recommended: false
     )
 
@@ -60,25 +42,25 @@ struct BackendOption: Equatable {
         model: "tiny.en",
         label: "Whisper Tiny English",
         sizeLabel: "~153 MB",
-        description: "The quickest English-only Whisper option for lightweight notes. Choose it when you always speak English and do not need automatic language detection.",
+        description: "Smallest English WhisperKit CoreML model. Quickest local setup.",
         recommended: false
     )
 
-    static let whisperSmallEnglish = BackendOption(
-        backend: "whisper",
-        model: "small.en",
-        label: "Whisper Small English",
-        sizeLabel: "~250 MB",
-        description: "A balanced English-only Whisper option for everyday dictation. It handles accents and background noise better than Tiny when you do not need other languages.",
-        recommended: false
-    )
-
-    static let whisperMediumEnglish = BackendOption(
+    static let whisperMedium = BackendOption(
         backend: "whisper",
         model: "medium.en",
-        label: "Whisper Medium English",
+        label: "Whisper Medium",
         sizeLabel: "~1.5 GB",
-        description: "A larger English-only Whisper option for difficult accents and noisier recordings. It favors accuracy over download size and speed.",
+        description: "Better accuracy, English-only. Runs on Apple Neural Engine via CoreML.",
+        recommended: false
+    )
+
+    static let whisperLargeTurbo = BackendOption(
+        backend: "whisper",
+        model: "large-v3-v20240930_626MB",
+        label: "Whisper Large Turbo",
+        sizeLabel: "~626 MB",
+        description: "Highest accuracy, multilingual. Quantized CoreML for faster inference.",
         recommended: false
     )
 
@@ -87,7 +69,7 @@ struct BackendOption: Equatable {
         model: "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
         label: "Nemotron 3.5 Multilingual",
         sizeLabel: "~665 MB",
-        description: "Live text appears as you speak in more than 100 locales, including Hindi, Chinese, and Japanese, with language auto-detection and punctuation. It works for hold-to-talk, hands-free dictation, and meetings, but it only appends words—it does not go back to correct earlier text.",
+        description: "NVIDIA Nemotron 3.5 streaming RNNT via FluidInference. Multilingual incl. Hindi, Chinese, Japanese + 100+ locales (auto-detect). Native punctuation. Hold-to-talk or double-tap handsfree (live text). For meetings, its continuous transcript can be used live and as the final raw transcript, or paired with a separate final model. Append-only with no corrections.",
         recommended: false
     )
 
@@ -96,7 +78,7 @@ struct BackendOption: Equatable {
         model: "phequals/cohere-transcribe-coreml-mixed-precision",
         label: "Cohere Transcribe",
         sizeLabel: "~3.8 GB",
-        description: "The most deliberate option for difficult accents and tricky audio. It supports 14 languages and can be more accurate than faster models, but the download is large and you only see the result after you stop speaking.",
+        description: "Best accuracy for difficult audio and accents. Choose it when getting every word right matters more than speed. It is larger and slower than Parakeet, supports 14 languages, and gives you the final transcript when you stop. Works best in a quiet environment.",
         recommended: false
     )
 
@@ -105,7 +87,7 @@ struct BackendOption: Equatable {
         model: "phequals/indic-conformer-600m-multilingual-coreml-rnnt",
         label: "Indic ASR",
         sizeLabel: "~618 MB",
-        description: "Built specifically for seven Indian languages. Choose your language before recording; it can help where general multilingual models struggle, but results still vary enough to keep it experimental.",
+        description: "Experimental AI4Bharat IndicConformer RNNT CoreML backend for seven Indian languages. Requires explicit language selection.",
         recommended: false
     )
 
@@ -114,7 +96,7 @@ struct BackendOption: Equatable {
         model: "FluidInference/sensevoice-small-coreml",
         label: "SenseVoice Small",
         sizeLabel: SenseVoiceTranscriber.downloadedModelSizeLabel,
-        description: "A compact option covering more than 50 languages, with punctuation included in the result. Quality varies by language and accent, so try it with your own voice before relying on it.",
+        description: "FunASR SenseVoiceSmall via FluidAudio. INT8 CoreML/ANE on macOS 14+, 50+ languages. Non-autoregressive with built-in punctuation.",
         recommended: false
     )
 
@@ -123,7 +105,7 @@ struct BackendOption: Equatable {
         model: Gemma4LiteRTModelStore.repoID,
         label: "Gemma 4 E2B",
         sizeLabel: "~2.6 GB",
-        description: "A research preview, not a dependable dictation model yet. It is large, slow to get ready, requires macOS 15 or later, and may produce an answer instead of a faithful transcript.",
+        description: "Experimental Gemma 4 LiteRT-LM evaluation backend. Downloads managed local weights, requires macOS 15+, and is not production ASR until an ASR-tuned Gemma artifact is available; chat-style outputs fail closed.",
         recommended: false
     )
 
@@ -135,9 +117,7 @@ struct BackendOption: Equatable {
     ]
 
     static let whisperFamily: [BackendOption] = [
-        .whisperTiny, .whisperTinyEnglish,
-        .whisperSmall, .whisperSmallEnglish,
-        .whisperMediumEnglish, .whisperLargeTurbo,
+        .whisperTinyEnglish, .whisperSmall, .whisperMedium, .whisperLargeTurbo,
     ]
 
     static let qwen3Asr = BackendOption(
@@ -145,12 +125,12 @@ struct BackendOption: Equatable {
         model: "FluidInference/qwen3-asr-0.6b-coreml",
         label: "Qwen3 ASR",
         sizeLabel: "~1.3 GB",
-        description: "Strong multilingual transcription across 52 languages when accuracy matters more than instant results. Expect a short 2–3 second wait compared with Parakeet, and about 30 seconds of one-time preparation the first time it runs.",
+        description: "Multilingual, 52 languages. Slower than Parakeet (~2-3s). First use takes ~30s to warm up.",
         recommended: false
     )
 
     static let experimental: [BackendOption] = [
-        .senseVoiceSmall, .indicASR, .gemma4E2BLiteRT,
+        .senseVoiceSmall, .qwen3Asr, .indicASR, .gemma4E2BLiteRT,
     ]
 
     /// Native streaming backends used by low-latency product surfaces.
@@ -161,19 +141,12 @@ struct BackendOption: Equatable {
     ]
 
     /// Models available for download and use.
-    static let all: [BackendOption] = {
-        parakeetFamily
-            + [.qwen3Asr]
-            + whisperFamily
-            + [.cohereTranscribe]
-            + streaming
-            + experimental
-    }()
+    static let all: [BackendOption] = parakeetFamily + whisperFamily + [.cohereTranscribe] + streaming + experimental
 
     /// Curated first-run choices shown in onboarding's "Other models" section.
     /// This is a deliberate hand-picked list, not a derived rule. Experimental models
     /// are excluded by default.
-    static let onboarding: [BackendOption] = [.parakeetMultilingual, .whisperTiny, .whisperSmall, .cohereTranscribe, .nemotron35Multilingual]
+    static let onboarding: [BackendOption] = [.parakeetMultilingual, .whisperTinyEnglish, .whisperSmall, .cohereTranscribe, .nemotron35Multilingual]
 
     /// Models coming soon — shown greyed out in the Models tab.
     static let comingSoon: [BackendOption] = []
@@ -189,9 +162,7 @@ struct BackendOption: Equatable {
     }
 
     static func resolve(backend: String, model: String) -> BackendOption? {
-        all.first {
-            $0.backend == backend && $0.model == model
-        }
+        all.first { $0.backend == backend && $0.model == model }
     }
 
     var isStreamingDictationBackend: Bool {
@@ -200,12 +171,6 @@ struct BackendOption: Equatable {
 
     var supportsMeetingTranscription: Bool {
         !isStreamingDictationBackend
-    }
-
-    /// Multilingual WhisperKit models expose language selection (auto-detect or pinned code).
-    /// English-only `.en` variants do not.
-    var supportsWhisperLanguageSelection: Bool {
-        backend == "whisper" && !WhisperKitLanguage.isEnglishOnlyModel(model)
     }
 
     static func resolveDownloaded(
@@ -231,12 +196,20 @@ struct BackendOption: Equatable {
         case "whisper":
             return WhisperKitTranscriber.isModelDownloaded(model)
         case "fluidaudio":
-            let plan = model.contains("v2")
-                ? ManagedASRModelPlans.parakeetV2()
-                : ManagedASRModelPlans.parakeetV3()
-            return plan.isAvailableLocally(fileManager: fm)
+            let supportDir = fm.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/FluidAudio/Models")
+            if model.contains("parakeet") {
+                let version = model.contains("v2") ? "v2" : "v3"
+                if let contents = try? fm.contentsOfDirectory(at: supportDir, includingPropertiesForKeys: nil) {
+                    return contents.contains { $0.lastPathComponent.contains("parakeet") && $0.lastPathComponent.contains(version) }
+                }
+            }
+            return false
         case "qwen":
-            return Qwen3AsrModelStore.isModelDownloaded(fileManager: fm)
+            let supportDir = fm.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/FluidAudio/Models/qwen3-asr-0.6b-coreml")
+            return fm.fileExists(atPath: supportDir.appendingPathComponent("int8/vocab.json").path)
+                || fm.fileExists(atPath: supportDir.appendingPathComponent("f32/vocab.json").path)
         case "nemotron35":
             return Nemotron35ModelStore.isModelDownloaded(fileManager: fm)
         case "cohere":
@@ -244,7 +217,7 @@ struct BackendOption: Equatable {
         case "indicasr":
             return IndicASRModelStore.isAvailableLocally()
         case "sensevoice":
-            return SenseVoiceTranscriber.isModelDownloaded(fileManager: fm)
+            return SenseVoiceTranscriber.isModelDownloaded()
         case "gemma4-litert":
             return Gemma4LiteRTModelStore.isAvailableLocally()
         default:
@@ -323,70 +296,6 @@ enum Nemotron35Language: String, CaseIterable, Codable, Sendable {
     }
 }
 
-/// Language selection for multilingual WhisperKit models.
-/// `auto` enables WhisperKit `detectLanguage`; explicit codes pin decoding language.
-enum WhisperKitLanguage: String, CaseIterable, Codable, Sendable {
-    case auto
-    case english = "en"
-    case hindi = "hi"
-    case spanish = "es"
-    case french = "fr"
-    case german = "de"
-    case italian = "it"
-    case portuguese = "pt"
-    case chinese = "zh"
-    case japanese = "ja"
-    case korean = "ko"
-    case russian = "ru"
-    case arabic = "ar"
-
-    static let defaultLanguage: Self = .auto
-
-    var label: String {
-        switch self {
-        case .auto: return "Auto-detect"
-        case .english: return "English"
-        case .hindi: return "Hindi"
-        case .spanish: return "Spanish"
-        case .french: return "French"
-        case .german: return "German"
-        case .italian: return "Italian"
-        case .portuguese: return "Portuguese"
-        case .chinese: return "Chinese"
-        case .japanese: return "Japanese"
-        case .korean: return "Korean"
-        case .russian: return "Russian"
-        case .arabic: return "Arabic"
-        }
-    }
-
-    static func resolved(_ rawValue: String?) -> Self {
-        guard let rawValue,
-              let language = Self(rawValue: rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) else {
-            return defaultLanguage
-        }
-        return language
-    }
-
-    static func resolvedCode(_ rawValue: String?) -> String {
-        resolved(rawValue).rawValue
-    }
-
-    /// English-only WhisperKit checkpoints (e.g. `tiny.en`) have no multilingual language tokens.
-    static func isEnglishOnlyModel(_ modelName: String) -> Bool {
-        modelName.hasSuffix(".en")
-    }
-
-    /// Preference to apply for a loaded WhisperKit model.
-    /// Returns `nil` for English-only variants so callers use default `DecodingOptions`.
-    static func preferenceForLoadedModel(
-        _ preference: WhisperKitLanguage,
-        modelName: String
-    ) -> WhisperKitLanguage? {
-        isEnglishOnlyModel(modelName) ? nil : preference
-    }
-}
-
 enum MeetingLiveCaptionBackend: String, CaseIterable, Codable, Sendable {
     case parakeetRealtimeEOU = "parakeet_realtime_eou"
     case nemotron35 = "nemotron35"
@@ -403,7 +312,7 @@ enum MeetingLiveCaptionBackend: String, CaseIterable, Codable, Sendable {
     var settingsLabel: String {
         switch self {
         case .parakeetRealtimeEOU: return "\(label) (live preview only)"
-        case .nemotron35: return "\(label) (live + final)"
+        case .nemotron35: return "\(label) (live transcript)"
         }
     }
 
@@ -680,9 +589,9 @@ struct PostProcessorOption: Identifiable, Equatable {
     // HF repo must be public (or token-gated) before distributing alpha builds.
     static let finetunedV2 = PostProcessorOption(
         id: "qwen3-postproc-v2",
-        label: "Muesli Cleanup (Legacy)",
+        label: "Post-Proc v2 (Finetuned)",
         sizeLabel: "~390 MB",
-        description: "An earlier cleanup model for Muesli dictation. It handles filler words, corrections, and spoken lists, but is less consistent than the current model.",
+        description: "Fine-tuned on Muesli dictation data. Best for filler removal, deletion cues, and spoken list formatting.",
         downloadURL: URL(string: "https://huggingface.co/phequals/qwen3-postproc-v2/resolve/main/qwen3-postproc-v2-q4_k_m.gguf")!,
         filename: "qwen3-postproc-v2-q4_k_m.gguf"
     )
@@ -690,9 +599,9 @@ struct PostProcessorOption: Identifiable, Equatable {
     // Vanilla Qwen3.5-0.8B. Stable for basic cleanup; does not reliably convert spoken list cues.
     static let qwen35_0_8b = PostProcessorOption(
         id: "qwen35-0.8b",
-        label: "Qwen Basic Cleanup",
+        label: "Qwen3.5 0.8B",
         sizeLabel: "~533 MB",
-        description: "A general-purpose option for typos and filler words. It may miss “scratch that” edits and spoken list formatting.",
+        description: "Vanilla Qwen3.5-0.8B. Good for typo correction and filler removal. Spoken list formatting is unreliable.",
         downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf")!,
         filename: "Qwen3.5-0.8B-Q4_K_M.gguf"
     )
@@ -700,9 +609,9 @@ struct PostProcessorOption: Identifiable, Equatable {
     // Fine-tuned Qwen3.5-0.8B v3 trained on Muesli dictation correction data.
     static let finetunedV3 = PostProcessorOption(
         id: "qwen35-postproc-v3",
-        label: "Muesli Cleanup",
+        label: "Post-Proc v3 (Finetuned)",
         sizeLabel: "~505 MB",
-        description: "The best overall choice for everyday dictation. It removes filler words, follows “scratch that,” and turns spoken list cues into clean formatting.",
+        description: "Fine-tuned Qwen3.5-0.8B on Muesli dictation data. Improved over v2 on filler removal, deletion cues, and spoken list formatting.",
         downloadURL: URL(string: "https://huggingface.co/phequals/qwen35-postproc-v3-gguf/resolve/main/qwen35-postproc-v3-Q4_K_M.gguf")!,
         filename: "qwen35-postproc-v3-Q4_K_M.gguf"
     )
@@ -788,12 +697,22 @@ struct CustomTranscriptCleanupPrompt: Codable, Equatable, Identifiable {
 
 enum TranscriptCleanupPrompts {
     static let defaultID = "default"
+    static let mixedLanguageRepairID = "mixed-language-repair"
 
     static let builtIns: [TranscriptCleanupPromptPreset] = [
         TranscriptCleanupPromptPreset(
             id: defaultID,
             name: "Default Cleanup",
             prompt: PostProcessorOption.defaultSystemPrompt,
+            isCustom: false
+        ),
+        // Selectable because the default forbids the word changes this needs. Someone
+        // dictating Arabic with English technical terms gets the same phonetic
+        // mangling a meeting does, and the same repair fixes it.
+        TranscriptCleanupPromptPreset(
+            id: mixedLanguageRepairID,
+            name: "Mixed-Language Repair (Arabic + English)",
+            prompt: MixedLanguageRepairPrompt.dictation,
             isCustom: false
         ),
     ]
@@ -809,6 +728,83 @@ enum TranscriptCleanupPrompts {
     }
 }
 
+/// Cleanup instructions for a finalized meeting transcript.
+///
+/// Deliberately not a `TranscriptCleanupPrompts` preset. The dictation default
+/// forbids paraphrasing, rewording, and adding words -- correct for a sentence
+/// someone just spoke into their own machine, and fatal here, because restoring
+/// `primary key` from البرايمريكية *is* changing the words. Keeping the two
+/// separate also means editing the dictation preset cannot silently change what
+/// meetings send.
+///
+/// It carries no `<APP-CONTEXT>` block: focused app, URL, and OCR text are
+/// dictation concepts with no meaning during a meeting.
+/// Instructions for repairing a transcript whose speech recognizer was monolingual.
+///
+/// Deliberately not a `TranscriptCleanupPrompts` default. The dictation default
+/// forbids paraphrasing, rewording, and adding words -- correct when the recognizer
+/// heard the right language, and fatal here, because restoring `primary key` from
+/// البرايمريكية *is* changing the words.
+enum MixedLanguageRepairPrompt {
+
+    /// The repair instructions themselves, shared by dictation and meetings.
+    ///
+    /// Carries no `<APP-CONTEXT>` block: it is about the words, not about what was
+    /// on screen when they were spoken.
+    static func core(subject: String) -> String {
+        """
+        You repair \(subject) that mix Arabic and English.
+
+        The speech recognizer was monolingual, so foreign-language terms were \
+        transcribed phonetically into the text's own script and are now nonsense. \
+        Your job is to restore them.
+
+        Restore technical terms, product names, and borrowed words to their correct \
+        original spelling. For example, Arabic text reading "البرايمريكية" is the \
+        English term "primary key" written phonetically, and "وأنتو مين" in a \
+        technical discussion is "one-to-many", not the Arabic question it looks like. \
+        Use the surrounding context to decide which reading is meant.
+
+        Add sentence punctuation where it is missing.
+
+        You MUST:
+        - Change words when the recognizer misheard them. This is the entire task.
+        - Keep every other word as the speaker said it, in the language they said it.
+        - Return every line you were given, in the same order.
+        - Return the full text of every line, however long.
+
+        You MUST NOT:
+        - Summarize, shorten, or omit anything.
+        - Translate the text into another language.
+        - Add commentary, headings, or content nobody said.
+        """
+    }
+
+    /// The dictation preset: one snippet in, one snippet out, no wire protocol.
+    static let dictation = core(subject: "dictated text")
+}
+
+enum MeetingTranscriptCleanupPrompt {
+    /// Marker delimiting each unit on the wire.
+    ///
+    /// Unit correspondence has to be exact rather than inferred: the model returns
+    /// free-form text, so without a marker to echo there is nothing to map output
+    /// units back to input units, and a merged or dropped line becomes invisible.
+    /// The sequence is chosen not to occur naturally in Arabic or English prose.
+    static let unitMarker = "<<<U"
+
+    static func marker(for index: Int) -> String { "\(unitMarker)\(index)>>>" }
+
+    /// The shared repair instructions plus the chunking protocol only meetings use.
+    static let systemPrompt = MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")
+        + """
+
+
+        Each line is preceded by a <<<U…>>> marker. Copy every marker exactly as it \
+        appears. Markers are structure, not content: never translate, renumber, \
+        reorder, merge, or drop one.
+        """
+}
 struct DictionarySuggestion: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     var observed: String
@@ -1079,7 +1075,6 @@ struct AppConfig: Codable {
     var cohereLanguage: String = CohereTranscribeLanguage.defaultLanguage.rawValue
     var indicASRLanguage: String = IndicASRLanguage.defaultLanguage.rawValue
     var nemotron35Language: String = Nemotron35Language.defaultLanguage.rawValue
-    var whisperLanguage: String = WhisperKitLanguage.defaultLanguage.rawValue
     var meetingTranscriptionBackend: String = BackendOption.whisper.backend
     var meetingTranscriptionModel: String = BackendOption.whisper.model
     var meetingSummaryBackend: String = MeetingSummaryBackendOption.chatGPT.backend
@@ -1103,10 +1098,12 @@ struct AppConfig: Codable {
     var launchAtLogin: Bool = false
     var openDashboardOnLaunch: Bool = true
     var showFloatingIndicator: Bool = true
-    var showHotkeyOnFloatingIndicator: Bool = false
     var indicatorAnchor: IndicatorAnchor = .midTrailing
     var dashboardWindowFrame: WindowFrame? = nil
     var indicatorOrigin: CGPointCodable? = nil
+    /// Bottom-left origin the user last dragged the floating transcript panel to.
+    /// The panel is user-positioned, not pill-attached; nil means never moved.
+    var meetingPanelOrigin: CGPointCodable? = nil
     var openAIAPIKey: String = ""
     var openRouterAPIKey: String = ""
     var openAIModel: String = ""
@@ -1140,7 +1137,6 @@ struct AppConfig: Codable {
     var muteSystemAudioDuringDictation: Bool = false
     var recordingColorHex: String = "1e1e2e"   // Catppuccin Mocha base, without #
     var menuBarIcon: String = "muesli"
-    var showHotkeyInMenuBar: Bool = true
     var showNextMeetingInMenuBar: Bool = true
     var maraudersMapUnlocked: Bool = false
     var maraudersMapAudioClip: String = "bbc_world_news"
@@ -1149,7 +1145,19 @@ struct AppConfig: Codable {
     var hiddenCalendarEventSourceHints: [String: String] = [:]
     var disabledCalendarIDs: [String] = []
     var enablePostProcessor: Bool = false
+    /// Whether finalized meeting transcripts get an AI cleanup pass.
+    ///
+    /// Off by default: it costs a model pass per meeting, and depending on the
+    /// configured endpoint it may send the full transcript of a private
+    /// conversation to a third party.
+    var enableMeetingTranscriptCleanup: Bool = false
+    /// SHA-256 identity of the backend and resolved destination the user approved.
+    /// Nil means there is no consent, including configs saved before this field.
+    var meetingTranscriptCleanupConsentFingerprint: String?
     var postProcessorBackend: String = TranscriptCleanupBackendOption.local.backend
+    /// Minutes of dictation-cleanup inactivity before an on-device cleanup model is
+    /// released from memory. 0 keeps it resident for the life of the process.
+    var postProcessorIdleUnloadMinutes: Int = PostProcessorIdleUnloadPolicy.defaultIdleMinutes
     var activePostProcessorId: String = PostProcessorOption.defaultOption.id
     var postProcessorChatGPTModel: String = ""
     var postProcessorOpenAIModel: String = ""
@@ -1166,6 +1174,9 @@ struct AppConfig: Codable {
     /// Enables the explicitly selected live meeting transcription mode.
     var enableLiveStreamingPartials: Bool = false
     var meetingLiveCaptionBackend: String = MeetingLiveCaptionBackend.defaultBackend.rawValue
+    /// Preserves the original unified Nemotron behavior unless the user explicitly
+    /// chooses a separate downloaded model for the final transcript.
+    var useLiveMeetingTranscriptAsFinal: Bool = true
     /// Reveals a compact live transcript beside the meeting waveform while the
     /// pointer is over either floating surface.
     var showMeetingTranscriptOnIndicatorHover: Bool = true
@@ -1202,7 +1213,6 @@ struct AppConfig: Codable {
         case cohereLanguage = "cohere_language"
         case indicASRLanguage = "indic_asr_language"
         case nemotron35Language = "nemotron35_language"
-        case whisperLanguage = "whisper_language"
         case meetingTranscriptionBackend = "meeting_transcription_backend"
         case meetingTranscriptionModel = "meeting_transcription_model"
         case meetingSummaryBackend = "meeting_summary_backend"
@@ -1226,10 +1236,10 @@ struct AppConfig: Codable {
         case launchAtLogin = "launch_at_login"
         case openDashboardOnLaunch = "open_dashboard_on_launch"
         case showFloatingIndicator = "show_floating_indicator"
-        case showHotkeyOnFloatingIndicator = "show_hotkey_on_floating_indicator"
         case indicatorAnchor = "indicator_anchor"
         case dashboardWindowFrame = "dashboard_window_frame"
         case indicatorOrigin = "indicator_origin"
+        case meetingPanelOrigin = "meeting_panel_origin"
         case openAIAPIKey = "openai_api_key"
         case openRouterAPIKey = "openrouter_api_key"
         case openAIModel = "openai_model"
@@ -1261,7 +1271,6 @@ struct AppConfig: Codable {
         case muteSystemAudioDuringDictation = "mute_system_audio_during_dictation"
         case recordingColorHex = "recording_color_hex"
         case menuBarIcon = "menu_bar_icon"
-        case showHotkeyInMenuBar = "show_hotkey_in_menu_bar"
         case showNextMeetingInMenuBar = "show_next_meeting_in_menu_bar"
         case maraudersMapUnlocked = "marauders_map_unlocked"
         case maraudersMapAudioClip = "marauders_map_audio_clip"
@@ -1270,7 +1279,10 @@ struct AppConfig: Codable {
         case hiddenCalendarEventSourceHints = "hidden_calendar_event_source_hints"
         case disabledCalendarIDs = "disabled_calendar_ids"
         case enablePostProcessor = "enable_post_processor"
+        case enableMeetingTranscriptCleanup = "enable_meeting_transcript_cleanup"
+        case meetingTranscriptCleanupConsentFingerprint = "meeting_transcript_cleanup_consent_fingerprint"
         case postProcessorBackend = "post_processor_backend"
+        case postProcessorIdleUnloadMinutes = "post_processor_idle_unload_minutes"
         case activePostProcessorId = "active_post_processor_id"
         case postProcessorChatGPTModel = "post_processor_chatgpt_model"
         case postProcessorOpenAIModel = "post_processor_openai_model"
@@ -1286,6 +1298,7 @@ struct AppConfig: Codable {
         case useCoreAudioTap = "use_core_audio_tap"
         case enableLiveStreamingPartials = "enable_live_streaming_partials"
         case meetingLiveCaptionBackend = "meeting_live_caption_backend"
+        case useLiveMeetingTranscriptAsFinal = "use_live_meeting_transcript_as_final"
         case showMeetingTranscriptOnIndicatorHover = "show_meeting_transcript_on_indicator_hover"
         case meetingHookEnabled = "meeting_hook_enabled"
         case meetingHookPath = "meeting_hook_path"
@@ -1331,7 +1344,6 @@ struct AppConfig: Codable {
         cohereLanguage = CohereTranscribeLanguage.resolvedCode(try? c.decode(String.self, forKey: .cohereLanguage))
         indicASRLanguage = IndicASRLanguage.resolvedCode(try? c.decode(String.self, forKey: .indicASRLanguage))
         nemotron35Language = Nemotron35Language.resolvedCode(try? c.decode(String.self, forKey: .nemotron35Language))
-        whisperLanguage = WhisperKitLanguage.resolvedCode(try? c.decode(String.self, forKey: .whisperLanguage))
         meetingTranscriptionBackend = (try? c.decode(String.self, forKey: .meetingTranscriptionBackend)) ?? sttBackend
         meetingTranscriptionModel = (try? c.decode(String.self, forKey: .meetingTranscriptionModel)) ?? sttModel
         meetingSummaryBackend = (try? c.decode(String.self, forKey: .meetingSummaryBackend)) ?? defaults.meetingSummaryBackend
@@ -1381,13 +1393,11 @@ struct AppConfig: Codable {
         launchAtLogin = (try? c.decode(Bool.self, forKey: .launchAtLogin)) ?? defaults.launchAtLogin
         openDashboardOnLaunch = (try? c.decode(Bool.self, forKey: .openDashboardOnLaunch)) ?? defaults.openDashboardOnLaunch
         showFloatingIndicator = (try? c.decode(Bool.self, forKey: .showFloatingIndicator)) ?? defaults.showFloatingIndicator
-        showHotkeyOnFloatingIndicator =
-            (try? c.decode(Bool.self, forKey: .showHotkeyOnFloatingIndicator))
-            ?? defaults.showHotkeyOnFloatingIndicator
         indicatorAnchor = (try? c.decode(IndicatorAnchor.self, forKey: .indicatorAnchor))
             ?? ((try? c.decodeIfPresent(CGPointCodable.self, forKey: .indicatorOrigin)) != nil ? .custom : .midTrailing)
         dashboardWindowFrame = try? c.decode(WindowFrame.self, forKey: .dashboardWindowFrame)
         indicatorOrigin = try? c.decode(CGPointCodable.self, forKey: .indicatorOrigin)
+        meetingPanelOrigin = try? c.decode(CGPointCodable.self, forKey: .meetingPanelOrigin)
         openAIAPIKey = (try? c.decode(String.self, forKey: .openAIAPIKey)) ?? defaults.openAIAPIKey
         openRouterAPIKey = (try? c.decode(String.self, forKey: .openRouterAPIKey)) ?? defaults.openRouterAPIKey
         openAIModel = SummaryModelPreset.migratedFromGPT55(
@@ -1436,9 +1446,6 @@ struct AppConfig: Codable {
         muteSystemAudioDuringDictation = (try? c.decode(Bool.self, forKey: .muteSystemAudioDuringDictation)) ?? defaults.muteSystemAudioDuringDictation
         recordingColorHex = (try? c.decode(String.self, forKey: .recordingColorHex)) ?? defaults.recordingColorHex
         menuBarIcon = (try? c.decode(String.self, forKey: .menuBarIcon)) ?? defaults.menuBarIcon
-        showHotkeyInMenuBar =
-            (try? c.decode(Bool.self, forKey: .showHotkeyInMenuBar))
-            ?? defaults.showHotkeyInMenuBar
         showNextMeetingInMenuBar = (try? c.decode(Bool.self, forKey: .showNextMeetingInMenuBar)) ?? defaults.showNextMeetingInMenuBar
         maraudersMapUnlocked = (try? c.decode(Bool.self, forKey: .maraudersMapUnlocked)) ?? defaults.maraudersMapUnlocked
         maraudersMapAudioClip = (try? c.decode(String.self, forKey: .maraudersMapAudioClip)) ?? defaults.maraudersMapAudioClip
@@ -1450,9 +1457,18 @@ struct AppConfig: Codable {
         )) ?? defaults.hiddenCalendarEventSourceHints
         disabledCalendarIDs = (try? c.decode([String].self, forKey: .disabledCalendarIDs)) ?? defaults.disabledCalendarIDs
         enablePostProcessor = (try? c.decode(Bool.self, forKey: .enablePostProcessor)) ?? defaults.enablePostProcessor
+        enableMeetingTranscriptCleanup = (try? c.decode(Bool.self, forKey: .enableMeetingTranscriptCleanup))
+            ?? defaults.enableMeetingTranscriptCleanup
+        meetingTranscriptCleanupConsentFingerprint = try? c.decode(
+            String.self,
+            forKey: .meetingTranscriptCleanupConsentFingerprint
+        )
         postProcessorBackend = TranscriptCleanupBackendOption
             .resolved(try? c.decode(String.self, forKey: .postProcessorBackend))
             .backend
+        postProcessorIdleUnloadMinutes = PostProcessorIdleUnloadPolicy.resolvedIdleMinutes(
+            (try? c.decode(Int.self, forKey: .postProcessorIdleUnloadMinutes)) ?? defaults.postProcessorIdleUnloadMinutes
+        )
         activePostProcessorId = (try? c.decode(String.self, forKey: .activePostProcessorId)) ?? defaults.activePostProcessorId
         postProcessorChatGPTModel = SummaryModelPreset.supportedChatGPTModel(
             SummaryModelPreset.migratedFromGPT55(
@@ -1480,6 +1496,8 @@ struct AppConfig: Codable {
         meetingLiveCaptionBackend = MeetingLiveCaptionBackend
             .resolved(try? c.decode(String.self, forKey: .meetingLiveCaptionBackend))
             .rawValue
+        useLiveMeetingTranscriptAsFinal = (try? c.decode(Bool.self, forKey: .useLiveMeetingTranscriptAsFinal))
+            ?? defaults.useLiveMeetingTranscriptAsFinal
         showMeetingTranscriptOnIndicatorHover = (try? c.decode(Bool.self, forKey: .showMeetingTranscriptOnIndicatorHover)) ?? defaults.showMeetingTranscriptOnIndicatorHover
         meetingHookEnabled = (try? c.decode(Bool.self, forKey: .meetingHookEnabled)) ?? defaults.meetingHookEnabled
         meetingHookPath = (try? c.decode(String.self, forKey: .meetingHookPath)) ?? defaults.meetingHookPath
@@ -1496,6 +1514,7 @@ struct AppConfig: Codable {
         contributionBuyMeCoffeeClicked = (try? c.decode(Bool.self, forKey: .contributionBuyMeCoffeeClicked)) ?? defaults.contributionBuyMeCoffeeClicked
         contributionTweetClicked = (try? c.decode(Bool.self, forKey: .contributionTweetClicked)) ?? defaults.contributionTweetClicked
         contributionLinkedInClicked = (try? c.decode(Bool.self, forKey: .contributionLinkedInClicked)) ?? defaults.contributionLinkedInClicked
+        MeetingTranscriptCleanupPolicy.reconcileConsent(in: &self)
     }
 
     var resolvedCohereLanguage: CohereTranscribeLanguage {
@@ -1508,10 +1527,6 @@ struct AppConfig: Codable {
 
     var resolvedNemotron35Language: Nemotron35Language {
         Nemotron35Language.resolved(nemotron35Language)
-    }
-
-    var resolvedWhisperLanguage: WhisperKitLanguage {
-        WhisperKitLanguage.resolved(whisperLanguage)
     }
 
     var resolvedMeetingLiveCaptionBackend: MeetingLiveCaptionBackend {
@@ -1532,6 +1547,17 @@ struct AppConfig: Codable {
 
     var resolvedMeetingRecordingFileFormat: MeetingRecordingFileFormat {
         MeetingRecordingFileFormat.resolved(meetingRecordingFileFormat)
+    }
+}
+
+extension AppConfig {
+    var usesNemotronLiveMeetingTranscript: Bool {
+        enableLiveStreamingPartials
+            && resolvedMeetingLiveCaptionBackend == .nemotron35
+    }
+
+    var usesUnifiedNemotronMeetingTranscript: Bool {
+        usesNemotronLiveMeetingTranscript && useLiveMeetingTranscriptAsFinal
     }
 }
 

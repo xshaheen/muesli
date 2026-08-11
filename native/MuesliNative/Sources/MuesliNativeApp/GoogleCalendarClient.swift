@@ -86,7 +86,8 @@ enum GoogleCalendarClientError: Error, LocalizedError {
 
 @MainActor
 final class GoogleCalendarClient {
-    private let auth = GoogleCalendarAuthManager.shared
+    private let auth: any GoogleCalendarAuthenticating
+    private let session: URLSession
 
     private static let baseURL = "https://www.googleapis.com/calendar/v3"
     private static let primaryCalendarID = "primary"
@@ -136,6 +137,16 @@ final class GoogleCalendarClient {
     /// so calendars added in the Google web UI get picked up automatically.
     private var cachedCalendarList: [GoogleCalendarSummary] = []
     private var upcomingEventsFetchGeneration = 0
+
+    init() {
+        auth = GoogleCalendarAuthManager.shared
+        session = .shared
+    }
+
+    init(auth: any GoogleCalendarAuthenticating, session: URLSession) {
+        self.auth = auth
+        self.session = session
+    }
 
     /// Fetch upcoming events from every Google calendar the user can read,
     /// minus any in `disabledCalendarIDs`. Refreshes the calendar list on each
@@ -261,7 +272,9 @@ final class GoogleCalendarClient {
 
         let escapedID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
 
-        repeat {
+        // `while true` rather than `repeat/while pageToken != nil` so the 401 branch can
+        // `continue` to re-run the *same* page with the refreshed token.
+        while true {
             var components = URLComponents(string: "\(Self.baseURL)/calendars/\(escapedID)/events")!
 
             if let pageToken {
@@ -284,7 +297,7 @@ final class GoogleCalendarClient {
             var request = URLRequest(url: components.url!)
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
 
             if statusCode == 410 {
@@ -307,7 +320,7 @@ final class GoogleCalendarClient {
 
             if statusCode == 401 && !tokenRetried {
                 tokenRetried = true
-                token = try await auth.validAccessToken()
+                token = try await auth.forceRefreshAccessToken()
                 continue
             }
 
@@ -347,7 +360,8 @@ final class GoogleCalendarClient {
                 cachedEventsByCalendar[calendarID] = bucket
                 cachedEventScopesByCalendar[calendarID] = windowScope
             }
-        } while pageToken != nil
+            if pageToken == nil { break }
+        }
     }
 
     private func ensureCurrentFetch(_ fetchGeneration: Int) throws {
@@ -364,7 +378,9 @@ final class GoogleCalendarClient {
         var tokenRetried = false
         var results: [GoogleCalendarSummary] = []
 
-        repeat {
+        // `while true` rather than `repeat/while pageToken != nil` so the 401 branch can
+        // `continue` to re-run the *same* page with the refreshed token.
+        while true {
             var components = URLComponents(string: "\(Self.baseURL)/users/me/calendarList")!
             var items: [URLQueryItem] = [
                 URLQueryItem(name: "maxResults", value: "250"),
@@ -378,12 +394,12 @@ final class GoogleCalendarClient {
             var request = URLRequest(url: components.url!)
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
 
             if statusCode == 401 && !tokenRetried {
                 tokenRetried = true
-                token = try await auth.validAccessToken()
+                token = try await auth.forceRefreshAccessToken()
                 continue
             }
 
@@ -407,7 +423,8 @@ final class GoogleCalendarClient {
                 }
             }
             pageToken = json["nextPageToken"] as? String
-        } while pageToken != nil
+            if pageToken == nil { break }
+        }
 
         return results.sorted { lhs, rhs in
             if lhs.isPrimary != rhs.isPrimary { return lhs.isPrimary }

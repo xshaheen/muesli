@@ -41,6 +41,9 @@ final class ChatGPTAuthManager {
         AppIdentity.supportDirectoryURL.appendingPathComponent("chatgpt-auth.json")
     }
 
+    /// The refresh currently in flight, so overlapping callers share one round trip.
+    private var refreshTask: Task<TokenResponse, Error>?
+
     private init() {
         // Migrate from legacy keychain storage to file
         migrateFromKeychain()
@@ -83,17 +86,37 @@ final class ChatGPTAuthManager {
                 return (accessToken, accountId)
             }
             // Token expired or about to expire — refresh
-            fputs("[chatgpt-auth] token expired, refreshing...\n", stderr)
-            guard let refreshToken = tokenRead(key: "refresh_token") else {
-                throw ChatGPTAuthError.notAuthenticated
-            }
-            let tokens = try await refreshAccessToken(refreshToken: refreshToken)
-            saveTokens(tokens)
+            let tokens = try await refreshSharingInFlightRequest()
             return (tokens.accessToken, tokens.accountId)
         }
 
         // No expiry info — use token as-is
         return (accessToken, accountId)
+    }
+
+    /// Runs one refresh at a time, letting concurrent callers await the same result.
+    ///
+    /// Without this, two callers that both find an expired token POST the same refresh
+    /// token: the server rotates it on the first request, the second fails, and the
+    /// later `saveTokens` overwrites the good tokens — an effective sign-out.
+    private func refreshSharingInFlightRequest() async throws -> TokenResponse {
+        if let refreshTask {
+            return try await refreshTask.value
+        }
+
+        fputs("[chatgpt-auth] token expired, refreshing...\n", stderr)
+        guard let refreshToken = tokenRead(key: "refresh_token") else {
+            throw ChatGPTAuthError.notAuthenticated
+        }
+
+        let task = Task { @MainActor in
+            let tokens = try await self.refreshAccessToken(refreshToken: refreshToken)
+            self.saveTokens(tokens)
+            return tokens
+        }
+        refreshTask = task
+        defer { refreshTask = nil }
+        return try await task.value
     }
 
     // MARK: - PKCE

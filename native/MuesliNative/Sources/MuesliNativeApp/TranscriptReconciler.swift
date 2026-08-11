@@ -195,31 +195,44 @@ enum TranscriptReconciler {
         let orderedSegments = sortedSegments(systemSegments)
 
         return orderedSegments.enumerated().compactMap { index, segment in
-            let normalizedSegmentText = normalizedText(segment.text)
-            guard !normalizedSegmentText.isEmpty else { return nil }
+            guard !normalizedText(segment.text).isEmpty else { return nil }
 
             let shouldDrop = orderedSegments.enumerated().contains { otherIndex, otherSegment in
                 guard otherIndex != index else { return false }
-                let overlapCoverage = overlapCoverage(of: segment, across: [otherSegment])
-                guard overlapCoverage >= 0.5 else { return false }
-
-                let normalizedOtherText = normalizedText(otherSegment.text)
-                guard !normalizedOtherText.isEmpty else { return false }
-
-                let segmentVisibleLength = visibleLength(of: segment.text)
-                guard segmentVisibleLength < 12 else { return false }
-
-                if normalizedOtherText.contains(normalizedSegmentText) {
-                    return true
-                }
-
-                let segmentTokens = tokenSet(from: normalizedSegmentText)
-                let otherTokens = tokenSet(from: normalizedOtherText)
-                return tokenContainmentRatio(source: segmentTokens, target: otherTokens) >= 0.67
+                guard isRedundantDuplicate(segment, comparedTo: otherSegment) else { return false }
+                // Two near-identical short turns each cover the other, so an unguarded
+                // symmetric drop would delete every copy. Keep the earliest one.
+                guard isRedundantDuplicate(otherSegment, comparedTo: segment) else { return true }
+                return otherIndex < index
             }
 
             return shouldDrop ? nil : segment
         }
+    }
+
+    private static func isRedundantDuplicate(
+        _ segment: SpeechSegment,
+        comparedTo otherSegment: SpeechSegment
+    ) -> Bool {
+        let normalizedSegmentText = normalizedText(segment.text)
+        guard !normalizedSegmentText.isEmpty else { return false }
+
+        let overlapCoverage = overlapCoverage(of: segment, across: [otherSegment])
+        guard overlapCoverage >= 0.5 else { return false }
+
+        let normalizedOtherText = normalizedText(otherSegment.text)
+        guard !normalizedOtherText.isEmpty else { return false }
+
+        let segmentVisibleLength = visibleLength(of: segment.text)
+        guard segmentVisibleLength < 12 else { return false }
+
+        if normalizedOtherText.contains(normalizedSegmentText) {
+            return true
+        }
+
+        let segmentTokens = tokenSet(from: normalizedSegmentText)
+        let otherTokens = tokenSet(from: normalizedOtherText)
+        return tokenContainmentRatio(source: segmentTokens, target: otherTokens) >= 0.67
     }
 
     private static func sortedSegments(_ segments: [SpeechSegment]) -> [SpeechSegment] {

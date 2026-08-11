@@ -85,7 +85,7 @@ final class HotkeyMonitor {
     }
 
     func configureTriggerThreshold(milliseconds: Int) {
-        finishActiveSessionBeforeReconfigure()
+        finishActiveSessionBeforeReconfigure(preserveToggle: true)
         prepareDelay = HotkeyTriggerTiming.prepareDelay(forThresholdMilliseconds: milliseconds)
         startDelay = HotkeyTriggerTiming.startDelay(forThresholdMilliseconds: milliseconds)
         if isRunning
@@ -129,7 +129,12 @@ final class HotkeyMonitor {
     }
 
     func stop() {
-        finishActiveSessionBeforeReconfigure()
+        stop(preserveToggle: false)
+    }
+
+    private func stop(preserveToggle: Bool) {
+        let preservedToggle = preserveToggle && toggleActive
+        finishActiveSessionBeforeReconfigure(preserveToggle: preserveToggle)
         cancelTimers()
         if let globalMonitor {
             NSEvent.removeMonitor(globalMonitor)
@@ -144,28 +149,28 @@ final class HotkeyMonitor {
         armed = false
         prepared = false
         active = false
-        toggleActive = false
+        toggleActive = preservedToggle
         combinationKeyDown = false
         combinationTriggered = false
     }
 
     func configure(keyCode: UInt16) {
-        finishActiveSessionBeforeReconfigure()
+        finishActiveSessionBeforeReconfigure(preserveToggle: true)
         combinationModifiers = nil
         combinationKeyCode = nil
         targetKeyCode = keyCode
-        if isRunning { restart() }
+        if isRunning { restart(preserveToggle: true) }
     }
 
     func configure(combination config: HotkeyConfig) {
         guard config.isCombination,
               let mods = config.resolvedCombinationModifiers,
               let kc = config.combinationKeyCode else { return }
-        finishActiveSessionBeforeReconfigure()
+        finishActiveSessionBeforeReconfigure(preserveToggle: true)
         targetKeyCode = UInt16.max
         combinationModifiers = mods
         combinationKeyCode = kc
-        if isRunning { restart() }
+        if isRunning { restart(preserveToggle: true) }
     }
 
     func configure(_ config: HotkeyConfig) {
@@ -177,7 +182,11 @@ final class HotkeyMonitor {
     }
 
     func restart() {
-        stop()
+        restart(preserveToggle: false)
+    }
+
+    private func restart(preserveToggle: Bool) {
+        stop(preserveToggle: preserveToggle)
         start()
     }
 
@@ -187,7 +196,10 @@ final class HotkeyMonitor {
         }
     }
 
-    private func finishActiveSessionBeforeReconfigure() {
+    /// - Parameter preserveToggle: Keeps a running toggle session alive across a
+    ///   reconfigure. Changing the trigger threshold or the hotkey itself invalidates an
+    ///   in-flight hold, but it is not a request to end a recording already in progress.
+    private func finishActiveSessionBeforeReconfigure(preserveToggle: Bool = false) {
         guard targetKeyDown
             || armed
             || prepared
@@ -197,7 +209,8 @@ final class HotkeyMonitor {
             || combinationKeyDown
             || combinationWorkItem != nil else { return }
 
-        let wasToggleActive = toggleActive
+        let keepToggle = preserveToggle && toggleActive
+        let wasToggleActive = toggleActive && !keepToggle
         let wasActive = active
         let shouldCancel = prepared || armed || armCancelWorkItem != nil
 
@@ -206,7 +219,7 @@ final class HotkeyMonitor {
         armed = false
         prepared = false
         active = false
-        toggleActive = false
+        toggleActive = keepToggle
         combinationKeyDown = false
         combinationTriggered = false
         lastTapWasShort = false

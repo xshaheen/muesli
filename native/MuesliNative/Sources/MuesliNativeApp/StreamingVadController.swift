@@ -14,12 +14,22 @@ final class StreamingVadController: @unchecked Sendable {
     /// touching queue- or actor-isolated state.
     var onChunkBoundary: (() -> Void)?
 
+    /// Backlog cap for undrained audio, in chunks (~256 ms each, so ~2 s).
+    ///
+    /// VAD inference can fall behind a live meeting indefinitely, and this queue
+    /// only drives chunk-boundary rotation — the durable audio goes to the chunk
+    /// recorders on a separate path. Stale samples would produce late boundaries
+    /// anyway, and the max-duration timer still forces rotation, so dropping the
+    /// oldest costs boundary precision rather than transcript content.
+    static let maxPendingChunks = 8
+
     private struct State {
         var generation = 0
         var drainerEpoch = 0
         var isActive = false
         var isDraining = false
         var pendingChunks: [[Float]] = []
+        var isDroppingChunks = false
         var streamState: VadStreamState?
         var lastRotationTime: Date?
     }
@@ -66,6 +76,7 @@ final class StreamingVadController: @unchecked Sendable {
             state.isActive = true
             state.isDraining = false
             state.pendingChunks.removeAll(keepingCapacity: true)
+            state.isDroppingChunks = false
             state.streamState = nil
             state.lastRotationTime = Date()
             return state.generation
@@ -99,6 +110,7 @@ final class StreamingVadController: @unchecked Sendable {
         let stopGeneration = lock.withLock { state in
             state.isActive = false
             state.pendingChunks.removeAll(keepingCapacity: false)
+            state.isDroppingChunks = false
             state.streamState = nil
             return state.generation
         }
@@ -114,13 +126,28 @@ final class StreamingVadController: @unchecked Sendable {
     func processAudio(_ samples: [Float]) {
         guard !samples.isEmpty else { return }
 
-        let shouldStart = lock.withLock { state in
-            guard state.isActive else { return false }
+        let outcome = lock.withLock { state -> (shouldStart: Bool, droppedChunks: Int) in
+            guard state.isActive else { return (false, 0) }
             state.pendingChunks.append(samples)
-            return state.streamState != nil && !state.isDraining
+            var dropped = 0
+            if state.pendingChunks.count > Self.maxPendingChunks {
+                dropped = state.pendingChunks.count - Self.maxPendingChunks
+                state.pendingChunks.removeFirst(dropped)
+            }
+            // One notice per burst: a backlog drops a chunk on every subsequent
+            // append, and logging each one would bury the meeting's other output.
+            let shouldLogDrop = dropped > 0 && !state.isDroppingChunks
+            if dropped > 0 {
+                state.isDroppingChunks = true
+            }
+            return (state.streamState != nil && !state.isDraining, shouldLogDrop ? dropped : 0)
         }
 
-        if shouldStart {
+        if outcome.droppedChunks > 0 {
+            logger.notice("VAD backlog exceeded \(Self.maxPendingChunks, privacy: .public) chunks; dropping oldest audio")
+            fputs("[vad] backlog exceeded \(Self.maxPendingChunks) chunks, dropping oldest audio\n", stderr)
+        }
+        if outcome.shouldStart {
             startDrainIfNeeded()
         }
     }
@@ -183,9 +210,15 @@ final class StreamingVadController: @unchecked Sendable {
                 }
                 guard !state.pendingChunks.isEmpty else {
                     state.isDraining = false
+                    state.isDroppingChunks = false
                     return nil
                 }
-                return (state.generation, state.pendingChunks.removeFirst(), streamState)
+                let chunk = state.pendingChunks.removeFirst()
+                if state.pendingChunks.isEmpty {
+                    // Caught up, so the next overflow is a new burst worth logging.
+                    state.isDroppingChunks = false
+                }
+                return (state.generation, chunk, streamState)
             }
 
             guard let next else { return }

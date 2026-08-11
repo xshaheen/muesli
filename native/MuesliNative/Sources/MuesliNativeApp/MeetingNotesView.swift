@@ -6,19 +6,34 @@ struct MeetingNotesView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                let lines = markdown.components(separatedBy: .newlines)
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    markdownLine(line)
-                }
-            }
-            .frame(maxWidth: 880, alignment: .leading)
-            .padding(.horizontal, MuesliTheme.spacing24)
-            .padding(.vertical, MuesliTheme.spacing16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .textSelection(.enabled)
+            MeetingMarkdownContent(markdown: markdown)
+                .frame(maxWidth: 880, alignment: .leading)
+                .padding(.horizontal, MuesliTheme.spacing24)
+                .padding(.vertical, MuesliTheme.spacing16)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// Renders markdown the way notes and transcripts are rendered, without imposing a
+/// scroll container or width.
+///
+/// Extracted so chat answers look like every other piece of prose in the app
+/// instead of showing raw `**` and `-` characters.
+struct MeetingMarkdownContent: View {
+    let markdown: String
+    var bodyFont: Font = MuesliTheme.body()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+            let lines = markdown.components(separatedBy: .newlines)
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                markdownLine(line)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .textSelection(.enabled)
     }
 
     @ViewBuilder
@@ -28,23 +43,11 @@ struct MeetingNotesView: View {
         if line.isEmpty {
             Color.clear
                 .frame(height: MuesliTheme.spacing8)
-        } else if line.hasPrefix("# ") {
-            Text(String(line.dropFirst(2)))
-                .font(MuesliTheme.title1())
+        } else if let heading = Self.headingContent(from: line) {
+            Text(heading.text)
+                .font(Self.headingFont(level: heading.level))
                 .foregroundStyle(MuesliTheme.textPrimary)
-                .padding(.top, MuesliTheme.spacing8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else if line.hasPrefix("## ") {
-            Text(String(line.dropFirst(3)))
-                .font(MuesliTheme.title3())
-                .foregroundStyle(MuesliTheme.textPrimary)
-                .padding(.top, MuesliTheme.spacing12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else if line.hasPrefix("### ") {
-            Text(String(line.dropFirst(4)))
-                .font(MuesliTheme.headline())
-                .foregroundStyle(MuesliTheme.textPrimary)
-                .padding(.top, MuesliTheme.spacing4)
+                .padding(.top, Self.headingTopPadding(level: heading.level))
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else if line.hasPrefix("- [ ] ") {
             listRow(text: String(line.dropFirst(6)), indentLevel: indentLevel, systemImage: "square")
@@ -59,7 +62,7 @@ struct MeetingNotesView: View {
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .frame(width: 22, alignment: .trailing)
                 Text(Self.inline(numbered.text))
-                    .font(MuesliTheme.body())
+                    .font(bodyFont)
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .lineSpacing(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -68,7 +71,7 @@ struct MeetingNotesView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             Text(Self.inline(line))
-                .font(MuesliTheme.body())
+                .font(bodyFont)
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .lineSpacing(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -96,7 +99,7 @@ struct MeetingNotesView: View {
                     .frame(width: 14, alignment: .center)
             }
             Text(Self.inline(text))
-                .font(MuesliTheme.body())
+                .font(bodyFont)
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .lineSpacing(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -112,7 +115,46 @@ struct MeetingNotesView: View {
     /// text stays literal instead of being re-read as a block marker. Text that
     /// fails to parse falls back to itself, so notes always render.
     static func inline(_ text: String) -> AttributedString {
-        MarkdownInlineParser.parse(text)
+        guard let parsed = try? AttributedString(
+            markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) else {
+            return AttributedString(text)
+        }
+        let hasUnsafeLink = parsed.runs.contains { run in
+            guard let link = run.link else { return false }
+            guard let scheme = link.scheme?.lowercased() else { return true }
+            return scheme != "http" && scheme != "https"
+        }
+        return hasUnsafeLink ? AttributedString(text) : parsed
+    }
+
+    static func headingContent(from line: String) -> (level: Int, text: AttributedString)? {
+        let headings = [
+            (prefix: "### ", level: 3),
+            (prefix: "## ", level: 2),
+            (prefix: "# ", level: 1),
+        ]
+        guard let heading = headings.first(where: { line.hasPrefix($0.prefix) }) else {
+            return nil
+        }
+        return (heading.level, inline(String(line.dropFirst(heading.prefix.count))))
+    }
+
+    private static func headingFont(level: Int) -> Font {
+        switch level {
+        case 1: MuesliTheme.title1()
+        case 2: MuesliTheme.title3()
+        default: MuesliTheme.headline()
+        }
+    }
+
+    private static func headingTopPadding(level: Int) -> CGFloat {
+        switch level {
+        case 1: MuesliTheme.spacing8
+        case 2: MuesliTheme.spacing12
+        default: MuesliTheme.spacing4
+        }
     }
 
     private static func indentLevel(for line: String) -> Int {

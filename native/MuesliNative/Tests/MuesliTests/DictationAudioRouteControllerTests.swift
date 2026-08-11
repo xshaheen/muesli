@@ -4,8 +4,11 @@ import Testing
 
 @Suite("DictationAudioRouteController")
 struct DictationAudioRouteControllerTests {
-    @Test("dictation prefers built-in mic for headphone output")
-    func dictationPrefersBuiltInMicForHeadphoneOutput() {
+    @Test("dictation follows the system default input for headphone output")
+    func dictationFollowsSystemDefaultInputForHeadphoneOutput() {
+        // Auto used to prefer the built-in mic when a headset was connected, which
+        // recorded silence whenever the built-in could not hear (lid closed, user
+        // wearing the headset across the room). Auto now follows the default input.
         let inspector = FakeCoreAudioDeviceInspector(
             defaultOutputDeviceID: 10,
             outputRouteKind: .headphoneLike,
@@ -17,12 +20,12 @@ struct DictationAudioRouteControllerTests {
             observesDefaultOutputChanges: false
         )
 
-        #expect(controller.preferredInputDeviceIDForDictation() == 82)
-        #expect(controller.cachedPreferredInputDeviceIDForDictation() == 82)
+        #expect(controller.preferredInputDeviceIDForDictation() == nil)
+        #expect(controller.cachedPreferredInputDeviceIDForDictation() == nil)
     }
 
-    @Test("meeting reuses route-aware preferred input policy")
-    func meetingReusesRouteAwarePreferredInputPolicy() {
+    @Test("meeting follows the system default input for headphone output")
+    func meetingFollowsSystemDefaultInputForHeadphoneOutput() {
         let inspector = FakeCoreAudioDeviceInspector(
             defaultOutputDeviceID: 10,
             outputRouteKind: .headphoneLike,
@@ -34,8 +37,8 @@ struct DictationAudioRouteControllerTests {
             observesDefaultOutputChanges: false
         )
 
-        #expect(controller.preferredInputDeviceIDForMeeting() == 82)
-        #expect(controller.meetingInputRouteSnapshot().preferredInputDeviceID == 82)
+        #expect(controller.preferredInputDeviceIDForMeeting() == nil)
+        #expect(controller.meetingInputRouteSnapshot().preferredInputDeviceID == nil)
         #expect(controller.meetingInputRouteSnapshot().outputRouteKind == "headphone-like")
     }
 
@@ -122,8 +125,8 @@ struct DictationAudioRouteControllerTests {
         #expect(!controller.systemDefaultInputIsBuiltInForDictation())
     }
 
-    @Test("dictation prefers built-in mic for ambiguous Bluetooth unknown output")
-    func dictationPrefersBuiltInMicForAmbiguousBluetoothUnknownOutput() {
+    @Test("dictation follows the system default input for ambiguous Bluetooth unknown output")
+    func dictationFollowsSystemDefaultInputForAmbiguousBluetoothUnknownOutput() {
         let inspector = FakeCoreAudioDeviceInspector(
             defaultOutputDeviceID: 10,
             outputRouteKind: .unknown,
@@ -136,8 +139,8 @@ struct DictationAudioRouteControllerTests {
             observesDefaultOutputChanges: false
         )
 
-        #expect(controller.preferredInputDeviceIDForDictation() == 82)
-        #expect(controller.cachedPreferredInputDeviceIDForDictation() == 82)
+        #expect(controller.preferredInputDeviceIDForDictation() == nil)
+        #expect(controller.cachedPreferredInputDeviceIDForDictation() == nil)
     }
 
     @Test("dictation preserves default input for non-Bluetooth unknown output")
@@ -195,7 +198,8 @@ struct DictationAudioRouteControllerTests {
 
         #expect(controller.preferredInputDeviceIDForDictation() == 91)
         #expect(controller.cachedPreferredInputDeviceIDForDictation() == 91)
-        #expect(controller.preferredInputDeviceIDForMeeting() == 82)
+        // The dictation selection does not leak into meetings, which follow the default.
+        #expect(controller.preferredInputDeviceIDForMeeting() == nil)
     }
 
     @Test("user selected default microphone uses system default recorder")
@@ -271,8 +275,8 @@ struct DictationAudioRouteControllerTests {
         #expect(inspector.inspectionCallCount == inspectionCountBeforeSelection)
     }
 
-    @Test("meeting keeps explicit built-in routing when another microphone is default")
-    func meetingKeepsExplicitBuiltInRoutingForDifferentDefault() {
+    @Test("meeting follows the system default input when no microphone is selected")
+    func meetingFollowsSystemDefaultInputWhenNoMicrophoneSelected() {
         let inspector = FakeCoreAudioDeviceInspector(
             defaultOutputDeviceID: 10,
             outputRouteKind: .speakerLike,
@@ -291,10 +295,10 @@ struct DictationAudioRouteControllerTests {
         )
         routeQueue.sync {}
 
-        #expect(controller.preferredInputDeviceIDForMeeting() == 82)
+        #expect(controller.preferredInputDeviceIDForMeeting() == nil)
         let snapshot = controller.meetingInputRouteSnapshot()
-        #expect(snapshot.preferredInputDeviceID == 82)
-        #expect(snapshot.preferredInputDeviceName == "MacBook Microphone")
+        #expect(snapshot.preferredInputDeviceID == nil)
+        #expect(snapshot.preferredInputDeviceName == nil)
         #expect(snapshot.defaultInputDeviceName == "External Mic")
     }
 
@@ -394,8 +398,8 @@ struct DictationAudioRouteControllerTests {
         #expect(!controller.meetingInputRouteSnapshot().selectedInputDeviceResolved)
     }
 
-    @Test("unavailable selected microphone falls back to automatic route policy")
-    func unavailableSelectedMicrophoneFallsBackToAutomaticRoutePolicy() {
+    @Test("unavailable selected microphone falls back to the system default input")
+    func unavailableSelectedMicrophoneFallsBackToSystemDefaultInput() {
         let inspector = FakeCoreAudioDeviceInspector(
             defaultOutputDeviceID: 10,
             outputRouteKind: .headphoneLike,
@@ -411,8 +415,8 @@ struct DictationAudioRouteControllerTests {
         )
         controller.selectedInputDeviceUID = "missing-mic"
 
-        #expect(controller.preferredInputDeviceIDForDictation() == 82)
-        #expect(controller.cachedPreferredInputDeviceIDForDictation() == 82)
+        #expect(controller.preferredInputDeviceIDForDictation() == nil)
+        #expect(controller.cachedPreferredInputDeviceIDForDictation() == nil)
     }
 
     @Test("system default aggregate is not treated as a selectable microphone")

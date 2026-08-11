@@ -116,9 +116,9 @@ CLI_BIN="$BIN_DIR/$CLI_BINARY"
 rm -rf "$STAGED_APP_DIR"
 mkdir -p "$STAGED_APP_DIR/Contents/MacOS" "$STAGED_APP_DIR/Contents/Resources"
 
-cp "$APP_BIN" "$STAGED_APP_DIR/Contents/MacOS/$APP_EXECUTABLE_NAME"
+cp -f "$APP_BIN" "$STAGED_APP_DIR/Contents/MacOS/$APP_EXECUTABLE_NAME"
 chmod +x "$STAGED_APP_DIR/Contents/MacOS/$APP_EXECUTABLE_NAME"
-cp "$CLI_BIN" "$STAGED_APP_DIR/Contents/MacOS/$CLI_BINARY"
+cp -f "$CLI_BIN" "$STAGED_APP_DIR/Contents/MacOS/$CLI_BINARY"
 chmod +x "$STAGED_APP_DIR/Contents/MacOS/$CLI_BINARY"
 
 # Bundle SwiftPM-linked frameworks (rpath is @loader_path, so they go next to the binary)
@@ -132,7 +132,7 @@ done
 for dylib in "$BIN_DIR"/*.dylib; do
   [[ -f "$dylib" ]] || continue
   target="$STAGED_APP_DIR/Contents/MacOS/$(basename "$dylib")"
-  cp -RL "$dylib" "$target"
+  cp -fRL "$dylib" "$target"
   thin_macho_to_bundle_arch "$target"
 done
 
@@ -209,7 +209,7 @@ EOF
 else
   for dylib in "${LOCALVQE_RUNTIME_FILES[@]}"; do
     target="$STAGED_APP_DIR/Contents/MacOS/$(basename "$dylib")"
-    cp -RL "$dylib" "$target"
+    cp -fRL "$dylib" "$target"
     thin_macho_to_bundle_arch "$target"
   done
   echo "Bundled LocalVQE runtime (${#LOCALVQE_RUNTIME_FILES[@]} files) from $LOCALVQE_LIB_DIR"
@@ -233,8 +233,6 @@ cp "$ROOT/assets/cohere.png" "$STAGED_APP_DIR/Contents/Resources/cohere-logo.png
 cp "$ROOT/assets/Qwen_logo.svg.png" "$STAGED_APP_DIR/Contents/Resources/qwen-logo.png"
 cp "$ROOT/assets/AI4Bharat_logo.png" "$STAGED_APP_DIR/Contents/Resources/ai4bharat-logo.png"
 cp "$ROOT/assets/google-logo.svg" "$STAGED_APP_DIR/Contents/Resources/google-logo.svg"
-cp "$ROOT/assets/x-logo.png" "$STAGED_APP_DIR/Contents/Resources/x-logo.png"
-cp "$ROOT/assets/linkedin-logo.png" "$STAGED_APP_DIR/Contents/Resources/linkedin-logo.png"
 cp "$ROOT/assets/insights-share-background.png" "$STAGED_APP_DIR/Contents/Resources/insights-share-background.png"
 cp "$ROOT/assets/muesli_app_icon.png" "$STAGED_APP_DIR/Contents/Resources/muesli_app_icon.png"
 if [[ -d "$ROOT/assets/fonts" ]]; then

@@ -39,6 +39,90 @@ struct SpeechTranscriptionResultTests {
     }
 }
 
+@Suite("Transcription result cleanup")
+struct TranscriptionResultCleanupTests {
+    private let segment = SpeechSegment(start: 1, end: 2, text: "Hello world")
+
+    @Test("replacement clears segments only when aggregate text changes")
+    func replacementSegmentInvariant() {
+        let result = SpeechTranscriptionResult(text: "Hello world", segments: [segment])
+
+        let changed = TranscriptionResultCleanup.replacingText(in: result, with: "Clean world")
+        let unchanged = TranscriptionResultCleanup.replacingText(in: result, with: result.text)
+
+        #expect(changed.text == "Clean world")
+        #expect(changed.segments.isEmpty)
+        #expect(unchanged.segments.count == 1)
+    }
+
+    @Test("filler cleanup clears segments when aggregate text changes")
+    func changedFillerTextClearsSegments() {
+        let result = SpeechTranscriptionResult(text: "Um hello world", segments: [segment])
+
+        let cleaned = TranscriptionResultCleanup.removeFillers(result)
+
+        #expect(cleaned.text == "Hello world")
+        #expect(cleaned.segments.isEmpty)
+    }
+
+    @Test("filler cleanup retains segments when aggregate text is unchanged")
+    func unchangedFillerTextRetainsSegments() {
+        let result = SpeechTranscriptionResult(text: "Hello world", segments: [segment])
+
+        let cleaned = TranscriptionResultCleanup.removeFillers(result)
+
+        #expect(cleaned.text == result.text)
+        #expect(cleaned.segments.count == 1)
+    }
+
+    @Test("artifact cleanup clears segments when aggregate text changes")
+    func changedArtifactTextClearsSegments() {
+        let result = SpeechTranscriptionResult(
+            text: "Hello [blank_audio] world",
+            segments: [segment]
+        )
+
+        let cleaned = TranscriptionResultCleanup.removeArtifacts(result)
+
+        #expect(cleaned.text == "Hello world")
+        #expect(cleaned.segments.isEmpty)
+    }
+
+    @Test("artifact cleanup retains segments when aggregate text is unchanged")
+    func unchangedArtifactTextRetainsSegments() {
+        let result = SpeechTranscriptionResult(text: "Hello world", segments: [segment])
+
+        let cleaned = TranscriptionResultCleanup.removeArtifacts(result)
+
+        #expect(cleaned.text == result.text)
+        #expect(cleaned.segments.count == 1)
+    }
+
+    @Test("meeting cleanup keeps numeric-only speech")
+    func meetingCleanupKeepsNumericSpeech() {
+        for text in ["42", "1.7", "50%", "١٢", "Ⅻ"] {
+            let result = SpeechTranscriptionResult(text: text, segments: [segment])
+
+            let cleaned = TranscriptionResultCleanup.cleanMeetingTranscript(result)
+
+            #expect(cleaned.text == text)
+            #expect(cleaned.segments.count == 1)
+        }
+    }
+
+    @Test("meeting cleanup rejects punctuation-only output")
+    func meetingCleanupRejectsPunctuationOnlyOutput() {
+        for text in [".", "...", "?!", "—"] {
+            let result = SpeechTranscriptionResult(text: text, segments: [segment])
+
+            let cleaned = TranscriptionResultCleanup.cleanMeetingTranscript(result)
+
+            #expect(cleaned.text.isEmpty)
+            #expect(cleaned.segments.isEmpty)
+        }
+    }
+}
+
 @Suite("Inference serialization gate")
 struct InferenceGateTests {
 
@@ -173,14 +257,29 @@ struct CohereTranscribeUtilsTests {
         #expect(result == "Hello world")
     }
 
-    @Test("cleanTranscript trims repeated suffix")
-    func trimsRepeatedSuffix() {
-        // Split on ". " produces: ["First", "Second", "Third", "Fourth", "Second", "more"]
-        // Position 4 "Second" matches position 1 "Second", i-j=3 ≤ 3 → truncate at position 4
+    @Test("cleanTranscript trims a repeated tail loop to one instance")
+    func trimsRepeatedTailLoop() {
+        // Five consecutive "Thank you." sentences run to the end — a decoder repetition loop.
+        let result = CohereTranscribeUtils.cleanTranscript(
+            "Let's wrap up here. Thank you. Thank you. Thank you. Thank you. Thank you."
+        )
+        #expect(result == "Let's wrap up here. Thank you.")
+    }
+
+    @Test("cleanTranscript keeps a natural repeated interjection")
+    func keepsNaturalRepetition() {
+        // Two consecutive "Okay." sentences are natural speech, and the repetition does not
+        // run to the end of the transcript.
+        let result = CohereTranscribeUtils.cleanTranscript("Okay. Okay. Sounds good. Thanks.")
+        #expect(result == "Okay. Okay. Sounds good. Thanks.")
+    }
+
+    @Test("cleanTranscript keeps a repeated sentence that is not at the tail")
+    func keepsNonTailRepetition() {
         let result = CohereTranscribeUtils.cleanTranscript(
             "First. Second. Third. Fourth. Second. more text"
         )
-        #expect(result == "First. Second. Third. Fourth.")
+        #expect(result == "First. Second. Third. Fourth. Second. more text")
     }
 
     @Test("cleanTranscript passes normal text unchanged")
@@ -195,6 +294,28 @@ struct TranscriptionEngineArtifactsFilterTests {
     @Test("returns empty string for known artifact")
     func blankAudioArtifact() {
         #expect(TranscriptionEngineArtifactsFilter.apply("[blank_audio]") == "")
+    }
+
+    @Test("punctuation and symbols are non-speech artifacts")
+    func nonSpeechArtifacts() {
+        #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("."))
+        #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("..."))
+        #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("?!"))
+        #expect(TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("—"))
+    }
+
+    @Test("letters and Unicode numbers are never non-speech artifacts")
+    func realSpeechIsKept() {
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("ok"))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("مرحبا"))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("1.7 يعني"))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact(""))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("42"))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("1.7..."))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("50%"))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("١٢"))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("Ⅻ"))
+        #expect(!TranscriptionEngineArtifactsFilter.isNonSpeechArtifact("2026-08-03"))
     }
 
     @Test("matching is case-insensitive")

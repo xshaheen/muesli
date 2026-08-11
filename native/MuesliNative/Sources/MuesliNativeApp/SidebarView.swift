@@ -20,6 +20,7 @@ struct SidebarView: View {
     @State private var dragOrderedFolders: [MeetingFolder]?
     @State private var collapsedFolderIDs: Set<Int64> = []
     @FocusState private var isSearchFieldFocused: Bool
+    @FocusState private var isRenameFieldFocused: Bool
 
     private var searchTextBinding: Binding<String> {
         Binding(
@@ -111,14 +112,12 @@ struct SidebarView: View {
             Spacer()
 
             modelPreparationStatus
-            spreadTheWordSection
             sidebarItem(tab: .settings, icon: "gearshape", label: "Settings")
             sidebarItem(tab: .about, icon: "info.circle", label: "About", updateCTA: pendingUpdateCTA)
-            darkModeToggle
                 .padding(.bottom, MuesliTheme.spacing16)
         }
         .frame(maxHeight: .infinity)
-        .background(MuesliTheme.backgroundDeep)
+        .background(MuesliTheme.backgroundDeep.ignoresSafeArea())
         .onChange(of: appState.selectedTab) { _, tab in
             if tab == .meetings {
                 meetingsExpanded = true
@@ -174,11 +173,13 @@ struct SidebarView: View {
                 Text("muesli")
                     .font(MuesliTheme.title2())
                     .foregroundStyle(MuesliTheme.textPrimary)
+                    .lineLimit(1)
             }
             if !userName.isEmpty {
                 Text("Hi, \(userName)")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textTertiary)
+                    .lineLimit(1)
                     .padding(.leading, 34)
             }
         }
@@ -409,80 +410,6 @@ struct SidebarView: View {
     }
 
     @ViewBuilder
-    private var spreadTheWordSection: some View {
-        let wordMilestone = ContributionSocialShare.completedWordMilestone(
-            totalWords: appState.dictationStats.totalWords
-        )
-        if wordMilestone != nil {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Spread the Word")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(MuesliTheme.textTertiary)
-                    .padding(.horizontal, sidebarRowHorizontalPadding)
-                    .padding(.bottom, 2)
-
-                socialShareRow(
-                    imageName: "x-logo",
-                    fallbackIcon: "bubble.left.and.bubble.right.fill",
-                    label: "Tweet about Muesli",
-                    action: { controller.openContributionSidebarShare(.tweetAboutMuesli) }
-                )
-                socialShareRow(
-                    imageName: "linkedin-logo",
-                    fallbackIcon: "person.crop.square.fill",
-                    label: "Post on LinkedIn",
-                    action: { controller.openContributionSidebarShare(.postOnLinkedIn) }
-                )
-            }
-            .padding(.horizontal, sidebarRowOuterPadding)
-            .padding(.bottom, MuesliTheme.spacing8)
-        }
-    }
-
-    @ViewBuilder
-    private func socialShareRow(
-        imageName: String,
-        fallbackIcon: String,
-        label: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: MuesliTheme.spacing12) {
-                socialLogo(imageName: imageName, fallbackIcon: fallbackIcon)
-                    .frame(width: sidebarIconColumnWidth, height: sidebarIconColumnWidth, alignment: .center)
-                Text(label)
-                    .font(MuesliTheme.callout())
-                    .foregroundStyle(MuesliTheme.textSecondary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, sidebarRowHorizontalPadding)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(label)
-    }
-
-    @ViewBuilder
-    private func socialLogo(imageName: String, fallbackIcon: String) -> some View {
-        if let url = Bundle.main.url(forResource: imageName, withExtension: "png"),
-           let image = NSImage(contentsOf: url) {
-            Image(nsImage: image)
-                .resizable()
-                .renderingMode(.template)
-                .scaledToFit()
-                .frame(width: 15, height: 15)
-                .foregroundStyle(MuesliTheme.textTertiary)
-        } else {
-            Image(systemName: fallbackIcon)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(MuesliTheme.textTertiary)
-        }
-    }
-
-    @ViewBuilder
     private func sidebarItem(tab: DashboardTab, icon: String, label: String, updateCTA: UpdateCTA? = nil) -> some View {
         let isSelected = appState.selectedTab == tab
         Button {
@@ -499,6 +426,8 @@ struct SidebarView: View {
                 Text(label)
                     .font(MuesliTheme.headline())
                     .foregroundStyle(isSelected ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
+                    .lineLimit(1)
+                    .layoutPriority(1)
                 Spacer()
                 if let updateCTA {
                     HStack(spacing: 4) {
@@ -530,52 +459,6 @@ struct SidebarView: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, sidebarRowOuterPadding)
-    }
-
-    @ViewBuilder
-    private var darkModeToggle: some View {
-        let isDark = appState.config.darkMode
-        HStack(spacing: 2) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    controller.updateConfig { $0.darkMode = false }
-                }
-            } label: {
-                Image(systemName: "sun.max.fill")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(!isDark ? MuesliTheme.accent : MuesliTheme.textTertiary)
-                    .frame(width: 28, height: 22)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(!isDark ? MuesliTheme.surfaceSelected : Color.clear)
-                    )
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    controller.updateConfig { $0.darkMode = true }
-                }
-            } label: {
-                Image(systemName: "moon.fill")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(isDark ? MuesliTheme.accent : MuesliTheme.textTertiary)
-                    .frame(width: 28, height: 22)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(isDark ? MuesliTheme.surfaceSelected : Color.clear)
-                    )
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(2)
-        .background(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                .fill(MuesliTheme.backgroundRaised)
-        )
-        .padding(.horizontal, sidebarRowOuterPadding)
-        .padding(.leading, sidebarRowHorizontalPadding)
-        .padding(.bottom, MuesliTheme.spacing4)
     }
 
     @ViewBuilder
@@ -638,12 +521,20 @@ struct SidebarView: View {
             TextField("Folder name", text: $renamingFolderName)
                 .font(MuesliTheme.callout())
                 .textFieldStyle(.plain)
-                .onSubmit {
-                    let trimmed = renamingFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        controller.renameFolder(id: folder.id, name: trimmed)
+                .focused($isRenameFieldFocused)
+                .onSubmit { commitFolderRename(folder) }
+                .onExitCommand { cancelFolderRename(folder) }
+                .onChange(of: isRenameFieldFocused) { _, isFocused in
+                    // Clicking away commits, the way Finder ends an inline rename.
+                    // The guard keeps the teardown after submit/cancel from committing twice.
+                    if !isFocused, renamingFolderID == folder.id {
+                        commitFolderRename(folder)
                     }
-                    renamingFolderID = nil
+                }
+                .task {
+                    // A newly created folder opens straight into this field, so it has to
+                    // take focus itself — otherwise the row is an inert box until clicked.
+                    isRenameFieldFocused = true
                 }
         }
         .padding(.horizontal, sidebarRowHorizontalPadding)
@@ -652,6 +543,19 @@ struct SidebarView: View {
             RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                 .fill(MuesliTheme.surfaceSelected.opacity(0.6))
         )
+    }
+
+    private func commitFolderRename(_ folder: MeetingFolder) {
+        let trimmed = renamingFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            controller.renameFolder(id: folder.id, name: trimmed)
+        }
+        renamingFolderID = nil
+    }
+
+    private func cancelFolderRename(_ folder: MeetingFolder) {
+        renamingFolderName = folder.name
+        renamingFolderID = nil
     }
 
     private func formattedCount(_ count: Int) -> String {

@@ -114,11 +114,19 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         if controller.isMeetingRecording() {
             let pauseTitle = controller.isMeetingRecordingPaused() ? "Resume Meeting Recording" : "Pause Meeting Recording"
             menu.addItem(actionItem(title: pauseTitle, action: #selector(MuesliController.toggleMeetingRecordingPause)))
+            let transcriptTitle = controller.isMeetingTranscriptPanelVisible()
+                ? "Hide Live Transcript"
+                : "Show Live Transcript"
+            menu.addItem(actionItem(title: transcriptTitle, action: #selector(MuesliController.toggleMeetingTranscriptPanel)))
             menu.addItem(actionItem(title: "Stop Meeting Recording", action: #selector(MuesliController.toggleMeetingRecording)))
             menu.addItem(actionItem(title: "Discard Meeting Recording...", action: #selector(MuesliController.discardMeetingWithConfirmation)))
         } else {
             menu.addItem(actionItem(title: "Start Meeting Recording", action: #selector(MuesliController.toggleMeetingRecording)))
         }
+        let indicatorTitle = controller.config.showFloatingIndicator
+            ? "Hide Floating Button"
+            : "Show Floating Button"
+        menu.addItem(actionItem(title: indicatorTitle, action: #selector(MuesliController.toggleFloatingIndicatorVisibility)))
         menu.addItem(.separator())
 
         let recentItem = NSMenuItem(title: "Recent Dictations", action: nil, keyEquivalent: "")

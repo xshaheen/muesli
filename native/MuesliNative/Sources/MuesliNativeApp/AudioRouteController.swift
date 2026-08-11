@@ -153,6 +153,7 @@ extension DictationAudioRouting {
             defaultInputDeviceID: nil,
             defaultInputDeviceName: nil,
             builtInInputDeviceID: nil,
+            builtInInputDeviceName: nil,
             systemDefaultInputIsBuiltIn: systemDefaultInputIsBuiltInForDictation()
         )
     }
@@ -366,6 +367,7 @@ final class DictationAudioRouteController: DictationAudioRouting {
             defaultInputDeviceID: current.defaultInputDeviceID,
             defaultInputDeviceName: current.defaultInputDeviceID.flatMap { current.inputDeviceNamesByID[$0] },
             builtInInputDeviceID: current.builtInInputDeviceID,
+            builtInInputDeviceName: current.builtInInputDeviceID.flatMap { current.inputDeviceNamesByID[$0] },
             systemDefaultInputIsBuiltIn: current.systemDefaultInputIsBuiltIn
         )
     }
@@ -413,22 +415,19 @@ final class DictationAudioRouteController: DictationAudioRouting {
     }
 
     private static func preferredInputDeviceID(for snapshot: RouteSnapshot) -> AudioObjectID? {
-        if let selectedInputDeviceID = snapshot.selectedInputDeviceID {
-            return selectedInputDeviceID
-        }
-        switch snapshot.outputRouteKind {
-        case .headphoneLike:
-            return snapshot.builtInInputDeviceID
-        case .speakerLike:
-            return nil
-        case .unknown:
-            return snapshot.outputIsAmbiguousBluetooth ? snapshot.builtInInputDeviceID : nil
-        }
+        // Auto follows the system default input. Preferring the built-in mic while a
+        // headset was connected recorded silence whenever the built-in could not hear
+        // (lid closed, user across the room wearing the headset) — and the default is
+        // what the user's meeting app is capturing from anyway.
+        snapshot.selectedInputDeviceID
     }
 
     private static func preferredMeetingInputDeviceID(for snapshot: RouteSnapshot) -> AudioObjectID? {
-        let desiredInputDeviceID = snapshot.selectedMeetingInputDeviceID ?? snapshot.builtInInputDeviceID
-
+        // Auto follows the system default input — the device the user's meeting app
+        // is capturing from. Only an explicit picker choice overrides it.
+        guard let desiredInputDeviceID = snapshot.selectedMeetingInputDeviceID else {
+            return nil
+        }
         // A nil meeting preference means "use the system-default recorder".
         // Avoid forcing the same physical device through the app-scoped
         // AudioQueue path: opening that second explicit input context can

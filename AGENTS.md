@@ -78,3 +78,7 @@ For direct SwiftPM test runs, pass the scratch path yourself:
 ```bash
 swift test --package-path native/MuesliNative --scratch-path "/Volumes/MuesliBuildCache/muesli-spm/test"
 ```
+
+## Learnings
+
+- Meeting chat history is stored locally in `meetings.chat_history_json`, uses the active `AppIdentity.supportDirectoryName`, and is intentionally excluded from CloudKit sync. (2026-08-09)

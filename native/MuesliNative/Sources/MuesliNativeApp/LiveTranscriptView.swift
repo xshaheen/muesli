@@ -24,12 +24,18 @@ enum LiveTranscriptCopyContent {
     }
 }
 
+enum LiveTranscriptSurfacePresentation: Equatable {
+    case standard
+    case floatingPanel
+}
+
 struct LiveTranscriptBubble: View {
     let speaker: String?
     let timestamp: String?
     let lines: [String]
     let isUser: Bool
     let isPartial: Bool
+    var surfacePresentation: LiveTranscriptSurfacePresentation = .standard
     var onOpen: (() -> Void)? = nil
     @State private var isHovered = false
     @State private var didCopy = false
@@ -59,7 +65,7 @@ struct LiveTranscriptBubble: View {
             .overlay {
                 RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                     .strokeBorder(
-                        isPartial ? MuesliTheme.surfaceBorder : committedBorder,
+                        bubbleBorder,
                         style: StrokeStyle(lineWidth: 1, dash: isPartial ? [4, 3] : [])
                     )
             }
@@ -76,7 +82,11 @@ struct LiveTranscriptBubble: View {
         Button(action: copyMessage) {
             Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
                 .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(didCopy ? MuesliTheme.success : MuesliTheme.textSecondary)
+                .foregroundStyle(
+                    surfacePresentation == .floatingPanel
+                        ? (didCopy ? MuesliTheme.success : Color.white.opacity(0.62))
+                        : (didCopy ? MuesliTheme.success : MuesliTheme.textSecondary)
+                )
                 .frame(width: 18, height: 18)
                 .contentShape(Rectangle())
         }
@@ -99,6 +109,16 @@ struct LiveTranscriptBubble: View {
     }
 
     private var bubbleBackground: Color {
+        if surfacePresentation == .floatingPanel {
+            if isPartial {
+                return Color.white.opacity(isUser ? 0.06 : 0.04)
+            }
+            return Color.white.opacity(
+                isUser
+                    ? FloatingMeetingPanelPalette.strongSurfaceAlpha
+                    : FloatingMeetingPanelPalette.subtleSurfaceAlpha
+            )
+        }
         if isPartial {
             return isUser ? MuesliTheme.accent.opacity(0.06) : MuesliTheme.surfacePrimary.opacity(0.5)
         }
@@ -106,7 +126,19 @@ struct LiveTranscriptBubble: View {
     }
 
     private var committedBorder: Color {
-        isUser ? MuesliTheme.accent.opacity(0.2) : MuesliTheme.surfaceBorder
+        if surfacePresentation == .floatingPanel {
+            return Color.white.opacity(isUser ? 0.15 : 0.10)
+        }
+        return isUser ? MuesliTheme.accent.opacity(0.2) : MuesliTheme.surfaceBorder
+    }
+
+    private var bubbleBorder: Color {
+        if isPartial {
+            return surfacePresentation == .floatingPanel
+                ? Color.white.opacity(FloatingMeetingPanelPalette.strongSurfaceAlpha)
+                : MuesliTheme.surfaceBorder
+        }
+        return committedBorder
     }
 }
 
@@ -117,6 +149,9 @@ final class LiveTranscriptPresentationModel {
     var partialYou = ""
     var partialOthers = ""
     var messages: [TranscriptChatMessage] = []
+    /// Flips at most once per session. Bodies that only need "is there anything yet"
+    /// observe this instead of `transcript`, whose every chunk would re-render them.
+    private(set) var hasContent = false
 
     func update(transcript: String, partialYou: String, partialOthers: String) {
         guard self.transcript != transcript ||
@@ -134,6 +169,12 @@ final class LiveTranscriptPresentationModel {
                 messages = TranscriptChatMessage.messages(from: transcript)
             }
             self.transcript = transcript
+            // Guarded write: an unconditional set would notify observers on every
+            // chunk, which is the exact churn this flag exists to absorb.
+            let nowHasContent = !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if hasContent != nowHasContent {
+                hasContent = nowHasContent
+            }
         }
         self.partialYou = partialYou
         self.partialOthers = partialOthers
@@ -144,6 +185,7 @@ final class LiveTranscriptPresentationModel {
         partialYou = ""
         partialOthers = ""
         messages = []
+        hasContent = false
     }
 }
 
@@ -156,6 +198,7 @@ struct LiveTranscriptFeedView: View {
     var horizontalPadding: CGFloat
     var topPadding: CGFloat
     var bottomPadding: CGFloat
+    var surfacePresentation: LiveTranscriptSurfacePresentation = .standard
     var onOpen: (() -> Void)? = nil
 
     private var trimmedPartialYou: String {
@@ -182,6 +225,7 @@ struct LiveTranscriptFeedView: View {
                         lines: [message.text],
                         isUser: message.isUser,
                         isPartial: false,
+                        surfacePresentation: surfacePresentation,
                         onOpen: onOpen
                     )
                 }
@@ -192,6 +236,7 @@ struct LiveTranscriptFeedView: View {
                         lines: [trimmedPartialOthers],
                         isUser: false,
                         isPartial: true,
+                        surfacePresentation: surfacePresentation,
                         onOpen: onOpen
                     )
                 }
@@ -202,6 +247,7 @@ struct LiveTranscriptFeedView: View {
                         lines: [trimmedPartialYou],
                         isUser: true,
                         isPartial: true,
+                        surfacePresentation: surfacePresentation,
                         onOpen: onOpen
                     )
                 }
