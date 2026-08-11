@@ -10,6 +10,12 @@ enum MeetingChatPresentation: Equatable {
     case floatingPanel
 }
 
+enum MeetingChatTextPresentation {
+    static func direction(for text: String) -> NaturalTextDirection {
+        NaturalTextDirection.resolve(text)
+    }
+}
+
 /// Chat surface over a meeting transcript.
 ///
 /// Sources nothing itself. The transcript and system prompt arrive as inputs so the same
@@ -121,9 +127,14 @@ struct MeetingChatView: View {
     }
 
     private func turnBubble(_ turn: MeetingChatTurn) -> some View {
-        HStack(alignment: .top, spacing: 6) {
+        let contentDirection = MeetingChatTextPresentation.direction(for: turn.displayText)
+
+        return HStack(alignment: .top, spacing: 6) {
             if turn.role == .user { Spacer(minLength: 32) }
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(
+                alignment: contentDirection == .rightToLeft ? .trailing : .leading,
+                spacing: 4
+            ) {
                 // Answers arrive as markdown, so render them the way notes and
                 // transcripts render -- otherwise bullets and bold show up as
                 // literal `-` and `**` in the middle of a sentence.
@@ -136,6 +147,8 @@ struct MeetingChatView: View {
                     Text(turn.displayText)
                         .font(.system(size: isCompact ? 12 : 13))
                         .foregroundStyle(MuesliTheme.textPrimary)
+                        .environment(\.layoutDirection, contentDirection.layoutDirection)
+                        .multilineTextAlignment(.leading)
                         .textSelection(.enabled)
                 }
                 if turn.role == .assistant {
@@ -156,11 +169,6 @@ struct MeetingChatView: View {
                             lineWidth: 1
                         )
                 }
-            }
-            // The copy affordance only shows on hover; clicking the bubble itself
-            // copies too, so the answer is grabbable without hunting for the button.
-            .onTapGesture {
-                if turn.role == .assistant { copyTurn(turn.displayText) }
             }
             .frame(maxWidth: .infinity, alignment: turn.role == .user ? .trailing : .leading)
             if turn.role == .assistant { Spacer(minLength: 32) }
@@ -202,6 +210,7 @@ struct MeetingChatView: View {
         }
         .buttonStyle(.plain)
         .padding(.top, 2)
+        .accessibilityLabel(copiedTurnText == text ? "Copied answer" : "Copy answer")
     }
 
     private var thinkingRow: some View {
@@ -332,11 +341,15 @@ struct MeetingChatView: View {
     }
 
     private var inputRow: some View {
-        HStack(spacing: 8) {
+        let inputDirection = MeetingChatTextPresentation.direction(for: draft)
+
+        return HStack(spacing: 8) {
             TextField("Ask anything", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: isCompact ? 12 : 13))
                 .lineLimit(1 ... 4)
+                .environment(\.layoutDirection, inputDirection.layoutDirection)
+                .multilineTextAlignment(.leading)
                 .focused($isInputFocused)
                 .onSubmit(submit)
                 .disabled(!hasTranscript)
