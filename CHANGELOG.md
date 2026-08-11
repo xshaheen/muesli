@@ -76,12 +76,7 @@ upstream `main`.
 - Fixed the SQLite leak probe for portability and parallel test execution.
 - Fixed manual-note Markdown ranges mixing grapheme counts with UTF-16, which truncated emoji-bearing lines.
 - Fixed meeting list metadata wrapping onto multiple lines, template chips collapsing to icons, and toolbar/content misalignment.
-
-##### Meeting detail interface
-
-- Moved meeting actions into a responsive top bar so Resume, template, export, summary, edit, and overflow controls remain immediately discoverable.
-- Redesigned the action groups with consistent geometry, clearer primary and secondary hierarchy, and hover and pressed feedback while preserving labels, tooltips, and keyboard accessibility.
-- Fixed slow meeting-detail resizing by replacing duplicate responsive action trees with one cached wrapping layout.
+- Fixed the meeting template and export menus collapsing below the height of adjacent action controls.
 
 ##### Calendar, CLI, Computer Use, and model/runtime reliability
 

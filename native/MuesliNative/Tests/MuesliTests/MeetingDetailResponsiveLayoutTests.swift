@@ -4,8 +4,8 @@ import Testing
 
 @Suite("Meeting detail responsive layout")
 struct MeetingDetailResponsiveLayoutTests {
-    @Test("utility band keeps folder and controls in one responsive top bar")
-    func utilityBandUsesSingleTopBarLayout() throws {
+    @Test("utility band uses one wrapping layout instead of duplicate responsive trees")
+    func utilityBandUsesSingleWrappingLayout() throws {
         let source = try meetingDetailSource()
         let utilityBand = try sourceSection(
             in: source,
@@ -13,25 +13,10 @@ struct MeetingDetailResponsiveLayoutTests {
             to: "private func meetingActionRail"
         )
 
-        #expect(utilityBand.contains("MeetingDetailTopBarLayout"))
+        #expect(utilityBand.contains("VStack(alignment: .leading"))
         #expect(!utilityBand.contains("ViewThatFits"))
         #expect(utilityBand.contains("folderPill(for: meeting)"))
         #expect(utilityBand.contains("meetingActionRail(for: meeting"))
-    }
-
-    @Test("meeting controls appear before the title at the top of the detail screen")
-    func controlsAppearAtTopOfHeader() throws {
-        let source = try meetingDetailSource()
-        let adaptiveHeader = try sourceSection(
-            in: source,
-            from: "private func adaptiveHeaderContent",
-            to: "private func headerTitleContent"
-        )
-
-        #expect(
-            try index(of: "headerUtilityBand(for: meeting", in: adaptiveHeader)
-                < index(of: "headerTitleContent(for: meeting", in: adaptiveHeader)
-        )
     }
 
     @Test("meeting actions render once and wrap as compact groups")
@@ -77,12 +62,12 @@ struct MeetingDetailResponsiveLayoutTests {
         #expect(responsiveRail.contains("templateAndExportActionRailContent(for: meeting"))
         #expect(responsiveRail.contains("utilityActionRail(for: meeting)"))
         #expect(railContainer.contains("HStack(spacing: 0)"))
-        #expect(railContainer.contains("MuesliTheme.backgroundRaised"))
-        #expect(railContainer.contains("MuesliTheme.cornerMedium"))
+        #expect(railContainer.contains(".clipShape(RoundedRectangle"))
         #expect(iconButton.contains(".accessibilityLabel(label)"))
         #expect(iconButton.contains(".help(label)"))
-        #expect(templateMenu.contains("MeetingDetailRailLabel"))
-        #expect(templateMenu.contains("fixedWidth: MeetingDetailRailMetrics.labeledWidth"))
+        #expect(templateMenu.contains(".truncationMode(.tail)"))
+        #expect(templateMenu.contains(".frame(maxWidth: 120"))
+        #expect(templateMenu.contains(".menuStyle(.borderlessButton)\n        .frame(height: 30)"))
         #expect(templateMenu.contains(".accessibilityLabel(templateAccessibilityLabel"))
     }
 
@@ -105,20 +90,6 @@ struct MeetingDetailResponsiveLayoutTests {
         ])
     }
 
-    @Test("action groups share one size and padding system")
-    func actionGroupsUseEqualMetrics() {
-        let labeledGroupWidth = MeetingDetailRailMetrics.labeledWidth
-            + MeetingDetailRailMetrics.dividerWidth
-            + MeetingDetailRailMetrics.iconWidth
-        let iconGroupWidth = MeetingDetailRailMetrics.iconWidth * 3
-            + MeetingDetailRailMetrics.dividerWidth * 2
-
-        #expect(labeledGroupWidth == iconGroupWidth)
-        #expect(MeetingDetailRailMetrics.groupWidth == labeledGroupWidth)
-        #expect(MeetingDetailRailMetrics.height == 32)
-        #expect(MeetingDetailRailMetrics.horizontalPadding == 8)
-    }
-
     @Test("export menu is icon-only while keeping an accessible label")
     func exportMenuUsesIconOnlyLabel() throws {
         let source = try meetingDetailSource()
@@ -128,8 +99,9 @@ struct MeetingDetailResponsiveLayoutTests {
             to: "private func hasMoreActions"
         )
 
-        #expect(exportMenu.contains("MeetingDetailRailLabel(systemImage: \"square.and.arrow.up\")"))
+        #expect(exportMenu.contains("Image(systemName: \"square.and.arrow.up\")"))
         #expect(!exportMenu.contains("Text(\"Export\")"))
+        #expect(exportMenu.contains(".menuStyle(.borderlessButton)\n        .frame(height: 30)"))
         #expect(exportMenu.contains(".accessibilityLabel(\"Export meeting\")"))
         #expect(exportMenu.contains(".help(\"Export meeting\")"))
     }
