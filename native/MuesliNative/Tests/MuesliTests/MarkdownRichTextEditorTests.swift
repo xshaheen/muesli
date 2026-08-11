@@ -41,6 +41,37 @@ struct MarkdownRichTextEditorTests {
         return coordinator.serializedMarkdown(from: textView)
     }
 
+    @Test("uses natural paragraph direction without rewriting mixed-language notes")
+    func usesNaturalWritingDirection() throws {
+        let textView = makeTextView()
+        let coordinator = makeCoordinator()
+        coordinator.configureNaturalWritingDirection(in: textView)
+
+        let paragraphStyle = try #require(
+            coordinator.bodyAttributes()[.paragraphStyle] as? NSParagraphStyle
+        )
+        #expect(textView.baseWritingDirection == .natural)
+        #expect(textView.alignment == .natural)
+        #expect(paragraphStyle.baseWritingDirection == .natural)
+        #expect(paragraphStyle.alignment == .natural)
+
+        let markdown = "# خطة الإطلاق\n- [ ] Ship 🚀\nمراجعة **نهائية**"
+        coordinator.apply(markdown: markdown, to: textView)
+        #expect(coordinator.serializedMarkdown(from: textView) == markdown)
+    }
+
+    @Test("preserves a selection while applying natural-direction content")
+    func preservesSelectionAcrossNaturalDirectionApply() {
+        let textView = makeTextView()
+        let coordinator = makeCoordinator()
+        coordinator.apply(markdown: "مرحبا Hello", to: textView)
+        textView.setSelectedRange(NSRange(location: 0, length: 5))
+
+        coordinator.apply(markdown: "مرحبا Hello team", to: textView)
+
+        #expect(textView.selectedRange() == NSRange(location: 0, length: 5))
+    }
+
     @Test("round-trips lines whose UTF-16 length exceeds their character count")
     func preservesEmojiLines() {
         // Emoji outside the BMP take two UTF-16 units, so serializing against

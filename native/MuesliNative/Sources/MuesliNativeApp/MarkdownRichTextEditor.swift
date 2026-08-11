@@ -48,6 +48,7 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = true
         textView.isEditable = isEditable
         textView.isSelectable = true
+        context.coordinator.configureNaturalWritingDirection(in: textView)
         textView.allowsUndo = true
         textView.drawsBackground = false
         textView.insertionPointColor = NSColor.controlAccentColor
@@ -72,6 +73,7 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
         textView.placeholder = placeholder
         textView.isEditable = isEditable
         textView.isSelectable = true
+        context.coordinator.configureNaturalWritingDirection(in: textView)
         context.coordinator.onTextChange = onTextChange
         if context.coordinator.shouldApplyExternalMarkdown(text) {
             context.coordinator.apply(markdown: text, to: textView)
@@ -154,6 +156,7 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
         func apply(markdown: String, to textView: NSTextView) {
             let selectedRanges = textView.selectedRanges
             isApplying = true
+            configureNaturalWritingDirection(in: textView)
             usesMarkdownStyling = Self.markdownNeedsRichRendering(markdown)
             textView.textStorage?.setAttributedString(attributedString(from: markdown))
             textView.typingAttributes = bodyAttributes()
@@ -242,6 +245,11 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
                 .foregroundColor: bodyColor,
                 .paragraphStyle: paragraphStyle(spacing: 8, lineHeightMultiple: 1.08)
             ]
+        }
+
+        func configureNaturalWritingDirection(in textView: NSTextView) {
+            textView.baseWritingDirection = .natural
+            textView.alignment = .natural
         }
 
         private func attributedString(from markdown: String) -> NSAttributedString {
@@ -661,6 +669,8 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
 
         private func paragraphStyle(spacing: CGFloat, lineHeightMultiple: CGFloat) -> NSParagraphStyle {
             let style = NSMutableParagraphStyle()
+            style.baseWritingDirection = .natural
+            style.alignment = .natural
             style.lineSpacing = 4
             style.paragraphSpacing = spacing
             style.lineHeightMultiple = lineHeightMultiple
