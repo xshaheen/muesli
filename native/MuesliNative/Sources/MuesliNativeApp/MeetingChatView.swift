@@ -10,12 +10,6 @@ enum MeetingChatPresentation: Equatable {
     case floatingPanel
 }
 
-enum MeetingChatTextPresentation {
-    static func direction(for text: String) -> NaturalTextDirection {
-        NaturalTextDirection.resolve(text)
-    }
-}
-
 /// Chat surface over a meeting transcript.
 ///
 /// Sources nothing itself. The transcript and system prompt arrive as inputs so the same
@@ -127,7 +121,7 @@ struct MeetingChatView: View {
     }
 
     private func turnBubble(_ turn: MeetingChatTurn) -> some View {
-        let contentDirection = MeetingChatTextPresentation.direction(for: turn.displayText)
+        let contentDirection = NaturalTextDirection.resolve(turn.displayText)
 
         return HStack(alignment: .top, spacing: 6) {
             if turn.role == .user { Spacer(minLength: 32) }
@@ -341,7 +335,7 @@ struct MeetingChatView: View {
     }
 
     private var inputRow: some View {
-        let inputDirection = MeetingChatTextPresentation.direction(for: draft)
+        let inputDirection = NaturalTextDirection.resolve(draft)
 
         return HStack(spacing: 8) {
             TextField("Ask anything", text: $draft, axis: .vertical)

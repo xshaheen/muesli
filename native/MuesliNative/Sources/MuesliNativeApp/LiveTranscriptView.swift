@@ -41,18 +41,18 @@ struct LiveTranscriptBubble: View {
     @State private var didCopy = false
 
     static func contentDirection(for lines: [String]) -> NaturalTextDirection {
-        NaturalTextDirection.resolve(lines.joined(separator: "\n"))
-    }
-
-    private var contentDirection: NaturalTextDirection {
-        Self.contentDirection(for: lines)
-    }
-
-    private var contentAlignment: HorizontalAlignment {
-        contentDirection == .rightToLeft ? .trailing : .leading
+        if lines.count == 1, let line = lines.first {
+            return NaturalTextDirection.resolve(line)
+        }
+        return NaturalTextDirection.resolve(lines.joined(separator: "\n"))
     }
 
     var body: some View {
+        let contentDirection = Self.contentDirection(for: lines)
+        let contentAlignment: HorizontalAlignment = contentDirection == .rightToLeft
+            ? .trailing
+            : .leading
+
         HStack(alignment: .bottom, spacing: 6) {
             if isUser { Spacer(minLength: 40) }
             if isUser { actionButtons }

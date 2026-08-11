@@ -2002,16 +2002,8 @@ private extension View {
 }
 
 enum MeetingTitlePresentation {
-    static func direction(for text: String) -> NaturalTextDirection {
-        NaturalTextDirection.resolve(text)
-    }
-
-    static func alignment(for text: String) -> Alignment {
-        direction(for: text).frameAlignment
-    }
-
     static func marqueeOffset(for text: String, distance: CGFloat) -> CGFloat {
-        direction(for: text) == .rightToLeft ? distance : -distance
+        NaturalTextDirection.resolve(text) == .rightToLeft ? distance : -distance
     }
 }
 
@@ -2033,12 +2025,10 @@ private struct MarqueeTitleTextField: View {
         text.isEmpty ? "Meeting Title" : text
     }
 
-    private var direction: NaturalTextDirection {
-        MeetingTitlePresentation.direction(for: displayText)
-    }
-
     var body: some View {
-        ZStack(alignment: MeetingTitlePresentation.alignment(for: displayText)) {
+        let direction = NaturalTextDirection.resolve(displayText)
+
+        ZStack(alignment: direction.frameAlignment) {
             TextField("Meeting Title", text: $text)
                 .font(titleFont)
                 .foregroundStyle(MuesliTheme.textPrimary)
@@ -2072,7 +2062,7 @@ private struct MarqueeTitleTextField: View {
         .frame(
             maxWidth: .infinity,
             minHeight: 38,
-            alignment: MeetingTitlePresentation.alignment(for: displayText)
+            alignment: direction.frameAlignment
         )
         .clipped()
         .contentShape(Rectangle())
@@ -2285,11 +2275,12 @@ private struct MeetingTranscriptView: View {
 struct TranscriptChatBubble: View {
     let message: TranscriptChatMessage
 
-    private var contentAlignment: HorizontalAlignment {
-        message.textDirection == .rightToLeft ? .trailing : .leading
-    }
-
     var body: some View {
+        let textDirection = message.textDirection
+        let contentAlignment: HorizontalAlignment = textDirection == .rightToLeft
+            ? .trailing
+            : .leading
+
         HStack(alignment: .bottom, spacing: MuesliTheme.spacing8) {
             if message.isUser {
                 Spacer(minLength: 80)
@@ -2308,7 +2299,7 @@ struct TranscriptChatBubble: View {
                     .lineSpacing(2)
                     .multilineTextAlignment(.leading)
                     .textSelection(.enabled)
-                    .environment(\.layoutDirection, message.textDirection.layoutDirection)
+                    .environment(\.layoutDirection, textDirection.layoutDirection)
             }
             .padding(.horizontal, MuesliTheme.spacing12)
             .padding(.vertical, 8)

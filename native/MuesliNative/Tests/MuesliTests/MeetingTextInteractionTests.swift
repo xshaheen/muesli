@@ -23,10 +23,10 @@ struct MeetingTextInteractionTests {
 
     @Test("title anchor and marquee travel follow content direction")
     func titleDirectionGeometry() {
-        #expect(MeetingTitlePresentation.direction(for: "2026 — خطة الإطلاق") == .rightToLeft)
-        #expect(MeetingTitlePresentation.direction(for: "2026 launch plan") == .leftToRight)
-        #expect(MeetingTitlePresentation.alignment(for: "خطة الإطلاق") == .trailing)
-        #expect(MeetingTitlePresentation.alignment(for: "Launch plan") == .leading)
+        #expect(NaturalTextDirection.resolve("2026 — خطة الإطلاق") == .rightToLeft)
+        #expect(NaturalTextDirection.resolve("2026 launch plan") == .leftToRight)
+        #expect(NaturalTextDirection.resolve("خطة الإطلاق").frameAlignment == .trailing)
+        #expect(NaturalTextDirection.resolve("Launch plan").frameAlignment == .leading)
         #expect(MeetingTitlePresentation.marqueeOffset(for: "خطة طويلة", distance: 120) == 120)
         #expect(MeetingTitlePresentation.marqueeOffset(for: "A long plan", distance: 120) == -120)
     }
@@ -49,8 +49,8 @@ struct MeetingTextInteractionTests {
 
     @Test("chat text direction stays independent from bubble role and selection")
     func chatTextInteraction() throws {
-        #expect(MeetingChatTextPresentation.direction(for: "مرحبا بالفريق") == .rightToLeft)
-        #expect(MeetingChatTextPresentation.direction(for: "Hello team") == .leftToRight)
+        #expect(NaturalTextDirection.resolve("مرحبا بالفريق") == .rightToLeft)
+        #expect(NaturalTextDirection.resolve("Hello team") == .leftToRight)
 
         let testURL = URL(fileURLWithPath: #filePath)
         let sourceURL = testURL

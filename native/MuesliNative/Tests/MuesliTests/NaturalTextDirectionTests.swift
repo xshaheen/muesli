@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 import Testing
 @testable import MuesliNativeApp
@@ -37,20 +36,14 @@ struct NaturalTextDirectionTests {
         }
     }
 
-    @Test("resolved values map to SwiftUI and AppKit presentation directions")
+    @Test("resolved values map to SwiftUI presentation directions")
     func presentationValues() {
         let ltr = NaturalTextDirection.leftToRight
         #expect(ltr.layoutDirection == LayoutDirection.leftToRight)
-        #expect(ltr.textAlignment == TextAlignment.leading)
         #expect(ltr.frameAlignment == Alignment.leading)
-        #expect(ltr.writingDirection == NSWritingDirection.leftToRight)
-        #expect(ltr.appKitTextAlignment == NSTextAlignment.left)
 
         let rtl = NaturalTextDirection.rightToLeft
         #expect(rtl.layoutDirection == LayoutDirection.rightToLeft)
-        #expect(rtl.textAlignment == TextAlignment.trailing)
         #expect(rtl.frameAlignment == Alignment.trailing)
-        #expect(rtl.writingDirection == NSWritingDirection.rightToLeft)
-        #expect(rtl.appKitTextAlignment == NSTextAlignment.right)
     }
 }

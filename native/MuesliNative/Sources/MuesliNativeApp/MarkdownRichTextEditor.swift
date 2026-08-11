@@ -248,8 +248,12 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
         }
 
         func configureNaturalWritingDirection(in textView: NSTextView) {
-            textView.baseWritingDirection = .natural
-            textView.alignment = .natural
+            if textView.baseWritingDirection != .natural {
+                textView.baseWritingDirection = .natural
+            }
+            if textView.alignment != .natural {
+                textView.alignment = .natural
+            }
         }
 
         private func attributedString(from markdown: String) -> NSAttributedString {

@@ -20,12 +20,6 @@ struct MeetingNotesInlineMarkdownTests {
         #expect(MeetingMarkdownContent.contentDirection(for: "1. ناقشنا API v2") == .rightToLeft)
     }
 
-    @Test("list indentation starts at the natural leading edge")
-    func listIndentationEdges() {
-        #expect(MeetingMarkdownContent.listIndentationEdge(for: "  - بند عربي") == .trailing)
-        #expect(MeetingMarkdownContent.listIndentationEdge(for: "  - English item") == .leading)
-    }
-
     @Test("bold, italic, and code markers are consumed")
     func inlineMarkersAreParsed() {
         #expect(rendered("Shipped **today** as agreed") == "Shipped today as agreed")

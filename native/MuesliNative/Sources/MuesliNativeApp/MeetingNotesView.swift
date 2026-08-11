@@ -83,7 +83,10 @@ struct MeetingMarkdownContent: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .environment(\.layoutDirection, direction.layoutDirection)
-            .padding(Self.listIndentationEdge(for: rawLine), CGFloat(indentLevel) * MuesliTheme.spacing20)
+            .padding(
+                direction == .rightToLeft ? .trailing : .leading,
+                CGFloat(indentLevel) * MuesliTheme.spacing20
+            )
             .frame(maxWidth: .infinity, alignment: direction.frameAlignment)
         } else {
             Text(Self.inline(line))
@@ -146,10 +149,6 @@ struct MeetingMarkdownContent: View {
         }
 
         return NaturalTextDirection.resolve(content)
-    }
-
-    static func listIndentationEdge(for rawLine: String) -> Edge.Set {
-        contentDirection(for: rawLine) == .rightToLeft ? .trailing : .leading
     }
 
     /// Renders inline markdown — bold, italic, code, links — within one line.
