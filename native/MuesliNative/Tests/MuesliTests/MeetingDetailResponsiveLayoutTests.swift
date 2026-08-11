@@ -19,19 +19,21 @@ struct MeetingDetailResponsiveLayoutTests {
         )
     }
 
-    @Test("utility band uses one wrapping layout instead of duplicate responsive trees")
-    func utilityBandUsesSingleWrappingLayout() throws {
+    @Test("folder and meeting controls share one responsive row")
+    func utilityBandUsesSingleWrappingRow() throws {
         let source = try meetingDetailSource()
         let utilityBand = try sourceSection(
             in: source,
             from: "private func headerUtilityBand",
-            to: "private func meetingActionRail"
+            to: "private func content(for meeting"
         )
 
-        #expect(utilityBand.contains("VStack(alignment: .leading"))
+        #expect(utilityBand.contains("MeetingDetailFlowLayout"))
         #expect(!utilityBand.contains("ViewThatFits"))
         #expect(utilityBand.contains("folderPill(for: meeting)"))
-        #expect(utilityBand.contains("meetingActionRail(for: meeting"))
+        #expect(utilityBand.contains("resumeRecordingButton(for: meeting)"))
+        #expect(utilityBand.contains("templateAndExportActionRailContent(for: meeting"))
+        #expect(utilityBand.contains("utilityActionRail(for: meeting)"))
     }
 
     @Test("meeting actions render once and wrap as compact groups")
@@ -45,11 +47,6 @@ struct MeetingDetailResponsiveLayoutTests {
         let utilityBand = try sourceSection(
             in: source,
             from: "private func headerUtilityBand",
-            to: "private func meetingActionRail"
-        )
-        let responsiveRail = try sourceSection(
-            in: source,
-            from: "private func meetingActionRail",
             to: "private func content(for meeting"
         )
         let railContainer = try sourceSection(
@@ -70,12 +67,11 @@ struct MeetingDetailResponsiveLayoutTests {
 
         #expect(!titleContent.contains("folderPill(for: meeting)"))
         #expect(utilityBand.contains("folderPill(for: meeting)"))
-        #expect(utilityBand.contains("meetingActionRail(for: meeting"))
-        #expect(responsiveRail.contains("MeetingDetailFlowLayout"))
-        #expect(!responsiveRail.contains("ViewThatFits"))
-        #expect(!responsiveRail.contains("extremeNarrowActionRail"))
-        #expect(responsiveRail.contains("templateAndExportActionRailContent(for: meeting"))
-        #expect(responsiveRail.contains("utilityActionRail(for: meeting)"))
+        #expect(utilityBand.contains("MeetingDetailFlowLayout"))
+        #expect(!utilityBand.contains("ViewThatFits"))
+        #expect(!utilityBand.contains("extremeNarrowActionRail"))
+        #expect(utilityBand.contains("templateAndExportActionRailContent(for: meeting"))
+        #expect(utilityBand.contains("utilityActionRail(for: meeting)"))
         #expect(railContainer.contains("HStack(spacing: 0)"))
         #expect(railContainer.contains(".clipShape(RoundedRectangle"))
         #expect(iconButton.contains(".accessibilityLabel(label)"))

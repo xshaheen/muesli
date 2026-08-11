@@ -409,30 +409,21 @@ struct MeetingDetailView: View {
         for meeting: MeetingRecord,
         appliedTemplate: MeetingTemplateSnapshot
     ) -> some View {
-        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+        MeetingDetailFlowLayout(spacing: MuesliTheme.spacing8) {
             folderPill(for: meeting)
             if showsManualNotesEditor(for: meeting) {
                 recordingControlGroup(for: meeting)
             } else {
-                meetingActionRail(for: meeting, appliedTemplate: appliedTemplate)
-            }
-        }
-    }
-
-    private func meetingActionRail(
-        for meeting: MeetingRecord,
-        appliedTemplate: MeetingTemplateSnapshot
-    ) -> some View {
-        MeetingDetailFlowLayout(spacing: MuesliTheme.spacing8) {
-            if canShowResumeChooser(for: meeting) {
-                actionRailContainer {
-                    resumeRecordingButton(for: meeting)
+                if canShowResumeChooser(for: meeting) {
+                    actionRailContainer {
+                        resumeRecordingButton(for: meeting)
+                    }
                 }
+                actionRailContainer {
+                    templateAndExportActionRailContent(for: meeting, appliedTemplate: appliedTemplate)
+                }
+                utilityActionRail(for: meeting)
             }
-            actionRailContainer {
-                templateAndExportActionRailContent(for: meeting, appliedTemplate: appliedTemplate)
-            }
-            utilityActionRail(for: meeting)
         }
     }
 

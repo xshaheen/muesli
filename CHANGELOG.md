@@ -78,6 +78,7 @@ upstream `main`.
 - Fixed meeting list metadata wrapping onto multiple lines, template chips collapsing to icons, and toolbar/content misalignment.
 - Fixed the meeting template and export menus collapsing below the height of adjacent action controls.
 - Moved the existing meeting controls above the title while preserving their compact layout and styling.
+- Compacted the meeting header by placing Add to folder and the action controls in one responsive row.
 
 ##### Calendar, CLI, Computer Use, and model/runtime reliability
 
