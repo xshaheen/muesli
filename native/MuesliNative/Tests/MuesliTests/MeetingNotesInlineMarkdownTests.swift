@@ -11,6 +11,21 @@ struct MeetingNotesInlineMarkdownTests {
         String(MeetingMarkdownContent.inline(markdown).characters)
     }
 
+    @Test("markdown lines resolve direction from their rendered content")
+    func markdownLineDirections() {
+        #expect(MeetingMarkdownContent.contentDirection(for: "# 2026 — مرحبا") == .rightToLeft)
+        #expect(MeetingMarkdownContent.contentDirection(for: "ناقشنا API v2") == .rightToLeft)
+        #expect(MeetingMarkdownContent.contentDirection(for: "Discussed API v2") == .leftToRight)
+        #expect(MeetingMarkdownContent.contentDirection(for: "- [ ] Ship the release") == .leftToRight)
+        #expect(MeetingMarkdownContent.contentDirection(for: "1. ناقشنا API v2") == .rightToLeft)
+    }
+
+    @Test("list indentation starts at the natural leading edge")
+    func listIndentationEdges() {
+        #expect(MeetingMarkdownContent.listIndentationEdge(for: "  - بند عربي") == .trailing)
+        #expect(MeetingMarkdownContent.listIndentationEdge(for: "  - English item") == .leading)
+    }
+
     @Test("bold, italic, and code markers are consumed")
     func inlineMarkersAreParsed() {
         #expect(rendered("Shipped **today** as agreed") == "Shipped today as agreed")

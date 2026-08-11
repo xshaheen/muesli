@@ -40,6 +40,7 @@ struct MeetingMarkdownContent: View {
     private func markdownLine(_ rawLine: String) -> some View {
         let line = rawLine.trimmingCharacters(in: .whitespaces)
         let indentLevel = Self.indentLevel(for: rawLine)
+        let direction = Self.contentDirection(for: rawLine)
         if line.isEmpty {
             Color.clear
                 .frame(height: MuesliTheme.spacing8)
@@ -48,13 +49,26 @@ struct MeetingMarkdownContent: View {
                 .font(Self.headingFont(level: heading.level))
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .padding(.top, Self.headingTopPadding(level: heading.level))
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .environment(\.layoutDirection, direction.layoutDirection)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: direction.frameAlignment)
         } else if line.hasPrefix("- [ ] ") {
-            listRow(text: String(line.dropFirst(6)), indentLevel: indentLevel, systemImage: "square")
+            listRow(
+                text: String(line.dropFirst(6)),
+                indentLevel: indentLevel,
+                direction: direction,
+                systemImage: "square"
+            )
         } else if line.hasPrefix("- [x] ") || line.hasPrefix("- [X] ") {
-            listRow(text: String(line.dropFirst(6)), indentLevel: indentLevel, systemImage: "checkmark.square", iconColor: MuesliTheme.success)
+            listRow(
+                text: String(line.dropFirst(6)),
+                indentLevel: indentLevel,
+                direction: direction,
+                systemImage: "checkmark.square",
+                iconColor: MuesliTheme.success
+            )
         } else if line.hasPrefix("- ") {
-            listRow(text: String(line.dropFirst(2)), indentLevel: indentLevel)
+            listRow(text: String(line.dropFirst(2)), indentLevel: indentLevel, direction: direction)
         } else if let numbered = Self.numberedListContent(from: line) {
             HStack(alignment: .firstTextBaseline, spacing: MuesliTheme.spacing8) {
                 Text(numbered.marker)
@@ -65,16 +79,20 @@ struct MeetingMarkdownContent: View {
                     .font(bodyFont)
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .lineSpacing(3)
+                    .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.leading, CGFloat(indentLevel) * MuesliTheme.spacing20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .environment(\.layoutDirection, direction.layoutDirection)
+            .padding(Self.listIndentationEdge(for: rawLine), CGFloat(indentLevel) * MuesliTheme.spacing20)
+            .frame(maxWidth: .infinity, alignment: direction.frameAlignment)
         } else {
             Text(Self.inline(line))
                 .font(bodyFont)
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .lineSpacing(3)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .environment(\.layoutDirection, direction.layoutDirection)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: direction.frameAlignment)
         }
     }
 
@@ -82,6 +100,7 @@ struct MeetingMarkdownContent: View {
     private func listRow(
         text: String,
         indentLevel: Int,
+        direction: NaturalTextDirection,
         systemImage: String? = nil,
         iconColor: Color = MuesliTheme.textTertiary
     ) -> some View {
@@ -102,10 +121,35 @@ struct MeetingMarkdownContent: View {
                 .font(bodyFont)
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .lineSpacing(3)
+                .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.leading, CGFloat(indentLevel) * MuesliTheme.spacing20)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .environment(\.layoutDirection, direction.layoutDirection)
+        .padding(direction == .rightToLeft ? .trailing : .leading, CGFloat(indentLevel) * MuesliTheme.spacing20)
+        .frame(maxWidth: .infinity, alignment: direction.frameAlignment)
+    }
+
+    static func contentDirection(for rawLine: String) -> NaturalTextDirection {
+        let line = rawLine.trimmingCharacters(in: .whitespaces)
+        let content: String
+
+        if let heading = headingContent(from: line) {
+            content = String(heading.text.characters)
+        } else if line.hasPrefix("- [ ] ") || line.hasPrefix("- [x] ") || line.hasPrefix("- [X] ") {
+            content = String(line.dropFirst(6))
+        } else if line.hasPrefix("- ") {
+            content = String(line.dropFirst(2))
+        } else if let numbered = numberedListContent(from: line) {
+            content = numbered.text
+        } else {
+            content = line
+        }
+
+        return NaturalTextDirection.resolve(content)
+    }
+
+    static func listIndentationEdge(for rawLine: String) -> Edge.Set {
+        contentDirection(for: rawLine) == .rightToLeft ? .trailing : .leading
     }
 
     /// Renders inline markdown — bold, italic, code, links — within one line.

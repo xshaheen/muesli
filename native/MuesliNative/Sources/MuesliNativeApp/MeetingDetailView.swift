@@ -2001,6 +2001,20 @@ private extension View {
     }
 }
 
+enum MeetingTitlePresentation {
+    static func direction(for text: String) -> NaturalTextDirection {
+        NaturalTextDirection.resolve(text)
+    }
+
+    static func alignment(for text: String) -> Alignment {
+        direction(for: text).frameAlignment
+    }
+
+    static func marqueeOffset(for text: String, distance: CGFloat) -> CGFloat {
+        direction(for: text) == .rightToLeft ? distance : -distance
+    }
+}
+
 private struct MarqueeTitleTextField: View {
     @Binding var text: String
     let onSubmit: () -> Void
@@ -2015,13 +2029,23 @@ private struct MarqueeTitleTextField: View {
 
     private let titleFont = Font.system(size: 30, weight: .bold)
 
+    private var displayText: String {
+        text.isEmpty ? "Meeting Title" : text
+    }
+
+    private var direction: NaturalTextDirection {
+        MeetingTitlePresentation.direction(for: displayText)
+    }
+
     var body: some View {
-        ZStack(alignment: .leading) {
+        ZStack(alignment: MeetingTitlePresentation.alignment(for: displayText)) {
             TextField("Meeting Title", text: $text)
                 .font(titleFont)
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .textFieldStyle(.plain)
                 .lineLimit(1)
+                .multilineTextAlignment(.leading)
+                .environment(\.layoutDirection, direction.layoutDirection)
                 .opacity(shouldShowMarquee ? 0 : 1)
                 .focused($isTitleFocused)
                 .onSubmit(onSubmit)
@@ -2033,17 +2057,23 @@ private struct MarqueeTitleTextField: View {
                     restartMarqueeIfNeeded()
                 }
 
-            Text(text.isEmpty ? "Meeting Title" : text)
+            Text(displayText)
                 .font(titleFont)
                 .fontWeight(.bold)
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .lineLimit(1)
+                .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: true, vertical: false)
                 .offset(x: marqueeOffset)
                 .opacity(shouldShowMarquee ? 1 : 0)
                 .allowsHitTesting(false)
+                .environment(\.layoutDirection, direction.layoutDirection)
         }
-        .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: 38,
+            alignment: MeetingTitlePresentation.alignment(for: displayText)
+        )
         .clipped()
         .contentShape(Rectangle())
         .background(
@@ -2052,7 +2082,7 @@ private struct MarqueeTitleTextField: View {
             }
         )
         .overlay(
-            Text(text.isEmpty ? "Meeting Title" : text)
+            Text(displayText)
                 .font(titleFont)
                 .fontWeight(.bold)
                 .lineLimit(1)
@@ -2113,7 +2143,7 @@ private struct MarqueeTitleTextField: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             guard marqueeRunID == runID, shouldShowMarquee else { return }
             withAnimation(.linear(duration: duration).repeatForever(autoreverses: false)) {
-                marqueeOffset = -distance
+                marqueeOffset = MeetingTitlePresentation.marqueeOffset(for: displayText, distance: distance)
             }
         }
     }
@@ -2143,6 +2173,10 @@ struct TranscriptChatMessage: Identifiable, Equatable {
 
     var isUser: Bool {
         speaker?.localizedCaseInsensitiveCompare("You") == .orderedSame
+    }
+
+    var textDirection: NaturalTextDirection {
+        NaturalTextDirection.resolve(text)
     }
 
     static func messages(from transcript: String, startingAt firstID: Int = 0) -> [TranscriptChatMessage] {
@@ -2251,13 +2285,17 @@ private struct MeetingTranscriptView: View {
 struct TranscriptChatBubble: View {
     let message: TranscriptChatMessage
 
+    private var contentAlignment: HorizontalAlignment {
+        message.textDirection == .rightToLeft ? .trailing : .leading
+    }
+
     var body: some View {
         HStack(alignment: .bottom, spacing: MuesliTheme.spacing8) {
             if message.isUser {
                 Spacer(minLength: 80)
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: contentAlignment, spacing: 4) {
                 if let metadata = metadata {
                     Text(metadata)
                         .font(.system(size: 10, weight: .medium))
@@ -2268,7 +2306,9 @@ struct TranscriptChatBubble: View {
                     .font(.system(size: 14))
                     .foregroundStyle(MuesliTheme.textPrimary)
                     .lineSpacing(2)
+                    .multilineTextAlignment(.leading)
                     .textSelection(.enabled)
+                    .environment(\.layoutDirection, message.textDirection.layoutDirection)
             }
             .padding(.horizontal, MuesliTheme.spacing12)
             .padding(.vertical, 8)

@@ -40,11 +40,23 @@ struct LiveTranscriptBubble: View {
     @State private var isHovered = false
     @State private var didCopy = false
 
+    static func contentDirection(for lines: [String]) -> NaturalTextDirection {
+        NaturalTextDirection.resolve(lines.joined(separator: "\n"))
+    }
+
+    private var contentDirection: NaturalTextDirection {
+        Self.contentDirection(for: lines)
+    }
+
+    private var contentAlignment: HorizontalAlignment {
+        contentDirection == .rightToLeft ? .trailing : .leading
+    }
+
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
             if isUser { Spacer(minLength: 40) }
-            if isUser { copyButton }
-            VStack(alignment: .leading, spacing: 2) {
+            if isUser { actionButtons }
+            VStack(alignment: contentAlignment, spacing: 2) {
                 if let speaker {
                     Text(speaker + (timestamp.map { "  \($0)" } ?? ""))
                         .font(.system(size: 10, weight: .medium))
@@ -55,9 +67,12 @@ struct LiveTranscriptBubble: View {
                         .font(.system(size: 13))
                         .italic(isPartial)
                         .foregroundStyle(isPartial ? MuesliTheme.textSecondary : MuesliTheme.textPrimary)
+                        .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
+                        .environment(\.layoutDirection, contentDirection.layoutDirection)
                 }
             }
+            .textSelection(.enabled)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(bubbleBackground)
@@ -69,13 +84,18 @@ struct LiveTranscriptBubble: View {
                         style: StrokeStyle(lineWidth: 1, dash: isPartial ? [4, 3] : [])
                     )
             }
-            .contentShape(Rectangle())
-            .onTapGesture { onOpen?() }
-            if !isUser { copyButton }
+            if !isUser { actionButtons }
             if !isUser { Spacer(minLength: 40) }
         }
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
         .onHover { isHovered = $0 }
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 2) {
+            copyButton
+            openButton
+        }
     }
 
     private var copyButton: some View {
@@ -92,9 +112,29 @@ struct LiveTranscriptBubble: View {
         }
         .buttonStyle(.plain)
         .help("Copy message")
-        .opacity(isHovered ? 1 : 0)
-        .allowsHitTesting(isHovered)
-        .accessibilityHidden(!isHovered)
+        .opacity(isHovered ? 1 : 0.45)
+        .accessibilityLabel(didCopy ? "Message copied" : "Copy message")
+    }
+
+    @ViewBuilder
+    private var openButton: some View {
+        if let onOpen {
+            Button(action: onOpen) {
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(
+                        surfacePresentation == .floatingPanel
+                            ? Color.white.opacity(0.62)
+                            : MuesliTheme.textSecondary
+                    )
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Open meeting details")
+            .opacity(isHovered ? 1 : 0.45)
+            .accessibilityLabel("Open meeting details")
+        }
     }
 
     private func copyMessage() {
