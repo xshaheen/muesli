@@ -1,17 +1,11 @@
 # Dev Branch Changelog
 
-This file tracks unreleased work integrated into `xshaheen/dev` compared with
-`Muesli-HQ/muesli` `main`. The current comparison baseline is upstream commit
-`5d8be7a527d23b252cc4e8a9709714fdb68c4004`.
+This file lists unreleased features and changes in `xshaheen/dev` compared with
+upstream `main`.
 
 ## Unreleased — 11-08-2026
 
-Integrated sources:
-
-- [PR #9 — meeting transcript cleanup and in-meeting chat](https://github.com/xshaheen/muesli/pull/9), head `4ae0f2fe55b603cd40f4bcca90337f96148f0081`.
-- [PR #10 — dynamic dictation writing styles](https://github.com/xshaheen/muesli/pull/10), head `e4d12a199449f31d0ed5cd5b46283e1f1ccf4b77`.
-
-### PR #9 — Meeting intelligence, audio reliability, and floating UI
+### Meeting intelligence, audio reliability, and floating UI
 
 #### Features
 
@@ -38,10 +32,7 @@ Integrated sources:
 - Added test-shard assignments for the expanded native test suite.
 - Added placement diagnostics for the floating pill and panel.
 
-#### Bug fixes and reliability improvements
-
-The list below is exhaustive at the merged-commit level. Multi-finding review
-commits call out every behavior class they corrected.
+#### Changes and fixes
 
 ##### Meeting chat and transcript cleanup
 
@@ -143,7 +134,7 @@ commits call out every behavior class they corrected.
 - Fixed folder rename focus, blur-to-commit, and Escape-to-cancel behavior.
 - Fixed Markdown toolbar edits lacking undo grouping and stripping paragraph terminators that were not present.
 
-### PR #10 — Dynamic dictation Writing Styles
+### Dynamic dictation Writing Styles
 
 #### Features
 
@@ -159,7 +150,7 @@ commits call out every behavior class they corrected.
 - Added privacy-safe diagnostics and coarse allowlisted telemetry that exclude app identifiers, hostnames, URLs, prompts, transcripts, and other user content.
 - Added local browser-host routing that keeps only the normalized hostname, never URL paths or queries, and never triggers OCR or a new permission prompt.
 
-#### Bug fixes
+#### Changes and fixes
 
 - Fixed cleanup requests reading mutable global state after recording stopped; each request now uses the complete start-of-session snapshot, including the pinned local model and speaker vocabulary.
 - Fixed ambiguous matcher validation comparing specificity without exact/wildcard rank, which could reject or permit the wrong cross-group overlap.
@@ -169,8 +160,7 @@ commits call out every behavior class they corrected.
 - Fixed edits made in the custom-style editor not counting as unsaved, allowing close/import/export before the edits were applied. Save now validates and atomically applies pending edits, and close/cancel behavior reflects them.
 - Added accessible labels and hints for style instructions and preserved textual conflict feedback when Save is blocked.
 
-### Integration notes
+### Cross-feature changes
 
-- PR #9 and PR #10 were merged as separate merge commits so both exact reviewed heads remain ancestors of `xshaheen/dev`.
 - CloudKit system fields and local Writing Styles provenance coexist in the combined dictation upsert path. Style provenance remains local, survives same-text acknowledgements, and is cleared when remote text replaces the local text or the record is deleted.
-- The meeting Markdown renderer retains PR #9's non-web-link safety behavior while preserving upstream heading, list, editor, and formatting behavior.
+- The meeting Markdown renderer keeps non-web links visible and inert while preserving heading, list, editor, and inline-formatting behavior.
