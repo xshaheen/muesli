@@ -4,7 +4,7 @@ import Foundation
 import MuesliCore
 import os
 
-struct DictationCorrectionTargetApp: Sendable {
+struct DictationSessionTarget: Sendable, Equatable {
     let processID: pid_t
     let appName: String
     let bundleID: String
@@ -15,9 +15,120 @@ struct DictationCorrectionTargetApp: Sendable {
 
     init?(app: NSRunningApplication?) {
         guard let app else { return nil }
-        self.processID = app.processIdentifier
-        self.appName = app.localizedName ?? "Unknown"
-        self.bundleID = app.bundleIdentifier ?? ""
+        self.init(
+            processID: app.processIdentifier,
+            appName: app.localizedName ?? "Unknown",
+            bundleID: app.bundleIdentifier ?? ""
+        )
+    }
+
+    init(processID: pid_t, appName: String, bundleID: String) {
+        self.processID = processID
+        self.appName = appName
+        self.bundleID = bundleID
+    }
+
+    func matches(processID: pid_t?, bundleID: String) -> Bool {
+        guard processID == self.processID,
+              let expectedBundleID = DictationStyleResolver.normalizeBundleID(self.bundleID),
+              let actualBundleID = DictationStyleResolver.normalizeBundleID(bundleID)
+        else {
+            return false
+        }
+        return actualBundleID == expectedBundleID
+    }
+}
+
+enum DictationStyleSessionMode: Sendable, Equatable {
+    case standard
+    case voiceNote
+    case computerUse
+    case meeting
+    case streaming
+    case dictationTest
+
+    var allowsAdaptiveStyles: Bool { self == .standard }
+}
+
+struct DictationStyleSessionSnapshot {
+    let id: UUID
+    let target: DictationSessionTarget?
+    let config: AppConfig
+    let mode: DictationStyleSessionMode
+    let cleanupRuntime: DictationCleanupRuntimeSnapshot?
+
+    init(
+        id: UUID = UUID(),
+        target: DictationSessionTarget?,
+        config: AppConfig,
+        mode: DictationStyleSessionMode,
+        cleanupRuntime: DictationCleanupRuntimeSnapshot? = nil
+    ) {
+        self.id = id
+        self.target = target
+        self.config = config
+        self.mode = mode
+        self.cleanupRuntime = cleanupRuntime
+    }
+
+    func matchingContext(_ result: DictationSessionContextResult?) -> DictationContext? {
+        guard let result,
+              result.sessionID == id,
+              let target,
+              target.matches(processID: result.context.processID, bundleID: result.context.bundleID)
+        else {
+            return nil
+        }
+        return result.context
+    }
+
+    func resolveStyle(context result: DictationSessionContextResult?) -> DictationStyleSelectionResult {
+        let context = matchingContext(result)
+        return DictationStyleResolver.resolve(
+            config: config,
+            bundleID: target?.bundleID,
+            hostname: context?.hostname
+        )
+    }
+
+    func cleanupPolicy(
+        readiness: DictationCleanupReadiness,
+        context result: DictationSessionContextResult?
+    ) -> DictationCleanupPolicy? {
+        guard mode.allowsAdaptiveStyles else { return nil }
+        let selection = resolveStyle(context: result)
+        let basePrompt = config.adaptiveDictationStylesEnabled
+            ? DictationCleanupPromptComposer.compose(styleInstructions: selection.prompt)
+            : config.postProcessorSystemPrompt
+        return DictationCleanupPolicy(
+            readiness: readiness,
+            systemPromptSnapshot: DictationCleanupPromptComposer.appendingSpeakerVocabulary(
+                to: basePrompt,
+                customWords: config.customWords
+            ),
+            provenance: DictationCleanupStyleProvenance(selection: selection)
+        )
+    }
+
+    func cleanupPolicy(
+        enabled: Bool,
+        context result: DictationSessionContextResult?
+    ) -> DictationCleanupPolicy? {
+        cleanupPolicy(
+            readiness: enabled ? .ready : .disabled,
+            context: result
+        )
+    }
+
+    func cleanupRequest(
+        context result: DictationSessionContextResult?
+    ) -> DictationCleanupRequestSnapshot? {
+        guard let cleanupRuntime,
+              let policy = cleanupPolicy(readiness: cleanupRuntime.readiness, context: result)
+        else {
+            return nil
+        }
+        return DictationCleanupRequestSnapshot(runtime: cleanupRuntime, policy: policy)
     }
 }
 
@@ -957,7 +1068,7 @@ final class DictationCorrectionMonitor {
     func start(
         originalText: String,
         appContext: String,
-        targetApp: DictationCorrectionTargetApp?,
+        targetApp: DictationSessionTarget?,
         onSuggestion: @escaping @MainActor (DictionarySuggestion) -> Void
     ) {
         cancel()
@@ -1055,7 +1166,7 @@ final class DictationCorrectionMonitor {
         originalText: String,
         editedSnapshot: String,
         appContext: String,
-        targetApp: DictationCorrectionTargetApp?,
+        targetApp: DictationSessionTarget?,
         maxSuggestions: Int,
         recognizedEnglishWords: Set<String>
     ) -> [DictionarySuggestion] {
@@ -1114,7 +1225,7 @@ final class DictationCorrectionMonitor {
 
     nonisolated private static func detectEditedSnapshots(
         originalText: String,
-        targetApp: DictationCorrectionTargetApp?
+        targetApp: DictationSessionTarget?
     ) -> [String] {
         var seen = Set<String>()
         var snapshots: [String] = []

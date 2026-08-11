@@ -12,6 +12,7 @@ struct TranscriptCleanupPromptsManagerView: View {
     @State private var nameValidationMessage: String?
     @State private var showPromptValidationError = false
     @State private var promptToDelete: CustomTranscriptCleanupPrompt?
+    @State private var operationErrorMessage: String?
 
     private var activePromptID: String {
         appState.config.activeTranscriptCleanupPromptId
@@ -31,7 +32,11 @@ struct TranscriptCleanupPromptsManagerView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-                    presetSection(title: "Built-in Presets") {
+                    Text("Built-in styles are read-only. Duplicate one to customize it.")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+
+                    presetSection(title: "Built-in Styles") {
                         VStack(spacing: MuesliTheme.spacing8) {
                             ForEach(builtInPresets) { preset in
                                 builtInPresetRow(preset)
@@ -39,7 +44,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                         }
                     }
 
-                    presetSection(title: "Custom Presets") {
+                    presetSection(title: "Custom Styles") {
                         if customPresets.isEmpty {
                             emptyState
                         } else {
@@ -53,6 +58,13 @@ struct TranscriptCleanupPromptsManagerView: View {
 
                     if isCreatingPrompt || editingPromptID != nil {
                         promptEditor
+                    }
+
+                    if let operationErrorMessage {
+                        Text(operationErrorMessage)
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.recording)
+                            .accessibilityLabel("Style settings error: \(operationErrorMessage)")
                     }
                 }
                 .padding(.bottom, MuesliTheme.spacing4)
@@ -73,21 +85,26 @@ struct TranscriptCleanupPromptsManagerView: View {
             }
             Button("Delete", role: .destructive) {
                 guard let preset = promptToDelete else { return }
-                controller.deleteTranscriptCleanupPrompt(id: preset.id)
-                if editingPromptID == preset.id {
-                    resetPromptEditor()
+                do {
+                    try controller.deleteTranscriptCleanupPrompt(id: preset.id)
+                    if editingPromptID == preset.id {
+                        resetPromptEditor()
+                    }
+                    promptToDelete = nil
+                    operationErrorMessage = nil
+                } catch {
+                    operationErrorMessage = persistenceError(error)
                 }
-                promptToDelete = nil
             }
         } message: {
-            Text("This prompt preset will be permanently removed. Existing dictations are not affected.")
+            Text(deletionImpactMessage)
         }
     }
 
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Manage Cleanup Presets")
+                Text("Manage Cleanup Styles")
                     .font(MuesliTheme.title2())
                     .foregroundStyle(MuesliTheme.textPrimary)
                 Text("Create reusable prompts for local and cloud dictation cleanup.")
@@ -103,7 +120,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                         resetPromptEditor()
                     }
                 } else {
-                    actionButton("New preset", systemImage: "plus") {
+                    actionButton("New style", systemImage: "plus") {
                         beginCreatingPrompt()
                     }
                 }
@@ -132,7 +149,7 @@ struct TranscriptCleanupPromptsManagerView: View {
             Image(systemName: "text.badge.plus")
                 .font(.system(size: 11))
                 .foregroundStyle(MuesliTheme.textTertiary)
-            Text("No custom cleanup presets yet.")
+            Text("No custom cleanup styles yet.")
                 .font(MuesliTheme.callout())
                 .foregroundStyle(MuesliTheme.textTertiary)
         }
@@ -154,7 +171,7 @@ struct TranscriptCleanupPromptsManagerView: View {
             systemImage: "sparkles"
         ) {
             actionButton("Use", systemImage: "checkmark") {
-                controller.selectTranscriptCleanupPrompt(id: preset.id)
+                selectStyle(preset.id)
             }
             .disabled(activePromptID == preset.id)
 
@@ -172,7 +189,7 @@ struct TranscriptCleanupPromptsManagerView: View {
             systemImage: "text.badge.checkmark"
         ) {
             actionButton("Use", systemImage: "checkmark") {
-                controller.selectTranscriptCleanupPrompt(id: preset.id)
+                selectStyle(preset.id)
             }
             .disabled(activePromptID == preset.id)
 
@@ -235,7 +252,7 @@ struct TranscriptCleanupPromptsManagerView: View {
 
     private var promptEditor: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-            Text(isCreatingPrompt ? "New preset" : "Edit preset")
+            Text(isCreatingPrompt ? "New style" : "Edit style")
                 .font(MuesliTheme.captionMedium())
                 .foregroundStyle(MuesliTheme.textPrimary)
 
@@ -289,7 +306,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                         }
                     }
                 if showPromptValidationError {
-                    Text("Enter cleanup instructions for this preset.")
+                    Text("Enter cleanup instructions for this style.")
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.recording)
                 }
@@ -298,7 +315,7 @@ struct TranscriptCleanupPromptsManagerView: View {
             HStack {
                 Spacer()
                 actionButton(
-                    isCreatingPrompt ? "Create preset" : "Save changes",
+                    isCreatingPrompt ? "Create style" : "Save changes",
                     systemImage: isCreatingPrompt ? "plus.circle" : "checkmark.circle"
                 ) {
                     savePromptEditor()
@@ -349,28 +366,60 @@ struct TranscriptCleanupPromptsManagerView: View {
     private func savePromptEditor() {
         let trimmedName = draftPromptName.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedPrompt = draftPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        nameValidationMessage = nil
-        showPromptValidationError = trimmedPrompt.isEmpty
-        if trimmedName.isEmpty {
-            nameValidationMessage = "Enter a preset name."
-        } else if presetNameExists(trimmedName, excludingID: editingPromptID) {
-            nameValidationMessage = "Use a unique preset name."
+        do {
+            try DictationStyleSettingsModel.validateStyle(
+                name: trimmedName,
+                instructions: trimmedPrompt,
+                excludingID: editingPromptID,
+                config: appState.config
+            )
+            if let editingPromptID {
+                try controller.updateTranscriptCleanupPrompt(
+                    id: editingPromptID,
+                    name: trimmedName,
+                    prompt: trimmedPrompt
+                )
+            } else {
+                try controller.createTranscriptCleanupPrompt(
+                    name: trimmedName,
+                    prompt: trimmedPrompt
+                )
+            }
+            operationErrorMessage = nil
+            resetPromptEditor()
+        } catch let error as DictationStyleSettingsError {
+            switch error {
+            case .missingStyleName, .duplicateStyleName:
+                nameValidationMessage = error.localizedDescription
+            case .missingStyleInstructions:
+                showPromptValidationError = true
+            default:
+                operationErrorMessage = error.localizedDescription
+            }
+        } catch {
+            operationErrorMessage = persistenceError(error)
         }
-        guard nameValidationMessage == nil, !trimmedPrompt.isEmpty else { return }
+    }
 
-        if let editingPromptID {
-            controller.updateTranscriptCleanupPrompt(
-                id: editingPromptID,
-                name: trimmedName,
-                prompt: trimmedPrompt
-            )
-        } else {
-            controller.createTranscriptCleanupPrompt(
-                name: trimmedName,
-                prompt: trimmedPrompt
-            )
+    private func selectStyle(_ id: String) {
+        do {
+            try controller.selectTranscriptCleanupPrompt(id: id)
+            operationErrorMessage = nil
+        } catch {
+            operationErrorMessage = persistenceError(error)
         }
-        resetPromptEditor()
+    }
+
+    private var deletionImpactMessage: String {
+        guard let promptToDelete else { return "This custom style will be permanently removed." }
+        return DictationStyleSettingsModel.deletionImpact(
+            styleID: promptToDelete.id,
+            in: appState.config
+        ).confirmationMessage
+    }
+
+    private func persistenceError(_ error: Error) -> String {
+        "Could not save cleanup styles. Your previous settings are unchanged. \(error.localizedDescription)"
     }
 
     private var isEditingPromptInProgress: Bool {
@@ -383,13 +432,7 @@ struct TranscriptCleanupPromptsManagerView: View {
     }
 
     private func presetNameExists(_ name: String, excludingID: String?) -> Bool {
-        let normalizedName = normalizedPresetName(name)
-        if builtInPresets.contains(where: { normalizedPresetName($0.name) == normalizedName }) {
-            return true
-        }
-        return customPresets.contains { preset in
-            preset.id != excludingID && normalizedPresetName(preset.name) == normalizedName
-        }
+        DictationStyleSettingsModel.hasStyleNamed(name, excludingID: excludingID, in: appState.config)
     }
 
     private func suggestedUniqueName(for baseName: String) -> String {
@@ -405,12 +448,6 @@ struct TranscriptCleanupPromptsManagerView: View {
             }
         }
         return "\(fallbackBase) \(UUID().uuidString.prefix(4))"
-    }
-
-    private func normalizedPresetName(_ name: String) -> String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .lowercased()
     }
 
     private func actionButton(

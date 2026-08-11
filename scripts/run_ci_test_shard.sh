@@ -28,6 +28,9 @@ case "${shard}" in
       OpenAILogoShapeTests
       MeetingChunkCollectorTests
       AppConfigTests
+      DictationStyleResolverTests
+      DictationStyleSettingsTests
+      DictationStyleRulesetCodecTests
       CGPointCodableTests
       UpdateFailureGuidanceTests
       SidebarHitAreaTests
@@ -78,9 +81,12 @@ case "${shard}" in
       HotkeyConfigTests
       DictationStateIdleTests
       DictationCorrectionMonitorTests
+      DictationStyleSessionTests
       AsrVocabularyPromptTests
       WhisperBiasingManualReproTests
       TranscriptionResultCleanupTests
+      DictationCleanupPolicyTests
+      DictationStyleObservabilityTests
       TranscriptionBackendResidencyPolicyTests
       TranscriptCleanupRequestBodyTests
       PostProcessorIdleUnloadPolicyTests

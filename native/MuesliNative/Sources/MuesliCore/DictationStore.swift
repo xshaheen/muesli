@@ -49,7 +49,8 @@ public final class DictationStore {
     private let databaseURL: URL
     private static let dictationColumns = """
     d.id, d.timestamp, d.duration_seconds, d.raw_text, d.app_context, d.word_count, d.source,
-    t.id, t.final_status, t.final_message, t.trace_json, t.created_at
+    t.id, t.final_status, t.final_message, t.trace_json, t.created_at,
+    d.dictation_style_id, d.dictation_style_name, d.dictation_style_selection_source, d.dictation_cleanup_outcome
     """
     private static let meetingColumns = """
     id, title, start_time, duration_seconds, raw_transcript, formatted_notes, word_count, folder_id, calendar_event_id, mic_audio_path, system_audio_path, saved_recording_path, meeting_status, manual_notes, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source, follow_up_to_id, follow_up_to_record_name, calendar_occurrence_key, calendar_source, calendar_id, calendar_series_id, calendar_occurrence_start, cleaned_transcript, visual_context, previous_meeting_notes, notes_source
@@ -110,6 +111,10 @@ public final class DictationStore {
             cloud_system_fields BLOB,
             last_synced_at REAL,
             sync_dirty INTEGER NOT NULL DEFAULT 1,
+            dictation_style_id TEXT,
+            dictation_style_name TEXT,
+            dictation_style_selection_source TEXT,
+            dictation_cleanup_outcome TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_dictations_timestamp ON dictations(timestamp DESC);
@@ -195,6 +200,7 @@ public final class DictationStore {
         );
         """
         try exec(createSQL, db: db)
+        try migrateDictationStyleProvenance(db: db)
 
         let foldersSQL = """
         CREATE TABLE IF NOT EXISTS meeting_folders (
@@ -362,6 +368,42 @@ public final class DictationStore {
         _ = try purgeSoftDeletedTextRecords(olderThan: Self.defaultTombstoneRetentionInterval, db: db)
     }
 
+    private func migrateDictationStyleProvenance(db: OpaquePointer?) throws {
+        let migrations = [
+            ("dictation_style_id", "ALTER TABLE dictations ADD COLUMN dictation_style_id TEXT"),
+            ("dictation_style_name", "ALTER TABLE dictations ADD COLUMN dictation_style_name TEXT"),
+            (
+                "dictation_style_selection_source",
+                "ALTER TABLE dictations ADD COLUMN dictation_style_selection_source TEXT"
+            ),
+            ("dictation_cleanup_outcome", "ALTER TABLE dictations ADD COLUMN dictation_cleanup_outcome TEXT"),
+        ]
+        var existingColumns = try tableColumns("dictations", db: db)
+        for (column, sql) in migrations where !existingColumns.contains(column) {
+            if sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK {
+                let message = String(cString: sqlite3_errmsg(db))
+                guard message.localizedCaseInsensitiveContains("duplicate column") else {
+                    throw lastError(db)
+                }
+            }
+            existingColumns.insert(column)
+        }
+    }
+
+    private func tableColumns(_ table: String, db: OpaquePointer?) throws -> Set<String> {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(\(table))", -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var columns: Set<String> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            columns.insert(stringColumn(statement, index: 1))
+        }
+        return columns
+    }
+
     private func migrateInsightsCache(db: OpaquePointer?) throws {
         try exec("""
         CREATE TABLE IF NOT EXISTS insights_cache_meta (
@@ -418,6 +460,10 @@ public final class DictationStore {
         durationSeconds: Double,
         appContext: String = "",
         source: String = "dictation",
+        dictationStyleID: String? = nil,
+        dictationStyleName: String? = nil,
+        dictationStyleSelectionSource: String? = nil,
+        dictationCleanupOutcome: String? = nil,
         startedAt: Date,
         endedAt: Date
     ) throws -> Int64 {
@@ -426,8 +472,10 @@ public final class DictationStore {
 
         let sql = """
         INSERT INTO dictations
-        (timestamp, duration_seconds, raw_text, app_context, word_count, source, started_at, ended_at, updated_at, sync_dirty)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        (timestamp, duration_seconds, raw_text, app_context, word_count, source,
+         dictation_style_id, dictation_style_name, dictation_style_selection_source, dictation_cleanup_outcome,
+         started_at, ended_at, updated_at, sync_dirty)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -444,9 +492,13 @@ public final class DictationStore {
         sqlite3_bind_text(statement, 4, (appContext as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_int(statement, 5, Int32(Self.countWords(in: text)))
         sqlite3_bind_text(statement, 6, (source as NSString).utf8String, -1, sqliteTransient)
-        sqlite3_bind_text(statement, 7, (started as NSString).utf8String, -1, sqliteTransient)
-        sqlite3_bind_text(statement, 8, (ended as NSString).utf8String, -1, sqliteTransient)
-        sqlite3_bind_double(statement, 9, Date().timeIntervalSince1970)
+        bindOptionalText(dictationStyleID, at: 7, statement: statement)
+        bindOptionalText(dictationStyleName, at: 8, statement: statement)
+        bindOptionalText(dictationStyleSelectionSource, at: 9, statement: statement)
+        bindOptionalText(dictationCleanupOutcome, at: 10, statement: statement)
+        sqlite3_bind_text(statement, 11, (started as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 12, (ended as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_double(statement, 13, Date().timeIntervalSince1970)
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
@@ -1762,6 +1814,10 @@ public final class DictationStore {
         UPDATE dictations
         SET raw_text = '',
             app_context = '',
+            dictation_style_id = NULL,
+            dictation_style_name = NULL,
+            dictation_style_selection_source = NULL,
+            dictation_cleanup_outcome = NULL,
             word_count = 0,
             duration_seconds = 0,
             deleted_at = ?,
@@ -1848,6 +1904,10 @@ public final class DictationStore {
             UPDATE dictations
             SET raw_text = '',
                 app_context = '',
+                dictation_style_id = NULL,
+                dictation_style_name = NULL,
+                dictation_style_selection_source = NULL,
+                dictation_cleanup_outcome = NULL,
                 word_count = 0,
                 duration_seconds = 0,
                 deleted_at = strftime('%s','now'),
@@ -4100,12 +4160,33 @@ public final class DictationStore {
         INSERT INTO dictations (
             timestamp, duration_seconds, raw_text, app_context, word_count, source,
             started_at, ended_at, updated_at, deleted_at, cloud_record_name,
-            cloud_change_tag, cloud_system_fields, last_synced_at, sync_dirty
+            cloud_change_tag, cloud_system_fields, last_synced_at, sync_dirty,
+            dictation_style_id, dictation_style_name, dictation_style_selection_source, dictation_cleanup_outcome
         )
-        VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, NULL)
         ON CONFLICT(cloud_record_name) DO UPDATE SET
             timestamp = excluded.timestamp,
             duration_seconds = excluded.duration_seconds,
+            dictation_style_id = CASE
+                WHEN excluded.deleted_at IS NULL AND excluded.raw_text IS dictations.raw_text
+                    THEN dictations.dictation_style_id
+                ELSE NULL
+            END,
+            dictation_style_name = CASE
+                WHEN excluded.deleted_at IS NULL AND excluded.raw_text IS dictations.raw_text
+                    THEN dictations.dictation_style_name
+                ELSE NULL
+            END,
+            dictation_style_selection_source = CASE
+                WHEN excluded.deleted_at IS NULL AND excluded.raw_text IS dictations.raw_text
+                    THEN dictations.dictation_style_selection_source
+                ELSE NULL
+            END,
+            dictation_cleanup_outcome = CASE
+                WHEN excluded.deleted_at IS NULL AND excluded.raw_text IS dictations.raw_text
+                    THEN dictations.dictation_cleanup_outcome
+                ELSE NULL
+            END,
             raw_text = excluded.raw_text,
             word_count = excluded.word_count,
             source = excluded.source,
@@ -4319,7 +4400,11 @@ public final class DictationStore {
             appContext: stringColumn(statement, index: 4),
             wordCount: Int(sqlite3_column_int(statement, 5)),
             source: stringColumn(statement, index: 6),
-            computerUseTrace: trace
+            computerUseTrace: trace,
+            dictationStyleID: optionalStringColumn(statement, index: 12),
+            dictationStyleName: optionalStringColumn(statement, index: 13),
+            dictationStyleSelectionSource: optionalStringColumn(statement, index: 14),
+            dictationCleanupOutcome: optionalStringColumn(statement, index: 15)
         )
     }
 
