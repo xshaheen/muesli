@@ -7,16 +7,30 @@ struct MeetingDetailResponsiveLayoutTests {
     @Test("meeting controls appear above the title without changing their layout")
     func controlsAppearAboveTitle() throws {
         let source = try meetingDetailSource()
+        let outerHeader = try sourceSection(
+            in: source,
+            from: "private func header(_ meeting",
+            to: "private func adaptiveHeaderContent"
+        )
         let header = try sourceSection(
             in: source,
             from: "private func adaptiveHeaderContent",
             to: "private func headerTitleContent"
         )
+        let folderPill = try sourceSection(
+            in: source,
+            from: "private func folderPill(for meeting",
+            to: "private func folderPopoverRow"
+        )
 
+        #expect(header.contains("MeetingDetailHeaderBarLayout"))
+        #expect(header.contains("Button(action: onBack)"))
         #expect(
             try index(of: "headerUtilityBand(for: meeting", in: header)
                 < index(of: "headerTitleContent(for: meeting", in: header)
         )
+        #expect(outerHeader.contains(".padding(.top, MuesliTheme.spacing16)"))
+        #expect(folderPill.contains(".frame(height: 30)"))
     }
 
     @Test("folder and meeting controls share one responsive row")
@@ -99,6 +113,33 @@ struct MeetingDetailResponsiveLayoutTests {
             CGPoint(x: 98, y: 0),
             CGPoint(x: 0, y: 38),
         ])
+    }
+
+    @Test("header bar trails actions when wide and stacks them when narrow")
+    func headerBarUsesResponsiveGeometry() {
+        let layout = MeetingDetailHeaderBarLayout(spacing: 8)
+        let row = layout.layout(
+            leadingSize: CGSize(width: 100, height: 20),
+            trailingSize: CGSize(width: 300, height: 30),
+            width: 600
+        )
+
+        #expect(row.size == CGSize(width: 600, height: 30))
+        #expect(row.leadingPoint == CGPoint(x: 0, y: 5))
+        #expect(row.trailingPoint == CGPoint(x: 300, y: 0))
+        #expect(!row.isStacked)
+
+        let stacked = layout.layout(
+            leadingSize: CGSize(width: 100, height: 20),
+            trailingSize: CGSize(width: 300, height: 30),
+            constrainedTrailingSize: CGSize(width: 260, height: 68),
+            width: 260
+        )
+
+        #expect(stacked.size == CGSize(width: 260, height: 96))
+        #expect(stacked.leadingPoint == .zero)
+        #expect(stacked.trailingPoint == CGPoint(x: 0, y: 28))
+        #expect(stacked.isStacked)
     }
 
     @Test("export menu is icon-only while keeping an accessible label")

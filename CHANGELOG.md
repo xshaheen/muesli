@@ -79,6 +79,7 @@ upstream `main`.
 - Fixed the meeting template and export menus collapsing below the height of adjacent action controls.
 - Moved the existing meeting controls above the title while preserving their compact layout and styling.
 - Compacted the meeting header by placing Add to folder and the action controls in one responsive row.
+- Refined the meeting header into a responsive navigation-and-actions bar, aligned the folder control height, and reduced excess top spacing.
 
 ##### Calendar, CLI, Computer Use, and model/runtime reliability
 

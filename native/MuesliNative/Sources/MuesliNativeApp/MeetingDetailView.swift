@@ -99,6 +99,104 @@ struct MeetingDetailFlowLayout: Layout {
     }
 }
 
+struct MeetingDetailHeaderBarLayout: Layout {
+    let spacing: CGFloat
+
+    struct Geometry: Equatable {
+        let size: CGSize
+        let leadingPoint: CGPoint
+        let trailingPoint: CGPoint
+        let isStacked: Bool
+    }
+
+    func makeCache(subviews: Subviews) -> [CGSize] {
+        subviews.map { $0.sizeThatFits(.unspecified) }
+    }
+
+    func updateCache(_ cache: inout [CGSize], subviews: Subviews) {
+        cache = makeCache(subviews: subviews)
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout [CGSize]
+    ) -> CGSize {
+        guard subviews.count == 2, cache.count == 2 else { return .zero }
+        let width = proposal.width ?? cache[0].width + spacing + cache[1].width
+        let constrainedTrailingSize = shouldStack(sizes: cache, width: width)
+            ? subviews[1].sizeThatFits(ProposedViewSize(width: width, height: nil))
+            : nil
+        return layout(
+            leadingSize: cache[0],
+            trailingSize: cache[1],
+            constrainedTrailingSize: constrainedTrailingSize,
+            width: width
+        ).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout [CGSize]
+    ) {
+        guard subviews.count == 2, cache.count == 2 else { return }
+        let isStacked = shouldStack(sizes: cache, width: bounds.width)
+        let trailingProposal = isStacked
+            ? ProposedViewSize(width: bounds.width, height: nil)
+            : .unspecified
+        let constrainedTrailingSize = isStacked
+            ? subviews[1].sizeThatFits(trailingProposal)
+            : nil
+        let geometry = layout(
+            leadingSize: cache[0],
+            trailingSize: cache[1],
+            constrainedTrailingSize: constrainedTrailingSize,
+            width: bounds.width
+        )
+        subviews[0].place(
+            at: CGPoint(x: bounds.minX + geometry.leadingPoint.x, y: bounds.minY + geometry.leadingPoint.y),
+            anchor: .topLeading,
+            proposal: .unspecified
+        )
+        subviews[1].place(
+            at: CGPoint(x: bounds.minX + geometry.trailingPoint.x, y: bounds.minY + geometry.trailingPoint.y),
+            anchor: .topLeading,
+            proposal: trailingProposal
+        )
+    }
+
+    func layout(
+        leadingSize: CGSize,
+        trailingSize: CGSize,
+        constrainedTrailingSize: CGSize? = nil,
+        width: CGFloat
+    ) -> Geometry {
+        guard shouldStack(sizes: [leadingSize, trailingSize], width: width) else {
+            let height = max(leadingSize.height, trailingSize.height)
+            return Geometry(
+                size: CGSize(width: width, height: height),
+                leadingPoint: CGPoint(x: 0, y: (height - leadingSize.height) / 2),
+                trailingPoint: CGPoint(x: width - trailingSize.width, y: (height - trailingSize.height) / 2),
+                isStacked: false
+            )
+        }
+
+        let wrappedTrailingSize = constrainedTrailingSize ?? trailingSize
+        return Geometry(
+            size: CGSize(width: width, height: leadingSize.height + spacing + wrappedTrailingSize.height),
+            leadingPoint: .zero,
+            trailingPoint: CGPoint(x: 0, y: leadingSize.height + spacing),
+            isStacked: true
+        )
+    }
+
+    private func shouldStack(sizes: [CGSize], width: CGFloat) -> Bool {
+        sizes[0].width + spacing + sizes[1].width > width
+    }
+}
+
 // Wrapper views that isolate observation of liveMeetingTranscript.
 // Without these, MeetingDetailView.body would observe the property and
 // re-evaluate on every chunk (every ~5s), re-rendering the entire detail view.
@@ -326,19 +424,6 @@ struct MeetingDetailView: View {
     private func header(_ meeting: MeetingRecord) -> some View {
         let appliedTemplate = controller.meetingTemplateSnapshot(for: meeting)
         VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-            if let onBack {
-                Button(action: onBack) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text(backLabel)
-                            .font(MuesliTheme.callout())
-                    }
-                    .foregroundStyle(MuesliTheme.textSecondary)
-                }
-                .buttonStyle(.plain)
-            }
-
             adaptiveHeaderContent(for: meeting, appliedTemplate: appliedTemplate)
 
             if let savedRecordingPath = meeting.savedRecordingPath,
@@ -354,7 +439,8 @@ struct MeetingDetailView: View {
         }
         .frame(maxWidth: 980, alignment: .leading)
         .padding(.horizontal, 40)
-        .padding(.vertical, 24)
+        .padding(.top, MuesliTheme.spacing16)
+        .padding(.bottom, 24)
         .frame(maxWidth: .infinity, alignment: .center)
     }
 
@@ -364,7 +450,24 @@ struct MeetingDetailView: View {
         appliedTemplate: MeetingTemplateSnapshot
     ) -> some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-            headerUtilityBand(for: meeting, appliedTemplate: appliedTemplate)
+            if let onBack {
+                MeetingDetailHeaderBarLayout(spacing: MuesliTheme.spacing8) {
+                    Button(action: onBack) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text(backLabel)
+                                .font(MuesliTheme.callout())
+                        }
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+
+                    headerUtilityBand(for: meeting, appliedTemplate: appliedTemplate)
+                }
+            } else {
+                headerUtilityBand(for: meeting, appliedTemplate: appliedTemplate)
+            }
             headerTitleContent(for: meeting, appliedTemplate: appliedTemplate)
             threadBreadcrumb
         }
@@ -1466,7 +1569,7 @@ struct MeetingDetailView: View {
             }
             .foregroundStyle(hasFolder ? MuesliTheme.accent : MuesliTheme.textSecondary)
             .padding(.horizontal, MuesliTheme.spacing8)
-            .padding(.vertical, 4)
+            .frame(height: 30)
             .background(hasFolder ? MuesliTheme.accentSubtle : MuesliTheme.backgroundRaised)
             .clipShape(Capsule())
             .overlay(
