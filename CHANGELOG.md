@@ -77,6 +77,7 @@ upstream `main`.
 - Fixed manual-note Markdown ranges mixing grapheme counts with UTF-16, which truncated emoji-bearing lines.
 - Fixed meeting list metadata wrapping onto multiple lines, template chips collapsing to icons, and toolbar/content misalignment.
 - Fixed the meeting template and export menus collapsing below the height of adjacent action controls.
+- Moved the existing meeting controls above the title while preserving their compact layout and styling.
 
 ##### Calendar, CLI, Computer Use, and model/runtime reliability
 

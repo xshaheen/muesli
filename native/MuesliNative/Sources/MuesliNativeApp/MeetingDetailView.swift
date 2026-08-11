@@ -364,8 +364,8 @@ struct MeetingDetailView: View {
         appliedTemplate: MeetingTemplateSnapshot
     ) -> some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-            headerTitleContent(for: meeting, appliedTemplate: appliedTemplate)
             headerUtilityBand(for: meeting, appliedTemplate: appliedTemplate)
+            headerTitleContent(for: meeting, appliedTemplate: appliedTemplate)
             threadBreadcrumb
         }
     }

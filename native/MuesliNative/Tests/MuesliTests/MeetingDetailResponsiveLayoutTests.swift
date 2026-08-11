@@ -4,6 +4,21 @@ import Testing
 
 @Suite("Meeting detail responsive layout")
 struct MeetingDetailResponsiveLayoutTests {
+    @Test("meeting controls appear above the title without changing their layout")
+    func controlsAppearAboveTitle() throws {
+        let source = try meetingDetailSource()
+        let header = try sourceSection(
+            in: source,
+            from: "private func adaptiveHeaderContent",
+            to: "private func headerTitleContent"
+        )
+
+        #expect(
+            try index(of: "headerUtilityBand(for: meeting", in: header)
+                < index(of: "headerTitleContent(for: meeting", in: header)
+        )
+    }
+
     @Test("utility band uses one wrapping layout instead of duplicate responsive trees")
     func utilityBandUsesSingleWrappingLayout() throws {
         let source = try meetingDetailSource()
@@ -137,6 +152,7 @@ struct MeetingDetailResponsiveLayoutTests {
         }
         return range.lowerBound
     }
+
 }
 
 private struct LayoutTestFailure: Error {
