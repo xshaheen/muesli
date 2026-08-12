@@ -38,7 +38,10 @@ struct MeetingSummaryClientTests {
 
     @Test("summary instructions include built-in template structure")
     func promptIncludesBuiltInTemplate() {
-        let instructions = MeetingSummaryClient.summaryInstructions(for: MeetingTemplates.auto.snapshot)
+        let instructions = MeetingSummaryClient.summaryInstructions(
+            for: MeetingTemplates.auto.snapshot,
+            transcript: ""
+        )
 
         #expect(instructions.contains("You are a meeting notes assistant"))
         #expect(instructions.contains("## Meeting Summary"))
@@ -47,17 +50,84 @@ struct MeetingSummaryClientTests {
 
     @Test("summary instructions include custom template prompt verbatim")
     func promptIncludesCustomTemplate() {
-        let instructions = MeetingSummaryClient.summaryInstructions(for: customTemplate)
+        let instructions = MeetingSummaryClient.summaryInstructions(
+            for: customTemplate,
+            transcript: ""
+        )
 
         #expect(instructions.contains("## Follow-Up Summary"))
         #expect(instructions.contains("## Risks"))
         #expect(instructions.contains("Do not invent facts"))
     }
 
+    @Test("predominantly Arabic transcripts require Arabic meeting notes")
+    func arabicTranscriptRequiresArabicSummary() {
+        let instructions = MeetingSummaryClient.summaryInstructions(
+            for: MeetingTemplates.auto.snapshot,
+            transcript: "ناقشنا خطة إطلاق المنتج ومهام الفريق القادمة مع API الجديد"
+        )
+
+        #expect(instructions.contains("predominantly Arabic"))
+        #expect(instructions.contains("Write the entire output in Arabic"))
+        #expect(instructions.contains("Translate template section headings"))
+    }
+
+    @Test("predominantly Arabic transcripts require Arabic meeting titles")
+    func arabicTranscriptRequiresArabicTitle() {
+        let instructions = MeetingSummaryClient.titleInstructions(
+            transcript: "راجعنا نتائج الربع وخطة تحسين تجربة المستخدم",
+            manualNotes: nil
+        )
+
+        #expect(instructions.contains("predominantly Arabic"))
+        #expect(instructions.contains("Return the title in Arabic"))
+    }
+
+    @Test("English transcript speaker labels do not override Arabic speech")
+    func speakerLabelsDoNotOverrideArabicSpeech() {
+        let transcript = "[10:00:00] Speaker 1: نعم"
+
+        #expect(MeetingOutputLanguage.detect(transcript: transcript) == .arabic)
+        #expect(MeetingSummaryClient.titleInstructions(
+            transcript: transcript,
+            manualNotes: nil
+        ).contains("Return the title in Arabic"))
+    }
+
+    @Test("Arabic technical meetings tolerate conventional English terms")
+    func arabicTechnicalMeetingsTolerateEnglishTerms() {
+        let transcript = "ناقشنا API Kubernetes staging وخطة الإطلاق والمهام القادمة"
+
+        #expect(MeetingOutputLanguage.detect(transcript: transcript) == .arabic)
+    }
+
+    @Test("Persian text is not classified as Arabic")
+    func persianTextIsNotClassifiedAsArabic() {
+        let transcript = "من گفتم که این طرح خوب است و فردا شروع می‌کنیم"
+
+        #expect(MeetingOutputLanguage.detect(transcript: transcript) == .unspecified)
+    }
+
+    @Test("English transcripts keep the default output-language behavior")
+    func englishTranscriptKeepsDefaultOutputLanguage() {
+        let summaryInstructions = MeetingSummaryClient.summaryInstructions(
+            for: MeetingTemplates.auto.snapshot,
+            transcript: "We reviewed the launch plan and assigned the next actions."
+        )
+        let titleInstructions = MeetingSummaryClient.titleInstructions(
+            transcript: "We reviewed the launch plan and assigned the next actions.",
+            manualNotes: nil
+        )
+
+        #expect(!summaryInstructions.contains("Write the entire output in Arabic"))
+        #expect(!titleInstructions.contains("Return the title in Arabic"))
+    }
+
     @Test("summary instructions mention preserving current notes when provided")
     func promptMentionsPreservingCurrentNotes() {
         let instructions = MeetingSummaryClient.summaryInstructions(
             for: customTemplate,
+            transcript: "",
             existingNotes: "## Notes\n- Generated follow-up detail",
             manualNotes: "- User added follow-up detail"
         )
@@ -278,7 +348,8 @@ struct MeetingSummaryClientTests {
     func finalNotesRetainManualNotesVerbatim() {
         let result = MeetingSummaryClient.notesByRetainingManualNotes(
             generatedNotes: "## Summary\n- Shipped the plan",
-            manualNotes: "- Decision: ship today\n- [ ] Follow up with Priy"
+            manualNotes: "- Decision: ship today\n- [ ] Follow up with Priy",
+            outputLanguage: .unspecified
         )
 
         #expect(result.contains("## Summary"))
@@ -287,11 +358,24 @@ struct MeetingSummaryClientTests {
         #expect(result.contains("- [ ] Follow up with Priy"))
     }
 
+    @Test("Arabic final notes use an Arabic heading for retained written notes")
+    func arabicFinalNotesUseArabicWrittenNotesHeading() {
+        let result = MeetingSummaryClient.notesByRetainingManualNotes(
+            generatedNotes: "## ملخص الاجتماع\n- تم اعتماد خطة الإطلاق",
+            manualNotes: "- متابعة موعد الإطلاق",
+            outputLanguage: .arabic
+        )
+
+        #expect(result.contains("### ملاحظات مكتوبة"))
+        #expect(!result.contains("### Written notes"))
+    }
+
     @Test("final notes do not append written notes already placed in summary")
     func finalNotesSkipAlreadyPlacedManualNotes() {
         let result = MeetingSummaryClient.notesByRetainingManualNotes(
             generatedNotes: "## Decisions\n- Decision: ship today",
-            manualNotes: "- Decision: ship today"
+            manualNotes: "- Decision: ship today",
+            outputLanguage: .unspecified
         )
 
         #expect(result == "## Decisions\n- Decision: ship today")
@@ -301,7 +385,8 @@ struct MeetingSummaryClientTests {
     func finalNotesRetainMissingNumberedManualNotes() {
         let result = MeetingSummaryClient.notesByRetainingManualNotes(
             generatedNotes: "## Decisions\n1. First decision",
-            manualNotes: "1. First decision\n2. Second decision"
+            manualNotes: "1. First decision\n2. Second decision",
+            outputLanguage: .unspecified
         )
 
         #expect(result == "## Decisions\n1. First decision\n\n### Written notes\n\n2. Second decision")
@@ -321,7 +406,8 @@ struct MeetingSummaryClientTests {
             - [ ] Follow up with Priy
             1) First decision
             2) Second decision
-            """
+            """,
+            outputLanguage: .unspecified
         )
 
         #expect(result == "## Decisions\n- Decision: ship today\n- Follow up with Priy\n1. First decision\n\n### Written notes\n\n2) Second decision")
@@ -331,7 +417,8 @@ struct MeetingSummaryClientTests {
     func shortManualNotesDoNotFalseMatchSectionTitles() {
         let result = MeetingSummaryClient.notesByRetainingManualNotes(
             generatedNotes: "## Next steps\n- Follow up with Priy",
-            manualNotes: "Next steps"
+            manualNotes: "Next steps",
+            outputLanguage: .unspecified
         )
 
         #expect(result == "## Next steps\n- Follow up with Priy\n\n### Written notes\n\nNext steps")
@@ -354,6 +441,24 @@ struct MeetingSummaryClientTests {
         #expect(result.contains("## Raw Transcript"))
         #expect(result.contains("### Written notes"))
         #expect(result.contains("- Manual decision"))
+    }
+
+    @Test("Arabic manual notes localize a letterless raw-transcript fallback")
+    func arabicManualNotesLocalizeRawTranscriptFallback() async throws {
+        var config = AppConfig()
+        config.openAIAPIKey = ""
+        config.meetingSummaryBackend = "openai"
+
+        let result = try await MeetingSummaryClient.summarize(
+            transcript: "[10:00:00] Speaker 1: 123",
+            meetingTitle: "اجتماع",
+            config: config,
+            manualNotesToRetain: "- متابعة خطة الإطلاق"
+        )
+
+        #expect(result.contains("## النص الخام"))
+        #expect(result.contains("### ملاحظات مكتوبة"))
+        #expect(!result.contains("## Raw Transcript"))
     }
 
     @Test("summary user prompt includes meeting context when provided")
@@ -416,6 +521,24 @@ struct MeetingSummaryClientTests {
         #expect(result.contains("- User typed this during the meeting"))
         #expect(result.contains("## Raw Transcript"))
         #expect(result.contains("Raw words"))
+    }
+
+    @Test("Arabic summary failure notes localize fallback headings")
+    func arabicSummaryFailureNotesUseArabicHeadings() {
+        let error = MeetingSummaryError.emptyResponse(backend: "OpenRouter")
+
+        let result = MeetingSummaryClient.summaryFailureNotes(
+            transcript: "[10:00:00] Speaker 1: نعم سنبدأ غداً",
+            meetingTitle: "خطة الإطلاق",
+            error: error,
+            manualNotes: "- متابعة موعد الإطلاق"
+        )
+
+        #expect(result.contains("## تعذر إنشاء الملخص"))
+        #expect(result.contains("الاجتماع: خطة الإطلاق"))
+        #expect(result.contains("### ملاحظات مكتوبة"))
+        #expect(result.contains("## النص الخام"))
+        #expect(!result.contains("## Raw Transcript"))
     }
 
     @Test("summary backend errors describe retired or unavailable models")

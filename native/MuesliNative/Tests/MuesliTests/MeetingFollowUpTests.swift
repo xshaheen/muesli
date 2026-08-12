@@ -737,9 +737,13 @@ struct MeetingFollowUpSummaryPromptTests {
     @Test("instructions gain the carry-forward guidance only for follow-ups")
     func instructionsCarryForwardGuidance() {
         let template = MeetingTemplates.auto.snapshot
-        let followUp = MeetingSummaryClient.summaryInstructions(for: template, previousMeetingNotes: "- [ ] Ship Y")
+        let followUp = MeetingSummaryClient.summaryInstructions(
+            for: template,
+            transcript: "",
+            previousMeetingNotes: "- [ ] Ship Y"
+        )
         #expect(followUp.contains("carry forward action items"))
-        let regular = MeetingSummaryClient.summaryInstructions(for: template)
+        let regular = MeetingSummaryClient.summaryInstructions(for: template, transcript: "")
         #expect(!regular.contains("carry forward action items"))
     }
 }
