@@ -45,18 +45,29 @@ struct MarkdownRichTextEditorTests {
     func usesNaturalWritingDirection() throws {
         let textView = makeTextView()
         let coordinator = makeCoordinator()
+        textView.baseWritingDirection = .leftToRight
+        textView.alignment = .center
         coordinator.configureNaturalWritingDirection(in: textView)
 
-        let paragraphStyle = try #require(
-            coordinator.bodyAttributes()[.paragraphStyle] as? NSParagraphStyle
-        )
         #expect(textView.baseWritingDirection == .natural)
         #expect(textView.alignment == .natural)
-        #expect(paragraphStyle.baseWritingDirection == .natural)
-        #expect(paragraphStyle.alignment == .natural)
 
         let markdown = "# خطة الإطلاق\n- [ ] Ship 🚀\nمراجعة **نهائية**"
         coordinator.apply(markdown: markdown, to: textView)
+        let storage = try #require(textView.textStorage)
+        var paragraphStyles: [NSParagraphStyle] = []
+        storage.enumerateAttribute(
+            .paragraphStyle,
+            in: NSRange(location: 0, length: storage.length)
+        ) { value, _, _ in
+            if let style = value as? NSParagraphStyle {
+                paragraphStyles.append(style)
+            }
+        }
+
+        #expect(!paragraphStyles.isEmpty)
+        #expect(paragraphStyles.allSatisfy { $0.baseWritingDirection == .natural })
+        #expect(paragraphStyles.allSatisfy { $0.alignment == .natural })
         #expect(coordinator.serializedMarkdown(from: textView) == markdown)
     }
 
