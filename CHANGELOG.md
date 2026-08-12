@@ -32,6 +32,8 @@ upstream `main`.
 - Added test-shard assignments for the expanded native test suite.
 - Added placement diagnostics for the floating pill and panel.
 - Added first-strong bidirectional text presentation for meeting titles, notes, transcripts, and chat, with per-block Arabic, Hebrew, and LTR alignment that leaves application chrome and speaker-role placement unchanged.
+- Added Arabic-aware meeting output so Arabic-dominant transcripts generate Arabic titles, summaries, section headings, fallback notes, and retained-note labels across every summary backend.
+- Added trusted macOS microphone-attribution evidence for Teams and other dedicated meeting apps when CoreAudio does not expose an output stream.
 
 #### Changes and fixes
 
@@ -84,6 +86,10 @@ upstream `main`.
 
 ##### Calendar, CLI, Computer Use, and model/runtime reliability
 
+- Fixed Teams meetings not producing a start notification when macOS reported only Control Center microphone attribution or an input-only CoreAudio process.
+- Fixed manually started meetings missing the end warning when meeting-app evidence arrived shortly after recording began; late evidence is accepted only during a short startup window to avoid adopting unrelated calls.
+- Fixed meeting detection continuing to poll after a failed start, cancelled start, discarded recording, or completed stop when detection notifications are disabled.
+- Fixed English timestamps and speaker labels outweighing short Arabic speech during output-language detection, while avoiding translation of Persian and Urdu meetings into Arabic.
 - Fixed Google Calendar 401 recovery exiting pagination as a successful empty result and wiping cached events; token refresh is now forced and the same page is retried.
 - Fixed concurrent ChatGPT and Google auth refreshes racing the same refresh token.
 - Fixed CLI summary configuration ignoring the app's snake_case keys.
