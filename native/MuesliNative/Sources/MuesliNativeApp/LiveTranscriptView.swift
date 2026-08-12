@@ -49,30 +49,18 @@ struct LiveTranscriptBubble: View {
 
     var body: some View {
         let contentDirection = Self.contentDirection(for: lines)
-        let contentAlignment: HorizontalAlignment = contentDirection == .rightToLeft
-            ? .trailing
-            : .leading
 
         HStack(alignment: .bottom, spacing: 6) {
             if isUser { Spacer(minLength: 40) }
             if isUser { actionButtons }
-            VStack(alignment: contentAlignment, spacing: 2) {
-                if let speaker {
-                    Text(speaker + (timestamp.map { "  \($0)" } ?? ""))
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                }
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    Text(line)
-                        .font(.system(size: 13))
-                        .italic(isPartial)
-                        .foregroundStyle(isPartial ? MuesliTheme.textSecondary : MuesliTheme.textPrimary)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .environment(\.layoutDirection, contentDirection.layoutDirection)
-                }
-            }
-            .textSelection(.enabled)
+            MeetingSelectableText(attributedText: MeetingSelectableTextContent.transcript(
+                metadata: speaker.map { $0 + (timestamp.map { "  \($0)" } ?? "") },
+                body: lines.joined(separator: "\n"),
+                bodyPointSize: 13,
+                isPartial: isPartial
+            ))
+            .environment(\.layoutDirection, contentDirection.layoutDirection)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(bubbleBackground)

@@ -135,15 +135,15 @@ struct MeetingChatView: View {
                 if turn.role == .assistant {
                     MeetingMarkdownContent(
                         markdown: turn.displayText,
-                        bodyFont: .system(size: isCompact ? 12 : 13)
+                        bodyPointSize: isCompact ? 12 : 13
                     )
                 } else {
-                    Text(turn.displayText)
-                        .font(.system(size: isCompact ? 12 : 13))
-                        .foregroundStyle(MuesliTheme.textPrimary)
+                    MeetingSelectableText(attributedText: MeetingSelectableTextContent.plain(
+                        turn.displayText,
+                        pointSize: isCompact ? 12 : 13
+                    ))
                         .environment(\.layoutDirection, contentDirection.layoutDirection)
-                        .multilineTextAlignment(.leading)
-                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if turn.role == .assistant {
                     copyButton(for: turn.displayText)

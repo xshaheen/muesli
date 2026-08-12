@@ -2277,30 +2277,20 @@ struct TranscriptChatBubble: View {
 
     var body: some View {
         let textDirection = message.textDirection
-        let contentAlignment: HorizontalAlignment = textDirection == .rightToLeft
-            ? .trailing
-            : .leading
 
         HStack(alignment: .bottom, spacing: MuesliTheme.spacing8) {
             if message.isUser {
                 Spacer(minLength: 80)
             }
 
-            VStack(alignment: contentAlignment, spacing: 4) {
-                if let metadata = metadata {
-                    Text(metadata)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                        .textSelection(.enabled)
-                }
-                Text(message.text)
-                    .font(.system(size: 14))
-                    .foregroundStyle(MuesliTheme.textPrimary)
-                    .lineSpacing(2)
-                    .multilineTextAlignment(.leading)
-                    .textSelection(.enabled)
-                    .environment(\.layoutDirection, textDirection.layoutDirection)
-            }
+            MeetingSelectableText(attributedText: MeetingSelectableTextContent.transcript(
+                metadata: metadata,
+                body: message.text,
+                bodyPointSize: 14,
+                isPartial: false
+            ))
+            .environment(\.layoutDirection, textDirection.layoutDirection)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, MuesliTheme.spacing12)
             .padding(.vertical, 8)
             .background(message.isUser ? MuesliTheme.accent.opacity(0.18) : MuesliTheme.surfacePrimary)
