@@ -3,7 +3,7 @@
 This file lists unreleased features and changes in `xshaheen/dev` compared with
 upstream `main`.
 
-## Unreleased — 11-08-2026
+## Unreleased — 12-08-2026
 
 ### Meeting intelligence, audio reliability, and floating UI
 
@@ -31,6 +31,7 @@ upstream `main`.
 - Added asynchronous model deletion after unloading the resident model.
 - Added test-shard assignments for the expanded native test suite.
 - Added placement diagnostics for the floating pill and panel.
+- Added first-strong bidirectional text presentation for meeting titles, notes, transcripts, and chat, with per-block Arabic, Hebrew, and LTR alignment that leaves application chrome and speaker-role placement unchanged.
 
 #### Changes and fixes
 
@@ -137,6 +138,9 @@ upstream `main`.
 - Fixed the custom audio picker blocking through a modal loop; it now uses a sheet.
 - Fixed folder rename focus, blur-to-commit, and Escape-to-cancel behavior.
 - Fixed Markdown toolbar edits lacking undo grouping and stripping paragraph terminators that were not present.
+- Fixed Arabic and mixed-language Markdown editing by using natural AppKit writing direction and paragraph alignment without changing stored Markdown, undo, or selection state.
+- Fixed partial text selection in chat and live transcripts by removing body-wide copy/open gestures; explicit keyboard- and VoiceOver-accessible Copy and Open controls preserve the whole-item actions.
+- Fixed RTL meeting headings, list markers, checkboxes, indentation, transcript messages, chat turns, and overflowing titles anchoring or moving from the wrong edge.
 
 ### Dynamic dictation Writing Styles
 
