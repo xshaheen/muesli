@@ -510,7 +510,11 @@ final class MeetingCandidateResolver {
             guard process.bundleID != selfBundleID else { return false }
             guard process.isRunningInput else { return false }
             guard Self.dedicatedApps[process.bundleID] != nil else { return false }
-            return process.isRunningOutput
+            if process.isRunningOutput {
+                return true
+            }
+            return process.attributionSource == .sensor
+                && !Self.weakDedicatedAppBundleIDs.contains(process.bundleID)
         }
 
         return candidates.sorted { lhs, rhs in

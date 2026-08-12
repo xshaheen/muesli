@@ -2,6 +2,31 @@ import Foundation
 import Testing
 @testable import MuesliNativeApp
 
+@Suite("Meeting activity detection policy")
+struct MeetingActivityDetectionPolicyTests {
+    @Test("manual recording keeps detection active until recording ends")
+    func manualRecordingLifecycle() {
+        #expect(MeetingActivityDetectionPolicy.shouldRun(
+            showDetectionNotification: false,
+            isAutoStopArmed: false,
+            isStartingRecording: true,
+            isRecording: false
+        ))
+        #expect(MeetingActivityDetectionPolicy.shouldRun(
+            showDetectionNotification: false,
+            isAutoStopArmed: false,
+            isStartingRecording: false,
+            isRecording: true
+        ))
+        #expect(!MeetingActivityDetectionPolicy.shouldRun(
+            showDetectionNotification: false,
+            isAutoStopArmed: false,
+            isStartingRecording: false,
+            isRecording: false
+        ))
+    }
+}
+
 @Suite("Meeting auto-stop policy")
 struct MeetingAutoStopPolicyTests {
     @Test("matches the original browser meeting candidate")
@@ -136,6 +161,59 @@ struct MeetingAutoStopPolicyTests {
         let source = MeetingAutoStopSource(candidate: googleMeetCandidate())
 
         #expect(source.hasObservedCandidate)
+    }
+
+    @Test("manual recording can adopt meeting evidence observed after start")
+    func manualRecordingCanAdoptLateMeetingEvidence() {
+        var tracker = MeetingAutoStopTracker()
+        let now = Date(timeIntervalSince1970: 1_800_000_100)
+        tracker.arm(source: nil, allowLateArmingUntil: now.addingTimeInterval(15))
+
+        let didArm = tracker.armFromObservedCandidateIfNeeded(teamsCandidate(), now: now)
+        #expect(didArm)
+        #expect(tracker.source == MeetingAutoStopSource(candidate: teamsCandidate()))
+        #expect(tracker.lastSeenAt == now)
+        let warnedBeforeGracePeriod = tracker.observe(
+            candidate: nil,
+            now: now.addingTimeInterval(19),
+            gracePeriod: 20
+        )
+        let warnedAtGracePeriod = tracker.observe(
+            candidate: nil,
+            now: now.addingTimeInterval(20),
+            gracePeriod: 20
+        )
+        #expect(!warnedBeforeGracePeriod)
+        #expect(warnedAtGracePeriod)
+    }
+
+    @Test("manual recording ignores unrelated meeting evidence after the late-arm window")
+    func manualRecordingIgnoresEvidenceAfterLateArmWindow() {
+        var tracker = MeetingAutoStopTracker()
+        let now = Date(timeIntervalSince1970: 1_800_000_100)
+        tracker.arm(source: nil, allowLateArmingUntil: now.addingTimeInterval(15))
+
+        let didArm = tracker.armFromObservedCandidateIfNeeded(
+            teamsCandidate(),
+            now: now.addingTimeInterval(16)
+        )
+
+        #expect(!didArm)
+        #expect(!tracker.isArmed)
+    }
+
+    @Test("late evidence does not replace an already armed source")
+    func lateEvidenceDoesNotReplaceArmedSource() {
+        let originalSource = MeetingAutoStopSource(candidate: googleMeetCandidate())
+        var tracker = MeetingAutoStopTracker()
+        tracker.arm(source: originalSource)
+
+        let didReplaceSource = tracker.armFromObservedCandidateIfNeeded(
+            teamsCandidate(),
+            now: Date(timeIntervalSince1970: 1_800_000_100)
+        )
+        #expect(!didReplaceSource)
+        #expect(tracker.source == originalSource)
     }
 
     @Test("manual start origin warns when a meeting signal is available")

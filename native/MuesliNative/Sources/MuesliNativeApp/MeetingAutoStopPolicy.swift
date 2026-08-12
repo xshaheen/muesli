@@ -1,5 +1,16 @@
 import Foundation
 
+enum MeetingActivityDetectionPolicy {
+    static func shouldRun(
+        showDetectionNotification: Bool,
+        isAutoStopArmed: Bool,
+        isStartingRecording: Bool,
+        isRecording: Bool
+    ) -> Bool {
+        showDetectionNotification || isAutoStopArmed || isStartingRecording || isRecording
+    }
+}
+
 enum MeetingRecordingStartOrigin: Equatable {
     case manual
     case detectedPrompt
@@ -131,21 +142,38 @@ struct MeetingAutoStopTracker: Equatable {
     private(set) var source: MeetingAutoStopSource?
     private(set) var lastSeenAt: Date?
     private var observedBeforeRecordingStarted = false
+    private(set) var lateArmExpiresAt: Date?
 
     var isArmed: Bool {
         source != nil
     }
 
-    mutating func arm(source: MeetingAutoStopSource?) {
+    mutating func arm(source: MeetingAutoStopSource?, allowLateArmingUntil: Date? = nil) {
         self.source = source
         lastSeenAt = nil
         observedBeforeRecordingStarted = false
+        lateArmExpiresAt = source == nil ? allowLateArmingUntil : nil
     }
 
     mutating func disarm() {
         source = nil
         lastSeenAt = nil
         observedBeforeRecordingStarted = false
+        lateArmExpiresAt = nil
+    }
+
+    mutating func armFromObservedCandidateIfNeeded(
+        _ candidate: MeetingCandidate,
+        now: Date
+    ) -> Bool {
+        guard source == nil,
+              let lateArmExpiresAt,
+              now <= lateArmExpiresAt else { return false }
+        source = MeetingAutoStopSource(candidate: candidate)
+        lastSeenAt = now
+        observedBeforeRecordingStarted = false
+        self.lateArmExpiresAt = nil
+        return true
     }
 
     mutating func observeBeforeRecordingStarted(candidate: MeetingCandidate?) {

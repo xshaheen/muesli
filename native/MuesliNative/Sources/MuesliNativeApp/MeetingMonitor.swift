@@ -298,6 +298,60 @@ struct MeetingMediaSignals: Equatable {
 }
 
 enum MeetingMediaSignalFilter {
+    static func mergingSensorAttributedInputProcesses(
+        _ coreAudioProcesses: [AudioProcessActivity],
+        sensorAttributions: SensorAttributionSnapshot,
+        runningProcessIDsByBundleID: [String: pid_t]
+    ) -> [AudioProcessActivity] {
+        var processes = coreAudioProcesses.map { process in
+            guard sensorAttributions.micBundleIDs.contains(process.bundleID),
+                  sensorAttributedAppName(for: process.bundleID) != nil else {
+                return process
+            }
+            return AudioProcessActivity(
+                pid: process.pid,
+                bundleID: process.bundleID,
+                appName: process.appName,
+                isRunningInput: process.isRunningInput,
+                isRunningOutput: process.isRunningOutput,
+                deviceIDs: process.deviceIDs,
+                attributionSource: .sensor
+            )
+        }
+        let existingBundleIDs = Set(coreAudioProcesses.map(\.bundleID))
+
+        for bundleID in sensorAttributions.micBundleIDs.sorted() {
+            guard let appName = sensorAttributedAppName(for: bundleID) else { continue }
+            guard !existingBundleIDs.contains(bundleID),
+                  !existingBundleIDs.contains(where: { helperBundleID in
+                      helperBundleID.lowercased().hasPrefix("\(bundleID.lowercased()).")
+                  }) else {
+                continue
+            }
+
+            processes.append(AudioProcessActivity(
+                pid: runningProcessIDsByBundleID[bundleID] ?? 0,
+                bundleID: bundleID,
+                appName: appName,
+                isRunningInput: true,
+                isRunningOutput: false,
+                attributionSource: .sensor
+            ))
+        }
+
+        return processes
+    }
+
+    private static func sensorAttributedAppName(for bundleID: String) -> String? {
+        if let browserName = MeetingCandidateResolver.browserApps[bundleID] {
+            return browserName
+        }
+        guard !MeetingCandidateResolver.weakDedicatedAppBundleIDs.contains(bundleID) else {
+            return nil
+        }
+        return MeetingCandidateResolver.dedicatedApps[bundleID]?.name
+    }
+
     static func apply(
         deviceMicActive: Bool,
         cameraActive: Bool,
@@ -564,7 +618,7 @@ private actor MeetingDetectionService {
             signalRefreshState.lastActiveTabFallbackAttemptAtByBundleID[bundleID] = now
         }
 
-        let rawAudioInputProcesses = mergedAudioInputProcesses(
+        let rawAudioInputProcesses = MeetingMediaSignalFilter.mergingSensorAttributedInputProcesses(
             audioResult.processes,
             sensorAttributions: context.sensorAttributions,
             runningProcessIDsByBundleID: collectedSignals.runningProcessIDsByBundleID
@@ -733,35 +787,6 @@ private actor MeetingDetectionService {
                 await self?.scheduleEvaluation(.fallbackTimer)
             }
         }
-    }
-
-    private func mergedAudioInputProcesses(
-        _ coreAudioProcesses: [AudioProcessActivity],
-        sensorAttributions: SensorAttributionSnapshot,
-        runningProcessIDsByBundleID: [String: pid_t]
-    ) -> [AudioProcessActivity] {
-        var processes = coreAudioProcesses
-        let existingBundleIDs = Set(coreAudioProcesses.map(\.bundleID))
-
-        for bundleID in sensorAttributions.micBundleIDs.sorted() {
-            guard let appName = MeetingCandidateResolver.browserApps[bundleID] else { continue }
-            guard !existingBundleIDs.contains(bundleID),
-                  !existingBundleIDs.contains(where: { helperBundleID in
-                      helperBundleID.lowercased().hasPrefix("\(bundleID.lowercased()).")
-                  }) else {
-                continue
-            }
-
-            processes.append(AudioProcessActivity(
-                pid: runningProcessIDsByBundleID[bundleID] ?? 0,
-                bundleID: bundleID,
-                appName: appName,
-                isRunningInput: true,
-                isRunningOutput: false
-            ))
-        }
-
-        return processes
     }
 
     private func debounceDelay(for trigger: MeetingDetectionTrigger) -> TimeInterval {

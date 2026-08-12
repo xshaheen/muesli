@@ -38,6 +38,83 @@ struct MeetingMediaSignalFilterTests {
         return resolver
     }
 
+    @Test("Teams sensor attribution becomes meeting evidence without CoreAudio output")
+    func teamsSensorAttributionBecomesMeetingEvidence() {
+        let processes = MeetingMediaSignalFilter.mergingSensorAttributedInputProcesses(
+            [],
+            sensorAttributions: sensorAttributions(micBundleIDs: ["com.microsoft.teams2"]),
+            runningProcessIDsByBundleID: ["com.microsoft.teams2": 4321]
+        )
+
+        #expect(processes.count == 1)
+        #expect(processes.first?.bundleID == "com.microsoft.teams2")
+        #expect(processes.first?.pid == 4321)
+        #expect(processes.first?.isRunningOutput == false)
+        #expect(processes.first?.attributionSource == .sensor)
+
+        let candidate = resolver().resolve(MeetingSignalSnapshot(
+            micActive: true,
+            cameraActive: false,
+            calendarEvent: nil,
+            runningApps: [
+                RunningAppInfo(bundleID: "com.microsoft.teams2", isActive: false),
+            ],
+            browserMeetings: [],
+            audioInputProcesses: processes,
+            foregroundBundleID: nil,
+            now: now
+        ))
+
+        #expect(candidate?.platform == .teams)
+        #expect(candidate?.sourceBundleID == "com.microsoft.teams2")
+        #expect(candidate?.sourcePID == 4321)
+    }
+
+    @Test("Teams sensor attribution upgrades an existing input-only CoreAudio process")
+    func teamsSensorAttributionUpgradesExistingInputOnlyProcess() {
+        let coreAudioProcess = audioProcess(
+            bundleID: "com.microsoft.teams2",
+            appName: "Microsoft Teams"
+        )
+        let processes = MeetingMediaSignalFilter.mergingSensorAttributedInputProcesses(
+            [coreAudioProcess],
+            sensorAttributions: sensorAttributions(micBundleIDs: ["com.microsoft.teams2"]),
+            runningProcessIDsByBundleID: ["com.microsoft.teams2": 4321]
+        )
+
+        #expect(processes.count == 1)
+        #expect(processes.first?.pid == coreAudioProcess.pid)
+        #expect(processes.first?.isRunningOutput == false)
+        #expect(processes.first?.attributionSource == .sensor)
+
+        let candidate = resolver().resolve(MeetingSignalSnapshot(
+            micActive: true,
+            cameraActive: false,
+            calendarEvent: nil,
+            runningApps: [
+                RunningAppInfo(bundleID: "com.microsoft.teams2", isActive: false),
+            ],
+            browserMeetings: [],
+            audioInputProcesses: processes,
+            foregroundBundleID: nil,
+            now: now
+        ))
+
+        #expect(candidate?.platform == .teams)
+        #expect(candidate?.sourceBundleID == "com.microsoft.teams2")
+    }
+
+    @Test("weak communication apps are not promoted from sensor attribution alone")
+    func weakAppsAreNotPromotedFromSensorAttributionAlone() {
+        let processes = MeetingMediaSignalFilter.mergingSensorAttributedInputProcesses(
+            [],
+            sensorAttributions: sensorAttributions(micBundleIDs: ["com.tinyspeck.slackmacgap"]),
+            runningProcessIDsByBundleID: ["com.tinyspeck.slackmacgap": 4321]
+        )
+
+        #expect(processes.isEmpty)
+    }
+
     @Test("Muesli dictation mic does not satisfy calendar meeting activity")
     func muesliDictationMicDoesNotSatisfyCalendarMeetingActivity() {
         let media = MeetingMediaSignalFilter.apply(

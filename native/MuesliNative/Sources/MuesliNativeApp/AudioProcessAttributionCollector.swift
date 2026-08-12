@@ -2,6 +2,11 @@ import AppKit
 import CoreAudio
 import Foundation
 
+enum AudioProcessAttributionSource: Equatable {
+    case coreAudio
+    case sensor
+}
+
 struct AudioProcessActivity: Equatable {
     let pid: pid_t
     let bundleID: String
@@ -9,6 +14,7 @@ struct AudioProcessActivity: Equatable {
     let isRunningInput: Bool
     let isRunningOutput: Bool
     let deviceIDs: [AudioObjectID]
+    let attributionSource: AudioProcessAttributionSource
 
     init(
         pid: pid_t,
@@ -16,7 +22,8 @@ struct AudioProcessActivity: Equatable {
         appName: String,
         isRunningInput: Bool,
         isRunningOutput: Bool,
-        deviceIDs: [AudioObjectID] = []
+        deviceIDs: [AudioObjectID] = [],
+        attributionSource: AudioProcessAttributionSource = .coreAudio
     ) {
         self.pid = pid
         self.bundleID = bundleID
@@ -24,6 +31,7 @@ struct AudioProcessActivity: Equatable {
         self.isRunningInput = isRunningInput
         self.isRunningOutput = isRunningOutput
         self.deviceIDs = deviceIDs
+        self.attributionSource = attributionSource
     }
 }
 

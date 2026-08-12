@@ -773,9 +773,7 @@ final class MuesliController: NSObject {
             self?.currentOrNearbyCachedCalendarEvent()
         }
         meetingMonitor.detectionEnabledProvider = { [weak self] in
-            guard let self else { return false }
-            return self.config.showMeetingDetectionNotification
-                || self.activeMeetingAutoStop.isArmed
+            self?.shouldDetectMeetingActivity ?? false
         }
         meetingMonitor.mutedDetectionBundleIDsProvider = { [weak self] in
             Set(self?.config.mutedMeetingDetectionAppBundleIDs ?? [])
@@ -3057,9 +3055,17 @@ final class MuesliController: NSObject {
         config.resolvedOnboardingUseCase.includesMeetings || shouldRunMeetingFeatureMonitors
     }
 
+    private var shouldDetectMeetingActivity: Bool {
+        MeetingActivityDetectionPolicy.shouldRun(
+            showDetectionNotification: config.showMeetingDetectionNotification,
+            isAutoStopArmed: activeMeetingAutoStop.isArmed,
+            isStartingRecording: isStartingMeetingRecording,
+            isRecording: isMeetingRecording()
+        )
+    }
+
     private func syncMeetingDetectionMonitor() {
-        let shouldRun = meetingFeatureMonitorsAllowed
-            && (config.showMeetingDetectionNotification || activeMeetingAutoStop.isArmed)
+        let shouldRun = meetingFeatureMonitorsAllowed && shouldDetectMeetingActivity
         if shouldRun && !meetingDetectionMonitorStarted {
             meetingMonitor.start()
             meetingDetectionMonitorStarted = true
@@ -5085,6 +5091,7 @@ final class MuesliController: NSObject {
         meetingStartMeetingID = nil
         isStartingMeetingRecording = false
         isStoppingMeetingRecording = false
+        syncMeetingDetectionMonitor()
         updateMeetingStartStatus(nil)
         updateMeetingNotificationVisibility()
         endMeetingActivity()
@@ -5260,6 +5267,7 @@ final class MuesliController: NSObject {
             response: startOrigin.signalLossResponse
         )
         isStartingMeetingRecording = true
+        syncMeetingDetectionMonitor()
         // Keep this after backend normalization and live-meeting creation so
         // a failed meeting start does not silently cancel an active dictation.
         cancelDictationAudioSessionForMeetingRecordingIfNeeded()
@@ -5418,6 +5426,7 @@ final class MuesliController: NSObject {
             response: MeetingRecordingStartOrigin.manual.signalLossResponse
         )
         isStartingMeetingRecording = true
+        syncMeetingDetectionMonitor()
         cancelDictationAudioSessionForMeetingRecordingIfNeeded()
         syncDictationRecorderWarmup(intent: .idlePrewarm(.meetingStateChanged))
         meetingStartMeetingID = meetingID
@@ -5675,6 +5684,7 @@ final class MuesliController: NSObject {
         meetingStartTask = nil
         meetingStartMeetingID = nil
         isStartingMeetingRecording = false
+        syncMeetingDetectionMonitor()
         updateMeetingStartStatus(nil)
         updateMeetingNotificationVisibility()
         syncAppState()
@@ -5687,6 +5697,7 @@ final class MuesliController: NSObject {
         meetingStartTask = nil
         meetingStartMeetingID = nil
         isStartingMeetingRecording = false
+        syncMeetingDetectionMonitor()
         updateMeetingStartStatus(nil)
         updateMeetingNotificationVisibility()
         if !didStartActiveSession {
@@ -6177,6 +6188,7 @@ final class MuesliController: NSObject {
 
     private func finishDiscardMeetingRecording() {
         isStoppingMeetingRecording = false
+        syncMeetingDetectionMonitor()
         endMeetingActivity()
         meetingMonitor.resumeAfterCooldown()
         meetingMonitor.refreshState()
@@ -6433,6 +6445,7 @@ final class MuesliController: NSObject {
             }
             indicator.setMeetingRecording(false, config: config)
             isStoppingMeetingRecording = false
+            syncMeetingDetectionMonitor()
             endMeetingActivity()
             setState(.idle)
             return
@@ -6470,6 +6483,7 @@ final class MuesliController: NSObject {
             activeMeetingAudioWarning = nil
         }
         isStoppingMeetingRecording = false
+        syncMeetingDetectionMonitor()
         backgroundMeetingProcessingCount += 1
         meetingMonitor.resumeAfterCooldown()
         meetingMonitor.refreshState()
@@ -7472,7 +7486,10 @@ final class MuesliController: NSObject {
         source: MeetingAutoStopSource?,
         response: MeetingSignalLossResponse = .autoStopAfterWarning
     ) {
-        activeMeetingAutoStop.arm(source: source)
+        let lateArmDeadline = source == nil && response == .warnOnly
+            ? Date().addingTimeInterval(15)
+            : nil
+        activeMeetingAutoStop.arm(source: source, allowLateArmingUntil: lateArmDeadline)
         activeMeetingSignalLossResponse = source == nil ? .none : response
         meetingSignalLossPromptState.resetForRecording()
         syncMeetingDetectionMonitor()
@@ -7530,6 +7547,18 @@ final class MuesliController: NSObject {
             return
         }
 
+        let now = Date()
+        if !activeMeetingAutoStop.isArmed,
+           activeMeetingSession?.isRecording == true,
+           !isStoppingMeetingRecording,
+           let candidate,
+           !isMutedMeetingDetectionCandidate(candidate),
+           activeMeetingAutoStop.armFromObservedCandidateIfNeeded(candidate, now: now) {
+            activeMeetingSignalLossResponse = .warnOnly
+            meetingSignalLossPromptState.resetForRecording()
+            syncMeetingDetectionMonitor()
+        }
+
         guard activeMeetingAutoStop.isArmed,
               activeMeetingSession?.isRecording == true,
               !isStoppingMeetingRecording else {
@@ -7540,7 +7569,6 @@ final class MuesliController: NSObject {
             return
         }
 
-        let now = Date()
         let matchedSource = candidate.flatMap { candidate in
             activeMeetingAutoStop.source.map { source in
                 MeetingAutoStopPolicy.matches(candidate: candidate, source: source)
