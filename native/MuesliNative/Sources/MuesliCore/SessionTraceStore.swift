@@ -238,7 +238,7 @@ public actor SessionTraceStore {
             guard richBytes - reclaimable + payload.count <= retentionPolicy.maximumSessionRichBytes else {
                 return SessionTraceArtifactWriteResult(mutation: .limitReached(.sessionRichBytes), artifactID: nil)
             }
-            let projectedGlobal = try scalarInt(
+            var projectedGlobal = try scalarInt(
                 "SELECT COALESCE(SUM(byte_count), 0) FROM session_trace_artifacts",
                 db: db
             ) - reclaimable + payload.count
@@ -248,12 +248,12 @@ public actor SessionTraceStore {
                     excluding: token.sessionID,
                     db: db
                 )
+                projectedGlobal = try scalarInt(
+                    "SELECT COALESCE(SUM(byte_count), 0) FROM session_trace_artifacts",
+                    db: db
+                ) - reclaimable + payload.count
             }
-            let afterPruneGlobal = try scalarInt(
-                "SELECT COALESCE(SUM(byte_count), 0) FROM session_trace_artifacts",
-                db: db
-            ) - reclaimable + payload.count
-            guard afterPruneGlobal <= retentionPolicy.maximumGlobalRichBytes else {
+            guard projectedGlobal <= retentionPolicy.maximumGlobalRichBytes else {
                 return SessionTraceArtifactWriteResult(mutation: .limitReached(.globalRichBytes), artifactID: nil)
             }
 
@@ -629,9 +629,7 @@ public actor SessionTraceStore {
         var statement: OpaquePointer?
         try prepare(
             """
-            SELECT session_uuid, kind, created_at, updated_at, terminal_outcome,
-                   dictation_id, meeting_id, backend_identity, fallback_backend_identity,
-                   rich_content_state, event_count, rich_byte_count
+            SELECT \(Self.summaryColumns)
             FROM session_traces ORDER BY created_at DESC, session_uuid DESC LIMIT ?
             """,
             into: &statement,
@@ -675,6 +673,12 @@ private extension SessionTraceStore {
         case cleared
         case mismatch
     }
+
+    static let summaryColumns = """
+    session_uuid, kind, created_at, updated_at, terminal_outcome,
+    dictation_id, meeting_id, backend_identity, fallback_backend_identity,
+    rich_content_state, event_count, rich_byte_count
+    """
 
     func openDatabase() throws -> OpaquePointer? {
         try FileManager.default.createDirectory(
@@ -1064,7 +1068,7 @@ private extension SessionTraceStore {
         var statement: OpaquePointer?
         try prepare(
             """
-            SELECT session_uuid FROM session_traces
+            SELECT session_uuid, rich_byte_count FROM session_traces
             WHERE terminal_at IS NOT NULL AND rich_byte_count > 0 AND session_uuid <> ?
             ORDER BY terminal_at ASC, session_uuid ASC
             """,
@@ -1073,16 +1077,20 @@ private extension SessionTraceStore {
         )
         defer { sqlite3_finalize(statement) }
         bind(excluding.uuidString, to: statement, at: 1)
-        var ids: [UUID] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            if let id = UUID(uuidString: text(statement, 0)) { ids.append(id) }
+        var candidates: [(id: UUID, bytes: Int)] = []
+        var selectedBytes = 0
+        while selectedBytes < bytesNeeded {
+            let result = sqlite3_step(statement)
+            if result == SQLITE_DONE { break }
+            guard result == SQLITE_ROW else { throw sqliteError(db) }
+            guard let id = UUID(uuidString: text(statement, 0)) else { continue }
+            let bytes = Int(sqlite3_column_int64(statement, 1))
+            candidates.append((id, bytes))
+            selectedBytes += bytes
         }
-        var reclaimed = 0
-        for id in ids where reclaimed < bytesNeeded {
-            reclaimed += try scalarInt(
-                "SELECT rich_byte_count FROM session_traces WHERE session_uuid = '\(id.uuidString)'",
-                db: db
-            )
+        sqlite3_finalize(statement)
+        statement = nil
+        for (id, _) in candidates {
             try pruneRichContent(sessionID: id, db: db)
         }
     }
@@ -1129,9 +1137,7 @@ private extension SessionTraceStore {
         var statement: OpaquePointer?
         try prepare(
             """
-            SELECT session_uuid, kind, created_at, updated_at, terminal_outcome,
-                   dictation_id, meeting_id, backend_identity, fallback_backend_identity,
-                   rich_content_state, event_count, rich_byte_count
+            SELECT \(Self.summaryColumns)
             FROM session_traces WHERE session_uuid = ?
             """,
             into: &statement,
@@ -1147,9 +1153,7 @@ private extension SessionTraceStore {
         var statement: OpaquePointer?
         try prepare(
             """
-            SELECT session_uuid, kind, created_at, updated_at, terminal_outcome,
-                   dictation_id, meeting_id, backend_identity, fallback_backend_identity,
-                   rich_content_state, event_count, rich_byte_count
+            SELECT \(Self.summaryColumns)
             FROM session_traces ORDER BY created_at ASC, session_uuid ASC
             """,
             into: &statement,

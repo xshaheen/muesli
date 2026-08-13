@@ -9,7 +9,6 @@ public struct SessionTraceRetentionPolicy: Codable, Equatable, Sendable {
         metadataRetention: 90 * 24 * 60 * 60,
         maximumArtifactBytes: 1 * 1_024 * 1_024,
         maximumSessionRichBytes: 4 * 1_024 * 1_024,
-        maximumNonterminalEvents: 511,
         maximumEvents: 512,
         maximumGlobalRichBytes: 128 * 1_024 * 1_024,
         maximumSessions: 1_000,
@@ -22,8 +21,8 @@ public struct SessionTraceRetentionPolicy: Codable, Equatable, Sendable {
     public let metadataRetention: TimeInterval
     public let maximumArtifactBytes: Int
     public let maximumSessionRichBytes: Int
-    public let maximumNonterminalEvents: Int
     public let maximumEvents: Int
+    public var maximumNonterminalEvents: Int { max(0, maximumEvents - 1) }
     public let maximumGlobalRichBytes: Int
     public let maximumSessions: Int
     public let maximumExportBytes: Int
@@ -35,7 +34,6 @@ public struct SessionTraceRetentionPolicy: Codable, Equatable, Sendable {
         metadataRetention: TimeInterval,
         maximumArtifactBytes: Int,
         maximumSessionRichBytes: Int,
-        maximumNonterminalEvents: Int,
         maximumEvents: Int,
         maximumGlobalRichBytes: Int,
         maximumSessions: Int,
@@ -47,7 +45,6 @@ public struct SessionTraceRetentionPolicy: Codable, Equatable, Sendable {
         self.metadataRetention = metadataRetention
         self.maximumArtifactBytes = maximumArtifactBytes
         self.maximumSessionRichBytes = maximumSessionRichBytes
-        self.maximumNonterminalEvents = maximumNonterminalEvents
         self.maximumEvents = maximumEvents
         self.maximumGlobalRichBytes = maximumGlobalRichBytes
         self.maximumSessions = maximumSessions

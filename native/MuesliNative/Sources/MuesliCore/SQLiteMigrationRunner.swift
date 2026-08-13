@@ -9,7 +9,6 @@ import SQLite3
 struct SQLiteMigrationRunner {
     struct Migration {
         let version: Int32
-        let name: String
         let apply: (OpaquePointer?) throws -> Void
         let validate: (OpaquePointer?) throws -> Void
     }

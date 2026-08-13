@@ -110,13 +110,11 @@ public final class DictationStore {
             migrations: [
                 SQLiteMigrationRunner.Migration(
                     version: 1,
-                    name: "normalize legacy schema",
                     apply: normalizeLegacySchema,
                     validate: validateNormalizedSchema
                 ),
                 SQLiteMigrationRunner.Migration(
                     version: Self.currentSchemaVersion,
-                    name: "add independent session traces",
                     apply: addSessionTraceSchema,
                     validate: validateSessionTraceSchema
                 ),
@@ -236,8 +234,6 @@ public final class DictationStore {
         );
         """
         try exec(createSQL, db: db)
-        try migrateDictationStyleProvenance(db: db)
-
         let foldersSQL = """
         CREATE TABLE IF NOT EXISTS meeting_folders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -271,6 +267,10 @@ public final class DictationStore {
             ("dictations", "cloud_system_fields", "BLOB"),
             ("dictations", "last_synced_at", "REAL"),
             ("dictations", "sync_dirty", "INTEGER NOT NULL DEFAULT 1"),
+            ("dictations", "dictation_style_id", "TEXT"),
+            ("dictations", "dictation_style_name", "TEXT"),
+            ("dictations", "dictation_style_selection_source", "TEXT"),
+            ("dictations", "dictation_cleanup_outcome", "TEXT"),
             ("meetings", "updated_at", "REAL NOT NULL DEFAULT 0"),
             ("meetings", "deleted_at", "REAL"),
             ("meetings", "cloud_record_name", "TEXT"),
@@ -407,8 +407,7 @@ public final class DictationStore {
                 fallback_backend_identity TEXT,
                 rich_content_state TEXT NOT NULL DEFAULT 'available' CHECK (
                     rich_content_state IN (
-                        'available', 'pruned', 'empty', 'active_writer',
-                        'unavailable', 'cleared_while_active'
+                        'available', 'pruned', 'cleared_while_active'
                     )
                 ),
                 event_count INTEGER NOT NULL DEFAULT 0 CHECK (event_count BETWEEN 0 AND 512),
@@ -500,16 +499,6 @@ public final class DictationStore {
                 "elapsed_milliseconds", "metadata_json", "artifact_id", "created_at",
             ],
         ]
-        for (table, expectedColumns) in requiredColumns {
-            guard try schemaObjectExists(type: "table", name: table, db: db) else {
-                throw schemaPostconditionError("missing table \(table)")
-            }
-            let missing = expectedColumns.subtracting(try tableColumns(table, db: db)).sorted()
-            guard missing.isEmpty else {
-                throw schemaPostconditionError("table \(table) is missing columns: \(missing.joined(separator: ", "))")
-            }
-        }
-
         let requiredIndexes = [
             "idx_session_traces_created_at",
             "idx_session_traces_terminal_at",
@@ -519,11 +508,11 @@ public final class DictationStore {
             "idx_session_trace_artifact_references_artifact",
             "idx_session_trace_events_session",
         ]
-        for index in requiredIndexes {
-            guard try schemaObjectExists(type: "index", name: index, db: db) else {
-                throw schemaPostconditionError("missing index \(index)")
-            }
-        }
+        try validateSchemaObjects(
+            requiredColumns: requiredColumns,
+            requiredIndexes: requiredIndexes,
+            db: db
+        )
 
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(
@@ -538,28 +527,6 @@ public final class DictationStore {
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else {
             throw schemaPostconditionError("session trace clear generation singleton is missing")
-        }
-    }
-
-    private func migrateDictationStyleProvenance(db: OpaquePointer?) throws {
-        let migrations = [
-            ("dictation_style_id", "ALTER TABLE dictations ADD COLUMN dictation_style_id TEXT"),
-            ("dictation_style_name", "ALTER TABLE dictations ADD COLUMN dictation_style_name TEXT"),
-            (
-                "dictation_style_selection_source",
-                "ALTER TABLE dictations ADD COLUMN dictation_style_selection_source TEXT"
-            ),
-            ("dictation_cleanup_outcome", "ALTER TABLE dictations ADD COLUMN dictation_cleanup_outcome TEXT"),
-        ]
-        var existingColumns = try tableColumns("dictations", db: db)
-        for (column, sql) in migrations where !existingColumns.contains(column) {
-            if sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK {
-                let message = String(cString: sqlite3_errmsg(db))
-                guard message.localizedCaseInsensitiveContains("duplicate column") else {
-                    throw lastError(db)
-                }
-            }
-            existingColumns.insert(column)
         }
     }
 
@@ -616,17 +583,6 @@ public final class DictationStore {
             "insights_daily_tokens": ["day", "token_id", "dictation_count", "meeting_count"],
         ]
 
-        for (table, expectedColumns) in requiredColumns {
-            guard try schemaObjectExists(type: "table", name: table, db: db) else {
-                throw schemaPostconditionError("missing table \(table)")
-            }
-            let actualColumns = try tableColumns(table, db: db)
-            let missingColumns = expectedColumns.subtracting(actualColumns).sorted()
-            guard missingColumns.isEmpty else {
-                throw schemaPostconditionError("table \(table) is missing columns: \(missingColumns.joined(separator: ", "))")
-            }
-        }
-
         let requiredIndexes = [
             "idx_dictations_timestamp",
             "idx_computer_use_traces_dictation_id",
@@ -645,11 +601,11 @@ public final class DictationStore {
             "idx_insights_record_updated",
             "idx_insights_daily_tokens_token",
         ]
-        for index in requiredIndexes {
-            guard try schemaObjectExists(type: "index", name: index, db: db) else {
-                throw schemaPostconditionError("missing index \(index)")
-            }
-        }
+        try validateSchemaObjects(
+            requiredColumns: requiredColumns,
+            requiredIndexes: requiredIndexes,
+            db: db
+        )
         for obsoleteIndex in ["idx_meetings_calendar_event_id", "idx_meetings_live_follow_up_unique"] {
             guard try !schemaObjectExists(type: "index", name: obsoleteIndex, db: db) else {
                 throw schemaPostconditionError("obsolete index remains: \(obsoleteIndex)")
@@ -672,6 +628,29 @@ public final class DictationStore {
             let sql = try schemaObjectSQL(type: "index", name: uniqueIndex, db: db) ?? ""
             guard sql.uppercased().contains("CREATE UNIQUE INDEX") else {
                 throw schemaPostconditionError("index \(uniqueIndex) is not unique")
+            }
+        }
+    }
+
+    private func validateSchemaObjects(
+        requiredColumns: [String: Set<String>],
+        requiredIndexes: [String],
+        db: OpaquePointer?
+    ) throws {
+        for (table, expectedColumns) in requiredColumns {
+            guard try schemaObjectExists(type: "table", name: table, db: db) else {
+                throw schemaPostconditionError("missing table \(table)")
+            }
+            let missingColumns = expectedColumns.subtracting(try tableColumns(table, db: db)).sorted()
+            guard missingColumns.isEmpty else {
+                throw schemaPostconditionError(
+                    "table \(table) is missing columns: \(missingColumns.joined(separator: ", "))"
+                )
+            }
+        }
+        for index in requiredIndexes {
+            guard try schemaObjectExists(type: "index", name: index, db: db) else {
+                throw schemaPostconditionError("missing index \(index)")
             }
         }
     }
