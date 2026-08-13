@@ -42,11 +42,13 @@ public struct MeetingThreadNavigation: Equatable, Sendable {
 
 public final class DictationStore {
     public static let defaultTombstoneRetentionInterval: TimeInterval = 30 * 24 * 60 * 60
+    static let currentSchemaVersion: Int32 = 1
 
     private static let iso8601Formatter = ISO8601DateFormatter()
     private static let iso8601FormatterLock = NSLock()
 
     private let databaseURL: URL
+    private let migrationCheckpoint: SQLiteMigrationRunner.CheckpointHook?
     private static let dictationColumns = """
     d.id, d.timestamp, d.duration_seconds, d.raw_text, d.app_context, d.word_count, d.source,
     t.id, t.final_status, t.final_message, t.trace_json, t.created_at,
@@ -75,10 +77,20 @@ public final class DictationStore {
 
     public init() {
         self.databaseURL = MuesliPaths.defaultDatabaseURL()
+        self.migrationCheckpoint = nil
     }
 
     public init(databaseURL: URL) {
         self.databaseURL = databaseURL
+        self.migrationCheckpoint = nil
+    }
+
+    init(
+        databaseURL: URL,
+        migrationCheckpoint: @escaping SQLiteMigrationRunner.CheckpointHook
+    ) {
+        self.databaseURL = databaseURL
+        self.migrationCheckpoint = migrationCheckpoint
     }
 
     public var resolvedDatabaseURL: URL {
@@ -92,6 +104,24 @@ public final class DictationStore {
     public func migrateIfNeeded() throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
+
+        let runner = SQLiteMigrationRunner(
+            db: db,
+            migrations: [
+                SQLiteMigrationRunner.Migration(
+                    version: Self.currentSchemaVersion,
+                    name: "normalize legacy schema",
+                    apply: normalizeLegacySchema,
+                    validate: validateNormalizedSchema
+                ),
+            ],
+            checkpoint: migrationCheckpoint
+        )
+        try runner.run()
+        _ = try purgeSoftDeletedTextRecords(olderThan: Self.defaultTombstoneRetentionInterval, db: db)
+    }
+
+    private func normalizeLegacySchema(db: OpaquePointer?) throws {
 
         let createSQL = """
         CREATE TABLE IF NOT EXISTS dictations (
@@ -213,69 +243,54 @@ public final class DictationStore {
         """
         try exec(foldersSQL, db: db)
 
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN folder_id INTEGER REFERENCES meeting_folders(id)", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        // These template columns are also present in CREATE TABLE for fresh databases.
-        // The ALTER TABLE path upgrades pre-existing databases where meetings already exists.
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN selected_template_id TEXT", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN selected_template_name TEXT", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN selected_template_kind TEXT", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN selected_template_prompt TEXT", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN saved_recording_path TEXT", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN meeting_status TEXT NOT NULL DEFAULT 'completed'", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN manual_notes TEXT NOT NULL DEFAULT ''", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN source TEXT NOT NULL DEFAULT 'meeting'", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE dictations ADD COLUMN source TEXT NOT NULL DEFAULT 'dictation'", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        for sql in [
-            "ALTER TABLE dictations ADD COLUMN updated_at REAL NOT NULL DEFAULT 0",
-            "ALTER TABLE dictations ADD COLUMN deleted_at REAL",
-            "ALTER TABLE dictations ADD COLUMN cloud_record_name TEXT",
-            "ALTER TABLE dictations ADD COLUMN cloud_change_tag TEXT",
-            "ALTER TABLE dictations ADD COLUMN cloud_system_fields BLOB",
-            "ALTER TABLE dictations ADD COLUMN last_synced_at REAL",
-            "ALTER TABLE dictations ADD COLUMN sync_dirty INTEGER NOT NULL DEFAULT 1",
-            "ALTER TABLE meetings ADD COLUMN updated_at REAL NOT NULL DEFAULT 0",
-            "ALTER TABLE meetings ADD COLUMN deleted_at REAL",
-            "ALTER TABLE meetings ADD COLUMN cloud_record_name TEXT",
-            "ALTER TABLE meetings ADD COLUMN cloud_change_tag TEXT",
-            "ALTER TABLE meetings ADD COLUMN cloud_system_fields BLOB",
-            "ALTER TABLE meetings ADD COLUMN cloud_transcript_record_name TEXT",
-            "ALTER TABLE meetings ADD COLUMN last_synced_at REAL",
-            "ALTER TABLE meetings ADD COLUMN sync_dirty INTEGER NOT NULL DEFAULT 1",
-            "ALTER TABLE meetings ADD COLUMN calendar_occurrence_key TEXT",
-            "ALTER TABLE meetings ADD COLUMN calendar_source TEXT",
-            "ALTER TABLE meetings ADD COLUMN calendar_id TEXT",
-            "ALTER TABLE meetings ADD COLUMN calendar_series_id TEXT",
-            "ALTER TABLE meetings ADD COLUMN calendar_occurrence_start REAL",
-            "ALTER TABLE meetings ADD COLUMN cleaned_transcript TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE meetings ADD COLUMN visual_context TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE meetings ADD COLUMN previous_meeting_notes TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE meetings ADD COLUMN notes_source TEXT NOT NULL DEFAULT 'raw'"
-        ] {
-            _ = sqlite3_exec(db, sql, nil, nil, nil)
-        }
-        if try !columnExists("chat_history_json", in: "meetings", db: db) {
-            try exec(
-                "ALTER TABLE meetings ADD COLUMN chat_history_json TEXT NOT NULL DEFAULT '[]'",
+        // These columns are present in CREATE TABLE for fresh databases. The
+        // inspected ALTER path upgrades supported legacy and partially migrated
+        // databases without swallowing unrelated SQLite errors.
+        let columnMigrations: [(table: String, column: String, definition: String)] = [
+            ("meetings", "folder_id", "INTEGER REFERENCES meeting_folders(id)"),
+            ("meetings", "selected_template_id", "TEXT"),
+            ("meetings", "selected_template_name", "TEXT"),
+            ("meetings", "selected_template_kind", "TEXT"),
+            ("meetings", "selected_template_prompt", "TEXT"),
+            ("meetings", "saved_recording_path", "TEXT"),
+            ("meetings", "meeting_status", "TEXT NOT NULL DEFAULT 'completed'"),
+            ("meetings", "manual_notes", "TEXT NOT NULL DEFAULT ''"),
+            ("meetings", "chat_history_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("meetings", "source", "TEXT NOT NULL DEFAULT 'meeting'"),
+            ("dictations", "source", "TEXT NOT NULL DEFAULT 'dictation'"),
+            ("dictations", "updated_at", "REAL NOT NULL DEFAULT 0"),
+            ("dictations", "deleted_at", "REAL"),
+            ("dictations", "cloud_record_name", "TEXT"),
+            ("dictations", "cloud_change_tag", "TEXT"),
+            ("dictations", "cloud_system_fields", "BLOB"),
+            ("dictations", "last_synced_at", "REAL"),
+            ("dictations", "sync_dirty", "INTEGER NOT NULL DEFAULT 1"),
+            ("meetings", "updated_at", "REAL NOT NULL DEFAULT 0"),
+            ("meetings", "deleted_at", "REAL"),
+            ("meetings", "cloud_record_name", "TEXT"),
+            ("meetings", "cloud_change_tag", "TEXT"),
+            ("meetings", "cloud_system_fields", "BLOB"),
+            ("meetings", "cloud_transcript_record_name", "TEXT"),
+            ("meetings", "last_synced_at", "REAL"),
+            ("meetings", "sync_dirty", "INTEGER NOT NULL DEFAULT 1"),
+            ("meetings", "calendar_occurrence_key", "TEXT"),
+            ("meetings", "calendar_source", "TEXT"),
+            ("meetings", "calendar_id", "TEXT"),
+            ("meetings", "calendar_series_id", "TEXT"),
+            ("meetings", "calendar_occurrence_start", "REAL"),
+            ("meetings", "cleaned_transcript", "TEXT NOT NULL DEFAULT ''"),
+            ("meetings", "visual_context", "TEXT NOT NULL DEFAULT ''"),
+            ("meetings", "previous_meeting_notes", "TEXT NOT NULL DEFAULT ''"),
+            ("meetings", "notes_source", "TEXT NOT NULL DEFAULT 'raw'"),
+            ("meeting_folders", "parent_id", "INTEGER REFERENCES meeting_folders(id)"),
+            ("meetings", "follow_up_to_id", "INTEGER REFERENCES meetings(id) ON DELETE SET NULL"),
+            ("meetings", "follow_up_to_record_name", "TEXT"),
+        ]
+        for migration in columnMigrations {
+            try addColumnIfNeeded(
+                migration.column,
+                definition: migration.definition,
+                to: migration.table,
                 db: db
             )
         }
@@ -334,38 +349,26 @@ public final class DictationStore {
             """,
             db: db
         )
-        if sqlite3_exec(db, "ALTER TABLE meeting_folders ADD COLUMN parent_id INTEGER REFERENCES meeting_folders(id)", nil, nil, nil) != SQLITE_OK {
-            let msg = String(cString: sqlite3_errmsg(db))
-            if !msg.localizedCaseInsensitiveContains("duplicate column") {
-                throw lastError(db)
-            }
-        }
-        let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meeting_folders_parent ON meeting_folders(parent_id)", nil, nil, nil)
-        let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meetings_folder ON meetings(folder_id)", nil, nil, nil)
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN follow_up_to_id INTEGER REFERENCES meetings(id) ON DELETE SET NULL", nil, nil, nil) != SQLITE_OK {
-            let msg = String(cString: sqlite3_errmsg(db))
-            if !msg.localizedCaseInsensitiveContains("duplicate column") {
-                throw lastError(db)
-            }
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN follow_up_to_record_name TEXT", nil, nil, nil) != SQLITE_OK {
-            let msg = String(cString: sqlite3_errmsg(db))
-            if !msg.localizedCaseInsensitiveContains("duplicate column") {
-                throw lastError(db)
-            }
-        }
-        let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meetings_follow_up ON meetings(follow_up_to_id)", nil, nil, nil)
-        let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meetings_follow_up_record_name ON meetings(follow_up_to_record_name)", nil, nil, nil)
-        let _ = sqlite3_exec(db, "DROP INDEX IF EXISTS idx_meetings_live_follow_up_unique", nil, nil, nil)
-        let _ = sqlite3_exec(db, "DROP INDEX IF EXISTS idx_dictations_cloud_record_name", nil, nil, nil)
-        let _ = sqlite3_exec(db, "DROP INDEX IF EXISTS idx_meetings_cloud_record_name", nil, nil, nil)
-        let _ = sqlite3_exec(db, "CREATE UNIQUE INDEX IF NOT EXISTS idx_dictations_cloud_record_name ON dictations(cloud_record_name)", nil, nil, nil)
-        let _ = sqlite3_exec(db, "CREATE UNIQUE INDEX IF NOT EXISTS idx_meetings_cloud_record_name ON meetings(cloud_record_name)", nil, nil, nil)
-        let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_dictations_sync_dirty ON dictations(updated_at DESC) WHERE sync_dirty = 1", nil, nil, nil)
-        let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meetings_sync_dirty ON meetings(updated_at DESC) WHERE sync_dirty = 1", nil, nil, nil)
+        try exec(
+            """
+            CREATE INDEX IF NOT EXISTS idx_meeting_folders_parent ON meeting_folders(parent_id);
+            CREATE INDEX IF NOT EXISTS idx_meetings_folder ON meetings(folder_id);
+            CREATE INDEX IF NOT EXISTS idx_meetings_follow_up ON meetings(follow_up_to_id);
+            CREATE INDEX IF NOT EXISTS idx_meetings_follow_up_record_name ON meetings(follow_up_to_record_name);
+            DROP INDEX IF EXISTS idx_meetings_live_follow_up_unique;
+            DROP INDEX IF EXISTS idx_dictations_cloud_record_name;
+            DROP INDEX IF EXISTS idx_meetings_cloud_record_name;
+            CREATE UNIQUE INDEX idx_dictations_cloud_record_name ON dictations(cloud_record_name);
+            CREATE UNIQUE INDEX idx_meetings_cloud_record_name ON meetings(cloud_record_name);
+            CREATE INDEX IF NOT EXISTS idx_dictations_sync_dirty
+                ON dictations(updated_at DESC) WHERE sync_dirty = 1;
+            CREATE INDEX IF NOT EXISTS idx_meetings_sync_dirty
+                ON meetings(updated_at DESC) WHERE sync_dirty = 1;
+            """,
+            db: db
+        )
         try migrateInsightsCache(db: db)
         try repairLegacyMacOriginSources(db: db)
-        _ = try purgeSoftDeletedTextRecords(olderThan: Self.defaultTombstoneRetentionInterval, db: db)
     }
 
     private func migrateDictationStyleProvenance(db: OpaquePointer?) throws {
@@ -388,6 +391,160 @@ public final class DictationStore {
             }
             existingColumns.insert(column)
         }
+    }
+
+    private func addColumnIfNeeded(
+        _ column: String,
+        definition: String,
+        to table: String,
+        db: OpaquePointer?
+    ) throws {
+        guard try !columnExists(column, in: table, db: db) else { return }
+        try exec("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)", db: db)
+    }
+
+    private func validateNormalizedSchema(db: OpaquePointer?) throws {
+        let requiredColumns: [String: Set<String>] = [
+            "dictations": [
+                "id", "timestamp", "duration_seconds", "raw_text", "app_context", "word_count", "source",
+                "started_at", "ended_at", "updated_at", "deleted_at", "cloud_record_name", "cloud_change_tag",
+                "cloud_system_fields", "last_synced_at", "sync_dirty", "dictation_style_id",
+                "dictation_style_name", "dictation_style_selection_source", "dictation_cleanup_outcome", "created_at",
+            ],
+            "computer_use_traces": [
+                "id", "dictation_id", "final_status", "final_message", "trace_json", "created_at",
+            ],
+            "meetings": [
+                "id", "title", "calendar_event_id", "calendar_occurrence_key", "calendar_source", "calendar_id",
+                "calendar_series_id", "calendar_occurrence_start", "start_time", "end_time", "duration_seconds",
+                "raw_transcript", "formatted_notes", "mic_audio_path", "system_audio_path", "saved_recording_path",
+                "meeting_status", "manual_notes", "chat_history_json", "word_count", "selected_template_id",
+                "selected_template_name", "selected_template_kind", "selected_template_prompt", "source", "updated_at",
+                "deleted_at", "cloud_record_name", "cloud_change_tag", "cloud_system_fields",
+                "cloud_transcript_record_name", "last_synced_at", "sync_dirty", "follow_up_to_id",
+                "follow_up_to_record_name", "folder_id", "created_at", "cleaned_transcript", "visual_context",
+                "previous_meeting_notes", "notes_source",
+            ],
+            "meeting_transcript_checkpoints": [
+                "id", "meeting_id", "timestamp_label", "speaker", "start_seconds", "end_seconds", "text", "created_at",
+            ],
+            "cloud_sync_state": ["key", "value", "updated_at"],
+            "meeting_resume_snapshots": [
+                "meeting_id", "raw_transcript", "formatted_notes", "duration_seconds", "start_time", "end_time", "created_at",
+            ],
+            "meeting_folders": ["id", "name", "sort_order", "parent_id", "created_at"],
+            "insights_cache_meta": ["key", "value"],
+            "insights_tokens": ["id", "token"],
+            "insights_record_cache": [
+                "kind", "record_id", "source_updated_at", "activity_day", "word_count", "duration_seconds",
+                "dictation_sessions", "meeting_words", "meetings", "token_blob",
+            ],
+            "insights_daily_cache": [
+                "day", "dictation_words", "dictation_sessions", "meeting_words", "meetings", "duration_seconds",
+            ],
+            "insights_token_totals": ["token_id", "dictation_count", "meeting_count"],
+            "insights_daily_tokens": ["day", "token_id", "dictation_count", "meeting_count"],
+        ]
+
+        for (table, expectedColumns) in requiredColumns {
+            guard try schemaObjectExists(type: "table", name: table, db: db) else {
+                throw schemaPostconditionError("missing table \(table)")
+            }
+            let actualColumns = try tableColumns(table, db: db)
+            let missingColumns = expectedColumns.subtracting(actualColumns).sorted()
+            guard missingColumns.isEmpty else {
+                throw schemaPostconditionError("table \(table) is missing columns: \(missingColumns.joined(separator: ", "))")
+            }
+        }
+
+        let requiredIndexes = [
+            "idx_dictations_timestamp",
+            "idx_computer_use_traces_dictation_id",
+            "idx_meetings_start_time",
+            "idx_meetings_calendar_event_lookup",
+            "idx_meetings_calendar_occurrence_key",
+            "idx_meeting_transcript_checkpoints_meeting",
+            "idx_meeting_folders_parent",
+            "idx_meetings_folder",
+            "idx_meetings_follow_up",
+            "idx_meetings_follow_up_record_name",
+            "idx_dictations_cloud_record_name",
+            "idx_meetings_cloud_record_name",
+            "idx_dictations_sync_dirty",
+            "idx_meetings_sync_dirty",
+            "idx_insights_record_updated",
+            "idx_insights_daily_tokens_token",
+        ]
+        for index in requiredIndexes {
+            guard try schemaObjectExists(type: "index", name: index, db: db) else {
+                throw schemaPostconditionError("missing index \(index)")
+            }
+        }
+        for obsoleteIndex in ["idx_meetings_calendar_event_id", "idx_meetings_live_follow_up_unique"] {
+            guard try !schemaObjectExists(type: "index", name: obsoleteIndex, db: db) else {
+                throw schemaPostconditionError("obsolete index remains: \(obsoleteIndex)")
+            }
+        }
+
+        guard try !schemaObjectExists(type: "trigger", name: "meetings_clear_cleaned_transcript", db: db) else {
+            throw schemaPostconditionError("obsolete transcript invalidation trigger remains")
+        }
+        let triggerSQL = try schemaObjectSQL(
+            type: "trigger",
+            name: "meetings_clear_cleaned_transcript_v2",
+            db: db
+        )
+        guard triggerSQL?.contains("notes_source") == true else {
+            throw schemaPostconditionError("current transcript invalidation trigger is missing or incomplete")
+        }
+
+        for uniqueIndex in ["idx_dictations_cloud_record_name", "idx_meetings_cloud_record_name"] {
+            let sql = try schemaObjectSQL(type: "index", name: uniqueIndex, db: db) ?? ""
+            guard sql.uppercased().contains("CREATE UNIQUE INDEX") else {
+                throw schemaPostconditionError("index \(uniqueIndex) is not unique")
+            }
+        }
+    }
+
+    private func schemaObjectExists(
+        type: String,
+        name: String,
+        db: OpaquePointer?
+    ) throws -> Bool {
+        try schemaObjectSQL(type: type, name: name, db: db) != nil
+    }
+
+    private func schemaObjectSQL(
+        type: String,
+        name: String,
+        db: OpaquePointer?
+    ) throws -> String? {
+        var statement: OpaquePointer?
+        let sql = "SELECT sql FROM sqlite_master WHERE type = ? AND name = ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (type as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, (name as NSString).utf8String, -1, sqliteTransient)
+
+        switch sqlite3_step(statement) {
+        case SQLITE_ROW:
+            guard let pointer = sqlite3_column_text(statement, 0) else { return "" }
+            return String(cString: pointer)
+        case SQLITE_DONE:
+            return nil
+        default:
+            throw lastError(db)
+        }
+    }
+
+    private func schemaPostconditionError(_ description: String) -> NSError {
+        NSError(
+            domain: "MuesliDBMigration",
+            code: Int(SQLITE_SCHEMA),
+            userInfo: [NSLocalizedDescriptionKey: "Schema postcondition failed: \(description)."]
+        )
     }
 
     private func tableColumns(_ table: String, db: OpaquePointer?) throws -> Set<String> {
