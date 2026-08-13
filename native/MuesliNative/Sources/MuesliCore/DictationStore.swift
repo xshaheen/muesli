@@ -42,7 +42,7 @@ public struct MeetingThreadNavigation: Equatable, Sendable {
 
 public final class DictationStore {
     public static let defaultTombstoneRetentionInterval: TimeInterval = 30 * 24 * 60 * 60
-    static let currentSchemaVersion: Int32 = 1
+    static let currentSchemaVersion: Int32 = 2
 
     private static let iso8601Formatter = ISO8601DateFormatter()
     private static let iso8601FormatterLock = NSLock()
@@ -109,10 +109,16 @@ public final class DictationStore {
             db: db,
             migrations: [
                 SQLiteMigrationRunner.Migration(
-                    version: Self.currentSchemaVersion,
+                    version: 1,
                     name: "normalize legacy schema",
                     apply: normalizeLegacySchema,
                     validate: validateNormalizedSchema
+                ),
+                SQLiteMigrationRunner.Migration(
+                    version: Self.currentSchemaVersion,
+                    name: "add independent session traces",
+                    apply: addSessionTraceSchema,
+                    validate: validateSessionTraceSchema
                 ),
             ],
             checkpoint: migrationCheckpoint
@@ -369,6 +375,170 @@ public final class DictationStore {
         )
         try migrateInsightsCache(db: db)
         try repairLegacyMacOriginSources(db: db)
+    }
+
+    private func addSessionTraceSchema(db: OpaquePointer?) throws {
+        try exec(
+            """
+            CREATE TABLE IF NOT EXISTS session_trace_settings (
+                singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                clear_generation INTEGER NOT NULL DEFAULT 0 CHECK (clear_generation >= 0),
+                updated_at REAL NOT NULL
+            );
+            INSERT OR IGNORE INTO session_trace_settings (singleton_id, clear_generation, updated_at)
+            VALUES (1, 0, (julianday('now') - 2440587.5) * 86400.0);
+
+            CREATE TABLE IF NOT EXISTS session_traces (
+                session_uuid TEXT PRIMARY KEY,
+                writer_uuid TEXT NOT NULL,
+                clear_generation INTEGER NOT NULL CHECK (clear_generation >= 0),
+                kind TEXT NOT NULL CHECK (kind IN ('dictation', 'meeting')),
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                terminal_at REAL,
+                terminal_outcome TEXT CHECK (
+                    terminal_outcome IS NULL OR terminal_outcome IN (
+                        'success', 'fallback_success', 'cancelled', 'timed_out', 'failed'
+                    )
+                ),
+                dictation_id INTEGER REFERENCES dictations(id) ON DELETE SET NULL,
+                meeting_id INTEGER REFERENCES meetings(id) ON DELETE SET NULL,
+                backend_identity TEXT,
+                fallback_backend_identity TEXT,
+                rich_content_state TEXT NOT NULL DEFAULT 'available' CHECK (
+                    rich_content_state IN (
+                        'available', 'pruned', 'empty', 'active_writer',
+                        'unavailable', 'cleared_while_active'
+                    )
+                ),
+                event_count INTEGER NOT NULL DEFAULT 0 CHECK (event_count BETWEEN 0 AND 512),
+                rich_byte_count INTEGER NOT NULL DEFAULT 0 CHECK (rich_byte_count >= 0)
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_traces_created_at
+                ON session_traces(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_session_traces_terminal_at
+                ON session_traces(terminal_at)
+                WHERE terminal_at IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_session_traces_dictation_id
+                ON session_traces(dictation_id)
+                WHERE dictation_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_session_traces_meeting_id
+                ON session_traces(meeting_id)
+                WHERE meeting_id IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS session_trace_artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_uuid TEXT NOT NULL REFERENCES session_traces(session_uuid) ON DELETE CASCADE,
+                content_fingerprint TEXT NOT NULL,
+                content BLOB NOT NULL,
+                byte_count INTEGER NOT NULL CHECK (byte_count BETWEEN 0 AND 1048576),
+                created_at REAL NOT NULL,
+                UNIQUE (session_uuid, content_fingerprint, content)
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_trace_artifacts_session
+                ON session_trace_artifacts(session_uuid, id);
+
+            CREATE TABLE IF NOT EXISTS session_trace_artifact_references (
+                session_uuid TEXT NOT NULL REFERENCES session_traces(session_uuid) ON DELETE CASCADE,
+                artifact_kind TEXT NOT NULL CHECK (
+                    artifact_kind IN (
+                        'raw_asr', 'cleanup_result', 'dictionary_changes',
+                        'final_output', 'language_profile', 'context_sources'
+                    )
+                ),
+                artifact_id INTEGER NOT NULL REFERENCES session_trace_artifacts(id) ON DELETE CASCADE,
+                created_at REAL NOT NULL,
+                PRIMARY KEY (session_uuid, artifact_kind)
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_trace_artifact_references_artifact
+                ON session_trace_artifact_references(artifact_id);
+
+            CREATE TABLE IF NOT EXISTS session_trace_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_uuid TEXT NOT NULL REFERENCES session_traces(session_uuid) ON DELETE CASCADE,
+                sequence INTEGER NOT NULL CHECK (sequence BETWEEN 1 AND 512),
+                vocabulary TEXT NOT NULL CHECK (
+                    vocabulary IN (
+                        'session_started', 'stage_started', 'stage_completed',
+                        'stage_failed', 'fallback_started', 'cancellation_requested',
+                        'timeout_requested', 'terminal'
+                    )
+                ),
+                stage TEXT NOT NULL,
+                elapsed_milliseconds INTEGER,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                artifact_id INTEGER REFERENCES session_trace_artifacts(id) ON DELETE SET NULL,
+                created_at REAL NOT NULL,
+                UNIQUE (session_uuid, sequence)
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_trace_events_session
+                ON session_trace_events(session_uuid, sequence);
+            """,
+            db: db
+        )
+    }
+
+    private func validateSessionTraceSchema(db: OpaquePointer?) throws {
+        try validateNormalizedSchema(db: db)
+
+        let requiredColumns: [String: Set<String>] = [
+            "session_trace_settings": ["singleton_id", "clear_generation", "updated_at"],
+            "session_traces": [
+                "session_uuid", "writer_uuid", "clear_generation", "kind", "created_at",
+                "updated_at", "terminal_at", "terminal_outcome", "dictation_id", "meeting_id",
+                "backend_identity", "fallback_backend_identity", "rich_content_state",
+                "event_count", "rich_byte_count",
+            ],
+            "session_trace_artifacts": [
+                "id", "session_uuid", "content_fingerprint", "content", "byte_count", "created_at",
+            ],
+            "session_trace_artifact_references": [
+                "session_uuid", "artifact_kind", "artifact_id", "created_at",
+            ],
+            "session_trace_events": [
+                "id", "session_uuid", "sequence", "vocabulary", "stage",
+                "elapsed_milliseconds", "metadata_json", "artifact_id", "created_at",
+            ],
+        ]
+        for (table, expectedColumns) in requiredColumns {
+            guard try schemaObjectExists(type: "table", name: table, db: db) else {
+                throw schemaPostconditionError("missing table \(table)")
+            }
+            let missing = expectedColumns.subtracting(try tableColumns(table, db: db)).sorted()
+            guard missing.isEmpty else {
+                throw schemaPostconditionError("table \(table) is missing columns: \(missing.joined(separator: ", "))")
+            }
+        }
+
+        let requiredIndexes = [
+            "idx_session_traces_created_at",
+            "idx_session_traces_terminal_at",
+            "idx_session_traces_dictation_id",
+            "idx_session_traces_meeting_id",
+            "idx_session_trace_artifacts_session",
+            "idx_session_trace_artifact_references_artifact",
+            "idx_session_trace_events_session",
+        ]
+        for index in requiredIndexes {
+            guard try schemaObjectExists(type: "index", name: index, db: db) else {
+                throw schemaPostconditionError("missing index \(index)")
+            }
+        }
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "SELECT clear_generation FROM session_trace_settings WHERE singleton_id = 1",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            throw schemaPostconditionError("session trace clear generation singleton is missing")
+        }
     }
 
     private func migrateDictationStyleProvenance(db: OpaquePointer?) throws {

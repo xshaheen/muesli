@@ -267,7 +267,11 @@ struct DictationStoreTests {
             "SELECT (SELECT COUNT(*) FROM dictations), (SELECT COUNT(*) FROM meetings)",
             count: 2
         ) == countsBefore)
-        #expect(try firstTextColumns(url, "PRAGMA user_version", count: 1) == ["1"])
+        #expect(try firstTextColumns(
+            url,
+            "PRAGMA user_version",
+            count: 1
+        ) == [String(DictationStore.currentSchemaVersion)])
     }
 
     @Test("failed migration rolls back schema, data, and version and can be retried")
@@ -299,11 +303,6 @@ struct DictationStoreTests {
             VALUES ('Before migration', '2026-08-14T00:00:00Z', 'Raw evidence', 'Notes evidence');
             """
         )
-        let legacyColumns = try firstTextColumns(
-            url,
-            "SELECT COUNT(*) FROM pragma_table_info('meetings')",
-            count: 1
-        )
         let legacyDigest = try migrationContentDigest(url)
         let failingStore = DictationStore(
             databaseURL: url,
@@ -317,22 +316,28 @@ struct DictationStoreTests {
         #expect(throws: InjectedFailure.self) {
             try failingStore.migrateIfNeeded()
         }
-        #expect(try firstTextColumns(url, "PRAGMA user_version", count: 1) == ["0"])
-        #expect(try firstTextColumns(
-            url,
-            "SELECT COUNT(*) FROM pragma_table_info('meetings')",
-            count: 1
-        ) == legacyColumns)
+        // Migrations commit independently. Version 1 remains valid and version
+        // 2 rolls back completely, so retry starts from the last good schema.
+        #expect(try firstTextColumns(url, "PRAGMA user_version", count: 1) == ["1"])
         #expect(try migrationContentDigest(url) == legacyDigest)
         #expect(try firstTextColumns(
             url,
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'dictations'",
             count: 1
+        ) == ["1"])
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_traces'",
+            count: 1
         ) == ["0"])
 
         let retryStore = DictationStore(databaseURL: url)
         try retryStore.migrateIfNeeded()
-        #expect(try firstTextColumns(url, "PRAGMA user_version", count: 1) == ["1"])
+        #expect(try firstTextColumns(
+            url,
+            "PRAGMA user_version",
+            count: 1
+        ) == [String(DictationStore.currentSchemaVersion)])
         #expect(try migrationContentDigest(url) == legacyDigest)
         #expect(try retryStore.recentMeetings(limit: 10).count == 1)
     }
@@ -346,7 +351,11 @@ struct DictationStoreTests {
         #expect(throws: Error.self) {
             try store.migrateIfNeeded()
         }
-        #expect(try firstTextColumns(url, "PRAGMA user_version", count: 1) == ["1"])
+        #expect(try firstTextColumns(
+            url,
+            "PRAGMA user_version",
+            count: 1
+        ) == [String(DictationStore.currentSchemaVersion)])
     }
 
     @Test("migration rejects pre-existing foreign key violations")
