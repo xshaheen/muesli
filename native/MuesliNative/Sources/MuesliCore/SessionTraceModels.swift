@@ -1,6 +1,9 @@
 import Foundation
 
-public struct SessionTraceRetentionPolicy: Equatable, Sendable {
+public struct SessionTraceRetentionPolicy: Codable, Equatable, Sendable {
+    /// Includes bounded event metadata and SQLite page/index overhead above the
+    /// 128 MiB rich-content cap.
+    public static let maximumDatabaseBytes = 512 * 1_024 * 1_024
     public static let `default` = SessionTraceRetentionPolicy(
         richContentRetention: 7 * 24 * 60 * 60,
         metadataRetention: 90 * 24 * 60 * 60,
@@ -11,8 +14,8 @@ public struct SessionTraceRetentionPolicy: Equatable, Sendable {
         maximumGlobalRichBytes: 128 * 1_024 * 1_024,
         maximumSessions: 1_000,
         maximumExportBytes: 32 * 1_024 * 1_024,
-        maximumEventMetadataBytes: 16 * 1_024,
-        maximumIdentifierBytes: 256
+        maximumEventMetadataBytes: 256,
+        maximumIdentifierBytes: 128
     )
 
     public let richContentRetention: TimeInterval
@@ -142,7 +145,7 @@ public struct SessionTraceArtifactWriteResult: Equatable, Sendable {
     }
 }
 
-public struct SessionTraceEvent: Equatable, Sendable {
+public struct SessionTraceEvent: Codable, Equatable, Sendable {
     public let sequence: Int
     public let vocabulary: SessionTraceEventVocabulary
     public let stage: String
@@ -152,7 +155,7 @@ public struct SessionTraceEvent: Equatable, Sendable {
     public let createdAt: Date
 }
 
-public struct SessionTraceArtifact: Equatable, Sendable {
+public struct SessionTraceArtifact: Codable, Equatable, Sendable {
     public let id: Int64
     public let kinds: [SessionTraceArtifactKind]
     public let content: String?
@@ -160,7 +163,7 @@ public struct SessionTraceArtifact: Equatable, Sendable {
     public let state: SessionTraceContentState
 }
 
-public struct SessionTraceSummary: Equatable, Sendable {
+public struct SessionTraceSummary: Codable, Equatable, Sendable {
     public let sessionID: UUID
     public let kind: SessionTraceKind
     public let createdAt: Date
@@ -175,7 +178,7 @@ public struct SessionTraceSummary: Equatable, Sendable {
     public let richByteCount: Int
 }
 
-public struct SessionTraceDetail: Equatable, Sendable {
+public struct SessionTraceDetail: Codable, Equatable, Sendable {
     public let summary: SessionTraceSummary
     public let events: [SessionTraceEvent]
     public let artifacts: [SessionTraceArtifact]
@@ -184,4 +187,51 @@ public struct SessionTraceDetail: Equatable, Sendable {
 public struct SessionTracePruneResult: Equatable, Sendable {
     public let richSessionsPruned: Int
     public let metadataSessionsDeleted: Int
+}
+
+public struct SessionTraceClearResult: Equatable, Sendable {
+    public let clearGeneration: Int64
+    public let terminalSessionsDeleted: Int
+    public let activeSessionsPreserved: Int
+    public let activeSessionsReset: Int
+    public let eventsDeleted: Int
+    public let artifactsDeleted: Int
+
+    public init(
+        clearGeneration: Int64,
+        terminalSessionsDeleted: Int,
+        activeSessionsPreserved: Int,
+        activeSessionsReset: Int,
+        eventsDeleted: Int,
+        artifactsDeleted: Int
+    ) {
+        self.clearGeneration = clearGeneration
+        self.terminalSessionsDeleted = terminalSessionsDeleted
+        self.activeSessionsPreserved = activeSessionsPreserved
+        self.activeSessionsReset = activeSessionsReset
+        self.eventsDeleted = eventsDeleted
+        self.artifactsDeleted = artifactsDeleted
+    }
+}
+
+public struct SessionTraceDiagnosticsExport: Codable, Equatable, Sendable {
+    public static let currentSchemaVersion = 1
+
+    public let schemaVersion: Int
+    public let exportedAt: Date
+    public let provenance: SessionTraceExportProvenance
+    public let policy: SessionTraceRetentionPolicy
+    public let traces: [SessionTraceDetail]
+}
+
+public struct SessionTraceExportProvenance: Codable, Equatable, Sendable {
+    public let storageScope: String
+    public let contentPolicy: String
+    public let databaseSchemaVersion: Int32
+
+    public init(storageScope: String, contentPolicy: String, databaseSchemaVersion: Int32) {
+        self.storageScope = storageScope
+        self.contentPolicy = contentPolicy
+        self.databaseSchemaVersion = databaseSchemaVersion
+    }
 }

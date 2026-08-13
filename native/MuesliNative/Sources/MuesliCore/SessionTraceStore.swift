@@ -9,6 +9,7 @@ public enum SessionTraceStoreError: Error, LocalizedError, Equatable {
     case sessionNotFound(UUID)
     case artifactDoesNotBelongToSession(Int64)
     case limitReached(SessionTraceLimit)
+    case exportLimitExceeded(requiredBytes: Int, maximumBytes: Int)
     case invalidStoredValue(String)
 
     public var errorDescription: String? {
@@ -21,6 +22,8 @@ public enum SessionTraceStoreError: Error, LocalizedError, Equatable {
             return "Session trace artifact \(id) belongs to another session or does not exist."
         case .limitReached(let limit):
             return "Session trace limit reached: \(limit.rawValue)."
+        case .exportLimitExceeded(let requiredBytes, let maximumBytes):
+            return "Diagnostics export requires \(requiredBytes) bytes; the limit is \(maximumBytes) bytes."
         case .invalidStoredValue(let description):
             return "Invalid session trace data: \(description)."
         }
@@ -32,7 +35,17 @@ public enum SessionTraceStoreError: Error, LocalizedError, Equatable {
 /// The actor serializes callers without using `MainActor`. Each mutation opens a
 /// checked SQLite connection and commits exactly one immediate transaction.
 public actor SessionTraceStore {
+    enum ClearCheckpoint: Equatable, Sendable {
+        case generationIncremented(Int64)
+        case terminalSessionsDeleted
+        case activeSessionsReset
+        case willCommit
+    }
+
+    typealias ClearCheckpointHook = @Sendable (ClearCheckpoint) throws -> Void
+
     private let databaseURL: URL
+    private let clearCheckpoint: ClearCheckpointHook?
     public let retentionPolicy: SessionTraceRetentionPolicy
 
     public init(
@@ -41,6 +54,18 @@ public actor SessionTraceStore {
     ) throws {
         self.databaseURL = databaseURL
         self.retentionPolicy = retentionPolicy
+        self.clearCheckpoint = nil
+        try DictationStore(databaseURL: databaseURL).migrateIfNeeded()
+    }
+
+    init(
+        databaseURL: URL,
+        retentionPolicy: SessionTraceRetentionPolicy = .default,
+        clearCheckpoint: @escaping ClearCheckpointHook
+    ) throws {
+        self.databaseURL = databaseURL
+        self.retentionPolicy = retentionPolicy
+        self.clearCheckpoint = clearCheckpoint
         try DictationStore(databaseURL: databaseURL).migrateIfNeeded()
     }
 
@@ -295,7 +320,14 @@ public actor SessionTraceStore {
 
         return try inTransaction(db) {
             switch try writerGate(token, db: db) {
-            case .cleared, .mismatch:
+            case .cleared:
+                return try claimTerminalAfterDiagnosticsClear(
+                    outcome,
+                    token: token,
+                    date: date,
+                    db: db
+                )
+            case .mismatch:
                 throw SessionTraceStoreError.sessionNotFound(token.sessionID)
             case .terminal(let existing):
                 return .alreadyDecided(existing)
@@ -341,6 +373,253 @@ public actor SessionTraceStore {
                 return .won
             }
         }
+    }
+
+    /// Completes an active session whose diagnostics were cleared while work was running.
+    /// This deliberately records only the terminal columns.
+    private func claimTerminalAfterDiagnosticsClear(
+        _ outcome: SessionTraceTerminalOutcome,
+        token: SessionTraceWriterToken,
+        date: Date,
+        db: OpaquePointer?
+    ) throws -> SessionTraceTerminalClaimResult {
+        var inspect: OpaquePointer?
+        try prepare(
+            """
+            SELECT writer_uuid, clear_generation, rich_content_state, terminal_outcome
+            FROM session_traces WHERE session_uuid = ?
+            """,
+            into: &inspect,
+            db: db
+        )
+        bind(token.sessionID.uuidString, to: inspect, at: 1)
+        let result = sqlite3_step(inspect)
+        guard result == SQLITE_ROW else {
+            sqlite3_finalize(inspect)
+            if result == SQLITE_DONE {
+                throw SessionTraceStoreError.sessionNotFound(token.sessionID)
+            }
+            throw sqliteError(db)
+        }
+        let writerID = text(inspect, 0)
+        let currentGeneration = sqlite3_column_int64(inspect, 1)
+        let contentState = text(inspect, 2)
+        let existingRaw = optionalText(inspect, 3)
+        sqlite3_finalize(inspect)
+
+        guard writerID == token.writerID.uuidString else {
+            throw SessionTraceStoreError.sessionNotFound(token.sessionID)
+        }
+        if let existingRaw {
+            guard let existing = SessionTraceTerminalOutcome(rawValue: existingRaw) else {
+                throw SessionTraceStoreError.invalidStoredValue("terminal outcome \(existingRaw)")
+            }
+            return .alreadyDecided(existing)
+        }
+        guard currentGeneration > token.clearGeneration,
+              contentState == SessionTraceContentState.clearedWhileActive.rawValue else {
+            throw SessionTraceStoreError.invalidStoredValue(
+                "post-clear terminal path requires a cleared active writer"
+            )
+        }
+
+        var statement: OpaquePointer?
+        try prepare(
+            """
+            UPDATE session_traces
+            SET terminal_outcome = ?, terminal_at = ?, updated_at = ?
+            WHERE session_uuid = ? AND writer_uuid = ? AND clear_generation = ?
+              AND rich_content_state = 'cleared_while_active' AND terminal_outcome IS NULL
+            """,
+            into: &statement,
+            db: db
+        )
+        defer { sqlite3_finalize(statement) }
+        bind(outcome.rawValue, to: statement, at: 1)
+        sqlite3_bind_double(statement, 2, date.timeIntervalSince1970)
+        sqlite3_bind_double(statement, 3, date.timeIntervalSince1970)
+        bind(token.sessionID.uuidString, to: statement, at: 4)
+        bind(token.writerID.uuidString, to: statement, at: 5)
+        sqlite3_bind_int64(statement, 6, currentGeneration)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw sqliteError(db) }
+        guard sqlite3_changes(db) == 1 else {
+            guard let decided = try terminalOutcome(sessionID: token.sessionID, db: db) else {
+                throw SessionTraceStoreError.invalidStoredValue(
+                    "post-clear terminal compare-and-set did not decide"
+                )
+            }
+            return .alreadyDecided(decided)
+        }
+        return .won
+    }
+
+    /// Deletes diagnostics without touching normal history or retained recordings.
+    @discardableResult
+    public func clearDiagnostics(at date: Date = Date()) throws -> SessionTraceClearResult {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        return try inTransaction(db) {
+            let nextGeneration = try scalarInt64(
+                "SELECT clear_generation + 1 FROM session_trace_settings WHERE singleton_id = 1",
+                db: db
+            )
+            var statement: OpaquePointer?
+            try prepare(
+                "UPDATE session_trace_settings SET clear_generation = ?, updated_at = ? WHERE singleton_id = 1",
+                into: &statement,
+                db: db
+            )
+            sqlite3_bind_int64(statement, 1, nextGeneration)
+            sqlite3_bind_double(statement, 2, date.timeIntervalSince1970)
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                sqlite3_finalize(statement)
+                throw sqliteError(db)
+            }
+            sqlite3_finalize(statement)
+            try clearCheckpoint?(.generationIncremented(nextGeneration))
+
+            let activeSessions = try scalarInt(
+                "SELECT COUNT(*) FROM session_traces WHERE terminal_outcome IS NULL",
+                db: db
+            )
+            let activeSessionsReset = try scalarInt(
+                """
+                SELECT COUNT(*) FROM session_traces
+                WHERE terminal_outcome IS NULL
+                  AND (event_count > 0 OR rich_byte_count > 0 OR rich_content_state <> 'cleared_while_active')
+                """,
+                db: db
+            )
+
+            try prepare(
+                "DELETE FROM session_traces WHERE terminal_outcome IS NOT NULL",
+                into: &statement,
+                db: db
+            )
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                sqlite3_finalize(statement)
+                throw sqliteError(db)
+            }
+            let terminalDeleted = Int(sqlite3_changes(db))
+            sqlite3_finalize(statement)
+            try clearCheckpoint?(.terminalSessionsDeleted)
+
+            try prepare(
+                """
+                DELETE FROM session_trace_events
+                WHERE session_uuid IN (SELECT session_uuid FROM session_traces WHERE terminal_outcome IS NULL)
+                """,
+                into: &statement,
+                db: db
+            )
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                sqlite3_finalize(statement)
+                throw sqliteError(db)
+            }
+            let eventsDeleted = Int(sqlite3_changes(db))
+            sqlite3_finalize(statement)
+
+            try prepare(
+                """
+                DELETE FROM session_trace_artifacts
+                WHERE session_uuid IN (SELECT session_uuid FROM session_traces WHERE terminal_outcome IS NULL)
+                """,
+                into: &statement,
+                db: db
+            )
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                sqlite3_finalize(statement)
+                throw sqliteError(db)
+            }
+            let artifactsDeleted = Int(sqlite3_changes(db))
+            sqlite3_finalize(statement)
+
+            try prepare(
+                """
+                UPDATE session_traces
+                SET clear_generation = ?, updated_at = ?, event_count = 0, rich_byte_count = 0,
+                    rich_content_state = 'cleared_while_active', dictation_id = NULL,
+                    meeting_id = NULL, backend_identity = NULL, fallback_backend_identity = NULL
+                WHERE terminal_outcome IS NULL
+                """,
+                into: &statement,
+                db: db
+            )
+            sqlite3_bind_int64(statement, 1, nextGeneration)
+            sqlite3_bind_double(statement, 2, date.timeIntervalSince1970)
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                sqlite3_finalize(statement)
+                throw sqliteError(db)
+            }
+            sqlite3_finalize(statement)
+            try clearCheckpoint?(.activeSessionsReset)
+            try clearCheckpoint?(.willCommit)
+
+            return SessionTraceClearResult(
+                clearGeneration: nextGeneration,
+                terminalSessionsDeleted: terminalDeleted,
+                activeSessionsPreserved: activeSessions,
+                activeSessionsReset: activeSessionsReset,
+                eventsDeleted: eventsDeleted,
+                artifactsDeleted: artifactsDeleted
+            )
+        }
+    }
+
+    public func exportDiagnosticsData(now: Date = Date()) throws -> Data {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        try execute("BEGIN", db: db)
+        do {
+            let estimatedBytes = try estimatedExportBytes(db: db)
+            guard estimatedBytes <= retentionPolicy.maximumExportBytes else {
+                throw SessionTraceStoreError.exportLimitExceeded(
+                    requiredBytes: estimatedBytes,
+                    maximumBytes: retentionPolicy.maximumExportBytes
+                )
+            }
+            let summaries = try loadAllSummaries(db: db)
+            let details = try summaries.map { summary in
+                SessionTraceDetail(
+                    summary: summary,
+                    events: try loadEvents(sessionID: summary.sessionID, db: db),
+                    artifacts: try loadArtifacts(sessionID: summary.sessionID, db: db)
+                )
+            }
+            let payload = SessionTraceDiagnosticsExport(
+                schemaVersion: SessionTraceDiagnosticsExport.currentSchemaVersion,
+                exportedAt: now,
+                provenance: SessionTraceExportProvenance(
+                    storageScope: "local-only",
+                    contentPolicy: "short-retention-size-bounded",
+                    databaseSchemaVersion: DictationStore.currentSchemaVersion
+                ),
+                policy: retentionPolicy,
+                traces: details
+            )
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            let data = try encoder.encode(payload)
+            guard data.count <= retentionPolicy.maximumExportBytes else {
+                throw SessionTraceStoreError.exportLimitExceeded(
+                    requiredBytes: data.count,
+                    maximumBytes: retentionPolicy.maximumExportBytes
+                )
+            }
+            try execute("COMMIT", db: db)
+            return data
+        } catch {
+            _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw error
+        }
+    }
+
+    @discardableResult
+    public func exportDiagnostics(to destination: URL, now: Date = Date()) throws -> Int {
+        let data = try exportDiagnosticsData(now: now)
+        try data.write(to: destination, options: .atomic)
+        return data.count
     }
 
     public func list(limit: Int = 100) throws -> [SessionTraceSummary] {
@@ -411,6 +690,7 @@ private extension SessionTraceStore {
         do {
             guard sqlite3_busy_timeout(db, 5_000) == SQLITE_OK else { throw sqliteError(db) }
             try execute("PRAGMA foreign_keys=ON", db: db)
+            try execute("PRAGMA secure_delete=ON", db: db)
             try execute("PRAGMA journal_mode=WAL", db: db)
             return db
         } catch {
@@ -861,6 +1141,51 @@ private extension SessionTraceStore {
         bind(sessionID.uuidString, to: statement, at: 1)
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
         return try summary(from: statement)
+    }
+
+    func loadAllSummaries(db: OpaquePointer?) throws -> [SessionTraceSummary] {
+        var statement: OpaquePointer?
+        try prepare(
+            """
+            SELECT session_uuid, kind, created_at, updated_at, terminal_outcome,
+                   dictation_id, meeting_id, backend_identity, fallback_backend_identity,
+                   rich_content_state, event_count, rich_byte_count
+            FROM session_traces ORDER BY created_at ASC, session_uuid ASC
+            """,
+            into: &statement,
+            db: db
+        )
+        defer { sqlite3_finalize(statement) }
+        var summaries: [SessionTraceSummary] = []
+        while true {
+            let result = sqlite3_step(statement)
+            if result == SQLITE_DONE { return summaries }
+            guard result == SQLITE_ROW else { throw sqliteError(db) }
+            summaries.append(try summary(from: statement))
+        }
+    }
+
+    /// Conservatively accounts for JSON escaping before loading rich content
+    /// into memory. The final encoded byte count remains the authoritative cap.
+    func estimatedExportBytes(db: OpaquePointer?) throws -> Int {
+        let sql = """
+        SELECT 8192
+             + (SELECT COUNT(*) * 2048 FROM session_traces)
+             + COALESCE((
+                   SELECT SUM((length(stage) + length(metadata_json)) * 6 + 512)
+                   FROM session_trace_events
+               ), 0)
+             + COALESCE((
+                   SELECT SUM(byte_count * 6 + 512)
+                   FROM session_trace_artifacts
+               ), 0)
+             + COALESCE((
+                   SELECT COUNT(*) * 256
+                   FROM session_trace_artifact_references
+               ), 0)
+        """
+        let estimate = try scalarInt64(sql, db: db)
+        return estimate > Int64(Int.max) ? Int.max : Int(estimate)
     }
 
     func summary(from statement: OpaquePointer?) throws -> SessionTraceSummary {

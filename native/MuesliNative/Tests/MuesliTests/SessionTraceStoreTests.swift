@@ -168,6 +168,7 @@ struct SessionTraceStoreTests {
             let detail = try #require(try await store.detail(sessionID: sessionID))
             #expect(detail.summary.contentState == .pruned)
             #expect(detail.artifacts.isEmpty)
+            #expect(detail.events.map(\.vocabulary) == [.sessionStarted, .terminal])
         }
 
         _ = try await store.prune(now: start.addingTimeInterval(91 * 24 * 60 * 60))
@@ -208,11 +209,269 @@ struct SessionTraceStoreTests {
         #expect(try await store.detail(sessionID: token.sessionID) != nil)
     }
 
+    @Test("clear preserves active writers and history while invalidating rich writes")
+    func clearDuringActiveWriterIsDiagnosticsOnlyAndIdempotent() async throws {
+        let (store, url) = try makeStore()
+        defer { removeDatabase(url) }
+        let history = DictationStore(databaseURL: url)
+        let meetingID = try history.insertMeeting(
+            title: "Retained meeting",
+            calendarEventID: nil,
+            startTime: Date(timeIntervalSince1970: 100),
+            endTime: Date(timeIntervalSince1970: 200),
+            rawTranscript: "normal history",
+            formattedNotes: "normal notes",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        try execute(url, "UPDATE meetings SET saved_recording_path = '/retained/meeting.m4a' WHERE id = \(meetingID)")
+
+        let active = try await store.beginSession(
+            kind: .meeting,
+            backendIdentity: "primary-backend",
+            fallbackBackendIdentity: "fallback-backend"
+        )
+        _ = try await store.associate(token: active, meetingID: meetingID)
+        _ = try await store.storeArtifact("private trace", kind: .rawASR, token: active)
+        _ = try await store.appendEvent(.stageStarted, stage: "asr", token: active)
+        let terminal = try await store.beginSession(kind: .dictation)
+        _ = try await store.claimTerminal(.success, token: terminal)
+
+        let first = try await store.clearDiagnostics(at: Date(timeIntervalSince1970: 300))
+
+        #expect(first.terminalSessionsDeleted == 1)
+        #expect(first.activeSessionsPreserved == 1)
+        #expect(first.activeSessionsReset == 1)
+        #expect(first.eventsDeleted == 2)
+        #expect(first.artifactsDeleted == 1)
+        #expect(try scalar(url, "SELECT COUNT(*) FROM meetings WHERE id = \(meetingID)") == 1)
+        #expect(try textScalar(url, "SELECT saved_recording_path FROM meetings WHERE id = \(meetingID)")
+            == "/retained/meeting.m4a")
+
+        let cleared = try #require(try await store.detail(sessionID: active.sessionID))
+        #expect(cleared.summary.contentState == .clearedWhileActive)
+        #expect(cleared.summary.meetingID == nil)
+        #expect(cleared.summary.backendIdentity == nil)
+        #expect(cleared.summary.fallbackBackendIdentity == nil)
+        #expect(cleared.events.isEmpty)
+        #expect(cleared.artifacts.isEmpty)
+        #expect(try await store.appendEvent(.stageCompleted, stage: "asr", token: active) == .clearedByGeneration)
+        #expect(try await store.storeArtifact("late", kind: .finalOutput, token: active).mutation
+            == .clearedByGeneration)
+        #expect(try await store.associate(token: active, meetingID: meetingID) == .clearedByGeneration)
+        #expect(try await store.claimTerminal(.cancelled, token: active) == .won)
+        #expect(try await store.claimTerminal(.failed, token: active)
+            == .alreadyDecided(.cancelled))
+        #expect(try await store.detail(sessionID: active.sessionID)?.events.isEmpty == true)
+
+        let second = try await store.clearDiagnostics(at: Date(timeIntervalSince1970: 301))
+        #expect(second.terminalSessionsDeleted == 1)
+        #expect(second.activeSessionsPreserved == 0)
+        #expect(second.activeSessionsReset == 0)
+        #expect(try await store.list().isEmpty)
+        let third = try await store.clearDiagnostics(at: Date(timeIntervalSince1970: 302))
+        #expect(third.terminalSessionsDeleted == 0)
+        #expect(third.activeSessionsPreserved == 0)
+        #expect(third.eventsDeleted == 0)
+        #expect(third.artifactsDeleted == 0)
+
+        let postClear = try await store.beginSession(kind: .dictation)
+        #expect(try await store.appendEvent(.stageStarted, stage: "asr", token: postClear) == .appended)
+    }
+
+    @Test("a failed clear rolls back its generation and all trace mutations before retry")
+    func clearRollbackAndRetry() async throws {
+        enum InjectedFailure: Error { case stop }
+        let url = temporaryDatabaseURL()
+        defer { removeDatabase(url) }
+        let setup = try SessionTraceStore(databaseURL: url)
+        let active = try await setup.beginSession(kind: .dictation)
+        _ = try await setup.storeArtifact("private", kind: .rawASR, token: active)
+        let terminal = try await setup.beginSession(kind: .meeting)
+        _ = try await setup.claimTerminal(.failed, token: terminal)
+        let generationBefore = try scalar(
+            url,
+            "SELECT clear_generation FROM session_trace_settings WHERE singleton_id = 1"
+        )
+
+        let failing = try SessionTraceStore(databaseURL: url) { checkpoint in
+            if checkpoint == .activeSessionsReset { throw InjectedFailure.stop }
+        }
+        await #expect(throws: InjectedFailure.self) {
+            _ = try await failing.clearDiagnostics()
+        }
+        #expect(try scalar(url, "SELECT clear_generation FROM session_trace_settings WHERE singleton_id = 1")
+            == generationBefore)
+        #expect(try scalar(url, "SELECT COUNT(*) FROM session_traces") == 2)
+        #expect(try scalar(url, "SELECT COUNT(*) FROM session_trace_artifacts") == 1)
+
+        let retry = try SessionTraceStore(databaseURL: url)
+        let result = try await retry.clearDiagnostics()
+        #expect(result.clearGeneration == generationBefore + 1)
+        #expect(result.terminalSessionsDeleted == 1)
+        #expect(result.activeSessionsPreserved == 1)
+    }
+
+    @Test("diagnostics export is deterministic bounded and excludes history paths")
+    func exportSnapshotAndLimit() async throws {
+        let (store, url) = try makeStore()
+        defer { removeDatabase(url) }
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        let history = DictationStore(databaseURL: url)
+        let meetingID = try history.insertMeeting(
+            title: "Secret title",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: "history must not export",
+            formattedNotes: "notes must not export",
+            micAudioPath: "/audio/mic.wav",
+            systemAudioPath: "/audio/system.wav"
+        )
+        try execute(url, "UPDATE meetings SET saved_recording_path = '/recordings/secret.m4a' WHERE id = \(meetingID)")
+        let active = try await store.beginSession(kind: .meeting, at: now)
+        _ = try await store.associate(token: active, meetingID: meetingID, at: now)
+        let empty = try await store.beginSession(kind: .dictation, at: now.addingTimeInterval(1))
+        _ = try await store.claimTerminal(.success, token: empty, at: now.addingTimeInterval(2))
+        let pruned = try await store.beginSession(kind: .meeting, at: now.addingTimeInterval(3))
+        _ = try await store.storeArtifact("expiring rich content", kind: .rawASR, token: pruned, at: now)
+        _ = try await store.claimTerminal(.failed, token: pruned, at: now)
+        _ = try await store.prune(now: now.addingTimeInterval(8 * 24 * 60 * 60))
+
+        let exportedAt = now.addingTimeInterval(9 * 24 * 60 * 60)
+        let first = try await store.exportDiagnosticsData(now: exportedAt)
+        let second = try await store.exportDiagnosticsData(now: exportedAt)
+        #expect(first == second)
+        #expect(first.count <= SessionTraceRetentionPolicy.default.maximumExportBytes)
+        let decoded = try exportDecoder().decode(SessionTraceDiagnosticsExport.self, from: first)
+        #expect(decoded.schemaVersion == SessionTraceDiagnosticsExport.currentSchemaVersion)
+        #expect(decoded.provenance.storageScope == "local-only")
+        #expect(decoded.traces.map(\.summary.contentState).contains(.activeWriter))
+        #expect(decoded.traces.map(\.summary.contentState).contains(.empty))
+        #expect(decoded.traces.map(\.summary.contentState).contains(.pruned))
+        let json = String(decoding: first, as: UTF8.self)
+        for forbidden in ["Secret title", "history must not export", "/audio/", "/recordings/"] {
+            #expect(!json.contains(forbidden))
+        }
+        #expect(json.contains("\(meetingID)"))
+
+        _ = try await store.clearDiagnostics(at: exportedAt)
+        let afterClear = try await store.exportDiagnosticsData(now: exportedAt)
+        let cleared = try exportDecoder().decode(SessionTraceDiagnosticsExport.self, from: afterClear)
+        #expect(cleared.traces.map(\.summary.contentState) == [.clearedWhileActive])
+
+        let tinyPolicy = policy(replacingExportBytes: 16)
+        let tinyURL = temporaryDatabaseURL()
+        let tiny = try SessionTraceStore(databaseURL: tinyURL, retentionPolicy: tinyPolicy)
+        defer { removeDatabase(tinyURL) }
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent("diagnostics-export-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: destination) }
+        try Data("sentinel".utf8).write(to: destination)
+        await #expect(throws: SessionTraceStoreError.self) {
+            _ = try await tiny.exportDiagnostics(to: destination, now: now)
+        }
+        #expect(try Data(contentsOf: destination) == Data("sentinel".utf8))
+    }
+
+    @Test("two independent stores arbitrate one terminal result")
+    func independentStoreTerminalCAS() async throws {
+        let url = temporaryDatabaseURL()
+        defer { removeDatabase(url) }
+        let first = try SessionTraceStore(databaseURL: url)
+        let second = try SessionTraceStore(databaseURL: url)
+        let token = try await first.beginSession(kind: .dictation)
+
+        async let success = first.claimTerminal(.success, token: token)
+        async let failure = second.claimTerminal(.failed, token: token)
+        let results = try await [success, failure]
+
+        #expect(results.filter { $0 == .won }.count == 1)
+        let outcome = try #require(try await first.detail(sessionID: token.sessionID)?.summary.terminalOutcome)
+        #expect(results.contains(.alreadyDecided(outcome)))
+        #expect(try scalar(url, "SELECT COUNT(*) FROM session_trace_events WHERE vocabulary = 'terminal'") == 1)
+    }
+
+    @Test("an eight-hour synthetic workload stays within every frozen resource cap")
+    func eightHourResourceBounds() async throws {
+        let base = Date(timeIntervalSince1970: 3_000_000)
+        let policy = SessionTraceRetentionPolicy(
+            richContentRetention: 7 * 24 * 60 * 60,
+            metadataRetention: 90 * 24 * 60 * 60,
+            maximumArtifactBytes: 128,
+            maximumSessionRichBytes: 256,
+            maximumNonterminalEvents: 7,
+            maximumEvents: 8,
+            maximumGlobalRichBytes: 512,
+            maximumSessions: 8,
+            maximumExportBytes: 1 * 1_024 * 1_024,
+            maximumEventMetadataBytes: 1_024,
+            maximumIdentifierBytes: 128
+        )
+        let (store, url) = try makeStore(policy: policy)
+        defer { removeDatabase(url) }
+
+        for hour in 0 ..< 8 {
+            let time = base.addingTimeInterval(Double(hour) * 60 * 60)
+            let token = try await store.beginSession(kind: .meeting, at: time)
+            for event in 0 ..< 6 {
+                #expect(try await store.appendEvent(
+                    .stageCompleted,
+                    stage: "chunk-\(event)",
+                    elapsed: 0.01,
+                    token: token,
+                    at: time
+                ) == .appended)
+            }
+            _ = try await store.storeArtifact(
+                String(repeating: Character(String(hour)), count: 128),
+                kind: .rawASR,
+                token: token,
+                at: time
+            )
+            #expect(try await store.claimTerminal(.success, token: token, at: time) == .won)
+        }
+
+        #expect(try scalar(url, "SELECT COUNT(*) FROM session_traces") <= Int64(policy.maximumSessions))
+        #expect(try scalar(url, "SELECT COALESCE(MAX(event_count), 0) FROM session_traces")
+            <= Int64(policy.maximumEvents))
+        #expect(try scalar(url, "SELECT COALESCE(MAX(byte_count), 0) FROM session_trace_artifacts")
+            <= Int64(policy.maximumArtifactBytes))
+        #expect(try scalar(url, "SELECT COALESCE(MAX(rich_byte_count), 0) FROM session_traces")
+            <= Int64(policy.maximumSessionRichBytes))
+        #expect(try scalar(url, "SELECT COALESCE(SUM(byte_count), 0) FROM session_trace_artifacts")
+            <= Int64(policy.maximumGlobalRichBytes))
+        let databaseBytes = try scalar(url, "PRAGMA page_count") * scalar(url, "PRAGMA page_size")
+        #expect(databaseBytes <= Int64(SessionTraceRetentionPolicy.maximumDatabaseBytes))
+    }
+
     private func makeStore(
         policy: SessionTraceRetentionPolicy = .default
     ) throws -> (SessionTraceStore, URL) {
         let url = temporaryDatabaseURL()
         return (try SessionTraceStore(databaseURL: url, retentionPolicy: policy), url)
+    }
+
+    private func policy(replacingExportBytes exportBytes: Int) -> SessionTraceRetentionPolicy {
+        let value = SessionTraceRetentionPolicy.default
+        return SessionTraceRetentionPolicy(
+            richContentRetention: value.richContentRetention,
+            metadataRetention: value.metadataRetention,
+            maximumArtifactBytes: value.maximumArtifactBytes,
+            maximumSessionRichBytes: value.maximumSessionRichBytes,
+            maximumNonterminalEvents: value.maximumNonterminalEvents,
+            maximumEvents: value.maximumEvents,
+            maximumGlobalRichBytes: value.maximumGlobalRichBytes,
+            maximumSessions: value.maximumSessions,
+            maximumExportBytes: exportBytes,
+            maximumEventMetadataBytes: value.maximumEventMetadataBytes,
+            maximumIdentifierBytes: value.maximumIdentifierBytes
+        )
+    }
+
+    private func exportDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
     }
 
     private func temporaryDatabaseURL() -> URL {
@@ -242,6 +501,18 @@ struct SessionTraceStoreTests {
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else { throw sqliteError(db) }
         return sqlite3_column_int64(statement, 0)
+    }
+
+    private func textScalar(_ url: URL, _ sql: String) throws -> String {
+        var db: OpaquePointer?
+        guard sqlite3_open(url.path, &db) == SQLITE_OK else { throw sqliteError(db) }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw sqliteError(db) }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let value = sqlite3_column_text(statement, 0) else { throw sqliteError(db) }
+        return String(cString: value)
     }
 
     private func sqliteError(_ db: OpaquePointer?) -> NSError {
