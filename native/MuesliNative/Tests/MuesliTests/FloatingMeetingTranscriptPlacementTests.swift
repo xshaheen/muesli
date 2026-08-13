@@ -148,4 +148,34 @@ struct FloatingMeetingTranscriptPlacementTests {
         controller.show(beside: pill(x: 400), in: wideScreen)
         #expect(controller.placementSide == .left, "a fresh session places without memory")
     }
+
+    @Test("the panel is resizable without resetting its size after a hide")
+    @MainActor
+    func controllerRetainsUserSizeAcrossHideAndShow() {
+        let controller = FloatingMeetingTranscriptPanelController(
+            onOpenNotes: {},
+            onDismiss: {}
+        )
+        controller.show(beside: pill(x: 700), in: wideScreen)
+
+        guard let panel = controller.presentationWindow else {
+            Issue.record("expected the transcript panel to create its presentation window")
+            return
+        }
+        #expect(panel.styleMask.contains(.resizable))
+        #expect(panel.contentMinSize == FloatingMeetingTranscriptPlacement.minimumPanelSize)
+
+        let resizedSize = NSSize(width: 560, height: 480)
+        panel.setFrame(NSRect(origin: panel.frame.origin, size: resizedSize), display: false)
+        controller.hide()
+        controller.show(beside: pill(x: 700), in: wideScreen)
+
+        #expect(controller.presentationWindow?.frame.size == resizedSize)
+
+        controller.reset()
+        controller.show(beside: pill(x: 700), in: wideScreen)
+
+        #expect(controller.presentationWindow?.frame.size == resizedSize)
+        controller.close()
+    }
 }
