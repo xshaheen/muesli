@@ -69,7 +69,10 @@ struct MeetingSelectableText: NSViewRepresentable {
             with: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading]
         )
-        return CGSize(width: width, height: max(1, ceil(bounds.height)))
+        // The attributed-string bounds can be one point shorter than the native
+        // field cell. Returning that smaller height clips the final transcript line.
+        let height = max(bounds.height, nsView.fittingSize.height)
+        return CGSize(width: width, height: max(1, ceil(height)))
     }
 }
 

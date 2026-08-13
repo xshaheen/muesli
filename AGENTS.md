@@ -82,3 +82,4 @@ swift test --package-path native/MuesliNative --scratch-path "/Volumes/MuesliBui
 ## Learnings
 
 - Meeting chat history is stored locally in `meetings.chat_history_json`, uses the active `AppIdentity.supportDirectoryName`, and is intentionally excluded from CloudKit sync. (2026-08-09)
+- `MeetingSelectableText.sizeThatFits` must honor the native text field's fitting height; attributed-string bounds can be one point shorter and clip the final transcript line. (2026-08-13)
