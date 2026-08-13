@@ -274,6 +274,194 @@ struct DictationStoreTests {
         ) == [String(DictationStore.currentSchemaVersion)])
     }
 
+    @Test("legacy duplicate CloudKit identities are repaired transactionally without losing content")
+    func legacyDuplicateCloudIdentitiesAreRepairedTransactionally() throws {
+        enum InjectedFailure: Error { case beforeVersionOneCommit }
+
+        let (store, url) = try makeStoreWithURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try rawExec(
+            url,
+            """
+            DROP INDEX idx_dictations_cloud_record_name;
+            DROP INDEX idx_meetings_cloud_record_name;
+
+            INSERT INTO dictations (
+                id, timestamp, raw_text, app_context, word_count, source,
+                updated_at, cloud_record_name, cloud_change_tag,
+                cloud_system_fields, last_synced_at, sync_dirty
+            ) VALUES
+                (100, '2026-08-14T01:00:00Z', 'Older dictation content', 'older.app', 3, 'dictation',
+                 10, 'duplicate-dictation', 'older-tag', X'CAFE', 10, 0),
+                (101, '2026-08-14T02:00:00Z', 'Newer dictation content', 'newer.app', 3, 'dictation',
+                 20, 'duplicate-dictation', 'newer-tag', X'BEEF', 20, 0);
+            INSERT INTO computer_use_traces (
+                dictation_id, final_status, final_message, trace_json
+            ) VALUES (100, 'failed', 'Preserved diagnostic', '{}');
+
+            INSERT INTO meetings (
+                id, title, start_time, raw_transcript, formatted_notes, word_count, source,
+                updated_at, cloud_record_name, cloud_change_tag,
+                cloud_system_fields, last_synced_at, sync_dirty
+            ) VALUES
+                (200, 'Older meeting', '2026-08-14T03:00:00Z', 'Older meeting transcript',
+                 'Older meeting notes', 3, 'meeting', 30, 'duplicate-meeting', 'older-meeting-tag',
+                 X'ABCD', 30, 0),
+                (201, 'Newer meeting', '2026-08-14T04:00:00Z', 'Newer meeting transcript',
+                 'Newer meeting notes', 3, 'meeting', 30, 'duplicate-meeting', 'newer-meeting-tag',
+                 X'DEAD', 30, 0);
+            INSERT INTO meeting_transcript_checkpoints (
+                meeting_id, timestamp_label, speaker, start_seconds, end_seconds, text
+            ) VALUES (200, '00:01', 'Speaker 1', 1, 2, 'Preserved checkpoint');
+
+            PRAGMA user_version = 0;
+            """
+        )
+        let digestBefore = try migrationContentDigest(url)
+        let countsBefore = try firstTextColumns(
+            url,
+            """
+            SELECT (SELECT COUNT(*) FROM dictations),
+                   (SELECT COUNT(*) FROM meetings),
+                   (SELECT COUNT(*) FROM computer_use_traces),
+                   (SELECT COUNT(*) FROM meeting_transcript_checkpoints)
+            """,
+            count: 4
+        )
+
+        let failingStore = DictationStore(
+            databaseURL: url,
+            migrationCheckpoint: { checkpoint in
+                if checkpoint == .willCommit(version: 1) {
+                    throw InjectedFailure.beforeVersionOneCommit
+                }
+            }
+        )
+        #expect(throws: InjectedFailure.self) {
+            try failingStore.migrateIfNeeded()
+        }
+        #expect(try firstTextColumns(url, "PRAGMA user_version", count: 1) == ["0"])
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM dictations WHERE cloud_record_name = 'duplicate-dictation'",
+            count: 1
+        ) == ["2"])
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM meetings WHERE cloud_record_name = 'duplicate-meeting'",
+            count: 1
+        ) == ["2"])
+
+        try store.migrateIfNeeded()
+        let repairedDictations = try firstTextColumns(
+            url,
+            """
+            SELECT group_concat(material, char(30))
+            FROM (
+                SELECT printf('%d|%s|%s|%s|%s|%d', id,
+                              COALESCE(cloud_record_name, ''), COALESCE(cloud_change_tag, ''),
+                              COALESCE(hex(cloud_system_fields), ''), COALESCE(last_synced_at, ''),
+                              sync_dirty) AS material
+                FROM dictations WHERE id IN (100, 101) ORDER BY id
+            )
+            """,
+            count: 1
+        )[0]
+        let repairedMeetings = try firstTextColumns(
+            url,
+            """
+            SELECT group_concat(material, char(30))
+            FROM (
+                SELECT printf('%d|%s|%s|%s|%s|%d', id,
+                              COALESCE(cloud_record_name, ''), COALESCE(cloud_change_tag, ''),
+                              COALESCE(hex(cloud_system_fields), ''), COALESCE(last_synced_at, ''),
+                              sync_dirty) AS material
+                FROM meetings WHERE id IN (200, 201) ORDER BY id
+            )
+            """,
+            count: 1
+        )[0]
+
+        #expect(try firstTextColumns(
+            url,
+            "PRAGMA user_version",
+            count: 1
+        ) == [String(DictationStore.currentSchemaVersion)])
+        #expect(try migrationContentDigest(url) == digestBefore)
+        #expect(try firstTextColumns(
+            url,
+            """
+            SELECT (SELECT COUNT(*) FROM dictations),
+                   (SELECT COUNT(*) FROM meetings),
+                   (SELECT COUNT(*) FROM computer_use_traces),
+                   (SELECT COUNT(*) FROM meeting_transcript_checkpoints)
+            """,
+            count: 4
+        ) == countsBefore)
+        #expect(repairedDictations == "100|||||1\u{1e}101|duplicate-dictation|newer-tag|BEEF|20.0|0")
+        #expect(repairedMeetings == "200|||||1\u{1e}201|duplicate-meeting|newer-meeting-tag|DEAD|30.0|0")
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM pragma_foreign_key_check",
+            count: 1
+        ) == ["0"])
+        #expect(try firstTextColumns(
+            url,
+            """
+            SELECT (SELECT \"unique\" FROM pragma_index_list('dictations')
+                    WHERE name = 'idx_dictations_cloud_record_name'),
+                   (SELECT \"unique\" FROM pragma_index_list('meetings')
+                    WHERE name = 'idx_meetings_cloud_record_name')
+            """,
+            count: 2
+        ) == ["1", "1"])
+
+        try store.migrateIfNeeded()
+        #expect(try migrationContentDigest(url) == digestBefore)
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM pragma_foreign_key_check",
+            count: 1
+        ) == ["0"])
+        #expect(try firstTextColumns(
+            url,
+            """
+            SELECT (SELECT COUNT(*) FROM dictations WHERE cloud_record_name = 'duplicate-dictation'),
+                   (SELECT COUNT(*) FROM meetings WHERE cloud_record_name = 'duplicate-meeting')
+            """,
+            count: 2
+        ) == ["1", "1"])
+    }
+
+    @Test("session artifact schema indexes fingerprints without indexing payload bytes")
+    func sessionArtifactSchemaDoesNotIndexPayload() throws {
+        let (store, url) = try makeStoreWithURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try store.migrateIfNeeded()
+
+        #expect(try firstTextColumns(
+            url,
+            """
+            SELECT group_concat(name, ',')
+            FROM (
+                SELECT name FROM pragma_index_info('idx_session_trace_artifacts_fingerprint')
+                ORDER BY seqno
+            )
+            """,
+            count: 1
+        ) == ["session_uuid,content_fingerprint"])
+        #expect(try firstTextColumns(
+            url,
+            """
+            SELECT COUNT(*)
+            FROM pragma_index_list('session_trace_artifacts') AS indexes
+            JOIN pragma_index_info(indexes.name) AS columns
+            WHERE columns.name = 'content'
+            """,
+            count: 1
+        ) == ["0"])
+    }
+
     @Test("failed migration rolls back schema, data, and version and can be retried")
     func failedMigrationRollsBackAndRetries() throws {
         enum InjectedFailure: Error { case stopBeforeCommit }

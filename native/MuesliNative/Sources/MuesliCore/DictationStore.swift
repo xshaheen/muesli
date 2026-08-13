@@ -362,6 +362,12 @@ public final class DictationStore {
             CREATE INDEX IF NOT EXISTS idx_meetings_follow_up ON meetings(follow_up_to_id);
             CREATE INDEX IF NOT EXISTS idx_meetings_follow_up_record_name ON meetings(follow_up_to_record_name);
             DROP INDEX IF EXISTS idx_meetings_live_follow_up_unique;
+            """,
+            db: db
+        )
+        try repairDuplicateCloudRecordNames(db: db)
+        try exec(
+            """
             DROP INDEX IF EXISTS idx_dictations_cloud_record_name;
             DROP INDEX IF EXISTS idx_meetings_cloud_record_name;
             CREATE UNIQUE INDEX idx_dictations_cloud_record_name ON dictations(cloud_record_name);
@@ -431,11 +437,12 @@ public final class DictationStore {
                 content_fingerprint TEXT NOT NULL,
                 content BLOB NOT NULL,
                 byte_count INTEGER NOT NULL CHECK (byte_count BETWEEN 0 AND 1048576),
-                created_at REAL NOT NULL,
-                UNIQUE (session_uuid, content_fingerprint, content)
+                created_at REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_session_trace_artifacts_session
                 ON session_trace_artifacts(session_uuid, id);
+            CREATE INDEX IF NOT EXISTS idx_session_trace_artifacts_fingerprint
+                ON session_trace_artifacts(session_uuid, content_fingerprint);
 
             CREATE TABLE IF NOT EXISTS session_trace_artifact_references (
                 session_uuid TEXT NOT NULL REFERENCES session_traces(session_uuid) ON DELETE CASCADE,
@@ -505,6 +512,7 @@ public final class DictationStore {
             "idx_session_traces_dictation_id",
             "idx_session_traces_meeting_id",
             "idx_session_trace_artifacts_session",
+            "idx_session_trace_artifacts_fingerprint",
             "idx_session_trace_artifact_references_artifact",
             "idx_session_trace_events_session",
         ]
@@ -527,6 +535,49 @@ public final class DictationStore {
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else {
             throw schemaPostconditionError("session trace clear generation singleton is missing")
+        }
+
+        guard try indexColumns("idx_session_trace_artifacts_fingerprint", db: db) == [
+            "session_uuid", "content_fingerprint",
+        ] else {
+            throw schemaPostconditionError("session trace artifact fingerprint index has unexpected columns")
+        }
+        for index in try tableIndexNames("session_trace_artifacts", db: db) {
+            guard try !indexColumns(index, db: db).contains("content") else {
+                throw schemaPostconditionError("session trace artifact payload is indexed by \(index)")
+            }
+        }
+    }
+
+    private func repairDuplicateCloudRecordNames(db: OpaquePointer?) throws {
+        for table in ["dictations", "meetings"] {
+            // Legacy migrations attempted to add the uniqueness constraint but
+            // swallowed failures. Preserve every user row while retaining the
+            // newest CloudKit identity deterministically for each record name.
+            try exec(
+                """
+                UPDATE \(table) AS duplicate
+                SET cloud_record_name = NULL,
+                    cloud_change_tag = NULL,
+                    cloud_system_fields = NULL,
+                    last_synced_at = NULL,
+                    sync_dirty = 1
+                WHERE duplicate.cloud_record_name IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM \(table) AS keeper
+                      WHERE keeper.cloud_record_name = duplicate.cloud_record_name
+                        AND (
+                            COALESCE(keeper.updated_at, 0) > COALESCE(duplicate.updated_at, 0)
+                            OR (
+                                COALESCE(keeper.updated_at, 0) = COALESCE(duplicate.updated_at, 0)
+                                AND keeper.id > duplicate.id
+                            )
+                        )
+                  );
+                """,
+                db: db
+            )
         }
     }
 
@@ -661,6 +712,34 @@ public final class DictationStore {
         db: OpaquePointer?
     ) throws -> Bool {
         try schemaObjectSQL(type: type, name: name, db: db) != nil
+    }
+
+    private func tableIndexNames(_ table: String, db: OpaquePointer?) throws -> [String] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA index_list(\(table))", -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var names: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            names.append(stringColumn(statement, index: 1))
+        }
+        return names
+    }
+
+    private func indexColumns(_ index: String, db: OpaquePointer?) throws -> [String] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA index_info(\(index))", -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var columns: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            columns.append(stringColumn(statement, index: 2))
+        }
+        return columns
     }
 
     private func schemaObjectSQL(
