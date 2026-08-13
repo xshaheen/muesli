@@ -38,6 +38,7 @@ private struct PendingStandardDictationStop {
     let backend: BackendOption
     let cohereLanguage: CohereTranscribeLanguage
     let indicASRLanguage: IndicASRLanguage
+    let whisperLanguage: WhisperKitLanguage
     let promptContext: String?
     let storageContext: String
     let correctionTargetApp: DictationSessionTarget?
@@ -62,6 +63,7 @@ private struct StandardDictationJob: Identifiable {
     let backend: BackendOption
     let cohereLanguage: CohereTranscribeLanguage
     let indicASRLanguage: IndicASRLanguage
+    let whisperLanguage: WhisperKitLanguage
     let promptContext: String?
     let storageContext: String
     let correctionTargetApp: DictationSessionTarget?
@@ -411,6 +413,7 @@ final class MuesliController: NSObject {
     private var preferencesWindowController: PreferencesWindowController?
     private var onboardingWindowController: OnboardingWindowController?
     private let featureTourStore = FeatureTourStore()
+    private var isFeatureTourPresentationQueued = false
     var updaterController: SPUStandardUpdaterController?
     private var busyStatusGeneration = 0
 
@@ -1001,17 +1004,25 @@ final class MuesliController: NSObject {
     @discardableResult
     private func offerFeatureTour(_ tour: FeatureTour) -> Bool {
         guard !tour.steps.isEmpty,
+              !isFeatureTourPresentationQueued,
               appState.pendingFeatureTourInvitation == nil,
               appState.activeFeatureTour == nil,
               ensureBasicDictationPermissionsBeforeDashboard() else { return false }
 
-        appState.pendingFeatureTourInvitation = tour
-        presentHistoryWindow()
-        TelemetryDeck.signal("feature_walkthrough.invitation_shown", parameters: [
-            "version": tour.version,
-            "step_count": "\(tour.steps.count)",
-            "includes_cloud_cleanup": "\(tour.steps.contains { $0.target == .cloudCleanupSetting })",
-        ])
+        isFeatureTourPresentationQueued = true
+        presentHistoryWindow(whenReady: { [weak self] in
+            guard let self else { return }
+            self.isFeatureTourPresentationQueued = false
+            guard self.appState.pendingFeatureTourInvitation == nil,
+                  self.appState.activeFeatureTour == nil else { return }
+
+            self.appState.pendingFeatureTourInvitation = tour
+            TelemetryDeck.signal("feature_walkthrough.invitation_shown", parameters: [
+                "version": tour.version,
+                "step_count": "\(tour.steps.count)",
+                "includes_cloud_cleanup": "\(tour.steps.contains { $0.target == .cloudCleanupSetting })",
+            ])
+        })
         // The normal startup preload task continues while this invitation and
         // the walkthrough are on screen, so no second backend load is started.
         return true
@@ -1041,18 +1052,23 @@ final class MuesliController: NSObject {
     @discardableResult
     private func beginFeatureTour(_ tour: FeatureTour, source: String) -> Bool {
         guard !tour.steps.isEmpty,
+              !isFeatureTourPresentationQueued,
               ensureBasicDictationPermissionsBeforeDashboard() else { return false }
 
         appState.pendingFeatureTourInvitation = nil
-        appState.activeFeatureTour = tour
-        appState.featureTourStepIndex = 0
-        navigateToFeatureTourStep(tour.steps[0])
-        presentHistoryWindow()
-        TelemetryDeck.signal("feature_walkthrough.started", parameters: [
-            "version": tour.version,
-            "source": source,
-            "step_count": "\(tour.steps.count)",
-        ])
+        isFeatureTourPresentationQueued = true
+        presentHistoryWindow(whenReady: { [weak self] in
+            guard let self else { return }
+            self.isFeatureTourPresentationQueued = false
+            self.appState.activeFeatureTour = tour
+            self.appState.featureTourStepIndex = 0
+            self.navigateToFeatureTourStep(tour.steps[0])
+            TelemetryDeck.signal("feature_walkthrough.started", parameters: [
+                "version": tour.version,
+                "source": source,
+                "step_count": "\(tour.steps.count)",
+            ])
+        })
         return true
     }
 
@@ -2466,6 +2482,12 @@ final class MuesliController: NSObject {
     func selectIndicASRLanguage(_ language: IndicASRLanguage) {
         updateConfig {
             $0.indicASRLanguage = language.rawValue
+        }
+    }
+
+    func selectWhisperLanguage(_ language: WhisperKitLanguage) {
+        updateConfig {
+            $0.whisperLanguage = language.rawValue
         }
     }
 
@@ -4054,9 +4076,9 @@ final class MuesliController: NSObject {
         presentHistoryWindow()
     }
 
-    private func presentHistoryWindow() {
+    private func presentHistoryWindow(whenReady readyAction: (() -> Void)? = nil) {
         DispatchQueue.main.async { [weak self] in
-            self?.historyWindowController?.show()
+            self?.historyWindowController?.show(whenReady: readyAction)
         }
     }
 
@@ -4416,6 +4438,7 @@ final class MuesliController: NSObject {
                     backend: backend,
                     cohereLanguage: self.config.resolvedCohereLanguage,
                     indicASRLanguage: self.config.resolvedIndicASRLanguage,
+                    whisperLanguage: self.config.resolvedWhisperLanguage,
                     customWords: self.config.customWords
                 )
                 let rawTranscript = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5649,6 +5672,11 @@ final class MuesliController: NSObject {
         )
         scheduleICloudSyncAfterLocalChange()
         scheduleMeetingTranscriptCleanup(meetingID: meetingID)
+        meetingHookDispatcher.dispatchCompletedMeetingHook(
+            meetingID: meetingID,
+            completedAt: endTime,
+            config: config
+        )
         return meetingID
     }
 
@@ -7847,6 +7875,7 @@ final class MuesliController: NSObject {
                     backend: self.selectedBackend,
                     cohereLanguage: self.config.resolvedCohereLanguage,
                     indicASRLanguage: self.config.resolvedIndicASRLanguage,
+                    whisperLanguage: self.config.resolvedWhisperLanguage,
                     enablePostProcessor: false,
                     customWords: self.serializedCustomWords(),
                     appContext: nil
@@ -9060,6 +9089,7 @@ final class MuesliController: NSObject {
                 ? (dictationTestCohereLanguage ?? sessionConfig.resolvedCohereLanguage)
                 : sessionConfig.resolvedCohereLanguage,
             indicASRLanguage: sessionConfig.resolvedIndicASRLanguage,
+            whisperLanguage: sessionConfig.resolvedWhisperLanguage,
             promptContext: capturedContext.map { DictationContextCapture.formatForPrompt($0) },
             storageContext: capturedContext.map { DictationContextCapture.formatForStorage($0) }
                 ?? correctionTargetApp?.appContext
@@ -9194,6 +9224,7 @@ final class MuesliController: NSObject {
             backend: pendingStop.backend,
             cohereLanguage: pendingStop.cohereLanguage,
             indicASRLanguage: pendingStop.indicASRLanguage,
+            whisperLanguage: pendingStop.whisperLanguage,
             promptContext: pendingStop.promptContext,
             storageContext: pendingStop.storageContext,
             correctionTargetApp: pendingStop.correctionTargetApp,
@@ -9275,6 +9306,7 @@ final class MuesliController: NSObject {
                 backend: job.backend,
                 cohereLanguage: job.cohereLanguage,
                 indicASRLanguage: job.indicASRLanguage,
+                whisperLanguage: job.whisperLanguage,
                 enablePostProcessor: cleanupPolicy.readiness == .ready,
                 cleanupRequestSnapshot: job.cleanupRequest,
                 customWords: job.customWords,

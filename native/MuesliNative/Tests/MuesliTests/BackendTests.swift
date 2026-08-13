@@ -23,6 +23,31 @@ struct WhisperKitTranscriberTests {
             #expect(!option.model.hasSuffix(".bin"), "\(option.label) should not use .bin suffix")
         }
     }
+
+    @Test("language selection preserves vocabulary prompt tokens")
+    func languageSelectionPreservesVocabularyPromptTokens() {
+        let options = WhisperKitTranscriber.makeDecodeOptions(
+            language: .auto,
+            modelName: BackendOption.whisperLargeTurbo.model,
+            promptTokens: [11, 22, 33]
+        )
+
+        #expect(options.detectLanguage)
+        #expect(options.promptTokens == [11, 22, 33])
+    }
+
+    @Test("English-only models preserve vocabulary while ignoring language selection")
+    func englishOnlyModelsPreserveVocabularyPromptTokens() {
+        let options = WhisperKitTranscriber.makeDecodeOptions(
+            language: .arabic,
+            modelName: BackendOption.whisperSmallEnglish.model,
+            promptTokens: [44, 55]
+        )
+
+        #expect(options.language == nil)
+        #expect(!options.detectLanguage)
+        #expect(options.promptTokens == [44, 55])
+    }
 }
 
 @Suite("FluidAudioTranscriber")

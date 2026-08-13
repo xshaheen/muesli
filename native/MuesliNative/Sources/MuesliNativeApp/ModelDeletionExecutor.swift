@@ -64,25 +64,12 @@ enum ModelDeletionPlan: Sendable, Equatable {
         case "gemma4-litert":
             try Gemma4LiteRTModelStore.deleteModelFiles(fileManager: fileManager)
         case "fluidaudio":
-            let supportDirectory = fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models")
-            if model.contains("parakeet") {
-                let version = model.contains("v2") ? "v2" : "v3"
-                if let contents = try? fileManager.contentsOfDirectory(
-                    at: supportDirectory,
-                    includingPropertiesForKeys: nil
-                ) {
-                    for directory in contents
-                    where directory.lastPathComponent.contains("parakeet")
-                        && directory.lastPathComponent.contains(version) {
-                        try removeItemIfPresent(at: directory, fileManager: fileManager)
-                    }
-                }
-            }
+            let plan = model.contains("v2")
+                ? ManagedASRModelPlans.parakeetV2()
+                : ManagedASRModelPlans.parakeetV3()
+            try plan.delete(fileManager: fileManager)
         case "qwen":
-            let path = fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models/qwen3-asr-0.6b-coreml")
-            try removeItemIfPresent(at: path, fileManager: fileManager)
+            try Qwen3AsrModelStore.deleteModelFiles(fileManager: fileManager)
         default:
             break
         }

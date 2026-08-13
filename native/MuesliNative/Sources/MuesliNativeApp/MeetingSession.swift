@@ -854,6 +854,7 @@ final class MeetingSession {
                         backend: currentBackend(),
                         cohereLanguage: config.resolvedCohereLanguage,
                         indicASRLanguage: config.resolvedIndicASRLanguage,
+                        whisperLanguage: config.resolvedWhisperLanguage,
                         customWords: config.customWords
                     )
                     let normalizedSegments = normalizeSystemTranscription(
@@ -1153,6 +1154,7 @@ final class MeetingSession {
                     backend: backend,
                     cohereLanguage: config.resolvedCohereLanguage,
                     indicASRLanguage: config.resolvedIndicASRLanguage,
+                    whisperLanguage: config.resolvedWhisperLanguage,
                     customWords: config.customWords
                 )
                 if !result.text.isEmpty {
@@ -1511,6 +1513,7 @@ final class MeetingSession {
                 backend: currentBackend(),
                 cohereLanguage: config.resolvedCohereLanguage,
                 indicASRLanguage: config.resolvedIndicASRLanguage,
+                whisperLanguage: config.resolvedWhisperLanguage,
                 customWords: config.customWords
             )
             if !result.text.isEmpty {
@@ -1619,6 +1622,7 @@ final class MeetingSession {
                         backend: currentBackend(),
                         cohereLanguage: config.resolvedCohereLanguage,
                         indicASRLanguage: config.resolvedIndicASRLanguage,
+                        whisperLanguage: config.resolvedWhisperLanguage,
                         customWords: config.customWords
                     )
                     repairedSegments.append(contentsOf: normalizeSystemTranscription(
@@ -1652,6 +1656,7 @@ final class MeetingSession {
                 backend: currentBackend(),
                 cohereLanguage: config.resolvedCohereLanguage,
                 indicASRLanguage: config.resolvedIndicASRLanguage,
+                whisperLanguage: config.resolvedWhisperLanguage,
                 customWords: config.customWords
             )
             return normalizeSystemTranscription(

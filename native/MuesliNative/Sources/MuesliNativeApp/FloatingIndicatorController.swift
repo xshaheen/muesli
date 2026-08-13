@@ -61,6 +61,7 @@ private final class HoverIndicatorView: NSView {
     override func mouseDown(with event: NSEvent) {
         didDrag = false
         mouseDownScreenLocation = NSEvent.mouseLocation
+        owner?.pointerInteractionBegan()
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -130,6 +131,7 @@ final class FloatingIndicatorController: NSObject {
     private var textLabel: NSTextField?
     private var state: DictationState = .idle
     private var isHovered = false
+    private var preservesCollapsedLeftEdge = false
     private var hoverExitWorkItem: DispatchWorkItem?
     private var warningDismissWorkItem: DispatchWorkItem?
     private let configStore: ConfigStore
@@ -325,11 +327,19 @@ final class FloatingIndicatorController: NSObject {
         dragStartPillCenter = indicatorScreenFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
     }
 
+    func pointerInteractionBegan() {
+        isDragging = true
+        hoverExitWorkItem?.cancel()
+    }
+
     func pointerInteractionEnded() {
         isDragging = false
         dragStartAnchorCenter = nil
         dragStartPillCenter = nil
         dragScreenFrames = []
+        if state == .idle, isHovered, !pointerIsInsidePill() {
+            scheduleHoverExit()
+        }
     }
 
     /// Clamps a dragged origin so the pill's centre stays on a display.
@@ -523,7 +533,7 @@ final class FloatingIndicatorController: NSObject {
         // window and stopped -- leaving the tint layer and waveform bars laid out for
         // the old geometry. The surface and waveform are the recording pill's visible
         // appearance, so stale geometry can make the pill appear clipped or empty.
-        applyGlassState(state, frameSize: targetFrame.size)
+        applyGlassState(state, frameSize: targetFrame.size, config: config)
         applyWaveformChrome(for: state, mode: recordingWaveformMode, in: targetFrame.size)
         // setState orders the panel front after every transition; a drag resizes the
         // same way and needs the same guarantee.
@@ -833,6 +843,7 @@ final class FloatingIndicatorController: NSObject {
         if state != .idle {
             isHovered = false
         }
+        preservesCollapsedLeftEdge = state == .idle && isHovered
         if !config.showFloatingIndicator && state == .idle {
             close()
             return
@@ -937,7 +948,7 @@ final class FloatingIndicatorController: NSObject {
             }
 
             // Apply glass state last so it can override iconLabel visibility set above.
-            applyGlassState(state, frameSize: layoutFrame.size)
+            applyGlassState(state, frameSize: layoutFrame.size, config: config)
         }
 
         // Manage SF Symbol effects — stop everything first, then start for the new state.
@@ -991,6 +1002,7 @@ final class FloatingIndicatorController: NSObject {
             pointerInteractionEnded()
         }
         isHovered = false
+        preservesCollapsedLeftEdge = false
         clearLoadingChrome()
         stopWaveformAnimation()
 
@@ -1095,6 +1107,7 @@ final class FloatingIndicatorController: NSObject {
         clearLoadingChrome()
         chromeGeneration &+= 1
 
+        preservesCollapsedLeftEdge = false
         let warningFont = NSFont.systemFont(ofSize: 11, weight: .medium)
         let warningSize = Self.warningPillSize(
             message: message,
@@ -1199,6 +1212,7 @@ final class FloatingIndicatorController: NSObject {
         cancelWarningDismissal()
         chromeGeneration &+= 1
         isShowingLoading = true
+        preservesCollapsedLeftEdge = false
         let loadingSize = Self.loadingPillSize(message: message, screen: screen)
         let center = CGPoint(x: pillFrame.midX, y: pillFrame.midY)
         let x = min(max(center.x - loadingSize.width / 2, screen.minX), screen.maxX - loadingSize.width)
@@ -1367,6 +1381,7 @@ final class FloatingIndicatorController: NSObject {
         // The transcript window goes down with the pill below, so the latch suppressing
         // its re-show has nothing left to suppress.
         isMeetingTranscriptManuallyDismissed = false
+        preservesCollapsedLeftEdge = false
         panel?.close()
         panel = nil
         containerView = nil
@@ -1775,7 +1790,7 @@ final class FloatingIndicatorController: NSObject {
         return style
     }
 
-    private func applyGlassState(_ state: DictationState, frameSize: NSSize) {
+    private func applyGlassState(_ state: DictationState, frameSize: NSSize, config: AppConfig) {
         applyFloatingSurface(presentationRole(for: state), frameSize: frameSize)
 
         let iconSize = NSSize(width: 18, height: 18)
@@ -1789,12 +1804,48 @@ final class FloatingIndicatorController: NSObject {
             if let mic = micIconView {
                 mic.alphaValue = 1
                 if isHovered {
-                    mic.frame = NSRect(x: 12, y: (frameSize.height - iconSize.height) / 2,
-                                      width: iconSize.width, height: iconSize.height)
+                    mic.frame = NSRect(
+                        x: 14,
+                        y: (frameSize.height - iconSize.height) / 2,
+                        width: iconSize.width,
+                        height: iconSize.height
+                    )
+                    if let textLabel {
+                        let textX: CGFloat = 42
+                        let textHeight: CGFloat = 16
+                        textLabel.frame = NSRect(
+                            x: textX,
+                            y: floor((frameSize.height - textHeight) / 2),
+                            width: max(0, frameSize.width - textX - 14),
+                            height: textHeight
+                        )
+                    }
                 } else {
-                    mic.frame = NSRect(x: (frameSize.width - iconSize.width) / 2,
-                                       y: (frameSize.height - iconSize.height) / 2,
-                                       width: iconSize.width, height: iconSize.height)
+                    let showsHotkey = config.showHotkeyOnFloatingIndicator
+                    let compactIconSize = NSSize(width: 14, height: 14)
+                    let iconX = showsHotkey
+                        ? CGFloat(6)
+                        : floor((frameSize.width - compactIconSize.width) / 2)
+                    mic.frame = NSRect(
+                        x: iconX,
+                        y: floor((frameSize.height - compactIconSize.height) / 2),
+                        width: compactIconSize.width,
+                        height: compactIconSize.height
+                    )
+                    if let textLabel, showsHotkey {
+                        textLabel.stringValue = MenuBarIconRenderer.hotkeyCueLabel(
+                            for: config.dictationHotkey
+                        )
+                        textLabel.font = NSFont.monospacedSystemFont(ofSize: 8, weight: .semibold)
+                        textLabel.textColor = .white.withAlphaComponent(0.78)
+                        textLabel.alignment = .center
+                        textLabel.isHidden = false
+                        textLabel.alphaValue = 1
+                        textLabel.frame = NSRect(x: 21, y: 7, width: 18, height: 13)
+                    } else {
+                        textLabel?.isHidden = true
+                        textLabel?.alphaValue = 0
+                    }
                 }
             }
 
@@ -2132,6 +2183,36 @@ final class FloatingIndicatorController: NSObject {
         anchorCenter(.midTrailing, in: visibleFrame, size: idleSize)
     }
 
+    static func idlePositionCenter(
+        for frame: NSRect,
+        collapsedSize: NSSize = NSSize(width: 44, height: 28)
+    ) -> CGPoint {
+        CGPoint(x: frame.minX + collapsedSize.width / 2, y: frame.midY)
+    }
+
+    static func positionCenter(
+        for frame: NSRect,
+        preservesCollapsedLeftEdge: Bool,
+        collapsedSize: NSSize = NSSize(width: 44, height: 28)
+    ) -> CGPoint {
+        guard preservesCollapsedLeftEdge else {
+            return CGPoint(x: frame.midX, y: frame.midY)
+        }
+        return idlePositionCenter(for: frame, collapsedSize: collapsedSize)
+    }
+
+    static func customIdleFrame(
+        positionCenter: CGPoint,
+        size: NSSize,
+        in visibleFrame: NSRect,
+        collapsedSize: NSSize = NSSize(width: 44, height: 28)
+    ) -> NSRect {
+        let leftEdge = positionCenter.x - collapsedSize.width / 2
+        let x = min(max(leftEdge, visibleFrame.minX), visibleFrame.maxX - size.width)
+        let y = min(max(positionCenter.y - size.height / 2, visibleFrame.minY), visibleFrame.maxY - size.height)
+        return NSRect(origin: CGPoint(x: x, y: y), size: size)
+    }
+
     static func anchorCenter(_ anchor: IndicatorAnchor, in visibleFrame: NSRect, size: NSSize) -> CGPoint {
         let inset: CGFloat = 8
         let leadingX = visibleFrame.minX + size.width / 2 + inset
@@ -2170,6 +2251,35 @@ final class FloatingIndicatorController: NSObject {
     ) -> Bool {
         let allowedRect = visibleFrame.insetBy(dx: size.width / 2, dy: size.height / 2)
         return allowedRect.contains(center)
+    }
+
+    static func visibleFrameForCustomIndicator(
+        customPositionCenter: CGPoint?,
+        indicatorFrame: NSRect?,
+        savedPositionCenter: CGPoint?,
+        availableVisibleFrames: [NSRect],
+        fallback: NSRect
+    ) -> NSRect {
+        if let customPositionCenter,
+           let matchingFrame = availableVisibleFrames.first(where: { $0.contains(customPositionCenter) }) {
+            return matchingFrame
+        }
+        if let indicatorFrame, !indicatorFrame.isEmpty,
+           let matchingFrame = availableVisibleFrames
+               .compactMap({ visibleFrame -> (frame: NSRect, overlap: CGFloat)? in
+                   let intersection = visibleFrame.intersection(indicatorFrame)
+                   guard !intersection.isNull, !intersection.isEmpty else { return nil }
+                   return (visibleFrame, intersection.width * intersection.height)
+               })
+               .max(by: { $0.overlap < $1.overlap })?
+               .frame {
+            return matchingFrame
+        }
+        if let savedPositionCenter,
+           let matchingFrame = availableVisibleFrames.first(where: { $0.contains(savedPositionCenter) }) {
+            return matchingFrame
+        }
+        return fallback
     }
 
     /// Brings an anchor centre inside the area where a pill of `size` sits fully on screen.
@@ -2282,9 +2392,13 @@ final class FloatingIndicatorController: NSObject {
     private func indicatorSize(for state: DictationState, on screen: NSRect) -> NSSize {
         switch state {
         case .idle:
-            return isHovered
-                ? NSSize(width: 220, height: Self.compactIndicatorHeight)
-                : Self.idleIndicatorSize
+            if isHovered {
+                return Self.idleHoverPillSize(
+                    hotkeyLabel: configStore.load().dictationHotkey.label,
+                    screenWidth: screen.width
+                )
+            }
+            return Self.idleIndicatorSize
         case .preparing, .recording:
             // A meeting pill carries a third control (the panel toggle), and its
             // waveform strip is inert — so the width must hold two full-size hit
@@ -2526,6 +2640,18 @@ final class FloatingIndicatorController: NSObject {
 
     static func computerUseCursorSizeForTesting(label: String) -> NSSize {
         computerUseCursorSize(label: label)
+    }
+
+    static func idleHoverPillSize(hotkeyLabel: String, screenWidth: CGFloat) -> NSSize {
+        let title = "Hold \(hotkeyLabel) to dictate"
+        let font = NSFont.systemFont(ofSize: 11, weight: .regular)
+        let textWidth = ceil((title as NSString).size(withAttributes: [.font: font]).width)
+        let preferredWidth = 42 + textWidth + 22
+        let maxWidth = max(CGFloat(180), screenWidth - 32)
+        return NSSize(
+            width: min(max(220, preferredWidth), maxWidth),
+            height: 36
+        )
     }
 
     static func computerUseTranscriptPillSizeForTesting(
