@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "captureCommit": "01350223527973044173d48a6c70687f58176764",
+  "captureTimestampUTC": "14-08-2026_02-32-20",
+  "sampleCount": 9,
+  "samplesPerCohort": 3,
+  "rawASR": {
+    "overall": {"wer": 0.4861111111111111, "cer": 0.23177083333333334},
+    "english": {"wer": 0.1111111111111111, "cer": 0.019736842105263157},
+    "arabic": {"wer": 0.5, "cer": 0.13385826771653545},
+    "arabicEnglish": {"wer": 0.9130434782608695, "cer": 0.6571428571428571, "latinTokenPreservation": 0.1875, "arabicTokenPreservation": 0.5714285714285714}
+  },
+  "finalOutput": {
+    "overall": {"wer": 0.4861111111111111, "cer": 0.23177083333333334},
+    "english": {"wer": 0.1111111111111111, "cer": 0.019736842105263157},
+    "arabic": {"wer": 0.5, "cer": 0.13385826771653545},
+    "arabicEnglish": {"wer": 0.9130434782608695, "cer": 0.6571428571428571, "latinTokenPreservation": 0.1875, "arabicTokenPreservation": 0.5714285714285714}
+  },
+  "timing": {
+    "asrSeconds": {"count": 9, "p50": 0.2, "p95": 0.74, "maximum": 0.74},
+    "endToEndSeconds": {"count": 9, "p50": 0.93, "p95": 1.45, "maximum": 1.45},
+    "realTimeFactor": {"count": 9, "p50": 0.04595558437377828, "p95": 0.15973411909814303, "maximum": 0.15973411909814303}
+  },
+  "traceOverhead": {
+    "sampleCount": 100,
+    "measuredEnqueueMilliseconds": {"p50": 0.001792, "p95": 0.0045, "maximum": 0.008625},
+    "measuredTerminalDurableMilliseconds": {"p50": 12.576542, "p95": 15.190125, "maximum": 18.935},
+    "committedEnqueueCapMilliseconds": 10.0,
+    "committedTerminalDurableCapMilliseconds": 250.0
+  }
+}

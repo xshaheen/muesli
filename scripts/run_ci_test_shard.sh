@@ -20,6 +20,8 @@ case "${shard}" in
       ConfigStoreTests
       DictationStoreTests
       SessionTraceStoreTests
+      LocalDiagnosticsTests
+      SessionDiagnosticsPresentationTests
       MuesliCKSyncEngineTests
       MuesliCLITests
       ChatGPTAuthTests
@@ -98,17 +100,21 @@ case "${shard}" in
       HostedDictationCleanupDeadlineTests
       OrderedDictationJobQueueTests
       SessionTraceRuntimeTests
+      SessionTracePerformanceTests
+      TranscriptionQualityFixtureContractTests
     )
     ;;
   meetings)
     filters=(
       AudioGraphExceptionBridgeTests
       DiagnosticIncidentTests
+      DiagnosticIncidentReporterTests
       DictationAudioRouteControllerTests
       MeetingDetectorTests
       MeetingActivityDetectionPolicyTests
       MeetingRecordingWriterTests
       MeetingResumePolicyTests
+      MeetingSessionDiagnosticsTests
       MeetingStreamingPartialSessionTests
       MeetingFollowUpPolicyTests
       MeetingFollowUpThreadTests
