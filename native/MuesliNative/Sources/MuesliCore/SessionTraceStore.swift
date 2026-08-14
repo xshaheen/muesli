@@ -153,9 +153,9 @@ public actor SessionTraceStore {
                 date: date,
                 db: db
             )
-            guard try physicalBudgetSatisfiedAfterWrite(db: db) else {
-                throw SessionTraceStoreError.limitReached(.physicalDatabaseBytes)
-            }
+            // The session shell and terminal decision are mandatory even when
+            // normal history already consumes the shared database high-water.
+            // Optional diagnostic mutations enforce the physical budget.
             return SessionTraceWriterToken(
                 sessionID: sessionID,
                 writerID: writerID,

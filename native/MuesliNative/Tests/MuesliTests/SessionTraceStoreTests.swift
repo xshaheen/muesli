@@ -560,6 +560,29 @@ struct SessionTraceStoreTests {
         #expect(fileFootprint(url) <= physicalLimit)
     }
 
+    @Test("history above the diagnostics high-water still permits a terminal trace shell")
+    func physicalHighWaterNeverBlocksTerminalOwnership() async throws {
+        let url = temporaryDatabaseURL()
+        defer { removeDatabase(url) }
+        let history = DictationStore(databaseURL: url)
+        try history.migrateIfNeeded()
+        _ = try history.insertDictation(
+            text: String(repeating: "retained history ", count: 512),
+            durationSeconds: 1,
+            appContext: "tests",
+            startedAt: Date(timeIntervalSince1970: 1),
+            endedAt: Date(timeIntervalSince1970: 2)
+        )
+        let policy = replacing(SessionTraceRetentionPolicy.default, maximumPhysicalBytes: 1)
+        let store = try SessionTraceStore(databaseURL: url, retentionPolicy: policy)
+
+        let token = try await store.beginSession(kind: .dictation)
+        #expect(try await store.claimTerminal(.failed, token: token) == .won)
+        let detail = try #require(try await store.detail(sessionID: token.sessionID))
+        #expect(detail.summary.terminalOutcome == .failed)
+        #expect(detail.events.map(\.vocabulary) == [.sessionStarted, .terminal])
+    }
+
     @Test("an eight-hour synthetic workload stays within every frozen resource cap")
     func eightHourResourceBounds() async throws {
         let base = Date(timeIntervalSince1970: 3_000_000)
