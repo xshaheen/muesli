@@ -583,6 +583,25 @@ struct SessionTraceStoreTests {
         #expect(detail.events.map(\.vocabulary) == [.sessionStarted, .terminal])
     }
 
+    @Test("mandatory terminal shells use a bounded reserve")
+    func terminalShellReserveIsBounded() async throws {
+        let url = temporaryDatabaseURL()
+        defer { removeDatabase(url) }
+        let policy = replacing(
+            SessionTraceRetentionPolicy.default,
+            maximumSessions: 2,
+            maximumTerminalShellBytes: 4 * 1_024
+        )
+        let store = try SessionTraceStore(databaseURL: url, retentionPolicy: policy)
+        let first = try await store.beginSession(kind: .dictation)
+        #expect(try await store.claimTerminal(.success, token: first) == .won)
+
+        let replacement = try await store.beginSession(kind: .meeting)
+        #expect(try await store.detail(sessionID: first.sessionID) == nil)
+        #expect(try await store.claimTerminal(.failed, token: replacement) == .won)
+        #expect(try scalar(url, "SELECT COUNT(*) FROM session_traces") == 1)
+    }
+
     @Test("an eight-hour synthetic workload stays within every frozen resource cap")
     func eightHourResourceBounds() async throws {
         let base = Date(timeIntervalSince1970: 3_000_000)
@@ -652,7 +671,8 @@ struct SessionTraceStoreTests {
         maximumSessions: Int? = nil,
         abandonedWriterRetention: TimeInterval? = nil,
         maximumExportBytes: Int? = nil,
-        maximumPhysicalBytes: Int? = nil
+        maximumPhysicalBytes: Int? = nil,
+        maximumTerminalShellBytes: Int? = nil
     ) -> SessionTraceRetentionPolicy {
         SessionTraceRetentionPolicy(
             richContentRetention: value.richContentRetention,
@@ -666,7 +686,8 @@ struct SessionTraceStoreTests {
             maximumEventMetadataBytes: value.maximumEventMetadataBytes,
             maximumIdentifierBytes: value.maximumIdentifierBytes,
             abandonedWriterRetention: abandonedWriterRetention ?? value.abandonedWriterRetention,
-            maximumPhysicalBytes: maximumPhysicalBytes ?? value.maximumPhysicalBytes
+            maximumPhysicalBytes: maximumPhysicalBytes ?? value.maximumPhysicalBytes,
+            maximumTerminalShellBytes: maximumTerminalShellBytes ?? value.maximumTerminalShellBytes
         )
     }
 

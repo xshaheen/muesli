@@ -114,6 +114,9 @@ public actor SessionTraceStore {
             guard try scalarInt("SELECT COUNT(*) FROM session_traces", db: db) < retentionPolicy.maximumSessions else {
                 throw SessionTraceStoreError.limitReached(.sessionCount)
             }
+            guard try reclaimTerminalShellCapacity(reservingBytes: 4 * 1_024, db: db) else {
+                throw SessionTraceStoreError.limitReached(.terminalShellBytes)
+            }
             let generation = try scalarInt64(
                 "SELECT clear_generation FROM session_trace_settings WHERE singleton_id = 1",
                 db: db
@@ -800,6 +803,11 @@ private extension SessionTraceStore {
                 .contains(policy.maximumPhysicalBytes),
             "physical database bytes must be between 1 and 512 MiB"
         )
+        try require(
+            (4 * 1_024 ... SessionTraceRetentionPolicy.defaultMaximumTerminalShellBytes)
+                .contains(policy.maximumTerminalShellBytes),
+            "terminal shell bytes must be between 4 KiB and 8 MiB"
+        )
     }
 
     enum WriterGate {
@@ -986,6 +994,51 @@ private extension SessionTraceStore {
             }
         }
         return false
+    }
+
+    /// Mandatory session-start and terminal evidence has a separate bounded
+    /// reserve because normal history can already exceed the optional
+    /// diagnostics high-water in this shared database.
+    func reclaimTerminalShellCapacity(reservingBytes: Int, db: OpaquePointer?) throws -> Bool {
+        while try estimatedTerminalShellBytes(db: db) + reservingBytes
+            > retentionPolicy.maximumTerminalShellBytes {
+            var statement: OpaquePointer?
+            try prepare(
+                """
+                SELECT session_uuid FROM session_traces
+                WHERE terminal_at IS NOT NULL
+                ORDER BY terminal_at ASC, session_uuid ASC LIMIT 1
+                """,
+                into: &statement,
+                db: db
+            )
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                sqlite3_finalize(statement)
+                return false
+            }
+            let sessionID = text(statement, 0)
+            sqlite3_finalize(statement)
+            statement = nil
+            try prepare("DELETE FROM session_traces WHERE session_uuid = ?", into: &statement, db: db)
+            bind(sessionID, to: statement, at: 1)
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                sqlite3_finalize(statement)
+                throw sqliteError(db)
+            }
+            sqlite3_finalize(statement)
+        }
+        return true
+    }
+
+    func estimatedTerminalShellBytes(db: OpaquePointer?) throws -> Int {
+        try scalarInt(
+            """
+            SELECT (SELECT COUNT(*) * 2048 FROM session_traces)
+                 + (SELECT COUNT(*) * 1024 FROM session_trace_events
+                    WHERE vocabulary IN ('session_started', 'terminal'))
+            """,
+            db: db
+        )
     }
 
     func insertEvent(
