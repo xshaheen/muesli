@@ -88,6 +88,23 @@ struct SessionTraceStoreTests {
             == .terminalAlreadyDecided(outcome))
     }
 
+    @Test("oversized terminal metadata is truncated without blocking arbitration")
+    func oversizedTerminalMetadataCannotBlockCAS() async throws {
+        let (store, url) = try makeStore()
+        defer { removeDatabase(url) }
+        let token = try await store.beginSession(kind: .dictation)
+
+        #expect(try await store.claimTerminal(
+            .fallbackSuccess,
+            metadata: ["detail": String(repeating: "private", count: 100)],
+            token: token
+        ) == .won)
+        let detail = try #require(try await store.detail(sessionID: token.sessionID))
+        #expect(detail.summary.terminalOutcome == .fallbackSuccess)
+        #expect(detail.events.last?.metadata == ["metadata_state": "truncated"])
+        #expect(detail.events.filter { $0.vocabulary == .terminal }.count == 1)
+    }
+
     @Test("all terminal outcomes round-trip")
     func terminalOutcomesRoundTrip() async throws {
         let (store, url) = try makeStore()
@@ -172,6 +189,64 @@ struct SessionTraceStoreTests {
 
         _ = try await store.prune(now: start.addingTimeInterval(91 * 24 * 60 * 60))
         #expect(try await store.list().isEmpty)
+    }
+
+    @Test("stale writers time out exactly once while live writers remain active")
+    func abandonedWriterTimeout() async throws {
+        let url = temporaryDatabaseURL()
+        defer { removeDatabase(url) }
+        let first = try SessionTraceStore(databaseURL: url)
+        let second = try SessionTraceStore(databaseURL: url)
+        let start = Date(timeIntervalSince1970: 1_500_000)
+        let abandoned = try await first.beginSession(kind: .dictation, at: start)
+        let live = try await first.beginSession(kind: .meeting, at: start)
+        #expect(try await first.appendEvent(
+            .stageCompleted,
+            stage: "heartbeat",
+            token: live,
+            at: start.addingTimeInterval(23 * 60 * 60)
+        ) == .appended)
+
+        _ = try await second.prune(now: start.addingTimeInterval(25 * 60 * 60))
+
+        let timedOut = try #require(try await first.detail(sessionID: abandoned.sessionID))
+        #expect(timedOut.summary.terminalOutcome == .timedOut)
+        #expect(timedOut.events.filter { $0.vocabulary == .terminal }.count == 1)
+        #expect(try await first.appendEvent(.stageCompleted, stage: "late", token: abandoned)
+            == .terminalAlreadyDecided(.timedOut))
+        #expect(try await first.claimTerminal(.success, token: abandoned)
+            == .alreadyDecided(.timedOut))
+        #expect(try await first.detail(sessionID: live.sessionID)?.summary.terminalOutcome == nil)
+
+        _ = try await first.prune(now: start.addingTimeInterval(26 * 60 * 60))
+        #expect(try scalar(
+            url,
+            "SELECT COUNT(*) FROM session_trace_events WHERE session_uuid = '\(abandoned.sessionID.uuidString)' AND vocabulary = 'terminal'"
+        ) == 1)
+    }
+
+    @Test("session capacity evicts the oldest terminal trace and rejects an all-active set")
+    func sessionCapacityReservation() async throws {
+        let basePolicy = SessionTraceRetentionPolicy.default
+        let policy = replacing(basePolicy, maximumSessions: 2)
+        let (store, url) = try makeStore(policy: policy)
+        defer { removeDatabase(url) }
+        let start = Date(timeIntervalSince1970: 1_700_000)
+        let terminal = try await store.beginSession(kind: .dictation, at: start)
+        _ = try await store.claimTerminal(.success, token: terminal, at: start)
+        let active = try await store.beginSession(kind: .meeting, at: start.addingTimeInterval(1))
+
+        let replacement = try await store.beginSession(
+            kind: .dictation,
+            at: start.addingTimeInterval(2)
+        )
+        #expect(try await store.detail(sessionID: terminal.sessionID) == nil)
+        #expect(try await store.detail(sessionID: active.sessionID) != nil)
+        #expect(try await store.detail(sessionID: replacement.sessionID) != nil)
+
+        await #expect(throws: SessionTraceStoreError.limitReached(.sessionCount)) {
+            _ = try await store.beginSession(kind: .meeting, at: start.addingTimeInterval(3))
+        }
     }
 
     @Test("a current v1 database upgrades additively to v2 with valid foreign keys")
@@ -338,6 +413,7 @@ struct SessionTraceStoreTests {
         _ = try await store.prune(now: now.addingTimeInterval(8 * 24 * 60 * 60))
 
         let exportedAt = now.addingTimeInterval(9 * 24 * 60 * 60)
+        let recentActive = try await store.beginSession(kind: .meeting, at: exportedAt)
         let first = try await store.exportDiagnosticsData(now: exportedAt)
         let second = try await store.exportDiagnosticsData(now: exportedAt)
         #expect(first == second)
@@ -358,6 +434,7 @@ struct SessionTraceStoreTests {
         let afterClear = try await store.exportDiagnosticsData(now: exportedAt)
         let cleared = try exportDecoder().decode(SessionTraceDiagnosticsExport.self, from: afterClear)
         #expect(cleared.traces.map(\.summary.contentState) == [.clearedWhileActive])
+        #expect(cleared.traces.first?.summary.sessionID == recentActive.sessionID)
 
         let tinyPolicy = policy(replacingExportBytes: 16)
         let tinyURL = temporaryDatabaseURL()
@@ -390,6 +467,99 @@ struct SessionTraceStoreTests {
         #expect(try scalar(url, "SELECT COUNT(*) FROM session_trace_events WHERE vocabulary = 'terminal'") == 1)
     }
 
+    @Test("detail returns one snapshot while an independent store clears diagnostics")
+    func detailUsesReadTransaction() async throws {
+        let url = temporaryDatabaseURL()
+        defer { removeDatabase(url) }
+        let setup = try SessionTraceStore(databaseURL: url)
+        let token = try await setup.beginSession(kind: .dictation)
+        let artifact = try await setup.storeArtifact("snapshot", kind: .rawASR, token: token)
+        #expect(artifact.mutation == .appended)
+        _ = try await setup.claimTerminal(.success, token: token)
+
+        let entered = DispatchSemaphore(value: 0)
+        let resume = DispatchSemaphore(value: 0)
+        let reader = try SessionTraceStore(databaseURL: url) { checkpoint in
+            if checkpoint == .summaryLoaded {
+                entered.signal()
+                _ = resume.wait(timeout: .now() + 5)
+            }
+        }
+        let clearer = try SessionTraceStore(databaseURL: url)
+        let read = Task { try await reader.detail(sessionID: token.sessionID) }
+        let enteredResult = await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(returning: entered.wait(timeout: .now() + 5))
+            }
+        }
+        #expect(enteredResult == .success)
+        _ = try await clearer.clearDiagnostics()
+        resume.signal()
+
+        let snapshot = try #require(try await read.value)
+        #expect(snapshot.summary.terminalOutcome == .success)
+        #expect(snapshot.events.map(\.vocabulary) == [.sessionStarted, .terminal])
+        #expect(snapshot.artifacts.first?.content == "snapshot")
+        #expect(try await clearer.detail(sessionID: token.sessionID) == nil)
+    }
+
+    @Test("invalid retention policies fail before creating or migrating a database")
+    func invalidPoliciesFailBeforeStorage() throws {
+        let url = temporaryDatabaseURL()
+        defer { removeDatabase(url) }
+        let invalidEvents = replacing(SessionTraceRetentionPolicy.default, maximumEvents: 1)
+        #expect(throws: SessionTraceStoreError.invalidPolicy(
+            "event count must be between 2 and 512 to reserve a terminal event"
+        )) {
+            _ = try SessionTraceStore(databaseURL: url, retentionPolicy: invalidEvents)
+        }
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+
+        let invalidWriterAge = replacing(
+            SessionTraceRetentionPolicy.default,
+            abandonedWriterRetention: 8 * 60 * 60
+        )
+        #expect(throws: SessionTraceStoreError.self) {
+            _ = try SessionTraceStore(databaseURL: url, retentionPolicy: invalidWriterAge)
+        }
+
+        let boundary = replacing(SessionTraceRetentionPolicy.default, maximumEvents: 2)
+        _ = try SessionTraceStore(databaseURL: url, retentionPolicy: boundary)
+    }
+
+    @Test("physical high-water includes SQLite sidecars and never evicts normal history")
+    func physicalHighWaterStopsDiagnosticGrowth() async throws {
+        let url = temporaryDatabaseURL()
+        defer { removeDatabase(url) }
+        let history = DictationStore(databaseURL: url)
+        try history.migrateIfNeeded()
+        let historyID = try history.insertDictation(
+            text: String(repeating: "retained history ", count: 512),
+            durationSeconds: 1,
+            appContext: "tests",
+            startedAt: Date(timeIntervalSince1970: 1),
+            endedAt: Date(timeIntervalSince1970: 2)
+        )
+        let physicalLimit = fileFootprint(url) + 72 * 1_024
+        let policy = replacing(
+            SessionTraceRetentionPolicy.default,
+            maximumPhysicalBytes: physicalLimit
+        )
+        let store = try SessionTraceStore(databaseURL: url, retentionPolicy: policy)
+        let token = try await store.beginSession(kind: .dictation)
+        let artifact = try await store.storeArtifact(
+            String(repeating: "x", count: 128 * 1_024),
+            kind: .rawASR,
+            token: token
+        )
+        #expect(artifact.mutation == .limitReached(.physicalDatabaseBytes))
+        #expect(fileFootprint(url) <= physicalLimit)
+        #expect(try scalar(url, "SELECT COUNT(*) FROM dictations WHERE id = \(historyID)") == 1)
+        // Terminal ownership is never hostage to the diagnostics high-water.
+        #expect(try await store.claimTerminal(.success, token: token) == .won)
+        #expect(fileFootprint(url) <= physicalLimit)
+    }
+
     @Test("an eight-hour synthetic workload stays within every frozen resource cap")
     func eightHourResourceBounds() async throws {
         let base = Date(timeIntervalSince1970: 3_000_000)
@@ -402,7 +572,7 @@ struct SessionTraceStoreTests {
             maximumGlobalRichBytes: 512,
             maximumSessions: 8,
             maximumExportBytes: 1 * 1_024 * 1_024,
-            maximumEventMetadataBytes: 1_024,
+            maximumEventMetadataBytes: 256,
             maximumIdentifierBytes: 128
         )
         let (store, url) = try makeStore(policy: policy)
@@ -420,12 +590,13 @@ struct SessionTraceStoreTests {
                     at: time
                 ) == .appended)
             }
-            _ = try await store.storeArtifact(
+            let artifact = try await store.storeArtifact(
                 String(repeating: Character(String(hour)), count: 128),
                 kind: .rawASR,
                 token: token,
                 at: time
             )
+            #expect(artifact.mutation == .appended)
             #expect(try await store.claimTerminal(.success, token: token, at: time) == .won)
         }
 
@@ -438,8 +609,7 @@ struct SessionTraceStoreTests {
             <= Int64(policy.maximumSessionRichBytes))
         #expect(try scalar(url, "SELECT COALESCE(SUM(byte_count), 0) FROM session_trace_artifacts")
             <= Int64(policy.maximumGlobalRichBytes))
-        let databaseBytes = try scalar(url, "PRAGMA page_count") * scalar(url, "PRAGMA page_size")
-        #expect(databaseBytes <= Int64(SessionTraceRetentionPolicy.maximumDatabaseBytes))
+        #expect(fileFootprint(url) <= policy.maximumPhysicalBytes)
     }
 
     private func makeStore(
@@ -450,18 +620,30 @@ struct SessionTraceStoreTests {
     }
 
     private func policy(replacingExportBytes exportBytes: Int) -> SessionTraceRetentionPolicy {
-        let value = SessionTraceRetentionPolicy.default
-        return SessionTraceRetentionPolicy(
+        replacing(SessionTraceRetentionPolicy.default, maximumExportBytes: exportBytes)
+    }
+
+    private func replacing(
+        _ value: SessionTraceRetentionPolicy,
+        maximumEvents: Int? = nil,
+        maximumSessions: Int? = nil,
+        abandonedWriterRetention: TimeInterval? = nil,
+        maximumExportBytes: Int? = nil,
+        maximumPhysicalBytes: Int? = nil
+    ) -> SessionTraceRetentionPolicy {
+        SessionTraceRetentionPolicy(
             richContentRetention: value.richContentRetention,
             metadataRetention: value.metadataRetention,
             maximumArtifactBytes: value.maximumArtifactBytes,
             maximumSessionRichBytes: value.maximumSessionRichBytes,
-            maximumEvents: value.maximumEvents,
+            maximumEvents: maximumEvents ?? value.maximumEvents,
             maximumGlobalRichBytes: value.maximumGlobalRichBytes,
-            maximumSessions: value.maximumSessions,
-            maximumExportBytes: exportBytes,
+            maximumSessions: maximumSessions ?? value.maximumSessions,
+            maximumExportBytes: maximumExportBytes ?? value.maximumExportBytes,
             maximumEventMetadataBytes: value.maximumEventMetadataBytes,
-            maximumIdentifierBytes: value.maximumIdentifierBytes
+            maximumIdentifierBytes: value.maximumIdentifierBytes,
+            abandonedWriterRetention: abandonedWriterRetention ?? value.abandonedWriterRetention,
+            maximumPhysicalBytes: maximumPhysicalBytes ?? value.maximumPhysicalBytes
         )
     }
 
@@ -479,6 +661,14 @@ struct SessionTraceStoreTests {
     private func removeDatabase(_ url: URL) {
         for suffix in ["", "-wal", "-shm"] {
             try? FileManager.default.removeItem(atPath: url.path + suffix)
+        }
+    }
+
+    private func fileFootprint(_ url: URL) -> Int {
+        [url.path, url.path + "-wal", url.path + "-shm"].reduce(0) { total, path in
+            let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?
+                .intValue ?? 0
+            return total + size
         }
     }
 

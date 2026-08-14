@@ -10,6 +10,7 @@ public enum SessionTraceStoreError: Error, LocalizedError, Equatable {
     case artifactDoesNotBelongToSession(Int64)
     case limitReached(SessionTraceLimit)
     case exportLimitExceeded(requiredBytes: Int, maximumBytes: Int)
+    case invalidPolicy(String)
     case invalidStoredValue(String)
 
     public var errorDescription: String? {
@@ -24,6 +25,8 @@ public enum SessionTraceStoreError: Error, LocalizedError, Equatable {
             return "Session trace limit reached: \(limit.rawValue)."
         case .exportLimitExceeded(let requiredBytes, let maximumBytes):
             return "Diagnostics export requires \(requiredBytes) bytes; the limit is \(maximumBytes) bytes."
+        case .invalidPolicy(let description):
+            return "Invalid session trace retention policy: \(description)."
         case .invalidStoredValue(let description):
             return "Invalid session trace data: \(description)."
         }
@@ -44,8 +47,15 @@ public actor SessionTraceStore {
 
     typealias ClearCheckpointHook = @Sendable (ClearCheckpoint) throws -> Void
 
+    enum DetailCheckpoint: Sendable {
+        case summaryLoaded
+    }
+
+    typealias DetailCheckpointHook = @Sendable (DetailCheckpoint) -> Void
+
     private let databaseURL: URL
     private let clearCheckpoint: ClearCheckpointHook?
+    private let detailCheckpoint: DetailCheckpointHook?
     public let retentionPolicy: SessionTraceRetentionPolicy
 
     public init(
@@ -55,6 +65,8 @@ public actor SessionTraceStore {
         self.databaseURL = databaseURL
         self.retentionPolicy = retentionPolicy
         self.clearCheckpoint = nil
+        self.detailCheckpoint = nil
+        try Self.validate(retentionPolicy)
         try DictationStore(databaseURL: databaseURL).migrateIfNeeded()
     }
 
@@ -66,6 +78,21 @@ public actor SessionTraceStore {
         self.databaseURL = databaseURL
         self.retentionPolicy = retentionPolicy
         self.clearCheckpoint = clearCheckpoint
+        self.detailCheckpoint = nil
+        try Self.validate(retentionPolicy)
+        try DictationStore(databaseURL: databaseURL).migrateIfNeeded()
+    }
+
+    init(
+        databaseURL: URL,
+        retentionPolicy: SessionTraceRetentionPolicy = .default,
+        detailCheckpoint: @escaping DetailCheckpointHook
+    ) throws {
+        self.databaseURL = databaseURL
+        self.retentionPolicy = retentionPolicy
+        self.clearCheckpoint = nil
+        self.detailCheckpoint = detailCheckpoint
+        try Self.validate(retentionPolicy)
         try DictationStore(databaseURL: databaseURL).migrateIfNeeded()
     }
 
@@ -83,7 +110,7 @@ public actor SessionTraceStore {
         defer { sqlite3_close(db) }
 
         return try inTransaction(db) {
-            _ = try pruneInternal(now: date, db: db)
+            _ = try pruneInternal(now: date, reservingSessions: 1, db: db)
             guard try scalarInt("SELECT COUNT(*) FROM session_traces", db: db) < retentionPolicy.maximumSessions else {
                 throw SessionTraceStoreError.limitReached(.sessionCount)
             }
@@ -126,6 +153,9 @@ public actor SessionTraceStore {
                 date: date,
                 db: db
             )
+            guard try physicalBudgetSatisfiedAfterWrite(db: db) else {
+                throw SessionTraceStoreError.limitReached(.physicalDatabaseBytes)
+            }
             return SessionTraceWriterToken(
                 sessionID: sessionID,
                 writerID: writerID,
@@ -160,6 +190,13 @@ public actor SessionTraceStore {
                 guard eventCount < retentionPolicy.maximumNonterminalEvents else {
                     return .limitReached(.eventCount)
                 }
+                guard try reclaimPhysicalCapacity(
+                    estimatedAdditionalBytes: 32 * 1_024 + stage.utf8.count + metadataJSON.utf8.count,
+                    excluding: token.sessionID,
+                    db: db
+                ) else {
+                    return .limitReached(.physicalDatabaseBytes)
+                }
                 if let artifactID, try !artifactBelongs(artifactID, to: token.sessionID, db: db) {
                     throw SessionTraceStoreError.artifactDoesNotBelongToSession(artifactID)
                 }
@@ -176,6 +213,9 @@ public actor SessionTraceStore {
                     db: db
                 )
                 try updateEventCount(sequence, date: date, sessionID: token.sessionID, db: db)
+                guard try physicalBudgetSatisfiedAfterWrite(db: db) else {
+                    throw SessionTraceStoreError.limitReached(.physicalDatabaseBytes)
+                }
                 return .appended
             }
         }
@@ -209,6 +249,17 @@ public actor SessionTraceStore {
                 )
             case .open(_, let bytes):
                 richBytes = bytes
+            }
+
+            guard try reclaimPhysicalCapacity(
+                estimatedAdditionalBytes: 64 * 1_024 + payload.count,
+                excluding: token.sessionID,
+                db: db
+            ) else {
+                return SessionTraceArtifactWriteResult(
+                    mutation: .limitReached(.physicalDatabaseBytes),
+                    artifactID: nil
+                )
             }
 
             let priorReference = try referencedArtifact(
@@ -273,6 +324,9 @@ public actor SessionTraceStore {
             )
             try deleteArtifactIfOrphaned(priorReference, db: db)
             try refreshRichByteCount(sessionID: token.sessionID, date: date, db: db)
+            guard try physicalBudgetSatisfiedAfterWrite(db: db) else {
+                throw SessionTraceStoreError.limitReached(.physicalDatabaseBytes)
+            }
             return SessionTraceArtifactWriteResult(mutation: .appended, artifactID: artifactID)
         }
     }
@@ -291,6 +345,13 @@ public actor SessionTraceStore {
             case .mismatch: return .writerMismatch
             case .terminal(let outcome): return .terminalAlreadyDecided(outcome)
             case .open:
+                guard try reclaimPhysicalCapacity(
+                    estimatedAdditionalBytes: 32 * 1_024,
+                    excluding: token.sessionID,
+                    db: db
+                ) else {
+                    return .limitReached(.physicalDatabaseBytes)
+                }
                 var statement: OpaquePointer?
                 try prepare(
                     "UPDATE session_traces SET dictation_id = ?, meeting_id = ?, updated_at = ? WHERE session_uuid = ?",
@@ -303,6 +364,9 @@ public actor SessionTraceStore {
                 sqlite3_bind_double(statement, 3, date.timeIntervalSince1970)
                 bind(token.sessionID.uuidString, to: statement, at: 4)
                 guard sqlite3_step(statement) == SQLITE_DONE else { throw sqliteError(db) }
+                guard try physicalBudgetSatisfiedAfterWrite(db: db) else {
+                    throw SessionTraceStoreError.limitReached(.physicalDatabaseBytes)
+                }
                 return .appended
             }
         }
@@ -314,7 +378,15 @@ public actor SessionTraceStore {
         token: SessionTraceWriterToken,
         at date: Date = Date()
     ) throws -> SessionTraceTerminalClaimResult {
-        let metadataJSON = try encodeMetadata(metadata)
+        // Terminal arbitration must not be fallible because optional diagnostic
+        // metadata exceeded its budget. Preserve a fixed, content-free marker
+        // instead so the compare-and-set can always settle the owner.
+        let metadataJSON: String
+        do {
+            metadataJSON = try encodeMetadata(metadata)
+        } catch SessionTraceStoreError.limitReached(.eventMetadataBytes) {
+            metadataJSON = Self.truncatedTerminalMetadataJSON
+        }
         let db = try openDatabase()
         defer { sqlite3_close(db) }
 
@@ -569,6 +641,7 @@ public actor SessionTraceStore {
     public func exportDiagnosticsData(now: Date = Date()) throws -> Data {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
+        let payload: SessionTraceDiagnosticsExport
         try execute("BEGIN", db: db)
         do {
             let estimatedBytes = try estimatedExportBytes(db: db)
@@ -586,7 +659,7 @@ public actor SessionTraceStore {
                     artifacts: try loadArtifacts(sessionID: summary.sessionID, db: db)
                 )
             }
-            let payload = SessionTraceDiagnosticsExport(
+            payload = SessionTraceDiagnosticsExport(
                 schemaVersion: SessionTraceDiagnosticsExport.currentSchemaVersion,
                 exportedAt: now,
                 provenance: SessionTraceExportProvenance(
@@ -597,22 +670,24 @@ public actor SessionTraceStore {
                 policy: retentionPolicy,
                 traces: details
             )
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-            let data = try encoder.encode(payload)
-            guard data.count <= retentionPolicy.maximumExportBytes else {
-                throw SessionTraceStoreError.exportLimitExceeded(
-                    requiredBytes: data.count,
-                    maximumBytes: retentionPolicy.maximumExportBytes
-                )
-            }
             try execute("COMMIT", db: db)
-            return data
         } catch {
             _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
             throw error
         }
+        // Release the SQLite snapshot before potentially expensive JSON
+        // encoding so an exporter cannot pin unbounded WAL growth.
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(payload)
+        guard data.count <= retentionPolicy.maximumExportBytes else {
+            throw SessionTraceStoreError.exportLimitExceeded(
+                requiredBytes: data.count,
+                maximumBytes: retentionPolicy.maximumExportBytes
+            )
+        }
+        return data
     }
 
     @discardableResult
@@ -650,12 +725,24 @@ public actor SessionTraceStore {
     public func detail(sessionID: UUID) throws -> SessionTraceDetail? {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        guard let traceSummary = try loadSummary(sessionID: sessionID, db: db) else { return nil }
-        return SessionTraceDetail(
-            summary: traceSummary,
-            events: try loadEvents(sessionID: sessionID, db: db),
-            artifacts: try loadArtifacts(sessionID: sessionID, db: db)
-        )
+        try execute("BEGIN", db: db)
+        do {
+            guard let traceSummary = try loadSummary(sessionID: sessionID, db: db) else {
+                try execute("COMMIT", db: db)
+                return nil
+            }
+            detailCheckpoint?(.summaryLoaded)
+            let detail = SessionTraceDetail(
+                summary: traceSummary,
+                events: try loadEvents(sessionID: sessionID, db: db),
+                artifacts: try loadArtifacts(sessionID: sessionID, db: db)
+            )
+            try execute("COMMIT", db: db)
+            return detail
+        } catch {
+            _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw error
+        }
     }
 
     @discardableResult
@@ -667,6 +754,54 @@ public actor SessionTraceStore {
 }
 
 private extension SessionTraceStore {
+    static let truncatedTerminalMetadataJSON = #"{"metadata_state":"truncated"}"#
+
+    static func validate(_ policy: SessionTraceRetentionPolicy) throws {
+        func require(_ condition: Bool, _ description: String) throws {
+            guard condition else { throw SessionTraceStoreError.invalidPolicy(description) }
+        }
+
+        try require(policy.richContentRetention >= 0, "rich content retention must be nonnegative")
+        try require(
+            policy.metadataRetention >= policy.richContentRetention,
+            "metadata retention must not be shorter than rich content retention"
+        )
+        try require(
+            policy.abandonedWriterRetention > 8 * 60 * 60,
+            "abandoned writer retention must exceed the supported eight-hour session duration"
+        )
+        try require((1 ... 1 * 1_024 * 1_024).contains(policy.maximumArtifactBytes),
+                    "artifact bytes must be between 1 and 1 MiB")
+        try require(
+            policy.maximumSessionRichBytes >= policy.maximumArtifactBytes
+                && policy.maximumSessionRichBytes <= 4 * 1_024 * 1_024,
+            "session rich bytes must include one artifact and not exceed 4 MiB"
+        )
+        try require(
+            policy.maximumGlobalRichBytes >= policy.maximumSessionRichBytes
+                && policy.maximumGlobalRichBytes <= 128 * 1_024 * 1_024,
+            "global rich bytes must include one session and not exceed 128 MiB"
+        )
+        try require((2 ... 512).contains(policy.maximumEvents),
+                    "event count must be between 2 and 512 to reserve a terminal event")
+        try require((1 ... 1_000).contains(policy.maximumSessions),
+                    "session count must be between 1 and 1000")
+        try require((1 ... 32 * 1_024 * 1_024).contains(policy.maximumExportBytes),
+                    "export bytes must be between 1 and 32 MiB")
+        try require(
+            policy.maximumEventMetadataBytes >= truncatedTerminalMetadataJSON.utf8.count
+                && policy.maximumEventMetadataBytes <= 256,
+            "event metadata bytes must fit the terminal truncation marker and not exceed 256"
+        )
+        try require((1 ... 128).contains(policy.maximumIdentifierBytes),
+                    "identifier bytes must be between 1 and 128")
+        try require(
+            (1 ... SessionTraceRetentionPolicy.defaultMaximumPhysicalBytes)
+                .contains(policy.maximumPhysicalBytes),
+            "physical database bytes must be between 1 and 512 MiB"
+        )
+    }
+
     enum WriterGate {
         case open(eventCount: Int, richBytes: Int)
         case terminal(SessionTraceTerminalOutcome)
@@ -696,6 +831,10 @@ private extension SessionTraceStore {
             try execute("PRAGMA foreign_keys=ON", db: db)
             try execute("PRAGMA secure_delete=ON", db: db)
             try execute("PRAGMA journal_mode=WAL", db: db)
+            try execute("PRAGMA wal_autocheckpoint=16", db: db)
+            let journalLimit = min(16 * 1_024 * 1_024, max(0, retentionPolicy.maximumPhysicalBytes / 8))
+            try execute("PRAGMA journal_size_limit=\(journalLimit)", db: db)
+            _ = sqlite3_wal_checkpoint_v2(db, nil, SQLITE_CHECKPOINT_PASSIVE, nil, nil)
             return db
         } catch {
             sqlite3_close(db)
@@ -708,6 +847,9 @@ private extension SessionTraceStore {
         do {
             let result = try body()
             try execute("COMMIT", db: db)
+            // PASSIVE never waits for independent readers. The next mutation's
+            // physical high-water check accounts for any retained WAL sidecar.
+            _ = sqlite3_wal_checkpoint_v2(db, nil, SQLITE_CHECKPOINT_PASSIVE, nil, nil)
             return result
         } catch {
             _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
@@ -766,6 +908,84 @@ private extension SessionTraceStore {
         guard value.utf8.count <= retentionPolicy.maximumIdentifierBytes else {
             throw SessionTraceStoreError.limitReached(.identifierBytes)
         }
+    }
+
+    func databaseFootprintBytes() -> Int {
+        let fileManager = FileManager.default
+        return [databaseURL.path, databaseURL.path + "-wal", databaseURL.path + "-shm"].reduce(0) {
+            partial, path in
+            let bytes = (try? fileManager.attributesOfItem(atPath: path)[.size] as? NSNumber)?
+                .intValue ?? 0
+            return partial + bytes
+        }
+    }
+
+    func hasPhysicalCapacity(estimatedAdditionalBytes: Int, db: OpaquePointer?) throws -> Bool {
+        let current = databaseFootprintBytes()
+        guard current <= retentionPolicy.maximumPhysicalBytes else { return false }
+        let freePages = try scalarInt("PRAGMA freelist_count", db: db)
+        let pageSize = try scalarInt("PRAGMA page_size", db: db)
+        let reusableBytes = freePages * pageSize
+        let physicalGrowth = max(0, estimatedAdditionalBytes - reusableBytes)
+        return physicalGrowth <= retentionPolicy.maximumPhysicalBytes - current
+    }
+
+    func physicalBudgetSatisfiedAfterWrite(db: OpaquePointer?) throws -> Bool {
+        let pageSize = try scalarInt("PRAGMA page_size", db: db)
+        let pageCount = try scalarInt("PRAGMA page_count", db: db)
+        let freePages = try scalarInt("PRAGMA freelist_count", db: db)
+        let allocatedDatabaseBytes = (pageCount - freePages) * pageSize
+        let sidecarBytes = [databaseURL.path + "-wal", databaseURL.path + "-shm"].reduce(0) {
+            partial, path in
+            let bytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?
+                .intValue ?? 0
+            return partial + bytes
+        }
+        return allocatedDatabaseBytes + sidecarBytes <= retentionPolicy.maximumPhysicalBytes
+    }
+
+    /// Reclaims diagnostic rows only. Normal history shares this database and
+    /// is deliberately never considered a physical-budget eviction candidate.
+    func reclaimPhysicalCapacity(
+        estimatedAdditionalBytes: Int,
+        excluding sessionID: UUID?,
+        db: OpaquePointer?
+    ) throws -> Bool {
+        if try hasPhysicalCapacity(estimatedAdditionalBytes: estimatedAdditionalBytes, db: db) {
+            return true
+        }
+        var statement: OpaquePointer?
+        let exclusion = sessionID == nil ? "" : "AND session_uuid <> ?"
+        try prepare(
+            """
+            SELECT session_uuid FROM session_traces
+            WHERE terminal_at IS NOT NULL \(exclusion)
+            ORDER BY terminal_at ASC, session_uuid ASC
+            """,
+            into: &statement,
+            db: db
+        )
+        defer { sqlite3_finalize(statement) }
+        if let sessionID { bind(sessionID.uuidString, to: statement, at: 1) }
+        var candidates: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW { candidates.append(text(statement, 0)) }
+        sqlite3_finalize(statement)
+        statement = nil
+
+        for candidate in candidates {
+            try prepare("DELETE FROM session_traces WHERE session_uuid = ?", into: &statement, db: db)
+            bind(candidate, to: statement, at: 1)
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                sqlite3_finalize(statement)
+                throw sqliteError(db)
+            }
+            sqlite3_finalize(statement)
+            statement = nil
+            if try hasPhysicalCapacity(estimatedAdditionalBytes: estimatedAdditionalBytes, db: db) {
+                return true
+            }
+        }
+        return false
     }
 
     func insertEvent(
@@ -1011,7 +1231,12 @@ private extension SessionTraceStore {
         return outcome
     }
 
-    func pruneInternal(now: Date, db: OpaquePointer?) throws -> SessionTracePruneResult {
+    func pruneInternal(
+        now: Date,
+        reservingSessions: Int = 0,
+        db: OpaquePointer?
+    ) throws -> SessionTracePruneResult {
+        try settleAbandonedSessions(now: now, db: db)
         let richCutoff = now.addingTimeInterval(-retentionPolicy.richContentRetention).timeIntervalSince1970
         let metadataCutoff = now.addingTimeInterval(-retentionPolicy.metadataRetention).timeIntervalSince1970
         let richIDs = try sessionIDs(
@@ -1035,7 +1260,11 @@ private extension SessionTraceStore {
         let expiredCount = Int(sqlite3_changes(db))
         sqlite3_finalize(statement)
 
-        let overflow = max(0, try scalarInt("SELECT COUNT(*) FROM session_traces", db: db) - retentionPolicy.maximumSessions)
+        let overflow = max(
+            0,
+            try scalarInt("SELECT COUNT(*) FROM session_traces", db: db)
+                + reservingSessions - retentionPolicy.maximumSessions
+        )
         var overflowDeleted = 0
         if overflow > 0 {
             try prepare(
@@ -1061,6 +1290,74 @@ private extension SessionTraceStore {
             richSessionsPruned: richIDs.count,
             metadataSessionsDeleted: expiredCount + overflowDeleted
         )
+    }
+
+    func settleAbandonedSessions(now: Date, db: OpaquePointer?) throws {
+        let cutoff = now.addingTimeInterval(-retentionPolicy.abandonedWriterRetention)
+            .timeIntervalSince1970
+        var statement: OpaquePointer?
+        try prepare(
+            """
+            SELECT session_uuid, event_count FROM session_traces
+            WHERE terminal_outcome IS NULL AND updated_at < ?
+            ORDER BY updated_at ASC, session_uuid ASC
+            """,
+            into: &statement,
+            db: db
+        )
+        sqlite3_bind_double(statement, 1, cutoff)
+        var abandoned: [(UUID, Int)] = []
+        while true {
+            let result = sqlite3_step(statement)
+            if result == SQLITE_DONE { break }
+            guard result == SQLITE_ROW else {
+                sqlite3_finalize(statement)
+                throw sqliteError(db)
+            }
+            guard let sessionID = UUID(uuidString: text(statement, 0)) else {
+                sqlite3_finalize(statement)
+                throw SessionTraceStoreError.invalidStoredValue("session UUID")
+            }
+            abandoned.append((sessionID, Int(sqlite3_column_int(statement, 1))))
+        }
+        sqlite3_finalize(statement)
+        statement = nil
+
+        for (sessionID, eventCount) in abandoned {
+            try prepare(
+                """
+                UPDATE session_traces
+                SET terminal_outcome = 'timed_out', terminal_at = ?, updated_at = ?,
+                    event_count = event_count + 1
+                WHERE session_uuid = ? AND terminal_outcome IS NULL AND event_count < ?
+                """,
+                into: &statement,
+                db: db
+            )
+            sqlite3_bind_double(statement, 1, now.timeIntervalSince1970)
+            sqlite3_bind_double(statement, 2, now.timeIntervalSince1970)
+            bind(sessionID.uuidString, to: statement, at: 3)
+            sqlite3_bind_int(statement, 4, Int32(retentionPolicy.maximumEvents))
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                sqlite3_finalize(statement)
+                throw sqliteError(db)
+            }
+            let settled = sqlite3_changes(db) == 1
+            sqlite3_finalize(statement)
+            statement = nil
+            guard settled else { continue }
+            try insertEvent(
+                sessionID: sessionID,
+                sequence: eventCount + 1,
+                vocabulary: .terminal,
+                stage: "terminal",
+                elapsedMilliseconds: nil,
+                metadataJSON: "{}",
+                artifactID: nil,
+                date: now,
+                db: db
+            )
+        }
     }
 
     func pruneRichContentForCapacity(bytesNeeded: Int, excluding: UUID, db: OpaquePointer?) throws {

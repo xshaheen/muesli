@@ -1,9 +1,11 @@
 import Foundation
 
 public struct SessionTraceRetentionPolicy: Codable, Equatable, Sendable {
+    public static let defaultAbandonedWriterRetention: TimeInterval = 24 * 60 * 60
     /// Includes bounded event metadata and SQLite page/index overhead above the
-    /// 128 MiB rich-content cap.
-    public static let maximumDatabaseBytes = 512 * 1_024 * 1_024
+    /// 128 MiB rich-content cap. The store treats this as a physical high-water
+    /// mark across the main database and its WAL/SHM sidecars.
+    public static let defaultMaximumPhysicalBytes = 512 * 1_024 * 1_024
     public static let `default` = SessionTraceRetentionPolicy(
         richContentRetention: 7 * 24 * 60 * 60,
         metadataRetention: 90 * 24 * 60 * 60,
@@ -14,7 +16,9 @@ public struct SessionTraceRetentionPolicy: Codable, Equatable, Sendable {
         maximumSessions: 1_000,
         maximumExportBytes: 32 * 1_024 * 1_024,
         maximumEventMetadataBytes: 256,
-        maximumIdentifierBytes: 128
+        maximumIdentifierBytes: 128,
+        abandonedWriterRetention: defaultAbandonedWriterRetention,
+        maximumPhysicalBytes: defaultMaximumPhysicalBytes
     )
 
     public let richContentRetention: TimeInterval
@@ -28,6 +32,8 @@ public struct SessionTraceRetentionPolicy: Codable, Equatable, Sendable {
     public let maximumExportBytes: Int
     public let maximumEventMetadataBytes: Int
     public let maximumIdentifierBytes: Int
+    public let abandonedWriterRetention: TimeInterval
+    public let maximumPhysicalBytes: Int
 
     public init(
         richContentRetention: TimeInterval,
@@ -39,7 +45,9 @@ public struct SessionTraceRetentionPolicy: Codable, Equatable, Sendable {
         maximumSessions: Int,
         maximumExportBytes: Int,
         maximumEventMetadataBytes: Int,
-        maximumIdentifierBytes: Int
+        maximumIdentifierBytes: Int,
+        abandonedWriterRetention: TimeInterval = SessionTraceRetentionPolicy.defaultAbandonedWriterRetention,
+        maximumPhysicalBytes: Int = SessionTraceRetentionPolicy.defaultMaximumPhysicalBytes
     ) {
         self.richContentRetention = richContentRetention
         self.metadataRetention = metadataRetention
@@ -51,6 +59,8 @@ public struct SessionTraceRetentionPolicy: Codable, Equatable, Sendable {
         self.maximumExportBytes = maximumExportBytes
         self.maximumEventMetadataBytes = maximumEventMetadataBytes
         self.maximumIdentifierBytes = maximumIdentifierBytes
+        self.abandonedWriterRetention = abandonedWriterRetention
+        self.maximumPhysicalBytes = maximumPhysicalBytes
     }
 }
 
@@ -104,6 +114,7 @@ public enum SessionTraceLimit: String, Codable, Sendable {
     case sessionCount = "session_count"
     case eventMetadataBytes = "event_metadata_bytes"
     case identifierBytes = "identifier_bytes"
+    case physicalDatabaseBytes = "physical_database_bytes"
 }
 
 public struct SessionTraceWriterToken: Equatable, Hashable, Sendable {
