@@ -4,6 +4,55 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum SessionDiagnosticsPresentation {
+    enum ArtifactRelationship: Equatable {
+        case unchangedFrom(SessionTraceArtifactKind)
+    }
+
+    struct ArtifactItem: Identifiable {
+        let kind: SessionTraceArtifactKind
+        let artifact: SessionTraceArtifact
+        let relationship: ArtifactRelationship?
+
+        var id: String { "\(artifact.id)-\(kind.rawValue)" }
+    }
+
+    struct EvidenceLayout {
+        let sessionInputs: [ArtifactItem]
+        let attachmentsBySequence: [Int: [ArtifactItem]]
+        let unattachedArtifacts: [ArtifactItem]
+    }
+
+    private struct StageEventIndex {
+        var completed: [String: Int] = [:]
+        var started: [String: Int] = [:]
+
+        init(events: [SessionTraceEvent]) {
+            for event in events {
+                switch event.vocabulary {
+                case .stageCompleted:
+                    completed[event.stage] = event.sequence
+                case .stageStarted:
+                    started[event.stage] = event.sequence
+                default:
+                    break
+                }
+            }
+        }
+
+        func completedSequence(for candidates: [String]) -> Int? {
+            candidates.compactMap { completed[$0] }.first
+        }
+    }
+
+    private static let artifactOrder: [SessionTraceArtifactKind] = [
+        .languageProfile,
+        .contextSources,
+        .rawASR,
+        .cleanupResult,
+        .dictionaryChanges,
+        .finalOutput,
+    ]
+
     static func associationLabel(for summary: SessionTraceSummary) -> String {
         if let dictationID = summary.dictationID { return "Dictation #\(dictationID)" }
         if let meetingID = summary.meetingID { return "Meeting #\(meetingID)" }
@@ -49,17 +98,100 @@ enum SessionDiagnosticsPresentation {
         }
     }
 
-    static func artifactLabel(_ kinds: [SessionTraceArtifactKind]) -> String {
-        kinds.map { kind in
+    static func artifactLabel(_ kind: SessionTraceArtifactKind) -> String {
+        switch kind {
+        case .rawASR: return "Original · Raw ASR"
+        case .cleanupResult: return "Cleanup result"
+        case .dictionaryChanges: return "Dictionary changes"
+        case .finalOutput: return "Final output"
+        case .languageProfile: return "Language profile"
+        case .contextSources: return "Context sources"
+        }
+    }
+
+    static func relationshipLabel(_ relationship: ArtifactRelationship) -> String {
+        switch relationship {
+        case .unchangedFrom(let kind):
+            return "Unchanged from \(artifactLabel(kind).replacingOccurrences(of: "Original · ", with: ""))"
+        }
+    }
+
+    static func stageLabel(_ stage: String) -> String {
+        stage.split(separator: "_")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+
+    static func artifactItems(in artifacts: [SessionTraceArtifact]) -> [ArtifactItem] {
+        let artifactByKind = Dictionary(uniqueKeysWithValues: artifacts.flatMap { artifact in
+            artifact.kinds.map { ($0, artifact) }
+        })
+        return artifactOrder.compactMap { kind in
+            guard let artifact = artifactByKind[kind] else { return nil }
+            let relationship: ArtifactRelationship?
             switch kind {
-            case .rawASR: return "Raw ASR"
-            case .cleanupResult: return "Cleanup result"
-            case .dictionaryChanges: return "Dictionary changes"
-            case .finalOutput: return "Final output"
-            case .languageProfile: return "Language profile"
-            case .contextSources: return "Context sources"
+            case .cleanupResult where artifactByKind[.rawASR]?.id == artifact.id:
+                relationship = .unchangedFrom(.rawASR)
+            case .finalOutput where artifactByKind[.cleanupResult]?.id == artifact.id:
+                relationship = .unchangedFrom(.cleanupResult)
+            case .finalOutput where artifactByKind[.rawASR]?.id == artifact.id:
+                relationship = .unchangedFrom(.rawASR)
+            default:
+                relationship = nil
             }
-        }.joined(separator: ", ")
+            return ArtifactItem(kind: kind, artifact: artifact, relationship: relationship)
+        }
+    }
+
+    static func evidenceLayout(
+        events: [SessionTraceEvent],
+        artifacts: [SessionTraceArtifact]
+    ) -> EvidenceLayout {
+        let items = artifactItems(in: artifacts)
+        let eventIndex = StageEventIndex(events: events)
+        var attachments: [Int: [ArtifactItem]] = [:]
+        var unattached: [ArtifactItem] = []
+        for item in items where !isSessionInput(item.kind) {
+            guard let sequence = attachmentSequence(for: item.kind, eventIndex: eventIndex) else {
+                unattached.append(item)
+                continue
+            }
+            attachments[sequence, default: []].append(item)
+        }
+        return EvidenceLayout(
+            sessionInputs: items.filter { isSessionInput($0.kind) },
+            attachmentsBySequence: attachments,
+            unattachedArtifacts: unattached
+        )
+    }
+
+    private static func isSessionInput(_ kind: SessionTraceArtifactKind) -> Bool {
+        kind == .languageProfile || kind == .contextSources
+    }
+
+    private static func attachmentSequence(
+        for kind: SessionTraceArtifactKind,
+        eventIndex: StageEventIndex
+    ) -> Int? {
+        let speechRecognition = DictationTranscriptionStageEvent.Stage.speechRecognition.rawValue
+        let transcriptCleanup = DictationTranscriptionStageEvent.Stage.transcriptCleanup.rawValue
+        let finalization = DictationTranscriptionStageEvent.Stage.finalization.rawValue
+        let hasSpeakerDiarization = eventIndex.completed["speaker_diarization"] != nil
+        let candidates: [String]
+        switch kind {
+        case .rawASR:
+            candidates = [speechRecognition, "transcribing_audio", "nemotron_streaming"]
+        case .cleanupResult:
+            candidates = [transcriptCleanup, "transcribing_audio", "nemotron_streaming"]
+        case .dictionaryChanges, .finalOutput:
+            candidates = hasSpeakerDiarization
+                ? ["speaker_diarization", "meeting_persistence"]
+                : [finalization, "transcribing_audio", "nemotron_streaming", "meeting_finalization"]
+        case .languageProfile, .contextSources:
+            return nil
+        }
+        return eventIndex.completedSequence(for: candidates)
+            ?? eventIndex.started["nemotron_streaming"]
     }
 }
 
@@ -236,72 +368,103 @@ struct SessionDiagnosticsView: View {
 
                 metadata(detail.summary)
 
-                diagnosticsGroup("Stage Evidence") {
-                    if detail.events.isEmpty {
-                        Text("No events remain for this session.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(detail.events, id: \.sequence) { event in
-                            VStack(alignment: .leading, spacing: 3) {
-                                HStack {
-                                    Text("#\(event.sequence) \(event.vocabulary.rawValue)")
-                                        .font(.system(.body, design: .monospaced))
-                                    Spacer()
-                                    if let elapsed = event.elapsedMilliseconds {
-                                        Text("\(elapsed) ms")
-                                            .font(.caption)
-                                    }
-                                }
-                                Text(event.stage)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                if !event.metadata.isEmpty {
-                                    Text(event.metadata.sorted { $0.key < $1.key }
-                                        .map { "\($0.key)=\($0.value)" }
-                                        .joined(separator: "  "))
-                                        .font(.system(.caption2, design: .monospaced))
-                                        .textSelection(.enabled)
-                                }
-                            }
-                            if event.sequence != detail.events.last?.sequence { Divider() }
+                let evidenceLayout = SessionDiagnosticsPresentation.evidenceLayout(
+                    events: detail.events,
+                    artifacts: detail.artifacts
+                )
+                if !evidenceLayout.sessionInputs.isEmpty {
+                    diagnosticsGroup("Session Inputs") {
+                        ForEach(evidenceLayout.sessionInputs) { item in
+                            artifactEvidence(item)
+                            if item.id != evidenceLayout.sessionInputs.last?.id { Divider() }
                         }
                     }
                 }
 
-                diagnosticsGroup("Local Content") {
-                    if detail.artifacts.isEmpty {
-                        Text("No rich diagnostic content remains.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(detail.artifacts, id: \.id) { artifact in
-                            VStack(alignment: .leading, spacing: 5) {
-                                HStack {
-                                    Text(SessionDiagnosticsPresentation.artifactLabel(artifact.kinds))
-                                        .font(.headline)
-                                    Spacer()
-                                    Text("\(artifact.byteCount) bytes · \(SessionDiagnosticsPresentation.contentStateLabel(artifact.state))")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if let content = artifact.content {
-                                    Text(content)
-                                        .font(.system(.body, design: .monospaced))
-                                        .textSelection(.enabled)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                } else {
-                                    Text(SessionDiagnosticsPresentation.contentStateDescription(artifact.state))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            if artifact.id != detail.artifacts.last?.id { Divider() }
-                        }
-                    }
-                }
+                pipelineEvidence(detail, layout: evidenceLayout)
             }
             .padding(MuesliTheme.spacing24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func pipelineEvidence(
+        _ detail: SessionTraceDetail,
+        layout: SessionDiagnosticsPresentation.EvidenceLayout
+    ) -> some View {
+        return diagnosticsGroup("Pipeline Evidence") {
+            if detail.events.isEmpty && layout.unattachedArtifacts.isEmpty {
+                Text("No pipeline evidence remains for this session.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(detail.events, id: \.sequence) { event in
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                        HStack {
+                            Text(SessionDiagnosticsPresentation.stageLabel(event.stage))
+                                .font(.headline)
+                            Spacer()
+                            if let elapsed = event.elapsedMilliseconds {
+                                Text("\(elapsed) ms")
+                                    .font(.caption)
+                            }
+                        }
+                        Text("#\(event.sequence) · \(event.vocabulary.rawValue)")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        if !event.metadata.isEmpty {
+                            Text(event.metadata.sorted { $0.key < $1.key }
+                                .map { "\($0.key)=\($0.value)" }
+                                .joined(separator: "  "))
+                                .font(.system(.caption2, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                        if let items = layout.attachmentsBySequence[event.sequence] {
+                            ForEach(items) { artifactEvidence($0) }
+                        }
+                    }
+                    if event.sequence != detail.events.last?.sequence || !layout.unattachedArtifacts.isEmpty { Divider() }
+                }
+                if !layout.unattachedArtifacts.isEmpty {
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                        Text("Other evidence")
+                            .font(.headline)
+                        Text("Recorded content that could not be matched to a known pipeline stage.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(layout.unattachedArtifacts) { artifactEvidence($0) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func artifactEvidence(_ item: SessionDiagnosticsPresentation.ArtifactItem) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(SessionDiagnosticsPresentation.artifactLabel(item.kind))
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("\(item.artifact.byteCount) bytes · \(SessionDiagnosticsPresentation.contentStateLabel(item.artifact.state))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if let relationship = item.relationship {
+                Text(SessionDiagnosticsPresentation.relationshipLabel(relationship))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let content = item.artifact.content {
+                Text(content.isEmpty ? "Recorded empty output." : content)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(SessionDiagnosticsPresentation.contentStateDescription(item.artifact.state))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.leading, MuesliTheme.spacing12)
     }
 
     private func metadata(_ summary: SessionTraceSummary) -> some View {
