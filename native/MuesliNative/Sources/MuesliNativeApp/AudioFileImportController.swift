@@ -121,6 +121,30 @@ enum AudioFileImportController {
 
     // MARK: - Import Pipeline
 
+    enum ImportFallbackReason: String, Hashable, Sendable {
+        case diarizationUnavailable = "diarization_unavailable"
+        case diarizationFailed = "diarization_failed"
+        case titleGeneration = "title_generation"
+        case summaryGeneration = "summary_generation"
+    }
+
+    struct ImportFallbackSummary: Equatable, Sendable {
+        private(set) var reasons: Set<ImportFallbackReason> = []
+
+        var usedFallback: Bool { !reasons.isEmpty }
+        var usedSummaryFallback: Bool { reasons.contains(.summaryGeneration) }
+
+        mutating func record(_ reason: ImportFallbackReason) {
+            reasons.insert(reason)
+        }
+    }
+
+    enum ImportStageTiming {
+        static func elapsedMilliseconds(since startedAt: Date, now: Date = Date()) -> Int {
+            max(Int(now.timeIntervalSince(startedAt) * 1_000), 0)
+        }
+    }
+
     struct ImportResult {
         let meetingID: Int64
         let title: String
@@ -128,6 +152,11 @@ enum AudioFileImportController {
         let formattedNotes: String
         let durationSeconds: Double
         let wordCount: Int
+        let completedAt: Date
+        let fallbackSummary: ImportFallbackSummary
+
+        var usedFallback: Bool { fallbackSummary.usedFallback }
+        var usedSummaryFallback: Bool { fallbackSummary.usedSummaryFallback }
     }
 
     struct ImportContext {
@@ -142,10 +171,29 @@ enum AudioFileImportController {
         sourceURL: URL,
         title: String,
         controller: MuesliController,
+        sessionTrace: SessionRunTrace? = nil,
         progress: @escaping (String) -> Void
     ) async throws -> ImportResult {
         progress("Converting audio file...")
-        let (wavURL, duration) = try await convertToWAV(sourceURL: sourceURL)
+        await sessionTrace?.recordStageStarted("audio_conversion")
+        let conversionStartedAt = Date()
+        let wavURL: URL
+        let duration: TimeInterval
+        do {
+            (wavURL, duration) = try await convertToWAV(sourceURL: sourceURL)
+            let elapsedMilliseconds = stageElapsedMilliseconds(since: conversionStartedAt)
+            await sessionTrace?.recordStageCompleted(
+                "audio_conversion",
+                elapsedMilliseconds: elapsedMilliseconds
+            )
+        } catch {
+            let elapsedMilliseconds = stageElapsedMilliseconds(since: conversionStartedAt)
+            await sessionTrace?.recordStageFailed(
+                "audio_conversion",
+                elapsedMilliseconds: elapsedMilliseconds
+            )
+            throw error
+        }
         defer { try? FileManager.default.removeItem(at: wavURL) }
 
         try Task.checkCancellation()
@@ -156,12 +204,28 @@ enum AudioFileImportController {
         let transcriptionCoordinator = context.transcriptionCoordinator
 
         progress("Loading transcription model...")
-        try await transcriptionCoordinator.preloadRequired(
-            backend: backend,
-            enablePostProcessor: false,
-            includeMeetingHelpers: true,
-            meetingHelperTrigger: .audioImport
-        )
+        await sessionTrace?.recordStageStarted("model_preload")
+        let preloadStartedAt = Date()
+        do {
+            try await transcriptionCoordinator.preloadRequired(
+                backend: backend,
+                enablePostProcessor: false,
+                includeMeetingHelpers: true,
+                meetingHelperTrigger: .audioImport
+            )
+            let elapsedMilliseconds = stageElapsedMilliseconds(since: preloadStartedAt)
+            await sessionTrace?.recordStageCompleted(
+                "model_preload",
+                elapsedMilliseconds: elapsedMilliseconds
+            )
+        } catch {
+            let elapsedMilliseconds = stageElapsedMilliseconds(since: preloadStartedAt)
+            await sessionTrace?.recordStageFailed(
+                "model_preload",
+                elapsedMilliseconds: elapsedMilliseconds
+            )
+            throw error
+        }
 
         try Task.checkCancellation()
 
@@ -183,23 +247,52 @@ enum AudioFileImportController {
         try Task.checkCancellation()
 
         progress("Transcribing audio...")
-        let transcription = try await transcriptionCoordinator.transcribeMeeting(
-            at: wavURL,
-            backend: backend,
-            cohereLanguage: config.resolvedCohereLanguage,
-            indicASRLanguage: config.resolvedIndicASRLanguage,
-            whisperLanguage: config.resolvedWhisperLanguage,
-            customWords: config.customWords
-        )
-        let rawTranscript = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !rawTranscript.isEmpty else {
+        await sessionTrace?.recordStageStarted("transcribing_audio")
+        let transcriptionStartedAt = Date()
+        let transcriptionEvidence: MeetingTranscriptionEvidence
+        do {
+            transcriptionEvidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
+                at: wavURL,
+                backend: backend,
+                cohereLanguage: config.resolvedCohereLanguage,
+                indicASRLanguage: config.resolvedIndicASRLanguage,
+                whisperLanguage: config.resolvedWhisperLanguage,
+                customWords: config.customWords
+            )
+        } catch {
+            let elapsedMilliseconds = stageElapsedMilliseconds(since: transcriptionStartedAt)
+            await sessionTrace?.recordStageFailed(
+                "transcribing_audio",
+                elapsedMilliseconds: elapsedMilliseconds
+            )
+            throw error
+        }
+        let transcriptionElapsedMilliseconds = stageElapsedMilliseconds(since: transcriptionStartedAt)
+        let recognizerTranscript = transcriptionEvidence.raw.text
+        await sessionTrace?.storeArtifact(recognizerTranscript, kind: .rawASR)
+        let transcription = transcriptionEvidence.cleaned
+        let cleanedTranscript = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedTranscript.isEmpty else {
+            await sessionTrace?.recordStageFailed(
+                "transcribing_audio",
+                elapsedMilliseconds: transcriptionElapsedMilliseconds,
+                metadata: ["reason": "empty_cleanup_result"]
+            )
             throw ImportError.readError("No speech was transcribed from the selected audio file.")
         }
+        await sessionTrace?.recordStageCompleted(
+            "transcribing_audio",
+            elapsedMilliseconds: transcriptionElapsedMilliseconds
+        )
 
         try Task.checkCancellation()
 
         // Run speaker diarization if available
-        var diarizedTranscript = rawTranscript
+        var diarizedTranscript = cleanedTranscript
+        var fallbackSummary = ImportFallbackSummary()
+        var diarizationFallbackReason: ImportFallbackReason?
+        await sessionTrace?.recordStageStarted("speaker_diarization")
+        let diarizationStartedAt = Date()
         if let diarizerManager = await transcriptionCoordinator.getDiarizerManager(),
            diarizerManager.isAvailable {
             progress("Identifying speakers...")
@@ -219,29 +312,87 @@ enum AudioFileImportController {
                     )
                 }
             } catch is CancellationError {
+                let elapsedMilliseconds = stageElapsedMilliseconds(since: diarizationStartedAt)
+                await sessionTrace?.recordStageFailed(
+                    "speaker_diarization",
+                    elapsedMilliseconds: elapsedMilliseconds
+                )
                 throw CancellationError()
             } catch {
                 fputs("[import] diarization failed, using raw transcript: \(error)\n", stderr)
+                fallbackSummary.record(.diarizationFailed)
+                diarizationFallbackReason = .diarizationFailed
             }
+        } else {
+            fallbackSummary.record(.diarizationUnavailable)
+            diarizationFallbackReason = .diarizationUnavailable
         }
+        let diarizationElapsedMilliseconds = stageElapsedMilliseconds(since: diarizationStartedAt)
+        if let diarizationFallbackReason {
+            await sessionTrace?.recordFallbackStarted(
+                "speaker_diarization",
+                metadata: [
+                    "from": "diarized_transcript",
+                    "reason": diarizationFallbackReason.rawValue,
+                    "to": "cleaned_transcript",
+                ]
+            )
+        }
+        await sessionTrace?.recordStageCompleted(
+            "speaker_diarization",
+            elapsedMilliseconds: diarizationElapsedMilliseconds,
+            metadata: fallbackSummary.reasons.contains(.diarizationUnavailable)
+                || fallbackSummary.reasons.contains(.diarizationFailed)
+                ? ["outcome": "fallback"]
+                : [:]
+        )
+        await sessionTrace?.storeArtifact(cleanedTranscript, kind: .cleanupResult)
+        await sessionTrace?.storeArtifact(DictationDictionaryTrace.emptyContent, kind: .dictionaryChanges)
+        await sessionTrace?.storeArtifact(diarizedTranscript, kind: .finalOutput)
 
         try Task.checkCancellation()
 
         let wordCount = DictationStore.countWords(in: diarizedTranscript)
         let generatedTitle: String
+        var usedTitleFallback = false
         progress("Generating title...")
+        await sessionTrace?.recordStageStarted("title_generation")
+        let titleStartedAt = Date()
         if let autoTitle = await MeetingSummaryClient.generateTitle(transcript: diarizedTranscript, config: config),
            !autoTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             generatedTitle = autoTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
             generatedTitle = title
+            fallbackSummary.record(.titleGeneration)
+            usedTitleFallback = true
         }
+        let titleElapsedMilliseconds = stageElapsedMilliseconds(since: titleStartedAt)
+        if usedTitleFallback {
+            await sessionTrace?.recordFallbackStarted(
+                "title_generation",
+                metadata: [
+                    "from": "generated_title",
+                    "reason": ImportFallbackReason.titleGeneration.rawValue,
+                    "to": "source_filename",
+                ]
+            )
+        }
+        await sessionTrace?.recordStageCompleted(
+            "title_generation",
+            elapsedMilliseconds: titleElapsedMilliseconds,
+            metadata: fallbackSummary.reasons.contains(.titleGeneration)
+                ? ["outcome": "fallback"]
+                : [:]
+        )
 
         try Task.checkCancellation()
 
         progress("Generating summary...")
         let templateSnapshot = context.templateSnapshot
         let formattedNotes: String
+        var usedSummaryFallback = false
+        await sessionTrace?.recordStageStarted("summary_generation")
+        let summaryStartedAt = Date()
         do {
             formattedNotes = try await MeetingSummaryClient.summarize(
                 transcript: diarizedTranscript,
@@ -253,6 +404,8 @@ enum AudioFileImportController {
             )
         } catch {
             fputs("[import] summary generation failed: \(error)\n", stderr)
+            fallbackSummary.record(.summaryGeneration)
+            usedSummaryFallback = true
             formattedNotes = MeetingSummaryClient.summaryFailureNotes(
                 transcript: diarizedTranscript,
                 meetingTitle: generatedTitle,
@@ -260,30 +413,64 @@ enum AudioFileImportController {
                 manualNotes: ""
             )
         }
+        let summaryElapsedMilliseconds = stageElapsedMilliseconds(since: summaryStartedAt)
+        if usedSummaryFallback {
+            await sessionTrace?.recordFallbackStarted(
+                "summary_generation",
+                metadata: [
+                    "from": "generated_summary",
+                    "reason": ImportFallbackReason.summaryGeneration.rawValue,
+                    "to": "failure_notes",
+                ]
+            )
+        }
+        await sessionTrace?.recordStageCompleted(
+            "summary_generation",
+            elapsedMilliseconds: summaryElapsedMilliseconds,
+            metadata: fallbackSummary.reasons.contains(.summaryGeneration)
+                ? ["outcome": "fallback"]
+                : [:]
+        )
 
         try Task.checkCancellation()
-
-        // Persist the converted WAV as a saved recording so retranscription works
-        let savedRecordingPath = try persistRecording(wavURL: wavURL, title: generatedTitle)
 
         progress("Saving...")
         let now = Date()
         let startTime = now.addingTimeInterval(-duration)
-        let meetingID = try await controller.persistImportedAudioMeeting(
-            title: generatedTitle,
-            calendarEventID: nil,
-            startTime: startTime,
-            endTime: now,
-            rawTranscript: diarizedTranscript,
-            formattedNotes: formattedNotes,
-            micAudioPath: nil,
-            systemAudioPath: nil,
-            savedRecordingPath: savedRecordingPath,
-            selectedTemplateID: templateSnapshot.id,
-            selectedTemplateName: templateSnapshot.name,
-            selectedTemplateKind: templateSnapshot.kind,
-            selectedTemplatePrompt: templateSnapshot.prompt
-        )
+        await sessionTrace?.recordStageStarted("meeting_persistence")
+        let persistenceStartedAt = Date()
+        let meetingID: Int64
+        do {
+            // Persist the converted WAV as a saved recording so retranscription works.
+            let savedRecordingPath = try persistRecording(wavURL: wavURL, title: generatedTitle)
+            meetingID = try await controller.persistImportedAudioMeetingWithoutPublishing(
+                title: generatedTitle,
+                calendarEventID: nil,
+                startTime: startTime,
+                endTime: now,
+                rawTranscript: diarizedTranscript,
+                formattedNotes: formattedNotes,
+                micAudioPath: nil,
+                systemAudioPath: nil,
+                savedRecordingPath: savedRecordingPath,
+                selectedTemplateID: templateSnapshot.id,
+                selectedTemplateName: templateSnapshot.name,
+                selectedTemplateKind: templateSnapshot.kind,
+                selectedTemplatePrompt: templateSnapshot.prompt
+            )
+            let elapsedMilliseconds = stageElapsedMilliseconds(since: persistenceStartedAt)
+            await sessionTrace?.recordStageCompleted(
+                "meeting_persistence",
+                elapsedMilliseconds: elapsedMilliseconds
+            )
+        } catch {
+            let elapsedMilliseconds = stageElapsedMilliseconds(since: persistenceStartedAt)
+            await sessionTrace?.recordStageFailed(
+                "meeting_persistence",
+                elapsedMilliseconds: elapsedMilliseconds
+            )
+            throw error
+        }
 
         return ImportResult(
             meetingID: meetingID,
@@ -291,11 +478,17 @@ enum AudioFileImportController {
             rawTranscript: diarizedTranscript,
             formattedNotes: formattedNotes,
             durationSeconds: duration,
-            wordCount: wordCount
+            wordCount: wordCount,
+            completedAt: now,
+            fallbackSummary: fallbackSummary
         )
     }
 
     // MARK: - Helpers
+
+    private static func stageElapsedMilliseconds(since startedAt: Date) -> Int {
+        ImportStageTiming.elapsedMilliseconds(since: startedAt)
+    }
 
     private static func temporaryWAVURL() throws -> URL {
         let directory = FileManager.default.temporaryDirectory

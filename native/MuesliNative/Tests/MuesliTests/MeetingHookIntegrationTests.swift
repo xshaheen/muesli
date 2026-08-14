@@ -143,6 +143,39 @@ struct MeetingHookIntegrationTests {
         #expect(record.source == .audioImport)
     }
 
+    @Test("cancelled import discards only its provisional row and recording")
+    func cancelledImportDiscardsProvisionalArtifacts() throws {
+        let store = try makeStore()
+        let spy = MeetingHookDispatcherSpy()
+        let controller = makeController(store: store, dispatcher: spy)
+        let recordingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-provisional-import-\(UUID().uuidString).wav")
+        try Data("provisional audio".utf8).write(to: recordingURL)
+        defer { try? FileManager.default.removeItem(at: recordingURL) }
+        let now = Date()
+        let meetingID = try controller.persistImportedAudioMeetingWithoutPublishing(
+            title: "Cancelled Import",
+            calendarEventID: nil,
+            startTime: now.addingTimeInterval(-60),
+            endTime: now,
+            rawTranscript: "Not published",
+            formattedNotes: "Not published",
+            micAudioPath: nil,
+            systemAudioPath: nil,
+            savedRecordingPath: recordingURL.path,
+            selectedTemplateID: nil,
+            selectedTemplateName: nil,
+            selectedTemplateKind: nil,
+            selectedTemplatePrompt: nil
+        )
+
+        controller.discardProvisionalImportedMeeting(id: meetingID)
+
+        #expect(try store.meeting(id: meetingID) == nil)
+        #expect(!FileManager.default.fileExists(atPath: recordingURL.path))
+        #expect(spy.invocations.isEmpty)
+    }
+
     private func makeController(store: DictationStore, dispatcher: MeetingHookDispatching) -> MuesliController {
         MuesliController(
             runtime: RuntimePaths(

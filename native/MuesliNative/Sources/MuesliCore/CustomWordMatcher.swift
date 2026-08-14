@@ -46,6 +46,26 @@ public struct CustomWord: Codable, Equatable, Identifiable {
     }
 }
 
+public struct CustomWordAppliedChange: Codable, Equatable, Sendable {
+    public let observed: String
+    public let replacement: String
+
+    public init(observed: String, replacement: String) {
+        self.observed = observed
+        self.replacement = replacement
+    }
+}
+
+public struct CustomWordApplication: Equatable, Sendable {
+    public let text: String
+    public let changes: [CustomWordAppliedChange]
+
+    public init(text: String, changes: [CustomWordAppliedChange]) {
+        self.text = text
+        self.changes = changes
+    }
+}
+
 /// Post-processing step that replaces transcribed words with entries from
 /// the user's personal dictionary using fuzzy matching.
 ///
@@ -77,17 +97,29 @@ public struct CustomWordMatcher {
 
     /// Apply custom word replacements to transcribed text.
     public static func apply(text: String, customWords: [CustomWord]) -> String {
-        guard !text.isEmpty, !customWords.isEmpty else { return text }
+        applyWithChanges(text: text, customWords: customWords).text
+    }
+
+    public static func applyWithChanges(
+        text: String,
+        customWords: [CustomWord]
+    ) -> CustomWordApplication {
+        guard !text.isEmpty, !customWords.isEmpty else {
+            return CustomWordApplication(text: text, changes: [])
+        }
 
         let entries = customWords.compactMap {
             Entry(word: $0.word, replacement: $0.targetWord, matchingThreshold: $0.matchingThreshold)
         }
-        guard !entries.isEmpty else { return text }
+        guard !entries.isEmpty else {
+            return CustomWordApplication(text: text, changes: [])
+        }
 
         let entriesByTokenCount = Dictionary(grouping: entries, by: { $0.tokens.count })
         let tokenCounts = entriesByTokenCount.keys.sorted(by: >)
         let words = text.components(separatedBy: " ")
         var result: [String] = []
+        var changes: [CustomWordAppliedChange] = []
         var index = 0
 
         while index < words.count {
@@ -97,11 +129,15 @@ public struct CustomWordMatcher {
                 continue
             }
 
+            let observed = words[index..<(index + match.consumed)].joined(separator: " ")
             result.append(match.text)
+            if observed != match.text {
+                changes.append(CustomWordAppliedChange(observed: observed, replacement: match.text))
+            }
             index += match.consumed
         }
 
-        return result.joined(separator: " ")
+        return CustomWordApplication(text: result.joined(separator: " "), changes: changes)
     }
 
     private struct TokenParts {

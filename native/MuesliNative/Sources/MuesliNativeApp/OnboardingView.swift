@@ -1428,7 +1428,7 @@ struct OnboardingView: View {
         .onDisappear {
             // Cancel any in-flight recording before clearing callbacks to prevent
             // the transcription Task from falling through to the production paste path
-            controller.cancelTestDictation()
+            Task { await controller.cancelTestDictation() }
             controller.dictationTestCallback = nil
             controller.dictationTestFailureCallback = nil
             controller.dictationTestRecordingStarted = nil
@@ -1634,7 +1634,7 @@ struct OnboardingView: View {
             return
         case .stop(let cancelTestDictation):
             if cancelTestDictation {
-                controller.cancelTestDictation()
+                Task { await controller.cancelTestDictation() }
                 isDictationTesting = false
             }
             controller.stopHotkeyMonitor()

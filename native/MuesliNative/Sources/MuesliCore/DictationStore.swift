@@ -2826,6 +2826,66 @@ public final class DictationStore {
         return true
     }
 
+    /// Restores a row written provisionally before a session terminal winner was known.
+    /// Resumed meetings use their durable resume snapshot for transcript/timing state;
+    /// ordinary live meetings return to the exact pre-completion draft fields.
+    @discardableResult
+    public func rollbackProvisionalLiveMeeting(id: Int64, priorRecord: MeetingRecord) throws -> Bool {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        let snapshot = try resumeSnapshot(meetingID: id, db: db)
+
+        guard sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        do {
+            if let snapshot {
+                try completeResumedRecovery(
+                    id: id,
+                    snapshot: snapshot,
+                    rawTranscript: snapshot.rawTranscript,
+                    formattedNotes: snapshot.formattedNotes,
+                    endTime: snapshot.endTime,
+                    durationSeconds: snapshot.durationSeconds,
+                    wordCount: Self.countWords(in: snapshot.rawTranscript)
+                        + Self.countWords(in: priorRecord.manualNotes),
+                    db: db
+                )
+                try restoreCompletionAncillaryFields(id: id, from: priorRecord, db: db)
+            } else {
+                try restoreProvisionalLiveMeetingRow(id: id, from: priorRecord, db: db)
+                try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
+            }
+            guard sqlite3_exec(db, "COMMIT", nil, nil, nil) == SQLITE_OK else {
+                throw lastError(db)
+            }
+        } catch {
+            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw error
+        }
+        return snapshot != nil
+    }
+
+    /// Deletes only recovery metadata after the completed product row is durable.
+    /// Safe to retry when a prior cleanup was interrupted.
+    public func finalizeCompletedMeetingRecoveryMetadata(id: Int64) throws {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        guard sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        do {
+            try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
+            try deleteResumeSnapshot(meetingID: id, db: db)
+            guard sqlite3_exec(db, "COMMIT", nil, nil, nil) == SQLITE_OK else {
+                throw lastError(db)
+            }
+        } catch {
+            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw error
+        }
+    }
+
     private func updateMeetingStatus(id: Int64, status: MeetingStatus, db: OpaquePointer?) throws {
         let wordCount = try manualNoteWordCountIfNeeded(for: status, id: id, db: db)
         let sql = wordCount == nil
@@ -2868,7 +2928,8 @@ public final class DictationStore {
         selectedTemplateID: String? = nil,
         selectedTemplateName: String? = nil,
         selectedTemplateKind: MeetingTemplateKind? = nil,
-        selectedTemplatePrompt: String? = nil
+        selectedTemplatePrompt: String? = nil,
+        preserveRecoveryMetadata: Bool = false
     ) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
@@ -2914,8 +2975,10 @@ public final class DictationStore {
         guard sqlite3_changes(db) > 0 else {
             throw DictationStoreError.meetingNotFound(id: id)
         }
-        try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
-        try deleteResumeSnapshot(meetingID: id, db: db)
+        if !preserveRecoveryMetadata {
+            try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
+            try deleteResumeSnapshot(meetingID: id, db: db)
+        }
     }
 
     private func manualNoteWordCountIfNeeded(for status: MeetingStatus, id: Int64, db: OpaquePointer?) throws -> Int? {
@@ -3196,6 +3259,80 @@ public final class DictationStore {
         }
         try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
         try deleteResumeSnapshot(meetingID: id, db: db)
+    }
+
+    private func restoreCompletionAncillaryFields(
+        id: Int64,
+        from record: MeetingRecord,
+        db: OpaquePointer?
+    ) throws {
+        let sql = """
+        UPDATE meetings
+        SET title = ?, calendar_event_id = ?, mic_audio_path = ?, system_audio_path = ?, saved_recording_path = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, updated_at = ?, sync_dirty = 1
+        WHERE id = ? AND deleted_at IS NULL
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (record.title as NSString).utf8String, -1, sqliteTransient)
+        bindOptionalText(record.calendarEventID, at: 2, statement: statement)
+        bindOptionalText(record.micAudioPath, at: 3, statement: statement)
+        bindOptionalText(record.systemAudioPath, at: 4, statement: statement)
+        bindOptionalText(record.savedRecordingPath, at: 5, statement: statement)
+        bindOptionalText(record.selectedTemplateID, at: 6, statement: statement)
+        bindOptionalText(record.selectedTemplateName, at: 7, statement: statement)
+        bindOptionalText(record.selectedTemplateKind?.rawValue, at: 8, statement: statement)
+        bindOptionalText(record.selectedTemplatePrompt, at: 9, statement: statement)
+        sqlite3_bind_double(statement, 10, Date().timeIntervalSince1970)
+        sqlite3_bind_int64(statement, 11, id)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
+        guard sqlite3_changes(db) > 0 else {
+            throw DictationStoreError.meetingNotFound(id: id)
+        }
+    }
+
+    private func restoreProvisionalLiveMeetingRow(
+        id: Int64,
+        from record: MeetingRecord,
+        db: OpaquePointer?
+    ) throws {
+        let sql = """
+        UPDATE meetings
+        SET title = ?, calendar_event_id = ?, start_time = ?, end_time = NULL, duration_seconds = ?, raw_transcript = ?, formatted_notes = ?, mic_audio_path = ?, system_audio_path = ?, saved_recording_path = ?, meeting_status = ?, word_count = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, updated_at = ?, sync_dirty = 1
+        WHERE id = ? AND deleted_at IS NULL
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (record.title as NSString).utf8String, -1, sqliteTransient)
+        bindOptionalText(record.calendarEventID, at: 2, statement: statement)
+        sqlite3_bind_text(statement, 3, (record.startTime as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_double(statement, 4, record.durationSeconds)
+        sqlite3_bind_text(statement, 5, (record.rawTranscript as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 6, (record.formattedNotes as NSString).utf8String, -1, sqliteTransient)
+        bindOptionalText(record.micAudioPath, at: 7, statement: statement)
+        bindOptionalText(record.systemAudioPath, at: 8, statement: statement)
+        bindOptionalText(record.savedRecordingPath, at: 9, statement: statement)
+        sqlite3_bind_text(statement, 10, (record.status.rawValue as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_int(statement, 11, Int32(record.wordCount))
+        bindOptionalText(record.selectedTemplateID, at: 12, statement: statement)
+        bindOptionalText(record.selectedTemplateName, at: 13, statement: statement)
+        bindOptionalText(record.selectedTemplateKind?.rawValue, at: 14, statement: statement)
+        bindOptionalText(record.selectedTemplatePrompt, at: 15, statement: statement)
+        sqlite3_bind_double(statement, 16, Date().timeIntervalSince1970)
+        sqlite3_bind_int64(statement, 17, id)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
+        guard sqlite3_changes(db) > 0 else {
+            throw DictationStoreError.meetingNotFound(id: id)
+        }
     }
 
     private func combinedResumeRecoveryTranscript(prior: String, new: String) -> String {

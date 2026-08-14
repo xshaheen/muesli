@@ -60,7 +60,7 @@ struct OrderedDictationJobQueueTests {
         queue.enqueue(Job(id: 1, transcript: "first"))
         queue.enqueue(Job(id: 2, transcript: "cancelled"))
         queue.enqueue(Job(id: 3, transcript: "third"))
-        queue.cancel(id: 2)
+        await queue.cancel(id: 2)
         firstJobGate.continuation.yield()
         firstJobGate.continuation.finish()
 
@@ -90,7 +90,7 @@ struct OrderedDictationJobQueueTests {
         queue.enqueue(Job(id: 1, transcript: "cancelled"))
         queue.enqueue(Job(id: 2, transcript: "second"))
         await Task.yield()
-        queue.cancel(id: 1)
+        await queue.cancel(id: 1)
 
         let deadline = ContinuousClock.now + .seconds(10)
         while queue.count > 0, ContinuousClock.now < deadline {
@@ -99,6 +99,37 @@ struct OrderedDictationJobQueueTests {
 
         #expect(completed == [2])
         #expect(queue.count == 0)
+    }
+
+    @Test("active cancellation settles ownership before cancelling work")
+    @MainActor
+    func activeCancellationSettlesOwnershipFirst() async {
+        var cancellationClaimed = false
+        var workerObservedClaim = false
+        let queue = OrderedDictationJobQueue<Job>(
+            handler: { _ in
+                do {
+                    try await Task.sleep(for: .seconds(10))
+                } catch {
+                    workerObservedClaim = cancellationClaimed
+                }
+            },
+            onCurrentCancellationRequested: { _ in
+                cancellationClaimed = true
+            }
+        )
+
+        queue.enqueue(Job(id: 1, transcript: "cancelled"))
+        await Task.yield()
+        await queue.cancel(id: 1)
+
+        let deadline = ContinuousClock.now + .seconds(10)
+        while queue.count > 0, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+
+        #expect(cancellationClaimed)
+        #expect(workerObservedClaim)
     }
 
     @Test("completed recordings wait for earlier stop callbacks")
