@@ -72,7 +72,6 @@ PostProcessorOptionTests
 Qwen3PostProcessingOutputCleanerTests
 RouteAwareDictationRecorderTests
 SenseVoiceTranscriberTests
-SidebarHitAreaTests
 SoundControllerTests
 StreamingVadControllerTests
 SystemTurnNormalizerTests

@@ -25,6 +25,7 @@ case "${shard}" in
       ChatGPTAuthTests
       ChatGPTTokenStorageTests
       FloatingIndicatorVisibilityTests
+      FloatingMeetingPanelStyleTests
       IndicatorFrameSizeTests
       OpenAILogoShapeTests
       MeetingChunkCollectorTests
@@ -86,6 +87,7 @@ case "${shard}" in
       AsrVocabularyPromptTests
       WhisperBiasingManualReproTests
       TranscriptionResultCleanupTests
+      DictationTranscriptionStageDiagnosticsTests
       DictationCleanupPolicyTests
       DictationStyleObservabilityTests
       TranscriptionBackendResidencyPolicyTests
@@ -93,6 +95,9 @@ case "${shard}" in
       PostProcessorIdleUnloadPolicyTests
       ModelDeletionExecutorTests
       Nemotron35ModelStoreTests
+      HostedDictationCleanupDeadlineTests
+      OrderedDictationJobQueueTests
+      SessionTraceRuntimeTests
     )
     ;;
   meetings)
@@ -101,6 +106,7 @@ case "${shard}" in
       DiagnosticIncidentTests
       DictationAudioRouteControllerTests
       MeetingDetectorTests
+      MeetingActivityDetectionPolicyTests
       MeetingRecordingWriterTests
       MeetingResumePolicyTests
       MeetingStreamingPartialSessionTests
@@ -109,6 +115,11 @@ case "${shard}" in
       MeetingFollowUpSummaryPromptTests
       MeetingSummaryClientTests
       MeetingsNavigationTests
+      MeetingDetailResponsiveLayoutTests
+      MeetingFallbackClassificationTests
+      MeetingFinalizationRollbackTests
+      MeetingRawTranscriptAccumulatorTests
+      MeetingTextInteractionTests
       MeetingBrowserLogicTests
       MeetingNotesInlineMarkdownTests
       TranscriptFormatterTests
@@ -131,6 +142,7 @@ case "${shard}" in
       MeetingTranscriptCleanupTests
       DisabledCalendarFilterTests
       GoogleCalendarTests
+      NaturalTextDirectionTests
     )
     ;;
   *)
