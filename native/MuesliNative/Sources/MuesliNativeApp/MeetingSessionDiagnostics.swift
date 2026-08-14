@@ -167,119 +167,210 @@ struct MeetingAecDelaySkip: Codable {
 }
 
 final class MeetingSessionDiagnostics {
+    static let retentionDuration: TimeInterval = 7 * 24 * 60 * 60
+    static let maximumStoredRunCount = 10
+    static let maximumStoredRunBytes = 128 * 1_024
+    static let maximumStoredTotalBytes = 1 * 1_024 * 1_024
+
+    struct ClearResult: Equatable, Sendable {
+        let activeRunsPreserved: Int
+    }
+
     struct ChunkStats: Codable {
         let successful: Int
         let empty: Int
         let failed: Int
     }
 
+    struct MicRecorderSummary: Codable {
+        let recorderKind: String
+        let outputRouteKind: String?
+        let outputIsAmbiguousBluetooth: Bool?
+        let selectedInputDeviceResolved: Bool?
+        let systemDefaultInputIsBuiltIn: Bool?
+
+        init(_ snapshot: MeetingMicRecorderDiagnosticsSnapshot) {
+            recorderKind = snapshot.recorderKind.rawValue
+            outputRouteKind = snapshot.route?.outputRouteKind
+            outputIsAmbiguousBluetooth = snapshot.route?.outputIsAmbiguousBluetooth
+            selectedInputDeviceResolved = snapshot.route?.selectedInputDeviceResolved
+            systemDefaultInputIsBuiltIn = snapshot.route?.systemDefaultInputIsBuiltIn
+        }
+    }
+
+    struct MicHealthSummary: Codable {
+        let state: MeetingMicHealthState
+        let rawMic: AudioSampleStatsSnapshot
+        let systemAudio: AudioSampleStatsSnapshot
+        let firstRawMicCallbackAt: Date?
+        let firstNonZeroMicAt: Date?
+        let firstSystemAudioAt: Date?
+        let lastRawMicCallbackAt: Date?
+        let lastNonZeroMicAt: Date?
+        let lastSystemAudioAt: Date?
+        let transitionCount: Int
+        let sustainedZeroMicWhileSystemActive: Bool
+        let failoverAttempted: Bool
+        let failoverSucceeded: Bool
+
+        init(_ snapshot: MeetingMicHealthSnapshot) {
+            state = snapshot.state
+            rawMic = snapshot.rawMic
+            systemAudio = snapshot.systemAudio
+            firstRawMicCallbackAt = snapshot.firstRawMicCallbackAt
+            firstNonZeroMicAt = snapshot.firstNonZeroMicAt
+            firstSystemAudioAt = snapshot.firstSystemAudioAt
+            lastRawMicCallbackAt = snapshot.lastRawMicCallbackAt
+            lastNonZeroMicAt = snapshot.lastNonZeroMicAt
+            lastSystemAudioAt = snapshot.lastSystemAudioAt
+            transitionCount = snapshot.transitions.count
+            sustainedZeroMicWhileSystemActive = snapshot.sustainedZeroMicWhileSystemActive
+            failoverAttempted = snapshot.failover != nil
+            failoverSucceeded = snapshot.failover?.didSwitchInput == true
+        }
+    }
+
+    struct AecSummary: Codable {
+        let ready: Bool
+        let processor: String?
+        let frameSize: Int
+        let processedFrames: Int
+        let fullReferenceFrames: Int
+        let partialReferenceFrames: Int
+        let missingReferenceFrames: Int
+        let systemSamplesReceived: Int
+        let micSamplesReceived: Int
+        let bufferedSystemSamples: Int
+        let bufferedMicSamples: Int
+        let currentDelayMs: Int
+        let delayObservationCount: Int
+        let delaySkipCount: Int
+
+        init(_ snapshot: MeetingAecDiagnosticsSnapshot) {
+            ready = snapshot.ready
+            processor = snapshot.processor
+            frameSize = snapshot.frameSize
+            processedFrames = snapshot.processedFrames
+            fullReferenceFrames = snapshot.fullReferenceFrames
+            partialReferenceFrames = snapshot.partialReferenceFrames
+            missingReferenceFrames = snapshot.missingReferenceFrames
+            systemSamplesReceived = snapshot.systemSamplesReceived
+            micSamplesReceived = snapshot.micSamplesReceived
+            bufferedSystemSamples = snapshot.bufferedSystemSamples
+            bufferedMicSamples = snapshot.bufferedMicSamples
+            currentDelayMs = snapshot.currentDelayMs
+            delayObservationCount = snapshot.delayHistory.count
+            delaySkipCount = snapshot.delaySkipHistory.count
+        }
+    }
+
     struct Summary: Codable {
-        let meetingTitle: String
+        let schemaVersion: Int
         let startedAt: String
         let endedAt: String
         let durationSeconds: Double
         let systemCapture: SystemAudioCaptureDiagnosticsSnapshot?
-        let micRecorder: MeetingMicRecorderDiagnosticsSnapshot?
-        let micHealth: MeetingMicHealthSnapshot?
-        let aec: MeetingAecDiagnosticsSnapshot
+        let micRecorder: MicRecorderSummary?
+        let micHealth: MicHealthSummary?
+        let aec: AecSummary
         let micChunks: ChunkStats
         let systemChunks: ChunkStats
         let diarizationSegments: Int
         let diarizationSpeakers: Int
         let protectedSystemSegments: Int
         let rawMic: AudioSampleStatsSnapshot?
-        let cleanedMicAec: AudioSampleStatsSnapshot?
+        let cleanedMicAec: AudioSampleStatsSnapshot
         let systemAudio: AudioSampleStatsSnapshot?
-        let aecDelayEstimate: AecDelayEstimate?
     }
 
-    struct AecDelayEstimate: Codable {
-        let bestDelayMs: Int?
-        let confidence: Double
-        let scores: [DelayScore]
+    struct StoredSummary {
+        let id: String
+        let modifiedAt: Date
+        let summary: Summary
     }
 
-    struct DelayScore: Codable {
-        let delayMs: Int
-        let score: Double
-        let comparedFrames: Int
+    private struct State {
+        var cleanedMicStats = AudioSampleStats()
+        var isFinalized = false
+    }
+
+    private struct DiagnosticRun {
+        let url: URL
+        let modifiedAt: Date
+        let byteSize: Int
+        let isActive: Bool
     }
 
     private let outputDirectory: URL?
-    private let cleanedMicURL: URL?
-    private let cleanedMicFile: FileHandle?
-    private let lock = OSAllocatedUnfairLock(initialState: CleanedMicState())
+    private let diagnosticsRoot: URL
+    private let activeRunPath: String?
     private let enabled: Bool
-    private static let maxDiagnosticRuns = 10
-    private static let maxDiagnosticBytes = 2 * 1_024 * 1_024 * 1_024
-
-    private struct CleanedMicState {
-        var bytesWritten = 0
-        var stats = AudioSampleStats()
-        var isClosed = false
-    }
+    private let lock = OSAllocatedUnfairLock(initialState: State())
+    private static let activeRunsLock = OSAllocatedUnfairLock(initialState: Set<String>())
 
     static var isEnabled: Bool {
-        FileManager.default.fileExists(atPath: enabledFlagURL.path)
+        isEnabled(rootURL: AppIdentity.supportDirectoryURL)
     }
 
-    private static var enabledFlagURL: URL {
-        AppIdentity.supportDirectoryURL.appendingPathComponent("MeetingDiagnostics.enabled")
+    static func isEnabled(rootURL: URL) -> Bool {
+        FileManager.default.fileExists(atPath: enabledFlagURL(rootURL: rootURL).path)
     }
 
-    init(title: String, startedAt: Date) {
-        enabled = Self.isEnabled
+    init(
+        startedAt: Date,
+        rootURL: URL = AppIdentity.supportDirectoryURL,
+        enabledOverride: Bool? = nil
+    ) {
+        let resolvedDiagnosticsRoot = Self.diagnosticsRoot(rootURL: rootURL)
+        diagnosticsRoot = resolvedDiagnosticsRoot
+        enabled = enabledOverride ?? Self.isEnabled(rootURL: rootURL)
         guard enabled else {
             outputDirectory = nil
-            cleanedMicURL = nil
-            cleanedMicFile = nil
+            activeRunPath = nil
             return
         }
 
         let timestamp = Self.fileTimestamp.string(from: startedAt)
-        let safeTitle = Self.safePathComponent(title)
-        let diagnosticsRoot = AppIdentity.supportDirectoryURL
-            .appendingPathComponent("MeetingDiagnostics", isDirectory: true)
-        let runDirectory = diagnosticsRoot
-            .appendingPathComponent("\(timestamp)-\(safeTitle)-\(UUID().uuidString.prefix(8))", isDirectory: true)
-
-        do {
-            try FileManager.default.createDirectory(at: runDirectory, withIntermediateDirectories: true)
-            Self.pruneOldRuns(in: diagnosticsRoot, preserving: runDirectory)
-            let cleanedURL = runDirectory.appendingPathComponent("cleaned-mic-aec.wav")
-            FileManager.default.createFile(atPath: cleanedURL.path, contents: nil)
-            let file = FileHandle(forWritingAtPath: cleanedURL.path)
-            file?.write(WavWriter.header(dataSize: 0))
-            outputDirectory = runDirectory
-            cleanedMicURL = cleanedURL
-            cleanedMicFile = file
-            fputs("[meeting-diagnostics] enabled: \(runDirectory.path)\n", stderr)
-        } catch {
-            outputDirectory = nil
-            cleanedMicURL = nil
-            cleanedMicFile = nil
-            fputs("[meeting-diagnostics] failed to create diagnostics directory: \(error)\n", stderr)
+        let id = "\(timestamp)-\(UUID().uuidString.lowercased())"
+        let runDirectory = resolvedDiagnosticsRoot.appendingPathComponent(id, isDirectory: true)
+        let runPath = Self.canonicalPath(runDirectory)
+        let didCreateRun = Self.activeRunsLock.withLock { activeIDs in
+            activeIDs.insert(runPath)
+            do {
+                try FileManager.default.createDirectory(at: runDirectory, withIntermediateDirectories: true)
+                Self.pruneOldRuns(in: resolvedDiagnosticsRoot, now: Date(), activeIDs: activeIDs)
+                return true
+            } catch {
+                activeIDs.remove(runPath)
+                return false
+            }
         }
+        if didCreateRun {
+            outputDirectory = runDirectory
+            activeRunPath = runPath
+            fputs("[meeting-diagnostics] local metadata capture enabled\n", stderr)
+        } else {
+            outputDirectory = nil
+            activeRunPath = nil
+            fputs("[meeting-diagnostics] failed to create local metadata directory\n", stderr)
+        }
+    }
+
+    deinit {
+        unregisterActiveRun()
     }
 
     func appendCleanedMicSamples(_ samples: [Int16]) {
         guard enabled, !samples.isEmpty else { return }
-        let data = samples.withUnsafeBufferPointer { Data(buffer: $0) }
         lock.withLock { state in
-            guard !state.isClosed else { return }
-            cleanedMicFile?.write(data)
-            state.bytesWritten += data.count
-            state.stats.addInt16(samples)
+            guard !state.isFinalized else { return }
+            state.cleanedMicStats.addInt16(samples)
         }
     }
 
     func writeFinalReport(
-        title: String,
         startedAt: Date,
         endedAt: Date,
-        rawTranscript: String,
-        rawMicURL: URL?,
-        systemAudioURL: URL?,
         systemCapture: SystemAudioCaptureDiagnosticsSnapshot?,
         micRecorder: MeetingMicRecorderDiagnosticsSnapshot?,
         micHealth: MeetingMicHealthSnapshot?,
@@ -287,32 +378,22 @@ final class MeetingSessionDiagnostics {
         micChunks: MeetingTranscriptChunkHealthSnapshot,
         systemChunks: MeetingTranscriptChunkHealthSnapshot,
         diarizationSegments: [TimedSpeakerSegment]?,
-        protectedSystemSegmentCount: Int
+        protectedSystemSegmentCount: Int,
+        retentionReferenceDate: Date = Date()
     ) {
         guard enabled, let outputDirectory else { return }
+        guard let cleanedMicStats = finalizeCleanedMic() else { return }
+        defer { unregisterActiveRun() }
 
-        let cleanedMicStats = finalizeCleanedMic()
-        let rawMicDiagnosticsURL = outputDirectory.appendingPathComponent("raw-mic-full-session.wav")
-        let systemDiagnosticsURL = outputDirectory.appendingPathComponent("system-audio.wav")
-        let rawMicStats = copyAudioFileAndMeasure(from: rawMicURL, to: rawMicDiagnosticsURL)
-        let systemStats = copyAudioFileAndMeasure(from: systemAudioURL, to: systemDiagnosticsURL)
-        let delayEstimate = Self.estimateAecDelay(
-            rawMicURL: rawMicDiagnosticsURL,
-            systemAudioURL: systemDiagnosticsURL
-        )
-
-        writeText(rawTranscript, to: outputDirectory.appendingPathComponent("raw-transcript.txt"))
-
-        let speakerCount = Set((diarizationSegments ?? []).map(\.speakerId)).count
         let summary = Summary(
-            meetingTitle: title,
+            schemaVersion: 1,
             startedAt: Self.iso8601.string(from: startedAt),
             endedAt: Self.iso8601.string(from: endedAt),
             durationSeconds: max(endedAt.timeIntervalSince(startedAt), 0),
             systemCapture: systemCapture,
-            micRecorder: micRecorder,
-            micHealth: micHealth,
-            aec: aec,
+            micRecorder: micRecorder.map(MicRecorderSummary.init),
+            micHealth: micHealth.map(MicHealthSummary.init),
+            aec: AecSummary(aec),
             micChunks: ChunkStats(
                 successful: micChunks.successfulChunkCount,
                 empty: micChunks.emptyChunkCount,
@@ -324,87 +405,160 @@ final class MeetingSessionDiagnostics {
                 failed: systemChunks.failedChunkCount
             ),
             diarizationSegments: diarizationSegments?.count ?? 0,
-            diarizationSpeakers: speakerCount,
+            diarizationSpeakers: Set((diarizationSegments ?? []).map(\.speakerId)).count,
             protectedSystemSegments: protectedSystemSegmentCount,
-            rawMic: rawMicStats,
+            rawMic: micHealth?.rawMic,
             cleanedMicAec: cleanedMicStats,
-            systemAudio: systemStats,
-            aecDelayEstimate: delayEstimate
+            systemAudio: systemCapture?.postConversion ?? micHealth?.systemAudio
         )
 
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(summary)
+            guard data.count <= Self.maximumStoredRunBytes else {
+                fputs("[meeting-diagnostics] local metadata exceeded the per-run cap\n", stderr)
+                return
+            }
             try data.write(
                 to: outputDirectory.appendingPathComponent("diagnostics.json"),
-                options: Data.WritingOptions.atomic
+                options: .atomic
             )
         } catch {
-            fputs("[meeting-diagnostics] failed to write diagnostics.json: \(error)\n", stderr)
+            fputs("[meeting-diagnostics] failed to write diagnostics.json\n", stderr)
+        }
+
+        unregisterActiveRun()
+        Self.pruneOldRuns(in: diagnosticsRoot, now: retentionReferenceDate)
+    }
+
+    static func loadStoredSummaries(
+        rootURL: URL = AppIdentity.supportDirectoryURL,
+        now: Date = Date()
+    ) -> [StoredSummary] {
+        let root = diagnosticsRoot(rootURL: rootURL)
+        pruneOldRuns(in: root, now: now)
+        let fileManager = FileManager.default
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        return contents.compactMap { runURL -> StoredSummary? in
+            let values = try? runURL.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey])
+            guard values?.isDirectory == true else { return nil }
+            let reportURL = runURL.appendingPathComponent("diagnostics.json")
+            guard let data = try? Data(contentsOf: reportURL, options: .mappedIfSafe),
+                  data.count <= maximumStoredRunBytes,
+                  let summary = try? JSONDecoder().decode(Summary.self, from: data),
+                  summary.schemaVersion == 1
+            else { return nil }
+            return StoredSummary(
+                id: runURL.lastPathComponent,
+                modifiedAt: values?.contentModificationDate ?? .distantPast,
+                summary: summary
+            )
+        }
+        .sorted { $0.modifiedAt > $1.modifiedAt }
+    }
+
+    static func prepareStore(
+        rootURL: URL = AppIdentity.supportDirectoryURL,
+        now: Date = Date()
+    ) {
+        pruneOldRuns(in: diagnosticsRoot(rootURL: rootURL), now: now)
+    }
+
+    static func clearStoredRuns(
+        rootURL: URL = AppIdentity.supportDirectoryURL
+    ) throws -> ClearResult {
+        let root = diagnosticsRoot(rootURL: rootURL)
+        return try activeRunsLock.withLock { activeIDs in
+            let fileManager = FileManager.default
+            let activePathsInRoot = activeIDs.filter {
+                canonicalPath(URL(fileURLWithPath: $0).deletingLastPathComponent())
+                    == canonicalPath(root)
+            }
+            let contents: [URL]
+            do {
+                contents = try fileManager.contentsOfDirectory(
+                    at: root,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: []
+                )
+            } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+                return ClearResult(activeRunsPreserved: activePathsInRoot.count)
+            }
+
+            for url in contents where !activeIDs.contains(canonicalPath(url)) {
+                try fileManager.removeItem(at: url)
+            }
+            if activePathsInRoot.isEmpty {
+                try fileManager.removeItem(at: root)
+            }
+            return ClearResult(activeRunsPreserved: activePathsInRoot.count)
         }
     }
 
     private func finalizeCleanedMic() -> AudioSampleStatsSnapshot? {
-        guard let cleanedMicFile else { return nil }
-        let finalState = lock.withLock { state -> CleanedMicState in
-            state.isClosed = true
-            return state
-        }
-        cleanedMicFile.seek(toFileOffset: 0)
-        cleanedMicFile.write(WavWriter.header(dataSize: UInt32(finalState.bytesWritten)))
-        cleanedMicFile.closeFile()
-        return finalState.stats.snapshot()
-    }
-
-    private func copyAudioFileAndMeasure(from sourceURL: URL?, to destinationURL: URL) -> AudioSampleStatsSnapshot? {
-        guard let sourceURL, FileManager.default.fileExists(atPath: sourceURL.path) else { return nil }
-        do {
-            if FileManager.default.fileExists(atPath: destinationURL.path) {
-                try FileManager.default.removeItem(at: destinationURL)
-            }
-            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
-            return Self.measureInt16Wav(at: destinationURL)
-        } catch {
-            fputs("[meeting-diagnostics] failed to copy \(sourceURL.path): \(error)\n", stderr)
-            return nil
+        lock.withLock { state in
+            guard !state.isFinalized else { return nil }
+            state.isFinalized = true
+            return state.cleanedMicStats.snapshot()
         }
     }
 
-    private func writeText(_ text: String, to url: URL) {
-        do {
-            try text.write(to: url, atomically: true, encoding: .utf8)
-        } catch {
-            fputs("[meeting-diagnostics] failed to write \(url.lastPathComponent): \(error)\n", stderr)
+    private func unregisterActiveRun() {
+        guard let activeRunPath else { return }
+        _ = Self.activeRunsLock.withLock { $0.remove(activeRunPath) }
+    }
+
+    private static func pruneOldRuns(in diagnosticsRoot: URL, now: Date) {
+        activeRunsLock.withLock { activeIDs in
+            pruneOldRuns(in: diagnosticsRoot, now: now, activeIDs: activeIDs)
         }
     }
 
-    private static func pruneOldRuns(in diagnosticsRoot: URL, preserving preservedRun: URL) {
+    private static func pruneOldRuns(
+        in diagnosticsRoot: URL,
+        now: Date,
+        activeIDs: Set<String>
+    ) {
         let fileManager = FileManager.default
         guard let contents = try? fileManager.contentsOfDirectory(
             at: diagnosticsRoot,
-            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey, .fileSizeKey],
+            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
             options: [.skipsHiddenFiles]
         ) else { return }
 
         var runs = contents.compactMap { url -> DiagnosticRun? in
-            guard url.standardizedFileURL != preservedRun.standardizedFileURL else { return nil }
             let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey])
             guard values?.isDirectory == true else { return nil }
             return DiagnosticRun(
                 url: url,
                 modifiedAt: values?.contentModificationDate ?? .distantPast,
-                byteSize: directoryByteSize(url)
+                byteSize: directoryByteSize(url),
+                isActive: activeIDs.contains(canonicalPath(url))
             )
         }
-        runs.sort { $0.modifiedAt > $1.modifiedAt }
+        runs.sort {
+            if $0.isActive != $1.isActive { return $0.isActive }
+            return $0.modifiedAt > $1.modifiedAt
+        }
 
-        var retainedCount = 1
-        var retainedBytes = directoryByteSize(preservedRun)
+        let expirationDate = now.addingTimeInterval(-retentionDuration)
+        var retainedCount = 0
+        var retainedBytes = 0
         for run in runs {
-            let shouldKeep = retainedCount < maxDiagnosticRuns
-                && retainedBytes + run.byteSize <= maxDiagnosticBytes
-            if shouldKeep {
+            if !run.isActive, !isCurrentMetadataRun(run.url) {
+                try? fileManager.removeItem(at: run.url)
+                continue
+            }
+            let isExpired = run.modifiedAt < expirationDate
+            let fitsBounds = retainedCount < maximumStoredRunCount
+                && retainedBytes + run.byteSize <= maximumStoredTotalBytes
+            if run.isActive || (!isExpired && fitsBounds) {
                 retainedCount += 1
                 retainedBytes += run.byteSize
             } else {
@@ -413,10 +567,21 @@ final class MeetingSessionDiagnostics {
         }
     }
 
-    private struct DiagnosticRun {
-        let url: URL
-        let modifiedAt: Date
-        let byteSize: Int
+    private static func isCurrentMetadataRun(_ runURL: URL) -> Bool {
+        let fileManager = FileManager.default
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: runURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: []
+        ), contents.map(\.lastPathComponent).sorted() == ["diagnostics.json"] else {
+            return false
+        }
+        let reportURL = runURL.appendingPathComponent("diagnostics.json")
+        guard let data = try? Data(contentsOf: reportURL, options: .mappedIfSafe),
+              data.count <= maximumStoredRunBytes,
+              let summary = try? JSONDecoder().decode(Summary.self, from: data)
+        else { return false }
+        return summary.schemaVersion == 1
     }
 
     private static func directoryByteSize(_ url: URL) -> Int {
@@ -436,200 +601,16 @@ final class MeetingSessionDiagnostics {
         return total
     }
 
-    static func measureInt16Wav(at url: URL) -> AudioSampleStatsSnapshot? {
-        guard let wav = loadInt16Wav(at: url) else { return nil }
-        var stats = AudioSampleStats()
-        stats.addInt16(wav.samples)
-        return stats.snapshot()
+    private static func diagnosticsRoot(rootURL: URL) -> URL {
+        rootURL.appendingPathComponent("MeetingDiagnostics", isDirectory: true)
     }
 
-    static func estimateAecDelay(
-        rawMicURL: URL,
-        systemAudioURL: URL,
-        candidateDelaysMs: [Int] = MeetingAecDelayEstimator.defaultCandidateDelaysMs
-    ) -> AecDelayEstimate? {
-        guard let rawMic = loadInt16Wav(at: rawMicURL),
-              let system = loadInt16Wav(at: systemAudioURL),
-              rawMic.sampleRate == 16_000,
-              system.sampleRate == 16_000,
-              !rawMic.samples.isEmpty,
-              !system.samples.isEmpty
-        else { return nil }
-
-        let frameSize = 320 // 20ms at 16kHz
-        let micEnvelope = rmsEnvelope(samples: rawMic.samples, frameSize: frameSize)
-        let systemEnvelope = rmsEnvelope(samples: system.samples, frameSize: frameSize)
-        guard !micEnvelope.isEmpty, !systemEnvelope.isEmpty else { return nil }
-
-        let scores = candidateDelaysMs.map { delayMs in
-            let delayFrames = max(0, Int(round(Double(delayMs) / 20.0)))
-            let result = envelopeCosineSimilarity(
-                micEnvelope: micEnvelope,
-                systemEnvelope: systemEnvelope,
-                delayFrames: delayFrames
-            )
-            return DelayScore(
-                delayMs: delayMs,
-                score: result.score,
-                comparedFrames: result.comparedFrames
-            )
-        }
-
-        let best = scores.max { lhs, rhs in
-            if lhs.score == rhs.score {
-                return lhs.comparedFrames < rhs.comparedFrames
-            }
-            return lhs.score < rhs.score
-        }
-        let runnerUpScore = scores
-            .filter { $0.delayMs != best?.delayMs }
-            .map(\.score)
-            .max() ?? 0
-
-        return AecDelayEstimate(
-            bestDelayMs: (best?.comparedFrames ?? 0) > 0 ? best?.delayMs : nil,
-            confidence: max(0, (best?.score ?? 0) - runnerUpScore),
-            scores: scores
-        )
+    private static func canonicalPath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
-    private struct Int16WavData {
-        let sampleRate: Int
-        let samples: [Int16]
-    }
-
-    private static func loadInt16Wav(at url: URL) -> Int16WavData? {
-        guard let data = try? Data(contentsOf: url), data.count >= 12 else { return nil }
-        guard String(bytes: data[0..<4], encoding: .ascii) == "RIFF",
-              String(bytes: data[8..<12], encoding: .ascii) == "WAVE"
-        else { return nil }
-
-        var sampleRate: Int?
-        var channels: Int?
-        var bitsPerSample: Int?
-        var audioFormat: Int?
-        var dataRange: Range<Int>?
-        var offset = 12
-
-        while offset + 8 <= data.count {
-            guard let chunkID = String(bytes: data[offset..<(offset + 4)], encoding: .ascii),
-                  let chunkSize = readUInt32LE(data, at: offset + 4)
-            else { return nil }
-
-            let payloadStart = offset + 8
-            let payloadEnd = payloadStart + Int(chunkSize)
-            guard payloadEnd <= data.count else { return nil }
-
-            if chunkID == "fmt " {
-                guard Int(chunkSize) >= 16,
-                      let parsedFormat = readUInt16LE(data, at: payloadStart),
-                      let parsedChannels = readUInt16LE(data, at: payloadStart + 2),
-                      let parsedSampleRate = readUInt32LE(data, at: payloadStart + 4),
-                      let parsedBits = readUInt16LE(data, at: payloadStart + 14)
-                else { return nil }
-                audioFormat = Int(parsedFormat)
-                channels = Int(parsedChannels)
-                sampleRate = Int(parsedSampleRate)
-                bitsPerSample = Int(parsedBits)
-            } else if chunkID == "data" {
-                dataRange = payloadStart..<payloadEnd
-            }
-
-            offset = payloadEnd + (Int(chunkSize) % 2)
-        }
-
-        guard audioFormat == 1,
-              bitsPerSample == 16,
-              let sampleRate,
-              let channelCount = channels,
-              channelCount > 0,
-              let dataRange
-        else { return nil }
-
-        let byteCount = dataRange.count - (dataRange.count % 2)
-        var interleaved: [Int16] = []
-        interleaved.reserveCapacity(byteCount / 2)
-
-        var sampleOffset = dataRange.lowerBound
-        let sampleEnd = dataRange.lowerBound + byteCount
-        while sampleOffset + 1 < sampleEnd {
-            let low = UInt16(data[sampleOffset])
-            let high = UInt16(data[sampleOffset + 1]) << 8
-            interleaved.append(Int16(bitPattern: high | low))
-            sampleOffset += 2
-        }
-
-        let monoSamples: [Int16]
-        if channelCount == 1 {
-            monoSamples = interleaved
-        } else {
-            let frameCount = interleaved.count / channelCount
-            monoSamples = (0..<frameCount).map { frame in
-                var sum = 0
-                for channel in 0..<channelCount {
-                    sum += Int(interleaved[frame * channelCount + channel])
-                }
-                return Int16(clamping: sum / channelCount)
-            }
-        }
-
-        return Int16WavData(sampleRate: sampleRate, samples: monoSamples)
-    }
-
-    private static func readUInt16LE(_ data: Data, at offset: Int) -> UInt16? {
-        guard offset + 2 <= data.count else { return nil }
-        return UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
-    }
-
-    private static func readUInt32LE(_ data: Data, at offset: Int) -> UInt32? {
-        guard offset + 4 <= data.count else { return nil }
-        return UInt32(data[offset])
-            | (UInt32(data[offset + 1]) << 8)
-            | (UInt32(data[offset + 2]) << 16)
-            | (UInt32(data[offset + 3]) << 24)
-    }
-
-    private static func rmsEnvelope(samples: [Int16], frameSize: Int) -> [Double] {
-        guard frameSize > 0 else { return [] }
-        var envelope: [Double] = []
-        envelope.reserveCapacity(samples.count / frameSize)
-
-        var index = 0
-        while index + frameSize <= samples.count {
-            var sumSquares = 0.0
-            for sample in samples[index..<(index + frameSize)] {
-                let value = Double(sample) / 32768.0
-                sumSquares += value * value
-            }
-            envelope.append(sqrt(sumSquares / Double(frameSize)))
-            index += frameSize
-        }
-        return envelope
-    }
-
-    private static func envelopeCosineSimilarity(
-        micEnvelope: [Double],
-        systemEnvelope: [Double],
-        delayFrames: Int
-    ) -> (score: Double, comparedFrames: Int) {
-        guard delayFrames < micEnvelope.count else { return (0, 0) }
-
-        let comparedFrames = min(systemEnvelope.count, micEnvelope.count - delayFrames)
-        guard comparedFrames > 0 else { return (0, 0) }
-
-        var dot = 0.0
-        var micNorm = 0.0
-        var systemNorm = 0.0
-        for index in 0..<comparedFrames {
-            let mic = micEnvelope[index + delayFrames]
-            let system = systemEnvelope[index]
-            dot += mic * system
-            micNorm += mic * mic
-            systemNorm += system * system
-        }
-
-        guard micNorm > 0, systemNorm > 0 else { return (0, comparedFrames) }
-        return (dot / sqrt(micNorm * systemNorm), comparedFrames)
+    private static func enabledFlagURL(rootURL: URL) -> URL {
+        rootURL.appendingPathComponent("MeetingDiagnostics.enabled")
     }
 
     private static let iso8601: ISO8601DateFormatter = {
@@ -643,14 +624,4 @@ final class MeetingSessionDiagnostics {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
-
-    private static func safePathComponent(_ input: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_ "))
-        let scalars = input.unicodeScalars.map { scalar -> Character in
-            allowed.contains(scalar) ? Character(scalar) : "-"
-        }
-        let collapsed = String(scalars).trimmingCharacters(in: .whitespacesAndNewlines)
-        let prefix = collapsed.isEmpty ? "Meeting" : String(collapsed.prefix(48))
-        return prefix.replacingOccurrences(of: " ", with: "-")
-    }
 }

@@ -606,7 +606,7 @@ final class MeetingSession {
         let vadManager = await transcriptionCoordinator.getVadManager()
         let requestedStart = Date()
         await sessionTrace?.recordStageStarted("meeting_capture")
-        diagnostics = MeetingSessionDiagnostics(title: title, startedAt: requestedStart)
+        diagnostics = MeetingSessionDiagnostics(startedAt: requestedStart)
 
         // AEC must be loaded before audio pipeline starts (streaming mode)
         await neuralAec.preload()
@@ -1257,12 +1257,8 @@ final class MeetingSession {
         )
 
         diagnostics?.writeFinalReport(
-            title: generatedTitle,
             startedAt: meetingStart,
             endedAt: endTime,
-            rawTranscript: rawTranscript,
-            rawMicURL: rawStreamingMicURL,
-            systemAudioURL: systemAudioURL,
             systemCapture: (systemAudioRecorder as? SystemAudioDiagnosticsProviding)?.diagnosticsSnapshot,
             micRecorder: meetingMicRecorder.diagnosticsSnapshot(),
             micHealth: micHealthTracker.snapshot(),

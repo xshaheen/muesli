@@ -26,6 +26,37 @@ struct DiagnosticErrorFingerprint: Codable, Equatable, Sendable {
 }
 
 enum DiagnosticErrorCatalog {
+    static func sanitizedPersistedFingerprint(
+        _ candidate: DiagnosticErrorFingerprint,
+        kind: DiagnosticIncidentKind,
+        stage: DiagnosticIncidentStage
+    ) -> DiagnosticErrorFingerprint {
+        let appState = appStateFingerprint(kind: kind, stage: stage)
+        if candidate == appState { return appState }
+        if candidate.isKnown,
+           candidate.safeDomain == nil,
+           candidate.safeCode == nil,
+           domainFallbacks.values.contains(where: {
+               candidate.signature == $0.area
+                   && candidate.summary == $0.summary
+                   && candidate.area == $0.area
+           }) {
+            return candidate
+        }
+        guard let domain = candidate.safeDomain,
+              let code = candidate.safeCode,
+              let match = lookup(domain: domain, code: code)
+        else { return .unclassified() }
+        return DiagnosticErrorFingerprint(
+            signature: match.signature,
+            summary: match.meaning.summary,
+            area: match.meaning.area,
+            safeDomain: match.safeDomain,
+            safeCode: match.safeCode,
+            isKnown: true
+        )
+    }
+
     static func fingerprint(
         for error: Error?,
         kind: DiagnosticIncidentKind,
