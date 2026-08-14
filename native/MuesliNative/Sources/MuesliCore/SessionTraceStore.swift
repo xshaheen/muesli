@@ -641,7 +641,7 @@ public actor SessionTraceStore {
         }
     }
 
-    public func exportDiagnosticsData(now: Date = Date()) throws -> Data {
+    public func diagnosticsExport(now: Date = Date()) throws -> SessionTraceDiagnosticsExport {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
         let payload: SessionTraceDiagnosticsExport
@@ -678,6 +678,11 @@ public actor SessionTraceStore {
             _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
             throw error
         }
+        return payload
+    }
+
+    public func exportDiagnosticsData(now: Date = Date()) throws -> Data {
+        let payload = try diagnosticsExport(now: now)
         // Release the SQLite snapshot before potentially expensive JSON
         // encoding so an exporter cannot pin unbounded WAL growth.
         let encoder = JSONEncoder()

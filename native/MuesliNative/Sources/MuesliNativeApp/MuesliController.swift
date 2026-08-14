@@ -339,6 +339,18 @@ final class MuesliController: NSObject {
     private let configStore: ConfigStore
     private let dictationStore: DictationStore
     private let sessionTraceStore: SessionTraceStore?
+    lazy var localDiagnosticsService = LocalDiagnosticsService(
+        store: sessionTraceStore,
+        flushActiveWriters: { [weak self] in
+            await self?.flushActiveSessionTraces()
+        },
+        loadIncidentHistory: { [weak self] in
+            self?.diagnosticIncidentReporter.recentIncidents() ?? []
+        },
+        clearIncidentHistory: { [weak self] in
+            self?.diagnosticIncidentReporter.clearHistory()
+        }
+    )
     private let meetingHookDispatcher: MeetingHookDispatching
     private let meetingMarkdownAutoExporter: MeetingMarkdownAutoExporting
     private let launchAtLoginCoordinator: LaunchAtLoginCoordinator
@@ -633,6 +645,9 @@ final class MuesliController: NSObject {
 
     func start() {
         hasStarted = true
+        Task.detached(priority: .utility) {
+            MeetingSessionDiagnostics.prepareStore()
+        }
         do {
             try dictationStore.migrateIfNeeded()
         } catch {
