@@ -7,7 +7,7 @@ import Testing
 @Suite("Meeting finalization rollback")
 struct MeetingFinalizationRollbackTests {
     @Test("losing the terminal race removes a new meeting and its unreferenced recording")
-    func losingTerminalRemovesNewMeeting() throws {
+    func losingTerminalRemovesNewMeeting() async throws {
         let fixture = try makeFixture()
         let start = Date(timeIntervalSince1970: 1_720_000_000)
         let meetingID = try fixture.store.createLiveMeeting(
@@ -17,8 +17,19 @@ struct MeetingFinalizationRollbackTests {
         )
         let priorRecord = try #require(try fixture.store.meeting(id: meetingID))
         let recordingURL = try makeRecording(in: fixture.supportDirectory, name: "new-terminal-loser.m4a")
+        let artifact = try fixture.artifactStore.adoptCapture(
+            at: recordingURL,
+            sessionID: UUID(),
+            captureKind: .meeting,
+            savePolicy: .always
+        )
+        let retainedURL = try fixture.artifactStore.playableURL(id: artifact.id)
         let result = makeResult(start: start, transcript: "Final transcript")
-        let preparedSave = PreparedMeetingRecordingSave(path: recordingURL.path, error: nil)
+        let preparedSave = PreparedMeetingRecordingSave(
+            path: nil,
+            error: nil,
+            recording: .init(artifactID: artifact.id, availability: .available)
+        )
 
         let persistence = try fixture.controller.persistCompletedMeetingResult(
             result,
@@ -36,14 +47,26 @@ struct MeetingFinalizationRollbackTests {
         ))
 
         #expect(try fixture.store.meeting(id: meetingID) == nil)
-        #expect(!FileManager.default.fileExists(atPath: recordingURL.path))
+        await waitForFileRemoval(retainedURL)
+        #expect(!FileManager.default.fileExists(atPath: retainedURL.path))
     }
 
     @Test("losing the terminal race restores a resumed meeting and preserves recovery metadata until rollback")
-    func losingTerminalRestoresResumedMeeting() throws {
+    func losingTerminalRestoresResumedMeeting() async throws {
         let fixture = try makeFixture()
         let start = Date(timeIntervalSince1970: 1_720_100_000)
         let oldRecordingURL = try makeRecording(in: fixture.supportDirectory, name: "prior-recording.m4a")
+        let oldArtifact = try fixture.artifactStore.adoptCapture(
+            at: oldRecordingURL,
+            sessionID: UUID(),
+            captureKind: .meeting,
+            savePolicy: .always
+        )
+        let priorRecording = RecordingArtifactReference(
+            artifactID: oldArtifact.id,
+            availability: .available
+        )
+        let retainedOldURL = try fixture.artifactStore.playableURL(id: oldArtifact.id)
         let meetingID = try fixture.store.insertMeeting(
             title: "Prior Meeting",
             calendarEventID: "prior-event",
@@ -53,11 +76,12 @@ struct MeetingFinalizationRollbackTests {
             formattedNotes: "Prior notes",
             micAudioPath: nil,
             systemAudioPath: nil,
-            savedRecordingPath: oldRecordingURL.path,
+            savedRecordingPath: nil,
             selectedTemplateID: "prior-template",
             selectedTemplateName: "Prior Template",
             selectedTemplateKind: .custom,
-            selectedTemplatePrompt: "Prior prompt"
+            selectedTemplatePrompt: "Prior prompt",
+            recording: priorRecording
         )
         _ = try fixture.store.prepareMeetingForResume(id: meetingID)
         try fixture.store.appendLiveTranscriptCheckpoints(
@@ -73,7 +97,18 @@ struct MeetingFinalizationRollbackTests {
         let priorRecord = try #require(try fixture.store.meeting(id: meetingID))
 
         let newRecordingURL = try makeRecording(in: fixture.supportDirectory, name: "resume-terminal-loser.m4a")
-        let preparedSave = PreparedMeetingRecordingSave(path: newRecordingURL.path, error: nil)
+        let newArtifact = try fixture.artifactStore.adoptCapture(
+            at: newRecordingURL,
+            sessionID: UUID(),
+            captureKind: .meeting,
+            savePolicy: .always
+        )
+        let retainedNewURL = try fixture.artifactStore.playableURL(id: newArtifact.id)
+        let preparedSave = PreparedMeetingRecordingSave(
+            path: nil,
+            error: nil,
+            recording: .init(artifactID: newArtifact.id, availability: .available)
+        )
         let persistence = try fixture.controller.persistCompletedMeetingResult(
             makeResult(start: start, transcript: "Prior transcript\n\n— Resumed —\n\nNew transcript"),
             existingMeetingID: meetingID,
@@ -83,13 +118,14 @@ struct MeetingFinalizationRollbackTests {
 
         let provisional = try #require(try fixture.store.meeting(id: meetingID))
         #expect(provisional.rawTranscript.contains("New transcript"))
-        #expect(provisional.savedRecordingPath == newRecordingURL.path)
+        #expect(provisional.savedRecordingPath == nil)
         #expect(try fixture.store.liveTranscriptCheckpointText(meetingID: meetingID) != nil)
 
         #expect(fixture.controller.rollbackProvisionalCompletedMeeting(
             persistenceResult: persistence,
             originalMeetingID: meetingID,
             priorMeetingRecord: priorRecord,
+            priorMeetingRecording: priorRecording,
             preparedRecordingSave: preparedSave
         ))
 
@@ -100,16 +136,17 @@ struct MeetingFinalizationRollbackTests {
         #expect(restored.formattedNotes == "Prior notes")
         #expect(restored.durationSeconds == 60)
         #expect(restored.status == .completed)
-        #expect(restored.savedRecordingPath == oldRecordingURL.path)
+        #expect(restored.savedRecordingPath == nil)
         #expect(restored.selectedTemplateID == "prior-template")
         #expect(try fixture.store.liveTranscriptCheckpointText(meetingID: meetingID) == nil)
         #expect(try !fixture.store.restoreResumedMeetingIfNeeded(id: meetingID))
-        #expect(FileManager.default.fileExists(atPath: oldRecordingURL.path))
-        #expect(!FileManager.default.fileExists(atPath: newRecordingURL.path))
+        #expect(FileManager.default.fileExists(atPath: retainedOldURL.path))
+        await waitForFileRemoval(retainedNewURL)
+        #expect(!FileManager.default.fileExists(atPath: retainedNewURL.path))
     }
 
     @Test("losing the terminal race preserves a manual-note draft as failed without late transcript output")
-    func losingTerminalPreservesManualNoteDraft() throws {
+    func losingTerminalPreservesManualNoteDraft() async throws {
         let fixture = try makeFixture()
         let start = Date(timeIntervalSince1970: 1_720_200_000)
         let meetingID = try fixture.store.createLiveMeeting(
@@ -120,7 +157,18 @@ struct MeetingFinalizationRollbackTests {
         try fixture.store.updateMeetingManualNotes(id: meetingID, manualNotes: "Keep this decision")
         let priorRecord = try #require(try fixture.store.meeting(id: meetingID))
         let recordingURL = try makeRecording(in: fixture.supportDirectory, name: "manual-note-loser.m4a")
-        let preparedSave = PreparedMeetingRecordingSave(path: recordingURL.path, error: nil)
+        let artifact = try fixture.artifactStore.adoptCapture(
+            at: recordingURL,
+            sessionID: UUID(),
+            captureKind: .meeting,
+            savePolicy: .always
+        )
+        let retainedURL = try fixture.artifactStore.playableURL(id: artifact.id)
+        let preparedSave = PreparedMeetingRecordingSave(
+            path: nil,
+            error: nil,
+            recording: .init(artifactID: artifact.id, availability: .available)
+        )
         let persistence = try fixture.controller.persistCompletedMeetingResult(
             makeResult(start: start, transcript: "Late transcript must not publish"),
             existingMeetingID: meetingID,
@@ -141,7 +189,8 @@ struct MeetingFinalizationRollbackTests {
         #expect(failed.rawTranscript.isEmpty)
         #expect(failed.formattedNotes.isEmpty)
         #expect(failed.savedRecordingPath == nil)
-        #expect(!FileManager.default.fileExists(atPath: recordingURL.path))
+        await waitForFileRemoval(retainedURL)
+        #expect(!FileManager.default.fileExists(atPath: retainedURL.path))
     }
 
     @Test("winner recovery cleanup is idempotent and does not mutate completed output")
@@ -200,13 +249,20 @@ struct MeetingFinalizationRollbackTests {
     private func makeFixture() throws -> (
         store: DictationStore,
         controller: MuesliController,
-        supportDirectory: URL
+        supportDirectory: URL,
+        artifactStore: RecordingArtifactStore
     ) {
         let supportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-finalization-rollback-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
         let store = DictationStore(databaseURL: supportDirectory.appendingPathComponent("history.db"))
         try store.migrateIfNeeded()
+        let artifactStore = try RecordingArtifactStore(
+            databaseURL: store.resolvedDatabaseURL,
+            recordingsRootURL: supportDirectory.appendingPathComponent("recordings", isDirectory: true),
+            legacyMeetingRootURL: supportDirectory.appendingPathComponent("meeting-recordings", isDirectory: true),
+            migrateDatabase: false
+        )
         let controller = MuesliController(
             runtime: RuntimePaths(
                 repoRoot: supportDirectory,
@@ -215,14 +271,22 @@ struct MeetingFinalizationRollbackTests {
                 bundlePath: nil
             ),
             dictationStore: store,
+            recordingArtifactStore: artifactStore,
             configStore: ConfigStore(supportDirectory: supportDirectory)
         )
-        return (store, controller, supportDirectory)
+        return (store, controller, supportDirectory, artifactStore)
     }
 
     private func makeRecording(in directory: URL, name: String) throws -> URL {
         let url = directory.appendingPathComponent(name)
         try Data("recording".utf8).write(to: url)
         return url
+    }
+
+    private func waitForFileRemoval(_ url: URL) async {
+        let deadline = ContinuousClock.now + .seconds(1)
+        while FileManager.default.fileExists(atPath: url.path), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
     }
 }

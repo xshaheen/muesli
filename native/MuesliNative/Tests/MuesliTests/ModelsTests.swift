@@ -787,6 +787,7 @@ struct AppConfigTests {
         #expect(config.meetingTranscriptionModel == BackendOption.whisper.model)
         #expect(config.meetingSummaryBackend == "chatgpt")
         #expect(config.defaultMeetingTemplateID == MeetingTemplates.autoID)
+        #expect(config.dictationRecordingSavePolicy == .never)
         #expect(config.meetingRecordingSavePolicy == .never)
         #expect(config.showScheduledMeetingNotifications == true)
         #expect(config.scheduledMeetingNotificationLeadTime == .atStart)
@@ -1084,6 +1085,7 @@ struct AppConfigTests {
         config.cohereLanguage = CohereTranscribeLanguage.german.rawValue
         config.indicASRLanguage = IndicASRLanguage.tamil.rawValue
         config.defaultMeetingTemplateID = "weekly-team-meeting"
+        config.dictationRecordingSavePolicy = .always
         config.meetingRecordingSavePolicy = .always
         config.meetingRecordingFileFormat = MeetingRecordingFileFormat.wav.rawValue
         config.customMeetingTemplates = [
@@ -1166,6 +1168,7 @@ struct AppConfigTests {
         #expect(decoded.cohereLanguage == CohereTranscribeLanguage.german.rawValue)
         #expect(decoded.indicASRLanguage == IndicASRLanguage.tamil.rawValue)
         #expect(decoded.defaultMeetingTemplateID == "weekly-team-meeting")
+        #expect(decoded.dictationRecordingSavePolicy == .always)
         #expect(decoded.meetingRecordingSavePolicy == .always)
         #expect(decoded.meetingRecordingFileFormat == MeetingRecordingFileFormat.wav.rawValue)
         #expect(decoded.resolvedMeetingRecordingFileFormat == .wav)
@@ -1347,6 +1350,7 @@ struct AppConfigTests {
         #expect(config.defaultMeetingTemplateID == MeetingTemplates.autoID)
         #expect(config.upcomingMeetingsDayCount == UpcomingMeetingsWindow.threeDays.dayCount)
         #expect(config.hiddenCalendarEventSourceHints.isEmpty)
+        #expect(config.dictationRecordingSavePolicy == .never)
         #expect(config.meetingRecordingSavePolicy == .never)
         #expect(config.meetingRecordingFileFormat == MeetingRecordingFileFormat.m4a.rawValue)
         #expect(config.resolvedMeetingRecordingFileFormat == .m4a)

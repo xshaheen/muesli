@@ -51,7 +51,6 @@ struct ErrorBody: Encodable {
 struct MetaBody: Encodable {
     let schemaVersion: Int
     let generatedAt: String
-    let dbPath: String
     let warnings: [String]
 }
 
@@ -115,20 +114,20 @@ func appBundlePath() -> String? {
     return FileManager.default.fileExists(atPath: defaultPath) ? defaultPath : nil
 }
 
-func emitSuccess<T: Encodable>(command: String, data: T, dbPath: URL, warnings: [String] = []) {
+func emitSuccess<T: Encodable>(command: String, data: T, dbPath _: URL, warnings: [String] = []) {
     let envelope = SuccessEnvelope(
         command: command,
         data: data,
-        meta: MetaBody(schemaVersion: 1, generatedAt: timestampString(), dbPath: dbPath.path, warnings: warnings)
+        meta: MetaBody(schemaVersion: 1, generatedAt: timestampString(), warnings: warnings)
     )
     emitJSON(envelope)
 }
 
-func emitFailure(command: String, error: ErrorBody, dbPath: URL?) {
+func emitFailure(command: String, error: ErrorBody, dbPath _: URL?) {
     let envelope = FailureEnvelope(
         command: command,
         error: error,
-        meta: MetaBody(schemaVersion: 1, generatedAt: timestampString(), dbPath: dbPath?.path ?? "", warnings: [])
+        meta: MetaBody(schemaVersion: 1, generatedAt: timestampString(), warnings: [])
     )
     emitJSON(envelope)
 }
@@ -207,9 +206,6 @@ struct MeetingDetailPayload: Encodable {
     let notesState: String
     let notesSource: String
     let calendarEventID: String?
-    let micAudioPath: String?
-    let systemAudioPath: String?
-    let savedRecordingPath: String?
     let selectedTemplateID: String
     let selectedTemplateName: String
     let selectedTemplateKind: String
@@ -230,9 +226,6 @@ struct MeetingDetailPayload: Encodable {
         notesState = record.notesState.rawValue
         notesSource = record.notesSource.rawValue
         calendarEventID = record.calendarEventID
-        micAudioPath = record.micAudioPath
-        systemAudioPath = record.systemAudioPath
-        savedRecordingPath = record.savedRecordingPath
         selectedTemplateID = record.appliedTemplateID
         selectedTemplateName = record.appliedTemplateName
         selectedTemplateKind = record.appliedTemplateKind.rawValue

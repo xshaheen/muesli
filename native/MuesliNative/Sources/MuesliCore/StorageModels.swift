@@ -26,6 +26,117 @@ public enum MeetingRecordingSavePolicy: String, Codable, CaseIterable, Sendable 
     case always
 }
 
+/// Opaque, local-only identity for one app-owned recording file.
+public struct RecordingArtifactID: RawRepresentable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: UUID
+
+    public init(rawValue: UUID) {
+        self.rawValue = rawValue
+    }
+
+    public init() {
+        self.rawValue = UUID()
+    }
+
+    public init?(storedValue: String) {
+        guard let value = UUID(uuidString: storedValue) else { return nil }
+        self.rawValue = value
+    }
+
+    public var storedValue: String { rawValue.uuidString.lowercased() }
+    public var description: String { storedValue }
+}
+
+public enum RecordingCaptureKind: String, Sendable {
+    case dictation
+    case meeting
+    case audioImport = "audio_import"
+}
+
+/// Frozen at capture start. `.never` deliberately has no persisted artifact.
+public enum RecordingSavePolicySnapshot: String, Sendable {
+    case prompt
+    case always
+}
+
+public enum RecordingArtifactLifecycleState: String, Sendable {
+    case staging
+    case pending
+    case retained
+    case deleting
+    case missing
+}
+
+public enum RecordingAvailability: String, Sendable {
+    case never
+    case declined
+    case pending
+    case available
+    case missing
+    case expired
+    case deleted
+    case saveFailed = "save_failed"
+    case invalidLegacy = "invalid_legacy"
+}
+
+public enum DictationAudioTerminalOutcome: String, Sendable {
+    case cancelled
+    case timedOut = "timed_out"
+    case failed
+    case empty
+}
+
+public struct RecordingArtifact: Equatable, Sendable {
+    public let id: RecordingArtifactID
+    public let sessionID: UUID
+    public let captureKind: RecordingCaptureKind
+    public let fileExtension: String
+    public let frozenSavePolicy: RecordingSavePolicySnapshot
+    public let lifecycleState: RecordingArtifactLifecycleState
+    public let byteCount: Int64
+    public let createdAt: Date
+    public let terminalAt: Date?
+    public let pendingExpiresAt: Date?
+    public let orphanedAt: Date?
+}
+
+public struct DictationAudioHistoryRecord: Equatable, Sendable {
+    public let sessionID: UUID
+    public let capturedAt: Date
+    public let durationSeconds: Double
+    public let terminalOutcome: DictationAudioTerminalOutcome
+    public let artifactID: RecordingArtifactID?
+    public let availability: RecordingAvailability
+}
+
+public struct RecordingArtifactReference: Equatable, Sendable {
+    public let artifactID: RecordingArtifactID?
+    public let availability: RecordingAvailability
+
+    public init(artifactID: RecordingArtifactID?, availability: RecordingAvailability) {
+        self.artifactID = artifactID
+        self.availability = availability
+    }
+}
+
+public struct RecordingArtifactRetentionPolicy: Equatable, Sendable {
+    public static let `default` = RecordingArtifactRetentionPolicy(
+        dictationAskLease: 15 * 60,
+        pendingByteCap: 2 * 1024 * 1024 * 1024,
+        orphanGrace: 24 * 60 * 60
+    )
+
+    public let dictationAskLease: TimeInterval
+    public let pendingByteCap: Int64
+    public let orphanGrace: TimeInterval
+
+    public init(dictationAskLease: TimeInterval, pendingByteCap: Int64, orphanGrace: TimeInterval) {
+        self.dictationAskLease = dictationAskLease
+        self.pendingByteCap = pendingByteCap
+        self.orphanGrace = orphanGrace
+    }
+}
+
 public enum MeetingSource: String, Codable, Sendable {
     case meeting
     case iOS = "ios"
@@ -582,6 +693,33 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
             previousMeetingNotes: (try? c.decode(String.self, forKey: .previousMeetingNotes)) ?? "",
             notesSource: (try? c.decode(MeetingNotesSource.self, forKey: .notesSource)) ?? .raw
         )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encode(startTime, forKey: .startTime)
+        try c.encode(durationSeconds, forKey: .durationSeconds)
+        try c.encode(rawTranscript, forKey: .rawTranscript)
+        try c.encode(cleanedTranscript, forKey: .cleanedTranscript)
+        try c.encode(formattedNotes, forKey: .formattedNotes)
+        try c.encode(wordCount, forKey: .wordCount)
+        try c.encodeIfPresent(folderID, forKey: .folderID)
+        try c.encodeIfPresent(calendarEventID, forKey: .calendarEventID)
+        try c.encodeIfPresent(calendarOccurrence, forKey: .calendarOccurrence)
+        try c.encode(status, forKey: .status)
+        try c.encode(manualNotes, forKey: .manualNotes)
+        try c.encodeIfPresent(selectedTemplateID, forKey: .selectedTemplateID)
+        try c.encodeIfPresent(selectedTemplateName, forKey: .selectedTemplateName)
+        try c.encodeIfPresent(selectedTemplateKind, forKey: .selectedTemplateKind)
+        try c.encodeIfPresent(selectedTemplatePrompt, forKey: .selectedTemplatePrompt)
+        try c.encode(source, forKey: .source)
+        try c.encodeIfPresent(followUpToID, forKey: .followUpToID)
+        try c.encodeIfPresent(followUpToRecordName, forKey: .followUpToRecordName)
+        try c.encode(visualContext, forKey: .visualContext)
+        try c.encode(previousMeetingNotes, forKey: .previousMeetingNotes)
+        try c.encode(notesSource, forKey: .notesSource)
     }
 
     public var notesState: MeetingNotesState {

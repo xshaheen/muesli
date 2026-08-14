@@ -483,6 +483,27 @@ struct DictationAudioSessionManagerTests {
         #expect(!harness.events.contains { if case .noAudioTimeout = $0 { return true }; return false })
     }
 
+    @Test("retained no-audio timeout preserves a timed-out capture")
+    func retainedNoAudioTimeoutPreservesTimedOutCapture() {
+        let harness = Harness(routeKind: .speakerLike)
+        let wavURL = URL(fileURLWithPath: "/tmp/timed-out-dictation.wav")
+        harness.recorder.stopURL = wavURL
+
+        harness.manager.beginRecording(
+            mode: "toggle",
+            duckingEnabled: false,
+            mediaPauseEnabled: false,
+            recordingSavePolicy: .always
+        )
+        harness.wait()
+        harness.recorder.onNoAudioTimeout?(Date().addingTimeInterval(1.5))
+        harness.wait()
+
+        #expect(harness.terminalCaptures.count == 1)
+        #expect(harness.terminalCaptures.first?.outcome == .timedOut)
+        #expect(harness.terminalCaptures.first?.wavURL == wavURL)
+    }
+
     @Test("no audio timeout on headphone preferred input does not retry system default")
     func noAudioTimeoutOnHeadphonePreferredInputDoesNotRetrySystemDefault() {
         let harness = Harness(routeKind: .headphoneLike, preferredInputDeviceID: 82)
@@ -628,6 +649,168 @@ struct DictationAudioSessionManagerTests {
         #expect(!harness.recorder.keepsAudioGraphWarm)
     }
 
+    @Test("Never cancellation deletes capture without publishing a terminal capture")
+    func neverCancellationDeletesCapture() {
+        let harness = Harness(routeKind: .speakerLike)
+        harness.recorder.stopURL = URL(fileURLWithPath: "/tmp/never-dictation.wav")
+
+        harness.manager.beginRecording(
+            mode: "toggle",
+            duckingEnabled: false,
+            mediaPauseEnabled: false,
+            recordingSavePolicy: .never
+        )
+        harness.wait()
+        harness.manager.cancel(reason: "test")
+        harness.wait()
+
+        #expect(harness.recorder.stopCalls == 0)
+        #expect(harness.recorder.cancelCalls == 1)
+        #expect(harness.terminalCaptures.isEmpty)
+    }
+
+    @Test("retained cancellation finalizes one capture before teardown")
+    func retainedCancellationFinalizesCapture() {
+        let harness = Harness(routeKind: .speakerLike)
+        let wavURL = URL(fileURLWithPath: "/tmp/retained-dictation.wav")
+        harness.recorder.stopURL = wavURL
+
+        harness.manager.beginRecording(
+            mode: "toggle",
+            duckingEnabled: false,
+            mediaPauseEnabled: false,
+            recordingSavePolicy: .always
+        )
+        harness.wait()
+        harness.manager.beginRecording(
+            mode: "duplicate",
+            duckingEnabled: false,
+            mediaPauseEnabled: false,
+            recordingSavePolicy: .never
+        )
+        harness.wait()
+        harness.manager.cancel(reason: "test")
+        harness.wait()
+
+        #expect(harness.recorder.startCalls == 1)
+        #expect(harness.recorder.stopCalls == 1)
+        #expect(harness.recorder.cancelCalls == 1)
+        #expect(harness.terminalCaptures.count == 1)
+        #expect(harness.terminalCaptures.first?.wavURL == wavURL)
+        #expect(harness.terminalCaptures.first?.outcome == .cancelled)
+        #expect(harness.terminalCaptures.first?.recordingSavePolicy == .always)
+    }
+
+    @Test(
+        "shutdown awaits one retained capture without publishing a cancellation event",
+        arguments: [DictationRecordingSavePolicy.prompt, .always]
+    )
+    func shutdownAwaitsOneRetainedCapture(policy: DictationRecordingSavePolicy) async {
+        let harness = Harness(routeKind: .speakerLike)
+        let wavURL = URL(fileURLWithPath: "/tmp/shutdown-retained-dictation.wav")
+        harness.recorder.stopURL = wavURL
+
+        harness.manager.beginRecording(
+            mode: "toggle",
+            duckingEnabled: false,
+            mediaPauseEnabled: false,
+            recordingSavePolicy: policy
+        )
+        harness.wait()
+        let sessionID = harness.manager.currentSessionID
+
+        let capture = await harness.manager.finalizeCaptureForShutdown(reason: "test_shutdown")
+        let repeatedCapture = await harness.manager.finalizeCaptureForShutdown(reason: "test_shutdown_repeat")
+        harness.wait()
+
+        #expect(capture?.sessionID == sessionID)
+        #expect(capture?.outcome == .cancelled)
+        #expect(capture?.recordingSavePolicy == policy)
+        #expect(capture?.wavURL == wavURL)
+        #expect(repeatedCapture == nil)
+        #expect(harness.recorder.stopCalls == 1)
+        #expect(harness.recorder.cancelCalls == 1)
+        #expect(harness.terminalCaptures.isEmpty)
+    }
+
+    @Test("shutdown deletes Never capture once")
+    func shutdownDeletesNeverCaptureOnce() async {
+        let harness = Harness(routeKind: .speakerLike)
+        harness.recorder.stopURL = URL(fileURLWithPath: "/tmp/shutdown-never-dictation.wav")
+
+        harness.manager.beginRecording(
+            mode: "toggle",
+            duckingEnabled: false,
+            mediaPauseEnabled: false,
+            recordingSavePolicy: .never
+        )
+        harness.wait()
+
+        let capture = await harness.manager.finalizeCaptureForShutdown(reason: "test_shutdown")
+        let repeatedCapture = await harness.manager.finalizeCaptureForShutdown(reason: "test_shutdown_repeat")
+
+        #expect(capture == nil)
+        #expect(repeatedCapture == nil)
+        #expect(harness.recorder.stopCalls == 0)
+        #expect(harness.recorder.cancelCalls == 1)
+    }
+
+    @Test("shutdown consumes retained audio whose stopped event is still queued")
+    func shutdownConsumesQueuedStoppedCapture() async {
+        let harness = Harness(routeKind: .speakerLike)
+        let wavURL = URL(fileURLWithPath: "/tmp/shutdown-queued-stop.wav")
+        harness.recorder.stopURL = wavURL
+        harness.manager.beginRecording(
+            mode: "toggle",
+            duckingEnabled: false,
+            mediaPauseEnabled: false,
+            recordingSavePolicy: .always
+        )
+        harness.wait()
+        let sessionID = harness.manager.currentSessionID
+
+        harness.eventQueue.suspend()
+        harness.manager.stop()
+        let capture = await harness.manager.finalizeCaptureForShutdown(reason: "queued_stop")
+        let repeatedCapture = await harness.manager.finalizeCaptureForShutdown(reason: "queued_stop_repeat")
+        harness.eventQueue.resume()
+        harness.wait()
+
+        #expect(capture?.sessionID == sessionID)
+        #expect(capture?.recordingSavePolicy == .always)
+        #expect(capture?.wavURL == wavURL)
+        #expect(repeatedCapture == nil)
+        #expect(harness.recorder.stopCalls == 1)
+    }
+
+    @Test("retained recorder failure finalizes one capture")
+    func retainedRecorderFailureFinalizesCapture() {
+        let harness = Harness(routeKind: .speakerLike)
+        let wavURL = URL(fileURLWithPath: "/tmp/failed-dictation.wav")
+        harness.recorder.stopURL = wavURL
+
+        harness.manager.beginRecording(
+            mode: "toggle",
+            duckingEnabled: false,
+            mediaPauseEnabled: false,
+            recordingSavePolicy: .prompt
+        )
+        harness.wait()
+        let runID = harness.recorder.activeRecordingID!
+        harness.recorder.onRecordingFailed?(
+            NSError(domain: "DictationAudioSessionManagerTests", code: 44),
+            runID
+        )
+        harness.wait()
+
+        #expect(harness.recorder.stopCalls == 1)
+        #expect(harness.recorder.cancelCalls == 1)
+        #expect(harness.terminalCaptures.count == 1)
+        #expect(harness.terminalCaptures.first?.wavURL == wavURL)
+        #expect(harness.terminalCaptures.first?.outcome == .failed)
+        #expect(harness.terminalCaptures.first?.recordingSavePolicy == .prompt)
+    }
+
     @Test("cancel detaches ownership before queued teardown so immediate rearm gets a new session")
     func cancelThenImmediateRearmGetsNewSession() {
         let harness = Harness(routeKind: .speakerLike)
@@ -664,6 +847,7 @@ private final class Harness {
     let managerQueue = DispatchQueue(label: "test.dictation-session.manager")
     let eventQueue = DispatchQueue(label: "test.dictation-session.events")
     var events: [DictationAudioSessionEvent] = []
+    var terminalCaptures: [DictationAudioTerminalCapture] = []
     lazy var manager: DictationAudioSessionManager = {
         let manager = DictationAudioSessionManager(
             recorder: recorder,
@@ -675,6 +859,12 @@ private final class Harness {
         )
         manager.onEvent = { [weak self] event in
             self?.events.append(event)
+            switch event {
+            case .cancelled(_, _, let capture), .failed(_, _, let capture):
+                if let capture { self?.terminalCaptures.append(capture) }
+            default:
+                break
+            }
         }
         return manager
     }()

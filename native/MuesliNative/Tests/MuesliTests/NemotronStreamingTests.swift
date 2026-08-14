@@ -201,6 +201,172 @@ struct StreamingDictationControllerTests {
     }
 
     @available(macOS 15, *)
+    @Test("retained stop returns the finalized recorder WAV without deleting it")
+    func retainedStopReturnsRecorderWavOutput() async throws {
+        let transcriber = DelayedStreamingTranscriber()
+        let recorder = InspectableStreamingDictationRecorder()
+        let controller = StreamingDictationController(
+            transcriber: transcriber,
+            recorder: recorder
+        )
+        let wavURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("wav")
+        defer { try? FileManager.default.removeItem(at: wavURL) }
+        try Data([1, 2, 3]).write(to: wavURL)
+        recorder.stopURL = wavURL
+
+        #expect(controller.start(recordingSavePolicy: .always) == true)
+        #expect(controller.start(recordingSavePolicy: .never) == true)
+        async let stopped = stopWithCapture(controller)
+        await transcriber.releaseState()
+        let result = await stopped
+
+        #expect(result.captureURL == wavURL)
+        #expect(FileManager.default.fileExists(atPath: wavURL.path))
+        #expect(recorder.startCalls == 1)
+        #expect(recorder.stopCalls == 1)
+        #expect(recorder.cancelCalls == 1)
+    }
+
+    @available(macOS 15, *)
+    @Test("retained cancellation returns one finalized recorder WAV")
+    func retainedCancellationReturnsRecorderWavOutput() throws {
+        let transcriber = ImmediateStreamingTranscriber()
+        let recorder = InspectableStreamingDictationRecorder()
+        let controller = StreamingDictationController(
+            transcriber: transcriber,
+            recorder: recorder
+        )
+        let wavURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("wav")
+        defer { try? FileManager.default.removeItem(at: wavURL) }
+        try Data([1, 2, 3]).write(to: wavURL)
+        recorder.stopURL = wavURL
+
+        #expect(controller.start(recordingSavePolicy: .prompt) == true)
+        let captureURL = controller.cancel()
+
+        #expect(captureURL == wavURL)
+        #expect(FileManager.default.fileExists(atPath: wavURL.path))
+        #expect(recorder.stopCalls == 1)
+        #expect(recorder.cancelCalls == 1)
+    }
+
+    @available(macOS 15, *)
+    @Test(
+        "shutdown awaits one retained streaming capture",
+        arguments: [DictationRecordingSavePolicy.prompt, .always]
+    )
+    func shutdownAwaitsOneRetainedStreamingCapture(
+        policy: DictationRecordingSavePolicy
+    ) async throws {
+        let transcriber = ImmediateStreamingTranscriber()
+        let recorder = InspectableStreamingDictationRecorder()
+        let controller = StreamingDictationController(
+            transcriber: transcriber,
+            recorder: recorder
+        )
+        let wavURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("wav")
+        defer { try? FileManager.default.removeItem(at: wavURL) }
+        try Data([1, 2, 3]).write(to: wavURL)
+        recorder.stopURL = wavURL
+
+        #expect(controller.start(recordingSavePolicy: policy) == true)
+        let capture = await controller.finalizeCaptureForShutdown()
+        let repeatedCapture = await controller.finalizeCaptureForShutdown()
+
+        #expect(capture?.recordingSavePolicy == policy)
+        #expect(capture?.captureURL == wavURL)
+        #expect(repeatedCapture == nil)
+        #expect(recorder.stopCalls == 1)
+        #expect(recorder.cancelCalls == 1)
+    }
+
+    @available(macOS 15, *)
+    @Test("shutdown deletes Never streaming capture once")
+    func shutdownDeletesNeverStreamingCaptureOnce() async {
+        let transcriber = ImmediateStreamingTranscriber()
+        let recorder = InspectableStreamingDictationRecorder()
+        let controller = StreamingDictationController(
+            transcriber: transcriber,
+            recorder: recorder
+        )
+
+        #expect(controller.start(recordingSavePolicy: .never) == true)
+        let capture = await controller.finalizeCaptureForShutdown()
+        let repeatedCapture = await controller.finalizeCaptureForShutdown()
+
+        #expect(capture?.recordingSavePolicy == .never)
+        #expect(capture?.captureURL == nil)
+        #expect(repeatedCapture == nil)
+        #expect(recorder.stopCalls == 0)
+        #expect(recorder.cancelCalls == 1)
+    }
+
+    @available(macOS 15, *)
+    @Test("shutdown reuses a capture already finalized by streaming stop")
+    func shutdownReusesCaptureFromInFlightStop() async throws {
+        let transcriber = DelayedStreamingTranscriber()
+        let recorder = InspectableStreamingDictationRecorder()
+        let controller = StreamingDictationController(
+            transcriber: transcriber,
+            recorder: recorder
+        )
+        let wavURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("wav")
+        defer { try? FileManager.default.removeItem(at: wavURL) }
+        try Data([1, 2, 3]).write(to: wavURL)
+        recorder.stopURL = wavURL
+
+        #expect(controller.start(recordingSavePolicy: .prompt) == true)
+        async let stopped = stopWithCapture(controller)
+        #expect(await waitUntil { recorder.stopCalls == 1 })
+
+        let capture = await controller.finalizeCaptureForShutdown()
+        let stopResult = await stopped
+        await transcriber.releaseState()
+
+        #expect(capture?.recordingSavePolicy == .prompt)
+        #expect(capture?.captureURL == wavURL)
+        #expect(stopResult.captureURL == wavURL)
+        #expect(recorder.stopCalls == 1)
+        #expect(recorder.cancelCalls == 1)
+        #expect(await controller.finalizeCaptureForShutdown() == nil)
+    }
+
+    @available(macOS 15, *)
+    @Test("retained recorder start failure finalizes and reports its capture")
+    func retainedStartFailureReportsCapture() throws {
+        let transcriber = ImmediateStreamingTranscriber()
+        let recorder = InspectableStreamingDictationRecorder()
+        let controller = StreamingDictationController(
+            transcriber: transcriber,
+            recorder: recorder
+        )
+        let wavURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("wav")
+        defer { try? FileManager.default.removeItem(at: wavURL) }
+        try Data([1, 2, 3]).write(to: wavURL)
+        recorder.stopURL = wavURL
+        recorder.startError = NSError(domain: "NemotronStreamingTests", code: 71)
+        var reportedURL: URL?
+        controller.onStartFailureWithCapture = { _, captureURL in
+            reportedURL = captureURL
+        }
+
+        #expect(controller.start(recordingSavePolicy: .always) == false)
+        #expect(reportedURL == wavURL)
+        #expect(recorder.stopCalls == 1)
+        #expect(recorder.cancelCalls == 1)
+    }
+
+    @available(macOS 15, *)
     @Test("chunk transcription failure cancels mic session and permits retry")
     func chunkTranscriptionFailureCancelsMicSessionAndPermitsRetry() async {
         let transcriber = ThrowingChunkStreamingTranscriber()
@@ -249,6 +415,36 @@ struct StreamingDictationControllerTests {
         #expect(recorder.onRecordingFailed == nil)
         #expect(controller.start() == true)
         controller.cancel()
+    }
+
+    @available(macOS 15, *)
+    @Test("retained recorder failure returns one finalized capture")
+    func retainedRecorderFailureReturnsFinalizedCapture() async throws {
+        let transcriber = ImmediateStreamingTranscriber()
+        let recorder = InspectableStreamingDictationRecorder()
+        let failures = CapturedFailureRecorder()
+        let controller = StreamingDictationController(
+            transcriber: transcriber,
+            recorder: recorder
+        )
+        let wavURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("wav")
+        defer { try? FileManager.default.removeItem(at: wavURL) }
+        try Data([1, 2, 3]).write(to: wavURL)
+        recorder.stopURL = wavURL
+        controller.onFailureWithCapture = { error, captureURL in
+            failures.record(error: error, captureURL: captureURL)
+        }
+
+        #expect(controller.start(recordingSavePolicy: .always) == true)
+        recorder.onRecordingFailed?(NSError(domain: "StreamingDictationControllerTests", code: 3))
+        #expect(await waitUntil { failures.count == 1 })
+
+        #expect(failures.captureURL == wavURL)
+        #expect(FileManager.default.fileExists(atPath: wavURL.path))
+        #expect(recorder.stopCalls == 1)
+        #expect(recorder.cancelCalls == 1)
     }
 
     @available(macOS 15, *)
@@ -433,6 +629,7 @@ private final class InspectableStreamingDictationRecorder: StreamingDictationRec
     var preparedPreferredInputDeviceID: AudioObjectID?
     var startedPreferredInputDeviceID: AudioObjectID?
     var stopURL: URL?
+    var startError: Error?
     var power: Float = -160
 
     func prepare() throws {
@@ -443,6 +640,7 @@ private final class InspectableStreamingDictationRecorder: StreamingDictationRec
     func start() throws {
         startCalls += 1
         startedPreferredInputDeviceID = preferredInputDeviceID
+        if let startError { throw startError }
     }
 
     func emit(samples: [Float]) {
@@ -460,6 +658,27 @@ private final class InspectableStreamingDictationRecorder: StreamingDictationRec
 
     func currentPower() -> Float {
         power
+    }
+}
+
+private final class CapturedFailureRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var capturedErrors: [Error] = []
+    private var capturedURL: URL?
+
+    var count: Int {
+        lock.withLock { capturedErrors.count }
+    }
+
+    var captureURL: URL? {
+        lock.withLock { capturedURL }
+    }
+
+    func record(error: Error, captureURL: URL?) {
+        lock.withLock {
+            capturedErrors.append(error)
+            self.capturedURL = captureURL
+        }
     }
 }
 
@@ -723,6 +942,15 @@ private func stop(_ controller: StreamingDictationController) async -> String {
     await withCheckedContinuation { continuation in
         controller.stop { text in
             continuation.resume(returning: text)
+        }
+    }
+}
+
+@available(macOS 15, *)
+private func stopWithCapture(_ controller: StreamingDictationController) async -> StreamingDictationTerminalResult {
+    await withCheckedContinuation { continuation in
+        controller.stopWithCapture { result in
+            continuation.resume(returning: result)
         }
     }
 }

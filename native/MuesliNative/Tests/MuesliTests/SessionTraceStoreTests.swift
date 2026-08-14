@@ -249,14 +249,14 @@ struct SessionTraceStoreTests {
         }
     }
 
-    @Test("a current v1 database upgrades additively to v2 with valid foreign keys")
+    @Test("a current v1 database upgrades additively to v3 with valid foreign keys")
     func currentV1Upgrade() async throws {
         let url = temporaryDatabaseURL()
         defer { removeDatabase(url) }
         let history = DictationStore(databaseURL: url)
         try history.migrateIfNeeded()
         let dictationID = try history.insertDictation(
-            text: "preserved through v2",
+            text: "preserved through v3",
             durationSeconds: 2,
             appContext: "tests",
             startedAt: Date(timeIntervalSince1970: 100),
@@ -277,7 +277,7 @@ struct SessionTraceStoreTests {
         let store = try SessionTraceStore(databaseURL: url)
         let token = try await store.beginSession(kind: .dictation)
 
-        #expect(try scalar(url, "PRAGMA user_version") == 2)
+        #expect(try scalar(url, "PRAGMA user_version") == 3)
         #expect(try scalar(url, "SELECT COUNT(*) FROM dictations WHERE id = \(dictationID)") == 1)
         #expect(try scalar(url, "SELECT COUNT(*) FROM pragma_foreign_key_check") == 0)
         #expect(try await store.detail(sessionID: token.sessionID) != nil)

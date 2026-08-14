@@ -504,9 +504,9 @@ struct DictationStoreTests {
         #expect(throws: InjectedFailure.self) {
             try failingStore.migrateIfNeeded()
         }
-        // Migrations commit independently. Version 1 remains valid and version
-        // 2 rolls back completely, so retry starts from the last good schema.
-        #expect(try firstTextColumns(url, "PRAGMA user_version", count: 1) == ["1"])
+        // Migrations commit independently. Versions 1 and 2 remain valid and
+        // version 3 rolls back completely, so retry starts at the last good schema.
+        #expect(try firstTextColumns(url, "PRAGMA user_version", count: 1) == ["2"])
         #expect(try migrationContentDigest(url) == legacyDigest)
         #expect(try firstTextColumns(
             url,
@@ -516,6 +516,11 @@ struct DictationStoreTests {
         #expect(try firstTextColumns(
             url,
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_traces'",
+            count: 1
+        ) == ["1"])
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'recording_artifacts'",
             count: 1
         ) == ["0"])
 

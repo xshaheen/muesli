@@ -368,6 +368,11 @@ struct SessionDiagnosticsView: View {
 
                 metadata(detail.summary)
 
+                RecordingArtifactSection(
+                    owner: .session(detail.summary.sessionID),
+                    allowsReveal: false
+                )
+
                 let evidenceLayout = SessionDiagnosticsPresentation.evidenceLayout(
                     events: detail.events,
                     artifacts: detail.artifacts

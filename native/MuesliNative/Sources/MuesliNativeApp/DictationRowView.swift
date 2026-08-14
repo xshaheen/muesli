@@ -60,6 +60,7 @@ struct DictationRowView: View {
     let record: DictationRecord
     let timeOnly: String
     let onCopy: () -> Void
+    var onOpen: (() -> Void)? = nil
     var onCopyTrace: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
 
@@ -188,7 +189,9 @@ struct DictationRowView: View {
             }
         }
         .onTapGesture {
-            if record.computerUseTrace != nil {
+            if let onOpen {
+                onOpen()
+            } else if record.computerUseTrace != nil {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     isExpanded.toggle()
                 }
@@ -273,6 +276,77 @@ struct DictationRowView: View {
             return "Cancelled"
         default:
             return status.capitalized
+        }
+    }
+}
+
+struct AudioOnlyDictationRowView: View {
+    let record: DictationAudioHistoryRecord
+    let onOpen: () -> Void
+    let onDelete: () -> Void
+
+    @State private var isHovered = false
+    @State private var isConfirmingDeletion = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: MuesliTheme.spacing20) {
+            Text(record.capturedAt.formatted(date: .omitted, time: .shortened))
+                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .foregroundStyle(MuesliTheme.textTertiary)
+                .frame(width: 80, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                Text(record.terminalOutcome.detailTitle)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text("Recording-only local history · \(RecordingArtifactAvailability(record.availability).displaySummary)")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            }
+
+            Spacer()
+
+            RecordingArtifactAvailabilityBadge(owner: .session(record.sessionID))
+
+            Button {
+                isConfirmingDeletion = true
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+            .opacity(isHovered ? 1 : 0)
+            .help("Delete recording history")
+        }
+        .padding(.horizontal, MuesliTheme.spacing20)
+        .padding(.vertical, MuesliTheme.spacing16)
+        .background(isHovered ? MuesliTheme.backgroundHover : MuesliTheme.backgroundRaised)
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .onTapGesture(perform: onOpen)
+        .alert("Delete Recording History", isPresented: $isConfirmingDeletion) {
+            Button("Delete", role: .destructive, action: onDelete)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the local history entry and its retained recording when it is the last owner.")
+        }
+    }
+}
+
+private extension RecordingArtifactAvailability {
+    var displaySummary: String {
+        switch self {
+        case .available: "available"
+        case .pendingDecision: "waiting for save decision"
+        case .notRetained: "not retained"
+        case .declined: "discarded"
+        case .deleting: "deleting"
+        case .missing: "missing"
+        case .expired: "expired"
+        case .deleted: "deleted"
+        case .invalidLegacy: "invalid legacy file"
+        case .saveFailed: "save failed"
         }
     }
 }

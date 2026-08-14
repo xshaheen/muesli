@@ -41,12 +41,14 @@ struct LocalDiagnosticsExportEnvelope: Codable {
 
 enum LocalDiagnosticsCleanupTarget: String, Codable, Equatable, Sendable {
     case sessionTraces = "session_traces"
+    case recordingAssociations = "recording_associations"
     case meetingSummaries = "meeting_summaries"
     case incidentHistory = "incident_history"
 
     var displayName: String {
         switch self {
         case .sessionTraces: return "session traces"
+        case .recordingAssociations: return "recording associations"
         case .meetingSummaries: return "meeting summaries"
         case .incidentHistory: return "incident history"
         }
@@ -97,6 +99,7 @@ actor LocalDiagnosticsService {
     private let flushActiveWriters: @Sendable () async -> Void
     private let loadMeetingSummaries: @Sendable (URL, Date) -> [LocalDiagnosticsMeetingSummary]
     private let clearMeetingSummaries: @Sendable (URL) throws -> MeetingSessionDiagnostics.ClearResult
+    private let clearRecordingAssociations: @Sendable () throws -> Void
     private let loadIncidentHistory: @MainActor @Sendable () -> [DiagnosticIncident]
     private let clearIncidentHistory: @MainActor @Sendable () throws -> Void
 
@@ -112,6 +115,7 @@ actor LocalDiagnosticsService {
         clearMeetingSummaries: @escaping @Sendable (URL) throws -> MeetingSessionDiagnostics.ClearResult = {
             try MeetingSessionDiagnostics.clearStoredRuns(rootURL: $0)
         },
+        clearRecordingAssociations: @escaping @Sendable () throws -> Void = {},
         loadIncidentHistory: @escaping @MainActor @Sendable () -> [DiagnosticIncident] = { [] },
         clearIncidentHistory: @escaping @MainActor @Sendable () throws -> Void = {}
     ) {
@@ -120,6 +124,7 @@ actor LocalDiagnosticsService {
         self.flushActiveWriters = flushActiveWriters
         self.loadMeetingSummaries = loadMeetingSummaries
         self.clearMeetingSummaries = clearMeetingSummaries
+        self.clearRecordingAssociations = clearRecordingAssociations
         self.loadIncidentHistory = loadIncidentHistory
         self.clearIncidentHistory = clearIncidentHistory
     }
@@ -190,6 +195,11 @@ actor LocalDiagnosticsService {
             }
         } else {
             failedTargets.append(.sessionTraces)
+        }
+        do {
+            try clearRecordingAssociations()
+        } catch {
+            failedTargets.append(.recordingAssociations)
         }
 
         // Auxiliary stores contain metadata only and are intentionally cleaned

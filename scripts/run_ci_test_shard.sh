@@ -20,6 +20,8 @@ case "${shard}" in
       ConfigStoreTests
       DictationStoreTests
       SessionTraceStoreTests
+      RecordingArtifactStoreTests
+      RecordingArtifactPlaybackTests
       LocalDiagnosticsTests
       SessionDiagnosticsPresentationTests
       MuesliCKSyncEngineTests

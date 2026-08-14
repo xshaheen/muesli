@@ -60,14 +60,17 @@ public actor SessionTraceStore {
 
     public init(
         databaseURL: URL = MuesliPaths.defaultDatabaseURL(),
-        retentionPolicy: SessionTraceRetentionPolicy = .default
+        retentionPolicy: SessionTraceRetentionPolicy = .default,
+        migrateDatabase: Bool = true
     ) throws {
         self.databaseURL = databaseURL
         self.retentionPolicy = retentionPolicy
         self.clearCheckpoint = nil
         self.detailCheckpoint = nil
         try Self.validate(retentionPolicy)
-        try DictationStore(databaseURL: databaseURL).migrateIfNeeded()
+        if migrateDatabase {
+            try DictationStore(databaseURL: databaseURL).migrateIfNeeded()
+        }
     }
 
     init(
