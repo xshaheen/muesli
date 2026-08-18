@@ -109,6 +109,10 @@ struct SettingsView: View {
     private let meetingControlWidth: CGFloat = 275
     private let iOSCompanionURL = IPhoneBridgeLinks.installURL
     private let screenContextGrantIntentTimeout: TimeInterval = 15 * 60
+
+    private var languageProfileEditor: LanguageProfileSettingsModel {
+        appState.languageProfileSettings
+    }
     private let meetingDetectionAppOptions: [MeetingDetectionAppOption] = [
         MeetingDetectionAppOption(bundleID: "com.google.Chrome", name: "Chrome", icon: "globe"),
         MeetingDetectionAppOption(bundleID: "company.thebrowser.Browser", name: "Arc", icon: "globe"),
@@ -221,23 +225,8 @@ struct SettingsView: View {
         return "Sends dictated text to \(appState.selectedPostProcessorBackend.label) and may add latency."
     }
 
-    private var selectedCohereLanguage: CohereTranscribeLanguage {
-        appState.config.resolvedCohereLanguage
-    }
-
     private var selectedUpcomingMeetingsWindow: UpcomingMeetingsWindow {
         UpcomingMeetingsWindow.resolve(dayCount: appState.config.upcomingMeetingsDayCount)
-    }
-
-    private var selectedIndicASRLanguage: IndicASRLanguage {
-        appState.config.resolvedIndicASRLanguage
-    }
-
-    private var selectedNemotron35Language: Nemotron35Language {
-        appState.config.resolvedNemotron35Language
-    }
-    private var selectedWhisperLanguage: WhisperKitLanguage {
-        appState.config.resolvedWhisperLanguage
     }
 
     private var dictationMicrophoneOptions: [MicrophoneOption] {
@@ -286,6 +275,7 @@ struct SettingsView: View {
             }
             .background(MuesliTheme.backgroundBase)
             .onAppear {
+                languageProfileEditor.load(using: controller.languageProfileClient())
                 refreshDownloadedModelOptions()
                 refreshAudioInputDevices()
                 startPermissionPolling()
@@ -293,6 +283,9 @@ struct SettingsView: View {
                     loadOpenRouterFreeModelsIfNeeded()
                 }
                 scrollToFeatureTourTarget(activeFeatureTourTarget, using: scrollProxy)
+            }
+            .onChange(of: appState.config.languageProfile) { _, profile in
+                languageProfileEditor.synchronize(with: profile)
             }
             .onDisappear {
                 SoundController.stopMaraudersMapClip()
@@ -740,25 +733,127 @@ struct SettingsView: View {
             if !disabledDictationBackendLabels.isEmpty {
                 settingsDescription("Gemma 4 dictation is unavailable while Gemma 4 is the cleanup backend.")
             }
-            if appState.selectedBackend.backend == BackendOption.cohereTranscribe.backend {
-                Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Cohere language", controlWidth: meetingControlWidth) {
-                    cohereLanguageMenu
-                }
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsDescription(
+                controller.languageProfileClient().effectiveBehavior(
+                    appState.config.languageProfile,
+                    appState.selectedBackend
+                ).explanation
+            )
+        }
+    }
+
+    private var languageProfileSettingsSection: some View {
+        settingsSection("Languages") {
+            if appState.config.languageProfileNeedsConfirmation {
+                Label(
+                    "Previous model language choices disagreed. Review this profile, then save it.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.transcribing)
             }
-            if appState.selectedBackend.backend == BackendOption.indicASR.backend {
-                Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Indic language", controlWidth: meetingControlWidth) {
-                    indicLanguageMenu
+
+            settingsRow(
+                "Spoken languages",
+                description: "Choose any languages you use. Leave empty for automatic detection.",
+                controlWidth: meetingControlWidth
+            ) {
+                Menu {
+                    Button {
+                        languageProfileEditor.useAutomaticDetection()
+                    } label: {
+                        HStack {
+                            Text("Automatic detection")
+                            if languageProfileEditor.selectedLanguages.isEmpty {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                    Divider()
+                    ForEach(TranscriptionLanguage.allCases) { language in
+                        Button {
+                            languageProfileEditor.toggle(language)
+                        } label: {
+                            HStack {
+                                Text(language.label)
+                                if languageProfileEditor.selectedLanguages.contains(language) {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Text(languageSelectionSummary)
+                        .lineLimit(1)
+                        .frame(width: meetingControlWidth, alignment: .trailing)
                 }
+                .menuStyle(.borderlessButton)
             }
-            if appState.selectedBackend.supportsWhisperLanguageSelection {
-                Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Whisper language", controlWidth: meetingControlWidth) {
-                    whisperLanguageMenu
+
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow(
+                "Dominant language",
+                description: "Pins compatible recognizers. Leave unset to preserve code-switching.",
+                controlWidth: meetingControlWidth
+            ) {
+                let options: [TranscriptionLanguage?] = [nil]
+                    + languageProfileEditor.selectedLanguages.map(Optional.some)
+                FixedWidthPopUp(
+                    selection: languageProfileEditor.dominantLanguage?.label ?? "No dominant language",
+                    options: options.map { $0?.label ?? "No dominant language" },
+                    onSelectIndex: { index in
+                        guard options.indices.contains(index) else { return }
+                        languageProfileEditor.setDominant(options[index])
+                    }
+                )
+                .frame(height: 24)
+            }
+
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow("Meeting output", controlWidth: meetingControlWidth) {
+                let policies: [MeetingOutputLanguagePolicy] = languageProfileEditor
+                    .dominantLanguage?.supportsMeetingOutputLanguage == true
+                    ? MeetingOutputLanguagePolicy.allCases
+                    : [.automatic]
+                FixedWidthPopUp(
+                    selection: languageProfileEditor.meetingOutputPolicy.label,
+                    options: policies.map(\.label),
+                    onSelectIndex: { index in
+                        guard policies.indices.contains(index) else { return }
+                        languageProfileEditor.setMeetingOutputPolicy(policies[index])
+                    }
+                )
+                .frame(height: 24)
+            }
+
+            Divider().background(MuesliTheme.surfaceBorder)
+            HStack(spacing: MuesliTheme.spacing12) {
+                Button("Save language profile") {
+                    languageProfileEditor.save(using: controller.languageProfileClient())
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!languageProfileEditor.hasUnsavedChanges
+                    && !appState.config.languageProfileNeedsConfirmation)
+
+                if let errorMessage = languageProfileEditor.errorMessage {
+                    Text(errorMessage)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.recording)
+                } else if languageProfileEditor.didSave {
+                    Label("Saved", systemImage: "checkmark.circle.fill")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.success)
                 }
             }
         }
+    }
+
+    private var languageSelectionSummary: String {
+        let selected = languageProfileEditor.selectedLanguages
+        if selected.isEmpty { return "Automatic detection" }
+        if selected.count <= 2 { return selected.map(\.label).joined(separator: ", ") }
+        return "\(selected.count) languages"
     }
 
     private var meetingTranscriptionSettingsSection: some View {
@@ -854,30 +949,13 @@ struct SettingsView: View {
                     }
                 }
             }
-            if usesNemotronLiveTranscript {
-                Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Live language", controlWidth: meetingControlWidth) {
-                    nemotron35LanguageMenu
-                }
-            }
-            if !usesUnifiedMeetingTranscript,
-               appState.selectedMeetingTranscriptionBackend.backend == BackendOption.cohereTranscribe.backend {
-                Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow(usesNemotronLiveTranscript ? "Final language" : "Cohere language", controlWidth: meetingControlWidth) {
-                    cohereLanguageMenu
-                }
-            } else if !usesUnifiedMeetingTranscript,
-                      appState.selectedMeetingTranscriptionBackend.backend == BackendOption.indicASR.backend {
-                Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow(usesNemotronLiveTranscript ? "Final language" : "Indic language", controlWidth: meetingControlWidth) {
-                    indicLanguageMenu
-                }
-            } else if appState.selectedMeetingTranscriptionBackend.supportsWhisperLanguageSelection {
-                Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Whisper language", controlWidth: meetingControlWidth) {
-                    whisperLanguageMenu
-                }
-            }
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsDescription(
+                controller.languageProfileClient().effectiveBehavior(
+                    appState.config.languageProfile,
+                    appState.selectedMeetingTranscriptionBackend
+                ).explanation
+            )
         }
     }
 
@@ -944,48 +1022,6 @@ struct SettingsView: View {
                 hostedCleanupSettings(for: appState.selectedPostProcessorBackend)
             }
         }
-    }
-
-    private var cohereLanguageMenu: some View {
-        settingsMenu(
-            selection: selectedCohereLanguage.label,
-            options: CohereTranscribeLanguage.allCases.map(\.label)
-        ) { label in
-            guard let language = CohereTranscribeLanguage.allCases.first(where: { $0.label == label }) else { return }
-            controller.selectCohereLanguage(language)
-        }
-    }
-
-    private var nemotron35LanguageMenu: some View {
-        settingsMenu(
-            selection: selectedNemotron35Language.label,
-            options: Nemotron35Language.allCases.map(\.label)
-        ) { label in
-            guard let language = Nemotron35Language.allCases.first(where: { $0.label == label }) else { return }
-            Task { await controller.setNemotron35Language(language) }
-        }
-    }
-
-    private var whisperLanguageMenu: some View {
-        settingsMenu(
-            selection: selectedWhisperLanguage.label,
-            options: WhisperKitLanguage.allCases.map(\.label)
-        ) { label in
-            guard let language = WhisperKitLanguage.allCases.first(where: { $0.label == label }) else { return }
-            controller.selectWhisperLanguage(language)
-        }
-    }
-
-    private var indicLanguageMenu: some View {
-        FixedWidthPopUp(
-            selection: selectedIndicASRLanguage.label,
-            options: IndicASRLanguage.allCases.map(\.label),
-            onSelectIndex: { index in
-                guard index >= 0, index < IndicASRLanguage.allCases.count else { return }
-                controller.selectIndicASRLanguage(IndicASRLanguage.allCases[index])
-            }
-        )
-        .frame(height: 24)
     }
 
     @ViewBuilder
@@ -1348,6 +1384,8 @@ struct SettingsView: View {
 
     private var dictationSettingsPane: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
+            languageProfileSettingsSection
+
             dictationModelSettingsSection
 
             settingsSection("Transcription") {
@@ -1461,6 +1499,8 @@ struct SettingsView: View {
 
     private var meetingsSettingsPane: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
+            languageProfileSettingsSection
+
             meetingTranscriptionSettingsSection
 
             settingsSection("Meeting Context") {

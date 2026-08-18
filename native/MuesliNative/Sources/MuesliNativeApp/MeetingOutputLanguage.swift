@@ -46,6 +46,17 @@ enum MeetingOutputLanguage: Equatable {
         return arabicShare >= minimumArabicLetterShare ? .arabic : .unspecified
     }
 
+    static func resolve(
+        profile: LanguageProfile,
+        transcript: String,
+        manualNotes: String? = nil
+    ) -> Self {
+        if profile.meetingOutputPolicy == .dominantLanguage {
+            return profile.dominantLanguage == .arabic ? .arabic : .unspecified
+        }
+        return detect(transcript: transcript, manualNotes: manualNotes)
+    }
+
     private static func transcriptContent(from transcript: String) -> String {
         transcript.components(separatedBy: "\n").map { line in
             guard let prefix = MeetingTranscriptChunker.prefix(of: line) else { return line }

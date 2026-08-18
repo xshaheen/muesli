@@ -5,6 +5,54 @@ import Testing
 
 @Suite("Session trace runtime")
 struct SessionTraceRuntimeTests {
+    @Test("language trace records the frozen profile and effective backend behavior")
+    func languageTraceRecordsFrozenProfile() throws {
+        let profile = try LanguageProfile(
+            selectedLanguages: [.english, .arabic],
+            dominantLanguage: .arabic,
+            meetingOutputPolicy: .dominantLanguage
+        )
+        let data = Data(SessionTraceSnapshot.languageProfile(
+            backend: .whisperTinyEnglish,
+            profile: profile
+        ).utf8)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(json["schemaVersion"] as? Int == 2)
+        #expect(json["status"] as? String == "frozen")
+        #expect(json["selectedLanguages"] as? [String] == ["ar", "en"])
+        #expect(json["dominantLanguage"] as? String == "ar")
+        #expect(json["meetingOutputPolicy"] as? String == "dominant_language")
+        #expect(json["effectiveLanguage"] as? String == "en")
+        #expect(json["effectiveBehavior"] as? String == "english_only_fallback")
+    }
+
+    @Test("initial profile evidence is ordered before an immediate terminal failure")
+    func initialProfileSurvivesImmediateFailure() async throws {
+        let databaseURL = temporaryDatabaseURL()
+        defer { removeDatabaseFiles(at: databaseURL) }
+        let store = try SessionTraceStore(databaseURL: databaseURL)
+        let trace = SessionRunTrace(
+            store: store,
+            kind: .meeting,
+            initialArtifacts: [
+                SessionTraceInitialArtifact(
+                    content: #"{"status":"frozen"}"#,
+                    kind: .languageProfile
+                ),
+            ]
+        )
+
+        #expect(await trace.fail(stage: "meeting_start"))
+
+        let detail = try #require(await trace.detail())
+        #expect(detail.summary.terminalOutcome == .failed)
+        #expect(detail.artifacts.contains { artifact in
+            artifact.kinds.contains(.languageProfile)
+                && artifact.content == #"{"status":"frozen"}"#
+        })
+    }
+
     @Test("normal dictation records ordered evidence and one success")
     func normalDictationTrace() async throws {
         let databaseURL = temporaryDatabaseURL()
@@ -40,6 +88,50 @@ struct SessionTraceRuntimeTests {
         ])
         #expect(Set(detail.artifacts.flatMap(\.kinds)) == Set(SessionTraceArtifactKind.allCases))
         #expect(detail.events.filter { $0.vocabulary == .terminal }.count == 1)
+    }
+
+    @Test("successful meeting retranscription records every artifact and stage completion")
+    func successfulMeetingRetranscriptionTrace() async throws {
+        let databaseURL = temporaryDatabaseURL()
+        defer { removeDatabaseFiles(at: databaseURL) }
+        let store = try SessionTraceStore(databaseURL: databaseURL)
+        let trace = SessionRunTrace(
+            store: store,
+            kind: .meeting,
+            initialArtifacts: [
+                SessionTraceInitialArtifact(
+                    content: #"{"status":"frozen"}"#,
+                    kind: .languageProfile
+                ),
+            ]
+        )
+
+        await trace.recordStageStarted("meeting_retranscription")
+        await trace.storeArtifact("raw", kind: .rawASR)
+        await trace.storeArtifact("cleaned", kind: .cleanupResult)
+        await trace.storeArtifact("cleaned", kind: .finalOutput)
+        #expect(await MuesliController.completeMeetingRetranscriptionTrace(
+            trace,
+            elapsedMilliseconds: 42,
+            hadExistingNotes: true,
+            hadManualNotes: false
+        ))
+
+        let detail = try #require(await trace.detail())
+        #expect(detail.summary.terminalOutcome == .success)
+        #expect(Set(detail.artifacts.flatMap(\.kinds)) == Set(SessionTraceArtifactKind.allCases))
+        #expect(detail.events.map(\.vocabulary) == [
+            .sessionStarted,
+            .stageStarted,
+            .stageCompleted,
+            .terminal,
+        ])
+        let context = try #require(detail.artifacts.first {
+            $0.kinds.contains(.contextSources)
+        })
+        let contextContent = try #require(context.content)
+        #expect(contextContent.contains(#""existingNotes":true"#))
+        #expect(contextContent.contains(#""manualNotes":false"#))
     }
 
     @Test("fallback terminal prevents an uncooperative cleanup from publishing late")

@@ -1427,6 +1427,7 @@ actor TranscriptionCoordinator {
         backend: BackendOption,
         cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
         indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
+        nemotron35Language: Nemotron35Language = Nemotron35Language.defaultLanguage,
         whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
         enablePostProcessor: Bool = false,
         cleanupPolicy: DictationCleanupPolicy? = nil,
@@ -1441,6 +1442,7 @@ actor TranscriptionCoordinator {
             backend: backend,
             cohereLanguage: cohereLanguage,
             indicASRLanguage: indicASRLanguage,
+            nemotron35Language: nemotron35Language,
             whisperLanguage: whisperLanguage,
             enablePostProcessor: enablePostProcessor,
             cleanupPolicy: cleanupPolicy,
@@ -1457,6 +1459,7 @@ actor TranscriptionCoordinator {
         backend: BackendOption,
         cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
         indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
+        nemotron35Language: Nemotron35Language = Nemotron35Language.defaultLanguage,
         whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
         enablePostProcessor: Bool = false,
         cleanupPolicy: DictationCleanupPolicy? = nil,
@@ -1519,6 +1522,7 @@ actor TranscriptionCoordinator {
                 backend: backend,
                 cohereLanguage: cohereLanguage,
                 indicASRLanguage: indicASRLanguage,
+                nemotron35Language: nemotron35Language,
                 whisperLanguage: whisperLanguage,
                 vocabulary: AsrVocabularyPrompt.build(customWords: dictionary)
             )
@@ -1634,17 +1638,13 @@ actor TranscriptionCoordinator {
     func transcribeMeeting(
         at url: URL,
         backend: BackendOption,
-        cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
-        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
-        whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
+        profile: LanguageProfile = .automatic,
         customWords: [CustomWord] = []
     ) async throws -> SpeechTranscriptionResult {
         try await transcribeMeetingWithEvidence(
             at: url,
             backend: backend,
-            cohereLanguage: cohereLanguage,
-            indicASRLanguage: indicASRLanguage,
-            whisperLanguage: whisperLanguage,
+            profile: profile,
             customWords: customWords
         ).cleaned
     }
@@ -1652,9 +1652,7 @@ actor TranscriptionCoordinator {
     func transcribeMeetingWithEvidence(
         at url: URL,
         backend: BackendOption,
-        cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
-        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
-        whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
+        profile: LanguageProfile = .automatic,
         customWords: [CustomWord] = []
     ) async throws -> MeetingTranscriptionEvidence {
         // Meetings intentionally skip Qwen/custom-word post-processing. Keep deterministic artifact/filler cleanup only.
@@ -1662,9 +1660,10 @@ actor TranscriptionCoordinator {
         let raw = try await route(
             url: url,
             backend: backend,
-            cohereLanguage: cohereLanguage,
-            indicASRLanguage: indicASRLanguage,
-            whisperLanguage: whisperLanguage,
+            cohereLanguage: profile.resolvedCohereLanguage,
+            indicASRLanguage: profile.resolvedIndicASRLanguage,
+            nemotron35Language: profile.resolvedNemotron35Language,
+            whisperLanguage: profile.resolvedWhisperLanguage,
             vocabulary: AsrVocabularyPrompt.build(customWords: customWords)
         )
         return MeetingTranscriptionEvidence(raw: raw)
@@ -1673,17 +1672,13 @@ actor TranscriptionCoordinator {
     func transcribeMeetingChunk(
         at url: URL,
         backend: BackendOption,
-        cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
-        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
-        whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
+        profile: LanguageProfile = .automatic,
         customWords: [CustomWord] = []
     ) async throws -> SpeechTranscriptionResult {
         try await transcribeMeetingChunkWithEvidence(
             at: url,
             backend: backend,
-            cohereLanguage: cohereLanguage,
-            indicASRLanguage: indicASRLanguage,
-            whisperLanguage: whisperLanguage,
+            profile: profile,
             customWords: customWords
         ).cleaned
     }
@@ -1691,9 +1686,7 @@ actor TranscriptionCoordinator {
     func transcribeMeetingChunkWithEvidence(
         at url: URL,
         backend: BackendOption,
-        cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
-        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
-        whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
+        profile: LanguageProfile = .automatic,
         customWords: [CustomWord] = []
     ) async throws -> MeetingTranscriptionEvidence {
         // Meeting chunks intentionally skip Qwen/custom-word post-processing for reconciliation.
@@ -1715,9 +1708,10 @@ actor TranscriptionCoordinator {
         let raw = try await route(
             url: url,
             backend: backend,
-            cohereLanguage: cohereLanguage,
-            indicASRLanguage: indicASRLanguage,
-            whisperLanguage: whisperLanguage,
+            cohereLanguage: profile.resolvedCohereLanguage,
+            indicASRLanguage: profile.resolvedIndicASRLanguage,
+            nemotron35Language: profile.resolvedNemotron35Language,
+            whisperLanguage: profile.resolvedWhisperLanguage,
             vocabulary: AsrVocabularyPrompt.build(customWords: customWords)
         )
         return MeetingTranscriptionEvidence(raw: raw)
@@ -2172,6 +2166,7 @@ actor TranscriptionCoordinator {
         backend: BackendOption,
         cohereLanguage: CohereTranscribeLanguage,
         indicASRLanguage: IndicASRLanguage,
+        nemotron35Language: Nemotron35Language,
         whisperLanguage: WhisperKitLanguage = .defaultLanguage,
         vocabulary: AsrVocabularyPrompt? = nil
     ) async throws -> SpeechTranscriptionResult {
@@ -2181,6 +2176,7 @@ actor TranscriptionCoordinator {
                 backend: backend,
                 cohereLanguage: cohereLanguage,
                 indicASRLanguage: indicASRLanguage,
+                nemotron35Language: nemotron35Language,
                 whisperLanguage: whisperLanguage,
                 vocabulary: vocabulary
             )
@@ -2192,6 +2188,7 @@ actor TranscriptionCoordinator {
         backend: BackendOption,
         cohereLanguage: CohereTranscribeLanguage,
         indicASRLanguage: IndicASRLanguage,
+        nemotron35Language: Nemotron35Language,
         whisperLanguage: WhisperKitLanguage,
         vocabulary: AsrVocabularyPrompt?
     ) async throws -> SpeechTranscriptionResult {
@@ -2206,7 +2203,10 @@ actor TranscriptionCoordinator {
                 language: language
             )
         case "nemotron35":
-            return try await transcribeWithNemotron35(url: url)
+            return try await transcribeWithNemotron35(
+                url: url,
+                promptId: nemotron35Language.promptId
+            )
         case "qwen":
             return try await transcribeWithQwen3(url: url)
         case "cohere":
@@ -2359,11 +2359,14 @@ actor TranscriptionCoordinator {
 
     // MARK: - Nemotron 3.5 Streaming (RNNT CoreML on ANE)
 
-    private func transcribeWithNemotron35(url: URL) async throws -> SpeechTranscriptionResult {
+    private func transcribeWithNemotron35(
+        url: URL,
+        promptId: Int32
+    ) async throws -> SpeechTranscriptionResult {
         if #available(macOS 15, *) {
             fputs("[muesli-native] transcribing with Nemotron 3.5: \(url.lastPathComponent)\n", stderr)
             let transcriber = try await getLoadedNemotron35Transcriber()
-            let result = try await transcriber.transcribe(wavURL: url)
+            let result = try await transcriber.transcribe(wavURL: url, promptId: promptId)
             fputs("[muesli-native] Nemotron 3.5 result: \(result.text.prefix(80)) (took \(String(format: "%.3f", result.processingTime))s)\n", stderr)
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             return SpeechTranscriptionResult(

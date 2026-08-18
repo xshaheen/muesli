@@ -117,9 +117,14 @@ enum MeetingLiveCaptionModelStore {
             let mic = Nemotron35MeetingPartialEngine(
                 transcriber: transcriber,
                 label: "You",
+                promptId: nemotronPromptId,
                 ownsTranscriber: ownsTranscriber
             )
-            let system = Nemotron35MeetingPartialEngine(transcriber: transcriber, label: "Others")
+            let system = Nemotron35MeetingPartialEngine(
+                transcriber: transcriber,
+                label: "Others",
+                promptId: nemotronPromptId
+            )
             do {
                 try await mic.prepare()
                 try await system.prepare()
@@ -201,19 +206,26 @@ private actor Nemotron35MeetingPartialEngine: MeetingStreamingPartialEngine {
     /// would unload a model that dictation still depends on.
     private let ownedTranscriber: Nemotron35StreamingTranscriber?
     private let label: String
+    private let promptId: Int32
     private var streamState: Nemotron35StreamingTranscriber.StreamState?
     private var sampleBuffer: [Float] = []
     private var transcript = ""
     private var partialHandler: (@Sendable (String) -> Void)?
 
-    init(transcriber: Nemotron35StreamingTranscriber, label: String, ownsTranscriber: Bool = false) {
+    init(
+        transcriber: Nemotron35StreamingTranscriber,
+        label: String,
+        promptId: Int32,
+        ownsTranscriber: Bool = false
+    ) {
         self.transcriber = transcriber
         self.ownedTranscriber = ownsTranscriber ? transcriber : nil
         self.label = label
+        self.promptId = promptId
     }
 
     func prepare() async throws {
-        streamState = try await transcriber.makeStreamState()
+        streamState = try await transcriber.makeStreamState(promptId: promptId)
     }
 
     func setPartialHandler(_ handler: @escaping @Sendable (String) -> Void) async {

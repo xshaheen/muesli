@@ -127,6 +127,8 @@ struct ActiveMeetingAudioWarningState {
 @MainActor
 @Observable
 final class AppState {
+    let languageProfileSettings = LanguageProfileSettingsModel()
+
     // Dashboard data
     var dictationRows: [DictationRecord] = []
     var meetingRows: [MeetingListRecord] = []

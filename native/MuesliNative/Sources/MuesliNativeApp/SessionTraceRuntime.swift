@@ -1,6 +1,11 @@
 import Foundation
 import MuesliCore
 
+struct SessionTraceInitialArtifact: Sendable {
+    let content: String
+    let kind: SessionTraceArtifactKind
+}
+
 /// Owns one product run's terminal decision and mirrors diagnostic evidence to
 /// the local trace store. The in-memory decision is made before awaiting SQLite,
 /// so product publication remains exactly-once even when diagnostics are
@@ -23,6 +28,7 @@ actor SessionRunTrace {
         backendIdentity: String? = nil,
         fallbackBackendIdentity: String? = nil,
         startedAt: Date = Date(),
+        initialArtifacts: [SessionTraceInitialArtifact] = [],
         onTerminalWriteFinished: (@Sendable (UUID) -> Void)? = nil
     ) {
         self.sessionID = sessionID
@@ -37,6 +43,19 @@ actor SessionRunTrace {
                 fallbackBackendIdentity: fallbackBackendIdentity,
                 at: startedAt
             )
+        }
+        if let store, !initialArtifacts.isEmpty {
+            let initialTokenTask = tokenTask
+            writeTail = Task.detached(priority: .utility) {
+                guard let token = await initialTokenTask.value else { return }
+                for artifact in initialArtifacts {
+                    _ = try? await store.storeArtifact(
+                        artifact.content,
+                        kind: artifact.kind,
+                        token: token
+                    )
+                }
+            }
         }
     }
 
@@ -205,13 +224,21 @@ struct TranscriptionActivityOwnership: Equatable {
 }
 
 enum SessionTraceSnapshot {
-    private struct LanguageProfile: Encodable {
-        let schemaVersion = 1
-        let status = "frozen_placeholder"
+    private struct EncodedLanguageProfile: Encodable {
+        let schemaVersion = 2
+        let status = "frozen"
         let backend: String
-        let cohereLanguage: String
-        let indicASRLanguage: String
-        let whisperLanguage: String
+        let selectedLanguages: [String]
+        let dominantLanguage: String?
+        let meetingOutputPolicy: String
+        let effectiveLanguage: String?
+        let effectiveBehavior: String
+    }
+
+    private struct EncodedRetranscriptionContext: Encodable {
+        let scope = "meeting_retranscription"
+        let existingNotes: Bool
+        let manualNotes: Bool
     }
 
     static func backendIdentity(_ backend: BackendOption) -> String {
@@ -228,15 +255,26 @@ enum SessionTraceSnapshot {
 
     static func languageProfile(
         backend: BackendOption,
-        cohereLanguage: CohereTranscribeLanguage,
-        indicASRLanguage: IndicASRLanguage,
-        whisperLanguage: WhisperKitLanguage
+        profile: LanguageProfile
     ) -> String {
-        encode(LanguageProfile(
+        let behavior = profile.effectiveBehavior(for: backend)
+        return encode(EncodedLanguageProfile(
             backend: backend.backend,
-            cohereLanguage: cohereLanguage.rawValue,
-            indicASRLanguage: indicASRLanguage.rawValue,
-            whisperLanguage: whisperLanguage.rawValue
+            selectedLanguages: profile.selectedLanguages.map(\.rawValue),
+            dominantLanguage: profile.dominantLanguage?.rawValue,
+            meetingOutputPolicy: profile.meetingOutputPolicy.rawValue,
+            effectiveLanguage: behavior.effectiveLanguage?.rawValue,
+            effectiveBehavior: behavior.kind.rawValue
+        ))
+    }
+
+    static func retranscriptionContext(
+        hadExistingNotes: Bool,
+        hadManualNotes: Bool
+    ) -> String {
+        encode(EncodedRetranscriptionContext(
+            existingNotes: hadExistingNotes,
+            manualNotes: hadManualNotes
         ))
     }
 

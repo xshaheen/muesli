@@ -33,6 +33,7 @@ struct NemotronRNNTConfig {
 /// Carries all mutable state between chunk-by-chunk transcription calls. Neutral
 /// (not owned by either transcriber) so both backends share one type.
 struct RNNTStreamState {
+    let promptId: Int32?
     var cacheChannel: MLMultiArray   // [1, 24, cacheChannelFrames, 1024]
     var cacheTime: MLMultiArray      // [1, 24, 1024, 8]
     var cacheLen: MLMultiArray       // [1]
@@ -79,6 +80,7 @@ func nemotronMakeStreamState(config: NemotronRNNTConfig) throws -> RNNTStreamSta
     nemotronZeroFill(hState); nemotronZeroFill(cState)
 
     return RNNTStreamState(
+        promptId: config.promptId,
         cacheChannel: cacheChannel, cacheTime: cacheTime, cacheLen: cacheLen,
         hState: hState, cState: cState, lastToken: 0, allTokens: []
     )

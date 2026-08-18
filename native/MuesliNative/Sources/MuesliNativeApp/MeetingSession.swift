@@ -273,6 +273,7 @@ struct MeetingSessionResult {
     /// Recording retention is frozen with the rest of the meeting capture
     /// configuration. Finalization must not re-read a setting that may have
     /// changed while the meeting was running.
+    var languageProfile: LanguageProfile = .automatic
     var recordingSavePolicy: MeetingRecordingSavePolicy = .never
     var recordingFileFormat: MeetingRecordingFileFormat = .wav
     /// Screen/OCR context this summary was built from.
@@ -315,6 +316,7 @@ extension MeetingSessionResult {
             retainedRecordingError: retainedRecordingError,
             systemRecordingURL: systemRecordingURL,
             templateSnapshot: templateSnapshot,
+            languageProfile: languageProfile,
             recordingSavePolicy: recordingSavePolicy,
             recordingFileFormat: recordingFileFormat,
             visualContext: visualContext,
@@ -1030,9 +1032,7 @@ final class MeetingSession {
                     let evidence = try await transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                         at: lastSystemChunkURL,
                         backend: currentBackend(),
-                        cohereLanguage: config.resolvedCohereLanguage,
-                        indicASRLanguage: config.resolvedIndicASRLanguage,
-                        whisperLanguage: config.resolvedWhisperLanguage,
+                        profile: config.languageProfile,
                         customWords: config.customWords
                     )
                     rawTranscriptAccumulator.appendBatch(
@@ -1239,7 +1239,8 @@ final class MeetingSession {
                 transcript: rawTranscript,
                 meetingTitle: generatedTitle,
                 error: error,
-                manualNotes: manualNotes
+                manualNotes: manualNotes,
+                languageProfile: config.languageProfile
             )
         }
         let summaryElapsedMilliseconds = max(
@@ -1289,6 +1290,7 @@ final class MeetingSession {
             retainedRecordingError: retainedRecordingWriterError,
             systemRecordingURL: systemAudioURL,
             templateSnapshot: templateSnapshot,
+            languageProfile: config.languageProfile,
             recordingSavePolicy: config.meetingRecordingSavePolicy,
             recordingFileFormat: config.resolvedMeetingRecordingFileFormat,
             visualContext: visualContext,
@@ -1417,9 +1419,7 @@ final class MeetingSession {
                 let evidence = try await self.transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                     at: chunkURL,
                     backend: backend,
-                    cohereLanguage: config.resolvedCohereLanguage,
-                    indicASRLanguage: config.resolvedIndicASRLanguage,
-                    whisperLanguage: config.resolvedWhisperLanguage,
+                    profile: config.languageProfile,
                     customWords: config.customWords
                 )
                 self.rawTranscriptAccumulator.appendBatch(
@@ -1783,9 +1783,7 @@ final class MeetingSession {
             let evidence = try await transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                 at: url,
                 backend: currentBackend(),
-                cohereLanguage: config.resolvedCohereLanguage,
-                indicASRLanguage: config.resolvedIndicASRLanguage,
-                whisperLanguage: config.resolvedWhisperLanguage,
+                profile: config.languageProfile,
                 customWords: config.customWords
             )
             rawTranscriptAccumulator.appendBatch(
@@ -1899,9 +1897,7 @@ final class MeetingSession {
                     let evidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
                         at: segmentURL,
                         backend: currentBackend(),
-                        cohereLanguage: config.resolvedCohereLanguage,
-                        indicASRLanguage: config.resolvedIndicASRLanguage,
-                        whisperLanguage: config.resolvedWhisperLanguage,
+                        profile: config.languageProfile,
                         customWords: config.customWords
                     )
                     rawTranscriptAccumulator.appendBatch(
@@ -1939,9 +1935,7 @@ final class MeetingSession {
             let evidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
                 at: systemAudioURL,
                 backend: currentBackend(),
-                cohereLanguage: config.resolvedCohereLanguage,
-                indicASRLanguage: config.resolvedIndicASRLanguage,
-                whisperLanguage: config.resolvedWhisperLanguage,
+                profile: config.languageProfile,
                 customWords: config.customWords
             )
             rawTranscriptAccumulator.appendBatch(

@@ -39,6 +39,11 @@ private struct DictationLatencyTraceSnapshot {
     let routeDescription: String
 }
 
+struct FrozenDictationTranscriptionSelection: Equatable {
+    let backend: BackendOption
+    let languageProfile: LanguageProfile
+}
+
 private struct PendingStandardDictationStop {
     let id: UUID
     let sequence: UInt64
@@ -46,9 +51,7 @@ private struct PendingStandardDictationStop {
     let isTestMode: Bool
     let outputMode: DictationOutputMode
     let backend: BackendOption
-    let cohereLanguage: CohereTranscribeLanguage
-    let indicASRLanguage: IndicASRLanguage
-    let whisperLanguage: WhisperKitLanguage
+    let languageProfile: LanguageProfile
     let promptContext: String?
     let storageContext: String
     let correctionTargetApp: DictationSessionTarget?
@@ -73,9 +76,7 @@ private struct StandardDictationJob: Identifiable {
     let isTestMode: Bool
     let outputMode: DictationOutputMode
     let backend: BackendOption
-    let cohereLanguage: CohereTranscribeLanguage
-    let indicASRLanguage: IndicASRLanguage
-    let whisperLanguage: WhisperKitLanguage
+    let languageProfile: LanguageProfile
     let promptContext: String?
     let storageContext: String
     let correctionTargetApp: DictationSessionTarget?
@@ -508,6 +509,7 @@ final class MuesliController: NSObject {
     private var currentDictationOutputMode: DictationOutputMode = .paste
     private var pendingStandardDictationStops: [UUID: PendingStandardDictationStop] = [:]
     private var dictationSessionTraces: [UUID: SessionRunTrace] = [:]
+    private var frozenDictationTranscriptionSelections: [UUID: FrozenDictationTranscriptionSelection] = [:]
     private var completedStandardDictationStops = OrderedCompletionBuffer<CompletedStandardDictationStop>()
     private var nextStandardDictationStopSequence: UInt64 = 0
     private var pendingReleaseSoundSessionIDs: Set<UUID> = []
@@ -1149,6 +1151,7 @@ final class MuesliController: NSObject {
         previousStreamText = ""
         dictationStartedAt = nil
         pendingStandardDictationStops.removeAll()
+        frozenDictationTranscriptionSelections.removeAll()
         pendingReleaseSoundSessionIDs.removeAll()
         clearCapturedDictationSessionContext()
         resetDictationOutputMode()
@@ -1165,6 +1168,7 @@ final class MuesliController: NSObject {
             return
         }
         let trace = dictationSessionTraces.removeValue(forKey: sessionID)
+        frozenDictationTranscriptionSelections.removeValue(forKey: sessionID)
         let didWin = await trace?.cancel(stage: "shutdown") ?? true
         guard didWin else {
             if let wavURL = capture.wavURL { try? FileManager.default.removeItem(at: wavURL) }
@@ -1897,6 +1901,30 @@ final class MuesliController: NSObject {
         config = persisted
         appState.config = persisted
         statusBarController?.refresh()
+    }
+
+    /// Commits the language authority as one persisted transaction. Existing
+    /// recordings keep their frozen profile snapshots; only future sessions see
+    /// the newly published value.
+    @discardableResult
+    func saveLanguageProfile(_ profile: LanguageProfile) throws -> AppConfig {
+        var candidate = config
+        candidate.languageProfile = profile
+        let persisted = try configStore.saveLanguageProfileConfiguration(candidate)
+        config = persisted
+        appState.config = persisted
+        statusBarController?.refresh()
+        return persisted
+    }
+
+    func languageProfileClient() -> LanguageProfileClient {
+        LanguageProfileClient(
+            load: { [weak self] in self?.config.languageProfile ?? .automatic },
+            save: { [weak self] profile in
+                guard let self else { throw LanguageProfileClient.Error.controllerUnavailable }
+                return try self.saveLanguageProfile(profile).languageProfile
+            }
+        )
     }
 
     /// Applies a previously reviewed portable replacement in the same
@@ -2769,12 +2797,6 @@ final class MuesliController: NSObject {
         }
     }
 
-    /// Update the Nemotron 3.5 dictation language and push the prompt_id to the runtime.
-    func setNemotron35Language(_ language: Nemotron35Language) async {
-        updateConfig { $0.nemotron35Language = language.rawValue }
-        await transcriptionCoordinator.setNemotron35PromptId(language.promptId)
-    }
-
     func selectMeetingTranscriptionBackend(_ option: BackendOption, requireDownloaded: Bool = true) {
         applyMeetingTranscriptionBackend(option, requireDownloaded: requireDownloaded)
     }
@@ -2852,24 +2874,6 @@ final class MuesliController: NSObject {
             backend: selectedMeetingTranscriptionBackend,
             usesUnifiedNemotronTranscript: config.usesUnifiedNemotronMeetingTranscript
         )
-    }
-
-    func selectCohereLanguage(_ language: CohereTranscribeLanguage) {
-        updateConfig {
-            $0.cohereLanguage = language.rawValue
-        }
-    }
-
-    func selectIndicASRLanguage(_ language: IndicASRLanguage) {
-        updateConfig {
-            $0.indicASRLanguage = language.rawValue
-        }
-    }
-
-    func selectWhisperLanguage(_ language: WhisperKitLanguage) {
-        updateConfig {
-            $0.whisperLanguage = language.rawValue
-        }
     }
 
     var isPostProcessorReady: Bool {
@@ -4397,7 +4401,11 @@ final class MuesliController: NSObject {
             config.userName = userName
             config.sttBackend = backend.backend
             config.sttModel = backend.model
-            config.cohereLanguage = cohereLanguage.rawValue
+            config.languageProfile = LanguageProfile.onboarding(
+                backend: backend,
+                cohereLanguage: cohereLanguage
+            )
+            config.mirrorLanguageProfileToLegacyPins()
             config.meetingTranscriptionBackend = backend.backend
             config.meetingTranscriptionModel = backend.model
             config.dictationHotkey = hotkey
@@ -4794,6 +4802,7 @@ final class MuesliController: NSObject {
                 return
             }
             var didSetProcessing = false
+            var sessionTrace: SessionRunTrace?
             do {
                 guard let recordingArtifactStore,
                       let reference = try recordingArtifactStore.recordingForMeeting(id: meeting.id),
@@ -4804,6 +4813,16 @@ final class MuesliController: NSObject {
                 guard let backend = self.normalizeMeetingTranscriptionSelectionForAvailability() else {
                     throw MeetingRetranscriptionError.noDownloadedTranscriptionModel
                 }
+                let retranscriptionConfig = self.config
+                let retranscriptionStartedAt = Date()
+                let trace = self.makeMeetingSessionTrace(
+                    backend: backend,
+                    startedAt: retranscriptionStartedAt,
+                    languageProfile: retranscriptionConfig.languageProfile
+                )
+                sessionTrace = trace
+                await trace.associate(meetingID: meeting.id)
+                await trace.recordStageStarted("meeting_retranscription")
 
                 try self.updateMeetingStatusAndScheduleSyncThrowing(id: meeting.id, status: .processing)
                 didSetProcessing = true
@@ -4816,18 +4835,19 @@ final class MuesliController: NSObject {
                     includeMeetingHelpers: true,
                     meetingHelperTrigger: .retranscription
                 )
-                let transcription = try await self.transcriptionCoordinator.transcribeMeeting(
+                let transcription = try await self.transcriptionCoordinator.transcribeMeetingWithEvidence(
                     at: recordingURL,
                     backend: backend,
-                    cohereLanguage: self.config.resolvedCohereLanguage,
-                    indicASRLanguage: self.config.resolvedIndicASRLanguage,
-                    whisperLanguage: self.config.resolvedWhisperLanguage,
-                    customWords: self.config.customWords
+                    profile: retranscriptionConfig.languageProfile,
+                    customWords: retranscriptionConfig.customWords
                 )
-                let rawTranscript = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                await trace.storeArtifact(transcription.raw.text, kind: .rawASR)
+                await trace.storeArtifact(transcription.cleaned.text, kind: .cleanupResult)
+                let rawTranscript = transcription.cleaned.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !rawTranscript.isEmpty else {
                     throw MeetingRetranscriptionError.emptyTranscript
                 }
+                await trace.storeArtifact(rawTranscript, kind: .finalOutput)
 
                 let templateSnapshot = self.meetingTemplateSnapshot(for: meeting)
                 let formattedNotes: String
@@ -4835,7 +4855,7 @@ final class MuesliController: NSObject {
                     formattedNotes = try await MeetingSummaryClient.summarize(
                         transcript: rawTranscript,
                         meetingTitle: meeting.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Meeting" : meeting.title,
-                        config: self.config,
+                        config: retranscriptionConfig,
                         template: templateSnapshot,
                         existingNotes: self.notesContextForResummary(meeting),
                         manualNotesToRetain: meeting.manualNotes
@@ -4846,7 +4866,8 @@ final class MuesliController: NSObject {
                         transcript: rawTranscript,
                         meetingTitle: meeting.title,
                         error: error,
-                        manualNotes: meeting.manualNotes
+                        manualNotes: meeting.manualNotes,
+                        languageProfile: retranscriptionConfig.languageProfile
                     )
                 }
 
@@ -4864,11 +4885,31 @@ final class MuesliController: NSObject {
                     throw MeetingRetranscriptionError.failedToSave(underlying: error)
                 }
 
+                _ = await Self.completeMeetingRetranscriptionTrace(
+                    trace,
+                    elapsedMilliseconds: max(
+                        Int(Date().timeIntervalSince(retranscriptionStartedAt) * 1_000),
+                        0
+                    ),
+                    hadExistingNotes: !meeting.formattedNotes
+                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    hadManualNotes: !meeting.manualNotes
+                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
                 self.scheduleICloudSyncAfterLocalChange()
                 self.syncAppState()
                 self.historyWindowController?.reload()
                 completion(.success(()))
+            } catch is CancellationError {
+                _ = await sessionTrace?.cancel(stage: "meeting_retranscription")
+                if didSetProcessing {
+                    self.updateMeetingStatusAndScheduleSync(id: meeting.id, status: meeting.status)
+                }
+                self.syncAppState()
+                self.historyWindowController?.reload()
+                completion(.failure(CancellationError()))
             } catch {
+                _ = await sessionTrace?.fail(stage: "meeting_retranscription")
                 fputs("[muesli-native] failed to re-transcribe meeting \(meeting.id): \(error)\n", stderr)
                 if let status = Self.retranscriptionFailureStatus(
                     originalStatus: meeting.status,
@@ -4899,6 +4940,33 @@ final class MuesliController: NSObject {
             }
         }
         return .failed
+    }
+
+    nonisolated static func completeMeetingRetranscriptionTrace(
+        _ trace: SessionRunTrace,
+        elapsedMilliseconds: Int,
+        hadExistingNotes: Bool,
+        hadManualNotes: Bool
+    ) async -> Bool {
+        await trace.storeArtifact(
+            DictationDictionaryTrace.emptyContent,
+            kind: .dictionaryChanges
+        )
+        await trace.storeArtifact(
+            SessionTraceSnapshot.retranscriptionContext(
+                hadExistingNotes: hadExistingNotes,
+                hadManualNotes: hadManualNotes
+            ),
+            kind: .contextSources
+        )
+        await trace.recordStageCompleted(
+            "meeting_retranscription",
+            elapsedMilliseconds: elapsedMilliseconds
+        )
+        return await trace.claimTerminal(.success, metadata: [
+            "stage": "meeting_retranscription",
+            "history_created": "true",
+        ])
     }
 
     // MARK: - Meeting Editing
@@ -5776,22 +5844,13 @@ final class MuesliController: NSObject {
             )
             return false
         }
+        let meetingConfig = config
         let meetingStartedAt = Date()
         let sessionTrace = makeMeetingSessionTrace(
             backend: meetingBackend,
-            startedAt: meetingStartedAt
+            startedAt: meetingStartedAt,
+            languageProfile: meetingConfig.languageProfile
         )
-        Task {
-            await sessionTrace.storeArtifact(
-                SessionTraceSnapshot.languageProfile(
-                    backend: meetingBackend,
-                    cohereLanguage: config.resolvedCohereLanguage,
-                    indicASRLanguage: config.resolvedIndicASRLanguage,
-                    whisperLanguage: config.resolvedWhisperLanguage
-                ),
-                kind: .languageProfile
-            )
-        }
         let templateSnapshot = defaultMeetingTemplate()
         let resolvedCalendarEventID = calendarOccurrence?.eventID ?? calendarEventID
         let meetingID: Int64
@@ -5861,6 +5920,7 @@ final class MuesliController: NSObject {
                     calendarEventID: resolvedCalendarEventID,
                     meetingID: meetingID,
                     backend: meetingBackend,
+                    config: meetingConfig,
                     templateSnapshot: templateSnapshot,
                     showFloatingPanelWhenActive: showFloatingPanelWhenActive,
                     endDate: endDate,
@@ -5974,19 +6034,15 @@ final class MuesliController: NSObject {
             )
             return
         }
-        let sessionTrace = makeMeetingSessionTrace(backend: meetingBackend, startedAt: Date())
+        let meetingConfig = config
+        let sessionTrace = makeMeetingSessionTrace(
+            backend: meetingBackend,
+            startedAt: Date(),
+            languageProfile: meetingConfig.languageProfile
+        )
         meetingSessionTraces[meetingID] = sessionTrace
         Task {
             await sessionTrace.associate(meetingID: meetingID)
-            await sessionTrace.storeArtifact(
-                SessionTraceSnapshot.languageProfile(
-                    backend: meetingBackend,
-                    cohereLanguage: config.resolvedCohereLanguage,
-                    indicASRLanguage: config.resolvedIndicASRLanguage,
-                    whisperLanguage: config.resolvedWhisperLanguage
-                ),
-                kind: .languageProfile
-            )
         }
 
         let priorTranscript: String
@@ -6040,6 +6096,7 @@ final class MuesliController: NSObject {
                     calendarEventID: meeting.calendarEventID,
                     meetingID: meetingID,
                     backend: meetingBackend,
+                    config: meetingConfig,
                     templateSnapshot: self.meetingTemplateSnapshot(for: meeting),
                     endDate: nil,
                     previousMeetingNotes: previousMeetingNotes
@@ -6142,21 +6199,14 @@ final class MuesliController: NSObject {
     private func importAudioFile(from sourceURL: URL, sessionID: UUID) async {
         let filename = sourceURL.deletingPathExtension().lastPathComponent
         let title = filename.isEmpty ? "Imported Recording" : filename
+        let importContext = audioFileImportContext()
         let sessionTrace = makeMeetingSessionTrace(
             id: sessionID,
-            backend: selectedMeetingTranscriptionBackend,
-            startedAt: Date()
+            backend: importContext.backend,
+            startedAt: Date(),
+            languageProfile: importContext.config.languageProfile
         )
         importSessionTrace = sessionTrace
-        await sessionTrace.storeArtifact(
-            SessionTraceSnapshot.languageProfile(
-                backend: selectedMeetingTranscriptionBackend,
-                cohereLanguage: config.resolvedCohereLanguage,
-                indicASRLanguage: config.resolvedIndicASRLanguage,
-                whisperLanguage: config.resolvedWhisperLanguage
-            ),
-            kind: .languageProfile
-        )
         await sessionTrace.storeArtifact("", kind: .contextSources)
 
         self.updateImportProgressStatus("Importing audio file...", sessionID: sessionID)
@@ -6167,6 +6217,7 @@ final class MuesliController: NSObject {
                 sourceURL: sourceURL,
                 title: title,
                 controller: self,
+                context: importContext,
                 sessionTrace: sessionTrace,
                 progress: { [weak self] status in
                     Task { @MainActor in
@@ -6456,12 +6507,13 @@ final class MuesliController: NSObject {
         calendarEventID: String?,
         meetingID: Int64,
         backend: BackendOption,
+        config meetingConfig: AppConfig,
         templateSnapshot: MeetingTemplateSnapshot,
         showFloatingPanelWhenActive: Bool = false,
         endDate: Date?,
         previousMeetingNotes: String? = nil
     ) async throws {
-        var shouldRetryAfterPermissionRequest = config.useCoreAudioTap
+        var shouldRetryAfterPermissionRequest = meetingConfig.useCoreAudioTap
         statusBarController?.setStatus("Meeting transcription will start shortly.")
         statusBarController?.refresh()
         try Task.checkCancellation()
@@ -6487,7 +6539,7 @@ final class MuesliController: NSObject {
                 calendarEventID: calendarEventID,
                 backend: backend,
                 runtime: runtime,
-                config: config,
+                config: meetingConfig,
                 templateSnapshot: templateSnapshot,
                 transcriptionCoordinator: transcriptionCoordinator,
                 meetingMicRecorder: meetingMicRecorder,
@@ -7839,11 +7891,13 @@ final class MuesliController: NSObject {
         }
 
         let regeneratedNotes: String
+        var summaryConfig = config
+        summaryConfig.languageProfile = result.languageProfile
         do {
             regeneratedNotes = try await MeetingSummaryClient.summarize(
                 transcript: combined,
                 meetingTitle: result.title,
-                config: config,
+                config: summaryConfig,
                 template: result.templateSnapshot,
                 existingNotes: nil,
                 manualNotesToRetain: manualNotes,
@@ -7855,7 +7909,8 @@ final class MuesliController: NSObject {
                 transcript: combined,
                 meetingTitle: result.title,
                 error: error,
-                manualNotes: manualNotes
+                manualNotes: manualNotes,
+                languageProfile: result.languageProfile
             )
         }
         return result.overriding(
@@ -8743,6 +8798,9 @@ final class MuesliController: NSObject {
         setState(.transcribing)
         computerUseCommandTask?.cancel()
         let taskID = UUID()
+        let backend = selectedBackend
+        let languageProfile = config.languageProfile
+        let customWords = serializedCustomWords()
         computerUseCommandTaskID = taskID
         let task = Task { [weak self] in
             guard let self else { return }
@@ -8753,12 +8811,13 @@ final class MuesliController: NSObject {
             do {
                 let result = try await self.transcriptionCoordinator.transcribeDictation(
                     at: wavURL,
-                    backend: self.selectedBackend,
-                    cohereLanguage: self.config.resolvedCohereLanguage,
-                    indicASRLanguage: self.config.resolvedIndicASRLanguage,
-                    whisperLanguage: self.config.resolvedWhisperLanguage,
+                    backend: backend,
+                    cohereLanguage: languageProfile.resolvedCohereLanguage,
+                    indicASRLanguage: languageProfile.resolvedIndicASRLanguage,
+                    nemotron35Language: languageProfile.resolvedNemotron35Language,
+                    whisperLanguage: languageProfile.resolvedWhisperLanguage,
                     enablePostProcessor: false,
-                    customWords: self.serializedCustomWords(),
+                    customWords: customWords,
                     appContext: nil
                 )
                 try Task.checkCancellation()
@@ -9364,10 +9423,35 @@ final class MuesliController: NSObject {
 
     private func handleDictationAudioSessionEvent(_ event: DictationAudioSessionEvent) {
         switch event {
-        case .armed:
-            break
+        case .armed(let sessionID, _):
+            let sessionConfig = activeDictationStyleSession?.config ?? config
+            let selection = frozenDictationTranscriptionSelection(sessionConfig: sessionConfig)
+            frozenDictationTranscriptionSelections[sessionID] = selection
+            _ = ensureDictationSessionTrace(
+                id: sessionID,
+                backend: selection.backend,
+                cleanupBackend: TranscriptCleanupBackendOption.resolved(
+                    sessionConfig.postProcessorBackend
+                ),
+                languageProfile: selection.languageProfile,
+                contextSources: ""
+            )
         case .acquiringAudio(let sessionID):
-            _ = ensureDictationSessionTrace(id: sessionID)
+            let sessionConfig = activeDictationStyleSession?.config ?? config
+            let selection = frozenDictationTranscriptionSelections[sessionID]
+                ?? frozenDictationTranscriptionSelection(sessionConfig: sessionConfig)
+            if frozenDictationTranscriptionSelections[sessionID] == nil {
+                frozenDictationTranscriptionSelections[sessionID] = selection
+            }
+            _ = ensureDictationSessionTrace(
+                id: sessionID,
+                backend: selection.backend,
+                cleanupBackend: TranscriptCleanupBackendOption.resolved(
+                    sessionConfig.postProcessorBackend
+                ),
+                languageProfile: selection.languageProfile,
+                contextSources: ""
+            )
             markDictationLatency("acquiring_audio")
             activateDictationPreparingIndicator()
         case .streamActive(_, let capturedAt):
@@ -9396,6 +9480,7 @@ final class MuesliController: NSObject {
             SoundController.playDictationInsert(enabled: shouldPlayDictationLifecycleSounds)
         case .cancelled(let sessionID, let reason, let terminalCapture):
             guard let sessionID else { break }
+            frozenDictationTranscriptionSelections.removeValue(forKey: sessionID)
             let startedAt = pendingStandardDictationStops[sessionID]?.startedAt
                 ?? dictationStartedAt
                 ?? Date()
@@ -9425,6 +9510,7 @@ final class MuesliController: NSObject {
                 ?? dictationStartedAt
                 ?? Date()
             if let sessionID {
+                frozenDictationTranscriptionSelections.removeValue(forKey: sessionID)
                 let trace = dictationSessionTraces.removeValue(forKey: sessionID)
                     ?? ensureDictationSessionTrace(id: sessionID)
                 Task { @MainActor [weak self] in
@@ -9699,12 +9785,12 @@ final class MuesliController: NSObject {
     @available(macOS 15, *)
     private func startNemotronStreamingAsync(
         sessionID: UUID,
-        recordingSavePolicy: DictationRecordingSavePolicy
+        recordingSavePolicy: DictationRecordingSavePolicy,
+        languageProfile: LanguageProfile
     ) {
         Task {
             let transcriber: Nemotron35StreamingTranscriber
             do {
-                await transcriptionCoordinator.setNemotron35PromptId(config.resolvedNemotron35Language.promptId)
                 transcriber = try await transcriptionCoordinator.getLoadedNemotron35Transcriber()
             } catch {
                 await MainActor.run {
@@ -9718,11 +9804,15 @@ final class MuesliController: NSObject {
             }
             fputs("[muesli-native] got Nemotron 3.5 transcriber\n", stderr)
             let chunkSamples = transcriber.chunkSamples
+            let promptId = languageProfile.resolvedNemotron35Language.promptId
             let makeController: @MainActor (AudioObjectID?) -> StreamingDictationController = { preferredID in
                 StreamingDictationController(
                     transcriber: transcriber,
                     preferredInputDeviceID: preferredID,
-                    chunkSamples: chunkSamples
+                    chunkSamples: chunkSamples,
+                    makeStreamState: {
+                        try await transcriber.makeStreamState(promptId: promptId)
+                    }
                 )
             }
 
@@ -9962,6 +10052,8 @@ final class MuesliController: NSObject {
             if #available(macOS 15, *) {
                 let sessionID = UUID()
                 let recordingSavePolicy = activeDictationRecordingSavePolicy
+                let languageProfile = activeDictationStyleSession?.config.languageProfile
+                    ?? config.languageProfile
                 isNemotron35Streaming = true
                 nemotron35StreamingSessionID = sessionID
                 nemotron35StreamingRecordingSavePolicy = recordingSavePolicy
@@ -9969,20 +10061,12 @@ final class MuesliController: NSObject {
                     id: sessionID,
                     backend: selectedBackend,
                     cleanupBackend: selectedPostProcessorBackend,
-                    startedAt: Date()
+                    startedAt: Date(),
+                    languageProfile: languageProfile,
+                    contextSources: ""
                 )
                 Task {
                     await sessionTrace.recordStageStarted("nemotron_streaming")
-                    await sessionTrace.storeArtifact(
-                        SessionTraceSnapshot.languageProfile(
-                            backend: selectedBackend,
-                            cohereLanguage: config.resolvedCohereLanguage,
-                            indicASRLanguage: config.resolvedIndicASRLanguage,
-                            whisperLanguage: config.resolvedWhisperLanguage
-                        ),
-                        kind: .languageProfile
-                    )
-                    await sessionTrace.storeArtifact("", kind: .contextSources)
                 }
                 previousStreamText = ""
                 dictationStartedAt = Date()
@@ -9997,7 +10081,8 @@ final class MuesliController: NSObject {
                 fputs("[muesli-native] Nemotron streaming toggle mode active\n", stderr)
                 startNemotronStreamingAsync(
                     sessionID: sessionID,
-                    recordingSavePolicy: recordingSavePolicy
+                    recordingSavePolicy: recordingSavePolicy,
+                    languageProfile: languageProfile
                 )
                 return
             }
@@ -10100,13 +10185,10 @@ final class MuesliController: NSObject {
         let styleSession = stoppedDictationStyleSession
         let contextResult = stoppedDictationContextResult
         let sessionConfig = styleSession?.config ?? config
-        let configuredBackend = BackendOption.resolve(
-            backend: sessionConfig.sttBackend,
-            model: sessionConfig.sttModel
-        ) ?? selectedBackend
-        let transcriptionBackend = isTestMode
-            ? (dictationTestBackend ?? configuredBackend)
-            : configuredBackend
+        let transcriptionSelection = frozenDictationTranscriptionSelections.removeValue(forKey: id)
+            ?? frozenDictationTranscriptionSelection(sessionConfig: sessionConfig)
+        let transcriptionBackend = transcriptionSelection.backend
+        let frozenLanguageProfile = transcriptionSelection.languageProfile
         let capturedContext = styleSession?.matchingContext(contextResult)
         let correctionTargetApp = styleSession?.target
         let cleanupRuntime = styleSession?.mode.allowsAdaptiveStyles == true
@@ -10152,20 +10234,11 @@ final class MuesliController: NSObject {
             id: id,
             backend: transcriptionBackend,
             cleanupBackend: cleanupBackend,
-            startedAt: startedAt
+            startedAt: startedAt,
+            languageProfile: frozenLanguageProfile,
+            contextSources: capturedContext.map { DictationContextCapture.formatForPrompt($0) } ?? ""
         )
         Task {
-            await sessionTrace.storeArtifact(
-                SessionTraceSnapshot.languageProfile(
-                    backend: transcriptionBackend,
-                    cohereLanguage: isTestMode
-                        ? (dictationTestCohereLanguage ?? sessionConfig.resolvedCohereLanguage)
-                        : sessionConfig.resolvedCohereLanguage,
-                    indicASRLanguage: sessionConfig.resolvedIndicASRLanguage,
-                    whisperLanguage: sessionConfig.resolvedWhisperLanguage
-                ),
-                kind: .languageProfile
-            )
             await sessionTrace.storeArtifact(
                 capturedContext.map { DictationContextCapture.formatForPrompt($0) } ?? "",
                 kind: .contextSources
@@ -10178,11 +10251,7 @@ final class MuesliController: NSObject {
             isTestMode: isTestMode,
             outputMode: currentDictationOutputMode,
             backend: transcriptionBackend,
-            cohereLanguage: isTestMode
-                ? (dictationTestCohereLanguage ?? sessionConfig.resolvedCohereLanguage)
-                : sessionConfig.resolvedCohereLanguage,
-            indicASRLanguage: sessionConfig.resolvedIndicASRLanguage,
-            whisperLanguage: sessionConfig.resolvedWhisperLanguage,
+            languageProfile: frozenLanguageProfile,
             promptContext: capturedContext.map { DictationContextCapture.formatForPrompt($0) },
             storageContext: capturedContext.map { DictationContextCapture.formatForStorage($0) }
                 ?? correctionTargetApp?.appContext
@@ -10201,11 +10270,29 @@ final class MuesliController: NSObject {
         id: UUID,
         backend: BackendOption? = nil,
         cleanupBackend: TranscriptCleanupBackendOption? = nil,
-        startedAt: Date = Date()
+        startedAt: Date = Date(),
+        languageProfile: LanguageProfile? = nil,
+        contextSources: String? = nil
     ) -> SessionRunTrace {
         if let existing = dictationSessionTraces[id] { return existing }
         let resolvedBackend = backend ?? selectedBackend
         let resolvedCleanup = cleanupBackend ?? selectedPostProcessorBackend
+        var initialArtifacts: [SessionTraceInitialArtifact] = []
+        if let languageProfile {
+            initialArtifacts.append(SessionTraceInitialArtifact(
+                content: SessionTraceSnapshot.languageProfile(
+                    backend: resolvedBackend,
+                    profile: languageProfile
+                ),
+                kind: .languageProfile
+            ))
+        }
+        if let contextSources {
+            initialArtifacts.append(SessionTraceInitialArtifact(
+                content: contextSources,
+                kind: .contextSources
+            ))
+        }
         let trace = SessionRunTrace(
             id: id,
             store: sessionTraceStore,
@@ -10213,6 +10300,7 @@ final class MuesliController: NSObject {
             backendIdentity: SessionTraceSnapshot.backendIdentity(resolvedBackend),
             fallbackBackendIdentity: SessionTraceSnapshot.cleanupIdentity(resolvedCleanup),
             startedAt: startedAt,
+            initialArtifacts: initialArtifacts,
             onTerminalWriteFinished: sessionTraceCompletionHandler()
         )
         dictationSessionTraces[id] = trace
@@ -10220,10 +10308,55 @@ final class MuesliController: NSObject {
         return trace
     }
 
+    private func frozenDictationTranscriptionSelection(
+        sessionConfig: AppConfig
+    ) -> FrozenDictationTranscriptionSelection {
+        Self.frozenDictationTranscriptionSelection(
+            sessionConfig: sessionConfig,
+            defaultBackend: selectedBackend,
+            isTestMode: isDictationTestMode,
+            testBackend: dictationTestBackend,
+            testCohereLanguage: dictationTestCohereLanguage
+        )
+    }
+
+    nonisolated static func frozenDictationTranscriptionSelection(
+        sessionConfig: AppConfig,
+        defaultBackend: BackendOption,
+        isTestMode: Bool,
+        testBackend: BackendOption?,
+        testCohereLanguage: CohereTranscribeLanguage?
+    ) -> FrozenDictationTranscriptionSelection {
+        let configuredBackend = BackendOption.resolve(
+            backend: sessionConfig.sttBackend,
+            model: sessionConfig.sttModel
+        ) ?? defaultBackend
+        let backend = isTestMode ? (testBackend ?? configuredBackend) : configuredBackend
+        guard isTestMode,
+              backend.backend == "cohere",
+              let testCohereLanguage,
+              let language = TranscriptionLanguage(rawValue: testCohereLanguage.rawValue),
+              let profile = try? LanguageProfile(
+                  selectedLanguages: [language],
+                  dominantLanguage: language,
+                  meetingOutputPolicy: sessionConfig.languageProfile.meetingOutputPolicy
+              ) else {
+            return FrozenDictationTranscriptionSelection(
+                backend: backend,
+                languageProfile: sessionConfig.languageProfile
+            )
+        }
+        return FrozenDictationTranscriptionSelection(
+            backend: backend,
+            languageProfile: profile
+        )
+    }
+
     private func makeMeetingSessionTrace(
         id: UUID = UUID(),
         backend: BackendOption,
-        startedAt: Date
+        startedAt: Date,
+        languageProfile: LanguageProfile
     ) -> SessionRunTrace {
         let trace = SessionRunTrace(
             id: id,
@@ -10235,6 +10368,15 @@ final class MuesliController: NSObject {
                 value: selectedMeetingSummaryBackend.backend
             ),
             startedAt: startedAt,
+            initialArtifacts: [
+                SessionTraceInitialArtifact(
+                    content: SessionTraceSnapshot.languageProfile(
+                        backend: backend,
+                        profile: languageProfile
+                    ),
+                    kind: .languageProfile
+                ),
+            ],
             onTerminalWriteFinished: sessionTraceCompletionHandler()
         )
         sessionTraceRegistry[id] = trace
@@ -10742,9 +10884,7 @@ final class MuesliController: NSObject {
             isTestMode: pendingStop.isTestMode,
             outputMode: pendingStop.outputMode,
             backend: pendingStop.backend,
-            cohereLanguage: pendingStop.cohereLanguage,
-            indicASRLanguage: pendingStop.indicASRLanguage,
-            whisperLanguage: pendingStop.whisperLanguage,
+            languageProfile: pendingStop.languageProfile,
             promptContext: pendingStop.promptContext,
             storageContext: pendingStop.storageContext,
             correctionTargetApp: pendingStop.correctionTargetApp,
@@ -10841,9 +10981,10 @@ final class MuesliController: NSObject {
             let result = try await transcriptionCoordinator.transcribeDictationWithCleanupOutcome(
                 at: job.wavURL,
                 backend: job.backend,
-                cohereLanguage: job.cohereLanguage,
-                indicASRLanguage: job.indicASRLanguage,
-                whisperLanguage: job.whisperLanguage,
+                cohereLanguage: job.languageProfile.resolvedCohereLanguage,
+                indicASRLanguage: job.languageProfile.resolvedIndicASRLanguage,
+                nemotron35Language: job.languageProfile.resolvedNemotron35Language,
+                whisperLanguage: job.languageProfile.resolvedWhisperLanguage,
                 enablePostProcessor: cleanupPolicy.readiness == .ready,
                 cleanupRequestSnapshot: job.cleanupRequest,
                 customWords: job.customWords,

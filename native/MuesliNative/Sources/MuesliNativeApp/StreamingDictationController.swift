@@ -50,6 +50,7 @@ final class StreamingDictationController {
     var onFailureWithCapture: ((Error, URL?) -> Void)?
 
     private let transcriber: NemotronStreamingTranscribing
+    private let makeStreamState: () async throws -> RNNTStreamState
     private let recorder: StreamingDictationRecording
     private var streamState: RNNTStreamState?
     private let streamLock = OSAllocatedUnfairLock()
@@ -86,10 +87,12 @@ final class StreamingDictationController {
         ),
         stopStreamStateTimeout: TimeInterval = 1.0,
         stopDrainTimeout: TimeInterval? = nil,
-        chunkSamples: Int = 8960
+        chunkSamples: Int = 8960,
+        makeStreamState: (() async throws -> RNNTStreamState)? = nil
     ) {
         precondition(chunkSamples > 0, "StreamingDictationController chunkSamples must be positive")
         self.transcriber = transcriber
+        self.makeStreamState = makeStreamState ?? { try await transcriber.makeStreamState() }
         self.recorder = recorder
         self.stopStreamStateTimeout = stopStreamStateTimeout
         self.stopDrainTimeout = stopDrainTimeout ?? Self.defaultStopDrainTimeout(chunkSamples: chunkSamples)
@@ -106,7 +109,7 @@ final class StreamingDictationController {
     func warmup() {
         Task {
             do {
-                var state = try await transcriber.makeStreamState()
+                var state = try await makeStreamState()
                 fputs("[streaming-dictation] warming up ANE...\n", stderr)
                 let silence = [Float](repeating: 0, count: chunkSamples)
                 _ = try? await transcriber.transcribeChunk(samples: silence, state: &state)
@@ -171,10 +174,10 @@ final class StreamingDictationController {
         }
 
         // Init stream state in background — audio buffers queue while this runs
-        let transcriber = self.transcriber
+        let makeStreamState = self.makeStreamState
         let initializationTask = Task { [weak self] in
             do {
-                let state = try await transcriber.makeStreamState()
+                let state = try await makeStreamState()
                 guard let self, self.isCurrentSession(sessionID) else { return }
                 self.streamLock.withLock {
                     self.streamState = state

@@ -1134,12 +1134,34 @@ struct Nemotron35LanguageTests {
     @Test("config persists the selected language via snake_case key")
     func configRoundTrip() throws {
         var cfg = AppConfig()
-        cfg.nemotron35Language = Nemotron35Language.hindi.rawValue
+        cfg.languageProfile = try LanguageProfile(
+            selectedLanguages: [.hindi],
+            dominantLanguage: .hindi
+        )
+        cfg.mirrorLanguageProfileToLegacyPins()
         let data = try JSONEncoder().encode(cfg)
         let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(json["nemotron35_language"] as? String == "hi")
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(decoded.resolvedNemotron35Language == .hindi)
+    }
+
+    @Test("stream state freezes its language prompt")
+    @available(macOS 15, *)
+    func streamStateFreezesLanguagePrompt() async throws {
+        let transcriber = Nemotron35StreamingTranscriber()
+        await transcriber.setPromptId(Nemotron35Language.arabic.promptId)
+        let arabicState = try await transcriber.makeStreamState()
+
+        await transcriber.setPromptId(Nemotron35Language.english.promptId)
+        let englishState = try await transcriber.makeStreamState()
+        let explicitArabicState = try await transcriber.makeStreamState(
+            promptId: Nemotron35Language.arabic.promptId
+        )
+
+        #expect(arabicState.promptId == Nemotron35Language.arabic.promptId)
+        #expect(englishState.promptId == Nemotron35Language.english.promptId)
+        #expect(explicitArabicState.promptId == Nemotron35Language.arabic.promptId)
     }
 
     @Test("missing language config falls back to auto-detect")
@@ -1183,7 +1205,11 @@ struct WhisperKitLanguageTests {
     @Test("config persists the selected language via snake_case key")
     func configRoundTrip() throws {
         var cfg = AppConfig()
-        cfg.whisperLanguage = WhisperKitLanguage.german.rawValue
+        cfg.languageProfile = try LanguageProfile(
+            selectedLanguages: [.german],
+            dominantLanguage: .german
+        )
+        cfg.mirrorLanguageProfileToLegacyPins()
         let data = try JSONEncoder().encode(cfg)
         let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(json["whisper_language"] as? String == "de")
