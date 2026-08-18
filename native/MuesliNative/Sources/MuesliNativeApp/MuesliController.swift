@@ -455,7 +455,6 @@ final class MuesliController: NSObject {
         }
     )
     private let dictationLatencyTimestampFormatter = ISO8601DateFormatter()
-    private let indicator: FloatingIndicatorController
     private let dictationMiniIndicator: DictationMiniIndicatorController
     private let meetingRecordingPanel: MeetingRecordingPanelController
     private let calendarMonitor = CalendarMonitor()
@@ -694,7 +693,6 @@ final class MuesliController: NSObject {
             $0.backend == loadedConfig.meetingSummaryBackend
         }) ?? .chatGPT
         self.selectedPostProcessorBackend = loadedPostProcessorBackend
-        self.indicator = FloatingIndicatorController(configStore: configStore)
         self.dictationMiniIndicator = DictationMiniIndicatorController()
         self.meetingRecordingPanel = MeetingRecordingPanelController(configStore: configStore)
         super.init()
@@ -833,29 +831,10 @@ final class MuesliController: NSObject {
         meetingRecordingPanel.onDiscard = { [weak self] in self?.discardMeetingWithConfirmation() }
         meetingRecordingPanel.onTogglePause = { [weak self] in self?.toggleMeetingRecordingPause() }
         meetingRecordingPanel.onOpenNotes = { [weak self] in self?.openActiveMeetingNotes() }
-        indicator.onStopToggleDictation = { [weak self] in
-            guard let self else { return }
-            if self.hotkeyMonitor.isToggleRecording {
-                self.hotkeyMonitor.stopToggleMode()
-            } else {
-                self.handleStop()
-            }
-        }
-        indicator.onCancelToggleDictation = { [weak self] in
-            guard let self else { return }
-            self.handleCancel()
-            self.hotkeyMonitor.cancelToggleMode()
-        }
         ComputerUseCursorOverlay.shared.onStop = { [weak self] in self?.handleComputerUseStop() }
         ComputerUseCursorOverlay.shared.onCancel = { [weak self] in
             self?.handleComputerUseCancel()
             self?.computerUseHotkeyMonitor.cancelToggleMode()
-        }
-        indicator.onPositionSaved = { [weak self] center in
-            self?.updateConfig {
-                $0.indicatorAnchor = .custom
-                $0.indicatorOrigin = CGPointCodable(x: center.x, y: center.y)
-            }
         }
         meetingRecordingPanel.onControlCenterSaved = { [weak self] center in
             self?.updateConfig {
@@ -984,14 +963,6 @@ final class MuesliController: NSObject {
                 await self.applyDesignatedTranscriptionBackends()
                 await self.transcriptionCoordinator.startMemoryPressureMonitoring()
                 let dictationBackend = self.selectedBackend
-                // Same warming pill the backend picker shows: without it, a launch-time
-                // Whisper preload is invisible and the first hotkey press mid-warmup
-                // reads as the app ignoring the user.
-                if dictationBackend.backend == "whisper" {
-                    await MainActor.run {
-                        self.indicator.showLoading("Warming up...")
-                    }
-                }
                 guard await self.prepareDictationBackend(dictationBackend) else { return }
                 await self.preloadOptionalTranscriptionResources(
                     for: dictationBackend,
@@ -1126,7 +1097,6 @@ final class MuesliController: NSObject {
         await transcriptionCoordinator.shutdown()
         ComputerUseCursorOverlay.shared.close()
         dictationMiniIndicator.close()
-        indicator.close()
         CoreAudioSystemRecorder.cleanupStaleDevices()
     }
 
@@ -1567,29 +1537,12 @@ final class MuesliController: NSObject {
         return String(compact.prefix(limit - 3)).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
     }
 
-    func refreshIndicatorVisibility() {
-        if config.showFloatingIndicator {
-            indicator.ensureVisible(config: config)
-        } else {
-            indicator.closeIfIdle()
-        }
-        // The hover preference gates hover-opening only (checked in setHovered);
-        // a deliberately shown panel is never torn down by a config write.
-    }
-
     func refreshUI() {
         statusBarController?.setStatus("Idle")
         statusBarController?.refresh()
         historyWindowController?.updateBackendLabel()
         historyWindowController?.reload()
         preferencesWindowController?.refresh()
-        // Only the launch pass needs the pill brought up here. Every other caller is a
-        // data refresh (iCloud sync completion, backend preload) that cannot change
-        // anything the pill reads, and re-deriving its frame from those re-anchored it
-        // mid-drag and re-applied the hover-transcript preference behind the user.
-        if indicator.currentFrame == nil {
-            refreshIndicatorVisibility()
-        }
         syncAppState()
     }
 
@@ -1816,11 +1769,6 @@ final class MuesliController: NSObject {
         let previousMeetingRecordingHotkeyTriggerThresholdMS = config.meetingRecordingHotkeyTriggerThresholdMS
         let previousEnableDictionaryCorrectionPrompts = config.enableDictionaryCorrectionPrompts
         let previousEnableLiveStreamingPartials = config.enableLiveStreamingPartials
-        let previousShowFloatingIndicator = config.showFloatingIndicator
-        let previousIndicatorAnchor = config.indicatorAnchor
-        let previousIndicatorOrigin = config.indicatorOrigin
-        let previousRecordingColorHex = config.recordingColorHex
-        let previousDictationHotkey = config.dictationHotkey
         mutate(&config)
         if previousEnableLiveStreamingPartials, !config.enableLiveStreamingPartials {
             preparingMeetingSession?.stopStreamingPartials()
@@ -1841,16 +1789,6 @@ final class MuesliController: NSObject {
         let hotkeyTriggerThresholdChanged = config.hotkeyTriggerThresholdMS != previousHotkeyTriggerThresholdMS
             || config.computerUseHotkeyTriggerThresholdMS != previousComputerUseHotkeyTriggerThresholdMS
             || config.meetingRecordingHotkeyTriggerThresholdMS != previousMeetingRecordingHotkeyTriggerThresholdMS
-        // Every field the pill re-reads when it re-lays out: anchor/origin (frame),
-        // showFloatingIndicator (existence), recordingColorHex (tint), dictationHotkey
-        // (hovered idle title). Anything else in the
-        // config leaves the pill alone, so it must not trigger an animated re-layout.
-        let indicatorConfigChanged = config.showFloatingIndicator != previousShowFloatingIndicator
-            || config.indicatorAnchor != previousIndicatorAnchor
-            || config.indicatorOrigin?.x != previousIndicatorOrigin?.x
-            || config.indicatorOrigin?.y != previousIndicatorOrigin?.y
-            || config.recordingColorHex != previousRecordingColorHex
-            || config.dictationHotkey != previousDictationHotkey
         MuesliTheme.accentOverrideHex = config.recordingColorHex == "1e1e2e" ? nil : config.recordingColorHex
         selectedBackend = BackendOption.all.first(where: {
             $0.backend == config.sttBackend && $0.model == config.sttModel
@@ -1893,8 +1831,7 @@ final class MuesliController: NSObject {
         selectedPostProcessorBackend = TranscriptCleanupBackendOption.resolved(config.postProcessorBackend)
         applyConfigRuntimeSideEffects(
             wasICloudSyncEnabled: wasICloudSyncEnabled,
-            hotkeyTriggerThresholdChanged: hotkeyTriggerThresholdChanged,
-            indicatorConfigChanged: indicatorConfigChanged
+            hotkeyTriggerThresholdChanged: hotkeyTriggerThresholdChanged
         )
         if previousMeetingInputDeviceUID != config.meetingInputDeviceUID {
             dictationAudioRoutingController.selectedMeetingInputDeviceUID = config.meetingInputDeviceUID
@@ -1965,12 +1902,10 @@ final class MuesliController: NSObject {
 
     private func applyConfigRuntimeSideEffects(
         wasICloudSyncEnabled: Bool,
-        hotkeyTriggerThresholdChanged: Bool,
-        indicatorConfigChanged: Bool
+        hotkeyTriggerThresholdChanged: Bool
     ) {
         statusBarController?.refresh()
         statusBarController?.refreshIcon()
-        indicator.refreshIcon()
         hotkeyMonitor.doubleTapEnabled = config.enableDoubleTapDictation
         computerUseHotkeyMonitor.doubleTapEnabled = config.enableDoubleTapDictation
         if hotkeyTriggerThresholdChanged {
@@ -1978,9 +1913,6 @@ final class MuesliController: NSObject {
         }
         dictationAudioRoutingController.selectedInputDeviceUID = config.dictationInputDeviceUID
         historyWindowController?.updateBackendLabel()
-        if indicatorConfigChanged {
-            refreshIndicatorVisibility()
-        }
         appState.selectedBackend = selectedBackend
         appState.selectedMeetingTranscriptionBackend = selectedMeetingTranscriptionBackend
         appState.selectedMeetingSummaryBackend = selectedMeetingSummaryBackend
@@ -2721,12 +2653,6 @@ final class MuesliController: NSObject {
             // Push the selected Nemotron 3.5 language before preload so the loaded
             // transcriber is conditioned on the right prompt_id.
             await self.transcriptionCoordinator.setNemotron35PromptId(self.config.resolvedNemotron35Language.promptId)
-            let needsWarmup = option.backend == "whisper"
-            if needsWarmup {
-                await MainActor.run {
-                    self.indicator.showLoading("Warming up...")
-                }
-            }
             let ppOption = self.runtimePostProcessorOption()
             await self.configureTranscriptCleanupForRuntime(option: ppOption)
             let prepared = await self.prepareDictationBackend(option)
@@ -2739,9 +2665,6 @@ final class MuesliController: NSObject {
                 )
             }
             await MainActor.run {
-                if needsWarmup {
-                    self.indicator.hideLoading()
-                }
                 self.statusBarController?.refresh()
                 self.historyWindowController?.updateBackendLabel()
             }
@@ -2757,12 +2680,10 @@ final class MuesliController: NSObject {
             )
             guard selectedBackend == backend else { return false }
             dictationBackendReadiness = .ready
-            indicator.hideLoading()
             return true
         } catch {
             fputs("[muesli-native] dictation backend preparation failed for \(backend.backend)/\(backend.model): \(error)\n", stderr)
             guard selectedBackend == backend else { return false }
-            indicator.hideLoading()
             dictationBackendReadiness = .failed
             return false
         }
@@ -2861,8 +2782,7 @@ final class MuesliController: NSObject {
             appState.config = config
             applyConfigRuntimeSideEffects(
                 wasICloudSyncEnabled: wasICloudSyncEnabled,
-                hotkeyTriggerThresholdChanged: false,
-                indicatorConfigChanged: false
+                hotkeyTriggerThresholdChanged: false
             )
             return
         }
@@ -3783,7 +3703,7 @@ final class MuesliController: NSObject {
         logDictionarySuggestion("present \(dictionarySuggestionLogMetadata(suggestion))")
         dictionarySuggestionPrompt.show(
             suggestion: suggestion,
-            anchorFrame: indicator.currentFrame,
+            anchorFrame: nil,
             onAdd: { [weak self] in
                 guard let self else { return }
                 self.acceptDictionarySuggestion(suggestion)
@@ -5749,12 +5669,6 @@ final class MuesliController: NSObject {
         meetingRecordingPanel.toggleTranscriptPanel()
     }
 
-    /// Menu-bar toggle for the floating pill itself. Goes through config so the
-    /// setting persists and the Settings checkbox stays in agreement.
-    @objc func toggleFloatingIndicatorVisibility() {
-        updateConfig { $0.showFloatingIndicator.toggle() }
-    }
-
     @objc func toggleMeetingRecordingPause() {
         if isMeetingRecordingPaused() {
             resumeMeetingRecording()
@@ -6301,7 +6215,6 @@ final class MuesliController: NSObject {
         importSessionID = nil
         isStartingMeetingRecording = false
         updateMeetingStartStatus(nil)
-        indicator.hideLoading()
         endMeetingActivity()
         if refreshStatus {
             statusBarController?.refresh()
@@ -6480,7 +6393,6 @@ final class MuesliController: NSObject {
             importTask?.cancel()
             importTask = nil
             importSessionID = nil
-            indicator.hideLoading()
         }
 
         statusBarController?.refresh()
@@ -8433,7 +8345,6 @@ final class MuesliController: NSObject {
         updateMeetingStartStatus(status)
         statusBarController?.setStatus(status)
         statusBarController?.refresh()
-        indicator.showLoading(status)
     }
 
     private func blockDictationForMeetingActivityIfNeeded() -> Bool {
@@ -11510,7 +11421,8 @@ final class MuesliController: NSObject {
         fputs("[muesli-native] Marauder's Map unlocked!\n", stderr)
         updateConfig { $0.maraudersMapUnlocked = true }
         SoundController.playMaraudersMapUnlock()
-        indicator.showWarning("Mischief Managed", icon: "\u{26A1}", duration: 3.0)
+        statusBarController?.setStatus("Mischief Managed")
+        statusBarController?.refresh()
         startMaraudersMapMonitoring()
     }
 

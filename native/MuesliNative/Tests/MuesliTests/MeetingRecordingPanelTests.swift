@@ -142,7 +142,15 @@ struct MeetingRecordingPanelLifecycleTests {
             .appendingPathComponent("meeting-recording-routing-\(UUID().uuidString)", isDirectory: true)
         let store = ConfigStore(supportDirectory: supportDirectory)
         let controller = MeetingRecordingPanelController(configStore: store, now: { now })
-        let indicator = FloatingIndicatorController(configStore: store)
+        let indicator = DictationMiniIndicatorController(
+            screenProvider: {
+                [DictationMiniPlacement.Screen(
+                    frame: CGRect(x: 0, y: 0, width: 800, height: 600),
+                    visibleFrame: CGRect(x: 0, y: 24, width: 800, height: 576)
+                )]
+            },
+            pointerProvider: { CGPoint(x: 300, y: 300) }
+        )
         let owner = UUID()
         controller.showRecording(
             ownerID: owner,
@@ -151,8 +159,11 @@ struct MeetingRecordingPanelLifecycleTests {
             showTranscript: false
         )
 
-        for state in [DictationState.preparing, .recording, .transcribing, .idle] {
-            indicator.setState(state, config: AppConfig())
+        let generation = indicator.beginPreparing()
+        indicator.showRecording(generation: generation, powerProvider: { -35 })
+        indicator.showProcessing(generation: generation)
+        indicator.showSuccess(generation: generation, duration: 0.01)
+        for _ in 0..<4 {
             #expect(controller.activeOwnerIDForTesting == owner)
             #expect(controller.stateForTesting == .recording)
             #expect(controller.isVisible)

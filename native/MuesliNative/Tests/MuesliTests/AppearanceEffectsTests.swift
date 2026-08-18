@@ -57,25 +57,6 @@ struct MenuBarIconRendererTests {
         #expect((image?.size.height ?? 0) > 0)
     }
 
-    @MainActor
-    @Test("floating indicator preserves template rendering across setup and refresh")
-    func floatingIndicatorPreservesTemplateRendering() {
-        let supportDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let configStore = ConfigStore(supportDirectory: supportDirectory)
-        var config = AppConfig()
-        config.menuBarIcon = "sparkles"
-        configStore.save(config)
-        let indicator = FloatingIndicatorController(configStore: configStore)
-
-        indicator.setState(.idle, config: config)
-        #expect(indicator.idleIconIsTemplateForTesting == true)
-
-        indicator.refreshIcon()
-        #expect(indicator.idleIconIsTemplateForTesting == true)
-        indicator.close()
-    }
-
     @Test("official mark is a resolution-independent template")
     func officialMarkIsResolutionIndependent() {
         let image = MenuBarIconRenderer.make(choice: "muesli")
