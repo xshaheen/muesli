@@ -203,7 +203,8 @@ final class StreamingDictationController {
 
     /// Stop recording and return the finalized source capture when this
     /// session's save policy requested retention.
-    func stopWithCapture(completion: @escaping (StreamingDictationTerminalResult) -> Void) {
+    @discardableResult
+    func stopWithCapture(completion: @escaping (StreamingDictationTerminalResult) -> Void) -> Bool {
         let setup = stopLock.withLock { () -> StopSetup in
             let sessionIDs = bufferLock.withLock {
                 (
@@ -251,10 +252,10 @@ final class StreamingDictationController {
         case .start(let id):
             sessionID = id
         case .attached:
-            return
+            return true
         case .immediate(let result):
             completion(result)
-            return
+            return false
         }
 
         let retainsCapture = stopLock.withLock { () -> Bool in
@@ -322,6 +323,7 @@ final class StreamingDictationController {
             let transcript = self.finishStoppedSession(sessionID: sessionID)
             self.completeStop(sessionID: sessionID, with: transcript)
         }
+        return true
     }
 
     @discardableResult
