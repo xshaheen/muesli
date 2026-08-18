@@ -13,6 +13,18 @@ struct SpeechTranscriptionResult: Sendable {
     let segments: [SpeechSegment]
 }
 
+/// Preserves the recognizer response before deterministic meeting cleanup while
+/// keeping the cleaned result used by existing meeting consumers.
+struct MeetingTranscriptionEvidence: Sendable {
+    let raw: SpeechTranscriptionResult
+    let cleaned: SpeechTranscriptionResult
+
+    init(raw: SpeechTranscriptionResult) {
+        self.raw = raw
+        cleaned = TranscriptionResultCleanup.cleanMeetingTranscript(raw)
+    }
+}
+
 enum DictationCleanupOutcome: String, Codable, CaseIterable, Sendable {
     case applied
     case fallbackDeadline = "fallback_deadline"
@@ -230,6 +242,12 @@ enum DictationCleanupAttempt {
 }
 
 enum DictationCleanupFinalizer {
+    struct TracedResult {
+        let result: DictationTranscriptionResult
+        let cleanupResult: SpeechTranscriptionResult
+        let dictionaryChanges: [CustomWordAppliedChange]
+    }
+
     static func finalize(
         original: SpeechTranscriptionResult,
         attempt: DictationCleanupAttempt,
@@ -237,6 +255,22 @@ enum DictationCleanupFinalizer {
         provenance: DictationCleanupStyleProvenance?,
         fallbackResult: SpeechTranscriptionResult? = nil
     ) -> DictationTranscriptionResult {
+        finalizeWithTrace(
+            original: original,
+            attempt: attempt,
+            customWords: customWords,
+            provenance: provenance,
+            fallbackResult: fallbackResult
+        ).result
+    }
+
+    static func finalizeWithTrace(
+        original: SpeechTranscriptionResult,
+        attempt: DictationCleanupAttempt,
+        customWords: [CustomWord],
+        provenance: DictationCleanupStyleProvenance?,
+        fallbackResult: SpeechTranscriptionResult? = nil
+    ) -> TracedResult {
         let cleanupResult: SpeechTranscriptionResult
         if case .applied(let applied) = attempt {
             cleanupResult = applied
@@ -245,18 +279,29 @@ enum DictationCleanupFinalizer {
         }
 
         let final: SpeechTranscriptionResult
+        let dictionaryChanges: [CustomWordAppliedChange]
         if customWords.isEmpty || cleanupResult.text.isEmpty {
             final = cleanupResult
+            dictionaryChanges = []
         } else {
+            let application = CustomWordMatcher.applyWithChanges(
+                text: cleanupResult.text,
+                customWords: customWords
+            )
             final = TranscriptionResultCleanup.replacingText(
                 in: cleanupResult,
-                with: CustomWordMatcher.apply(text: cleanupResult.text, customWords: customWords)
+                with: application.text
             )
+            dictionaryChanges = application.changes
         }
-        return DictationTranscriptionResult(
-            transcription: final,
-            cleanupOutcome: attempt.outcome,
-            cleanupStyle: provenance
+        return TracedResult(
+            result: DictationTranscriptionResult(
+                transcription: final,
+                cleanupOutcome: attempt.outcome,
+                cleanupStyle: provenance
+            ),
+            cleanupResult: cleanupResult,
+            dictionaryChanges: dictionaryChanges
         )
     }
 }
@@ -291,6 +336,33 @@ struct DictationTranscriptionStageEvent: Equatable, Sendable {
         stage == .speechRecognition
             && outcome == .completed
             && outputCharacterCount == 0
+    }
+}
+
+enum DictationRuntimeTraceEvent: Sendable {
+    case stage(DictationTranscriptionStageEvent)
+    case artifact(SessionTraceArtifactKind, String)
+}
+
+enum DictationDictionaryTrace {
+    private struct Payload: Codable {
+        let changed: Bool
+        let changes: [CustomWordAppliedChange]
+    }
+
+    static let emptyContent = #"{"changed":false,"changes":[]}"#
+
+    static func content(
+        changed: Bool,
+        changes: [CustomWordAppliedChange]
+    ) -> String {
+        let payload = Payload(changed: changed, changes: changes)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(payload) else {
+            return emptyContent
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 }
 
@@ -411,6 +483,7 @@ struct TranscriptionResultCleanup {
 
 actor TranscriptionCoordinator {
     typealias DictationStageReporter = @MainActor @Sendable (DictationTranscriptionStageEvent) -> Void
+    typealias DictationTraceReporter = @Sendable (DictationRuntimeTraceEvent) async -> Void
     typealias DiarizerModelLoader = @Sendable (DiarizerRuntimePolicy) async throws -> DiarizerModels
     typealias VADLoader = @Sendable () async throws -> VadManager
 
@@ -1360,7 +1433,8 @@ actor TranscriptionCoordinator {
         cleanupRequestSnapshot: DictationCleanupRequestSnapshot? = nil,
         customWords: [[String: Any]] = [],
         appContext: String? = nil,
-        stageReporter: DictationStageReporter? = nil
+        stageReporter: DictationStageReporter? = nil,
+        traceReporter: DictationTraceReporter? = nil
     ) async throws -> SpeechTranscriptionResult {
         try await transcribeDictationWithCleanupOutcome(
             at: url,
@@ -1373,7 +1447,8 @@ actor TranscriptionCoordinator {
             cleanupRequestSnapshot: cleanupRequestSnapshot,
             customWords: customWords,
             appContext: appContext,
-            stageReporter: stageReporter
+            stageReporter: stageReporter,
+            traceReporter: traceReporter
         ).transcription
     }
 
@@ -1388,7 +1463,8 @@ actor TranscriptionCoordinator {
         cleanupRequestSnapshot: DictationCleanupRequestSnapshot? = nil,
         customWords: [[String: Any]] = [],
         appContext: String? = nil,
-        stageReporter: DictationStageReporter? = nil
+        stageReporter: DictationStageReporter? = nil,
+        traceReporter: DictationTraceReporter? = nil
     ) async throws -> DictationTranscriptionResult {
         let postProcessorSnapshot = postProcessorSnapshot(from: cleanupRequestSnapshot)
         let policy = cleanupRequestSnapshot?.policy ?? cleanupPolicy ?? DictationCleanupPolicy(
@@ -1418,8 +1494,13 @@ actor TranscriptionCoordinator {
                         outcome: .skipped,
                         startedAt: speechRecognitionStartedAt,
                         outputCharacterCount: 0,
-                        reporter: stageReporter
+                        reporter: stageReporter,
+                        traceReporter: traceReporter
                     )
+                    await traceReporter?(.artifact(.rawASR, ""))
+                    await traceReporter?(.artifact(.cleanupResult, ""))
+                    await traceReporter?(.artifact(.dictionaryChanges, DictationDictionaryTrace.emptyContent))
+                    await traceReporter?(.artifact(.finalOutput, ""))
                     return DictationTranscriptionResult(
                         transcription: empty,
                         cleanupOutcome: skippedOutcome,
@@ -1447,17 +1528,20 @@ actor TranscriptionCoordinator {
                 outcome: .failed,
                 startedAt: speechRecognitionStartedAt,
                 outputCharacterCount: 0,
-                reporter: stageReporter
+                reporter: stageReporter,
+                traceReporter: traceReporter
             )
             throw error
         }
+        await traceReporter?(.artifact(.rawASR, resultFromRecognizer.text))
         var result = resultFromRecognizer
         await reportDictationStage(
             .speechRecognition,
             outcome: .completed,
             startedAt: speechRecognitionStartedAt,
             outputCharacterCount: result.text.count,
-            reporter: stageReporter
+            reporter: stageReporter,
+            traceReporter: traceReporter
         )
         let artifactCleanupStartedAt = Date()
         result = removeArtifacts(result)
@@ -1466,7 +1550,8 @@ actor TranscriptionCoordinator {
             outcome: .completed,
             startedAt: artifactCleanupStartedAt,
             outputCharacterCount: result.text.count,
-            reporter: stageReporter
+            reporter: stageReporter,
+            traceReporter: traceReporter
         )
         if !result.text.isEmpty {
             Qwen3PostProcessorLogging.logVerbose("Dictation raw transcript after artifact cleanup: \(result.text)")
@@ -1484,7 +1569,8 @@ actor TranscriptionCoordinator {
             outcome: attempt.stageOutcome,
             startedAt: transcriptCleanupStartedAt,
             outputCharacterCount: attempt.outputCharacterCount(fallback: result.text.count),
-            reporter: stageReporter
+            reporter: stageReporter,
+            traceReporter: traceReporter
         )
         let fallbackResult: SpeechTranscriptionResult?
         switch attempt {
@@ -1496,20 +1582,31 @@ actor TranscriptionCoordinator {
             fallbackResult = removeFillersWithLogging(result)
         }
         let finalizationStartedAt = Date()
-        let final = DictationCleanupFinalizer.finalize(
+        let finalization = DictationCleanupFinalizer.finalizeWithTrace(
             original: result,
             attempt: attempt,
             customWords: dictionary,
             provenance: policy.provenance,
             fallbackResult: fallbackResult
         )
+        let final = finalization.result
+        await traceReporter?(.artifact(.cleanupResult, finalization.cleanupResult.text))
         await reportDictationStage(
             .finalization,
             outcome: .completed,
             startedAt: finalizationStartedAt,
             outputCharacterCount: final.text.count,
-            reporter: stageReporter
+            reporter: stageReporter,
+            traceReporter: traceReporter
         )
+        await traceReporter?(.artifact(
+            .dictionaryChanges,
+            DictationDictionaryTrace.content(
+                changed: finalization.cleanupResult.text != final.text,
+                changes: finalization.dictionaryChanges
+            )
+        ))
+        await traceReporter?(.artifact(.finalOutput, final.text))
         if !final.text.isEmpty {
             Qwen3PostProcessorLogging.logVerbose("Dictation final transcript: \(final.text)")
         }
@@ -1521,15 +1618,17 @@ actor TranscriptionCoordinator {
         outcome: DictationTranscriptionStageEvent.Outcome,
         startedAt: Date,
         outputCharacterCount: Int,
-        reporter: DictationStageReporter?
+        reporter: DictationStageReporter?,
+        traceReporter: DictationTraceReporter?
     ) async {
-        guard let reporter else { return }
-        await reporter(DictationTranscriptionStageEvent(
+        let event = DictationTranscriptionStageEvent(
             stage: stage,
             outcome: outcome,
             elapsedMilliseconds: max(Int(Date().timeIntervalSince(startedAt) * 1_000), 0),
             outputCharacterCount: outputCharacterCount
-        ))
+        )
+        await reporter?(event)
+        await traceReporter?(.stage(event))
     }
 
     func transcribeMeeting(
@@ -1540,16 +1639,35 @@ actor TranscriptionCoordinator {
         whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
         customWords: [CustomWord] = []
     ) async throws -> SpeechTranscriptionResult {
+        try await transcribeMeetingWithEvidence(
+            at: url,
+            backend: backend,
+            cohereLanguage: cohereLanguage,
+            indicASRLanguage: indicASRLanguage,
+            whisperLanguage: whisperLanguage,
+            customWords: customWords
+        ).cleaned
+    }
+
+    func transcribeMeetingWithEvidence(
+        at url: URL,
+        backend: BackendOption,
+        cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
+        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
+        whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
+        customWords: [CustomWord] = []
+    ) async throws -> MeetingTranscriptionEvidence {
         // Meetings intentionally skip Qwen/custom-word post-processing. Keep deterministic artifact/filler cleanup only.
         // ASR-stage vocabulary biasing is separate: it conditions the recognizer instead of rewriting its output.
-        cleanMeetingTranscript(try await route(
+        let raw = try await route(
             url: url,
             backend: backend,
             cohereLanguage: cohereLanguage,
             indicASRLanguage: indicASRLanguage,
             whisperLanguage: whisperLanguage,
             vocabulary: AsrVocabularyPrompt.build(customWords: customWords)
-        ))
+        )
+        return MeetingTranscriptionEvidence(raw: raw)
     }
 
     func transcribeMeetingChunk(
@@ -1560,6 +1678,24 @@ actor TranscriptionCoordinator {
         whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
         customWords: [CustomWord] = []
     ) async throws -> SpeechTranscriptionResult {
+        try await transcribeMeetingChunkWithEvidence(
+            at: url,
+            backend: backend,
+            cohereLanguage: cohereLanguage,
+            indicASRLanguage: indicASRLanguage,
+            whisperLanguage: whisperLanguage,
+            customWords: customWords
+        ).cleaned
+    }
+
+    func transcribeMeetingChunkWithEvidence(
+        at url: URL,
+        backend: BackendOption,
+        cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
+        indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
+        whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
+        customWords: [CustomWord] = []
+    ) async throws -> MeetingTranscriptionEvidence {
         // Meeting chunks intentionally skip Qwen/custom-word post-processing for reconciliation.
         // Run VAD to skip silent chunks (prevents hallucinations)
         if let vadManager {
@@ -1568,20 +1704,23 @@ actor TranscriptionCoordinator {
                 let hasSpeech = vadResults.contains { $0.probability > 0.5 }
                 if !hasSpeech {
                     fputs("[muesli-native] VAD: chunk is silent, skipping transcription\n", stderr)
-                    return SpeechTranscriptionResult(text: "", segments: [])
+                    return MeetingTranscriptionEvidence(
+                        raw: SpeechTranscriptionResult(text: "", segments: [])
+                    )
                 }
             } catch {
                 fputs("[muesli-native] VAD check failed, transcribing anyway: \(error)\n", stderr)
             }
         }
-        return cleanMeetingTranscript(try await route(
+        let raw = try await route(
             url: url,
             backend: backend,
             cohereLanguage: cohereLanguage,
             indicASRLanguage: indicASRLanguage,
             whisperLanguage: whisperLanguage,
             vocabulary: AsrVocabularyPrompt.build(customWords: customWords)
-        ))
+        )
+        return MeetingTranscriptionEvidence(raw: raw)
     }
 
     func diarizeSystemAudio(at url: URL) async throws -> DiarizationResult? {

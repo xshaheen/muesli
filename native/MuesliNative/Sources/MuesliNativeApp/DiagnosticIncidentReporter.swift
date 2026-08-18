@@ -13,6 +13,7 @@ final class DiagnosticIncidentReporter {
     private let onPrompt: PromptHandler
     private let calendar: Calendar
     private static let incidentHistoryKey = "diagnosticIncidentHistory.v1"
+    private static let promptThrottlePrefix = "diagnosticIncidentPrompt."
     private static let maximumIncidentHistoryCount = 50
 
     init(
@@ -82,6 +83,14 @@ final class DiagnosticIncidentReporter {
         appState.pendingDiagnosticIncident = nil
     }
 
+    func clearHistory() {
+        defaults.removeObject(forKey: Self.incidentHistoryKey)
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(Self.promptThrottlePrefix) {
+            defaults.removeObject(forKey: key)
+        }
+        appState.pendingDiagnosticIncident = nil
+    }
+
     private func shouldPrompt(for incident: DiagnosticIncident) -> Bool {
         let key = promptThrottleKey(for: incident)
         return defaults.string(forKey: key) != dayBucket(for: incident.occurredAt)
@@ -92,7 +101,7 @@ final class DiagnosticIncidentReporter {
     }
 
     private func promptThrottleKey(for incident: DiagnosticIncident) -> String {
-        "diagnosticIncidentPrompt.\(incident.kind.rawValue).\(incident.metadata.appVersion).\(incident.metadata.buildNumber)"
+        "\(Self.promptThrottlePrefix)\(incident.kind.rawValue).\(incident.metadata.appVersion).\(incident.metadata.buildNumber)"
     }
 
     private func dayBucket(for date: Date) -> String {

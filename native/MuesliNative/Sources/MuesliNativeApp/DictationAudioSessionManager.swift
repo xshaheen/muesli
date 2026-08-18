@@ -26,9 +26,22 @@ enum DictationAudioSessionEvent {
     case noAudioTimeout(UUID, at: Date)
     case stopped(UUID?, wavURL: URL?)
     case audioRestored(UUID?)
-    case cancelled(UUID?, reason: String)
-    case failed(UUID?, error: Error)
+    case cancelled(UUID?, reason: String, capture: DictationAudioTerminalCapture?)
+    case failed(UUID?, error: Error, capture: DictationAudioTerminalCapture?)
     case latency(UUID?, String, Date)
+}
+
+enum DictationAudioTerminalCaptureOutcome: Equatable {
+    case cancelled
+    case timedOut
+    case failed
+}
+
+struct DictationAudioTerminalCapture: Equatable {
+    let sessionID: UUID?
+    let outcome: DictationAudioTerminalCaptureOutcome
+    let recordingSavePolicy: DictationRecordingSavePolicy
+    let wavURL: URL?
 }
 
 enum DictationWarmupIntent: Equatable {
@@ -140,6 +153,8 @@ final class DictationAudioSessionManager: @unchecked Sendable {
     private var externalSessionActive = false
     private var routeRefreshGeneration = 0
     private var activeRecorderRunID: UUID?
+    private var activeRecordingSavePolicy: DictationRecordingSavePolicy = .never
+    private var unacknowledgedTerminalCapture: DictationAudioTerminalCapture?
     private var failedSessionID: UUID?
     private let sessionHintLock = NSLock()
     private var sessionHint: UUID?
@@ -242,7 +257,12 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         }
     }
 
-    func beginRecording(mode: String, duckingEnabled: Bool, mediaPauseEnabled: Bool) {
+    func beginRecording(
+        mode: String,
+        duckingEnabled: Bool,
+        mediaPauseEnabled: Bool,
+        recordingSavePolicy: DictationRecordingSavePolicy = .never
+    ) {
         let sessionID = ensureSession()
         queue.async { [self] in
             self.cancelPendingRouteRefreshLocked()
@@ -282,6 +302,7 @@ final class DictationAudioSessionManager: @unchecked Sendable {
             let recorderInputDeviceID = self.recorderInputDeviceID(for: self.routeSnapshot)
             self.recorder.preferredInputDeviceID = recorderInputDeviceID
             self.recorder.keepsAudioGraphWarm = self.routeSnapshot.canSpeculativelyWarmRecorder
+            self.activeRecordingSavePolicy = recordingSavePolicy
             do {
                 self.emitLatency("activation_begin:\(mode)")
                 if self.routeSnapshot.canSpeculativelyWarmRecorder {
@@ -294,8 +315,13 @@ final class DictationAudioSessionManager: @unchecked Sendable {
                 fputs("[dictation-session] recording mode=\(mode) \(self.routeSnapshot.debugDescription)\n", stderr)
             } catch {
                 self.emitLatency("activation_failed:\(mode)")
-                self.recorder.cancel()
-                self.failCurrentSession(error: error)
+                let wavURL = self.finishRecorderForTerminal()
+                let capture = self.terminalCaptureIfRequested(
+                    sessionID: sessionID,
+                    outcome: .failed,
+                    wavURL: wavURL
+                )
+                self.failCurrentSession(error: error, capture: capture)
             }
         }
     }
@@ -333,7 +359,13 @@ final class DictationAudioSessionManager: @unchecked Sendable {
             self.emitLatency("stop")
             self.recorder.keepsAudioGraphWarm = false
             let wavURL = self.recorder.stop()
+            self.unacknowledgedTerminalCapture = self.terminalCaptureIfRequested(
+                sessionID: sessionID,
+                outcome: .cancelled,
+                wavURL: wavURL
+            )
             self.activeRecorderRunID = nil
+            self.activeRecordingSavePolicy = .never
             self.recorder.preferredInputDeviceID = nil
             self.stateStorage = .idle
             self.emit(.stopped(sessionID, wavURL: wavURL))
@@ -348,14 +380,69 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         queue.async { [self] in
             let sessionID = self.stateStorage.sessionID ?? requestedSessionID
             self.recorder.keepsAudioGraphWarm = false
-            self.recorder.cancel()
-            self.activeRecorderRunID = nil
+            let wavURL = self.finishRecorderForTerminal()
+            let capture = self.terminalCaptureIfRequested(
+                sessionID: sessionID,
+                outcome: .cancelled,
+                wavURL: wavURL
+            )
+            self.unacknowledgedTerminalCapture = capture
+            self.activeRecordingSavePolicy = .never
             self.recorder.preferredInputDeviceID = nil
             self.stateStorage = .idle
             self.externalSessionActive = false
             self.restoreSessionAudioState()
             self.emitLatency("cancelled:\(reason)")
-            self.emit(.cancelled(sessionID, reason: reason))
+            self.emit(.cancelled(sessionID, reason: reason, capture: capture))
+        }
+    }
+
+    /// Synchronously owns recorder teardown at application shutdown. Unlike
+    /// `cancel(reason:)`, this returns retained audio directly so the caller can
+    /// persist it before shutting down stores, and does not enqueue a late
+    /// terminal event.
+    func finalizeCaptureForShutdown(reason: String) async -> DictationAudioTerminalCapture? {
+        let requestedSessionID = detachSessionHint(clearExternalSession: true)
+        return await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                if let pending = unacknowledgedTerminalCapture {
+                    unacknowledgedTerminalCapture = nil
+                    continuation.resume(returning: pending)
+                    return
+                }
+                let sessionID = stateStorage.sessionID ?? requestedSessionID
+                let hasRecorderOwnership = sessionID != nil
+                    || activeRecorderRunID != nil
+                    || externalSessionActive
+                    || recorder.keepsAudioGraphWarm
+                guard hasRecorderOwnership else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                cancelPendingRouteRefreshLocked()
+                recorder.keepsAudioGraphWarm = false
+                let wavURL = finishRecorderForTerminal()
+                let capture = terminalCaptureIfRequested(
+                    sessionID: sessionID,
+                    outcome: .cancelled,
+                    wavURL: wavURL
+                )
+                activeRecordingSavePolicy = .never
+                recorder.preferredInputDeviceID = nil
+                stateStorage = .idle
+                externalSessionActive = false
+                restoreSessionAudioState()
+                fputs("[dictation-session] shutdown finalized reason=\(reason)\n", stderr)
+                continuation.resume(returning: capture)
+            }
+        }
+    }
+
+    func acknowledgeTerminalCapture(sessionID: UUID) {
+        queue.async { [self] in
+            guard unacknowledgedTerminalCapture?.sessionID == sessionID else { return }
+            unacknowledgedTerminalCapture = nil
         }
     }
 
@@ -544,17 +631,22 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         )
     }
 
-    private func failCurrentSession(error: Error) {
+    private func failCurrentSession(
+        error: Error,
+        capture: DictationAudioTerminalCapture? = nil
+    ) {
         let sessionID = stateStorage.sessionID
         if let sessionID {
             failedSessionID = sessionID
         }
         stateStorage = .idle
         activeRecorderRunID = nil
+        activeRecordingSavePolicy = .never
         recorder.preferredInputDeviceID = nil
         clearSessionHint(sessionID)
         restoreSessionAudioState()
-        emit(.failed(sessionID, error: error))
+        unacknowledgedTerminalCapture = capture
+        emit(.failed(sessionID, error: error, capture: capture))
     }
 
     private func handleFirstAudioBuffer(capturedAt: Date) {
@@ -589,8 +681,13 @@ final class DictationAudioSessionManager: @unchecked Sendable {
             case .armed(let id) where id == sessionID,
                  .acquiringAudio(let id) where id == sessionID:
                 self.recorder.keepsAudioGraphWarm = false
-                self.recorder.cancel()
-                self.failCurrentSession(error: StartupError.noAudioBuffer)
+                let wavURL = self.finishRecorderForTerminal()
+                let capture = self.terminalCaptureIfRequested(
+                    sessionID: sessionID,
+                    outcome: .timedOut,
+                    wavURL: wavURL
+                )
+                self.failCurrentSession(error: StartupError.noAudioBuffer, capture: capture)
                 return
             default:
                 break
@@ -605,9 +702,36 @@ final class DictationAudioSessionManager: @unchecked Sendable {
                   self.activeRecorderRunID == recorderRunID else { return }
             self.emitLatency("recorder_failed")
             self.recorder.keepsAudioGraphWarm = false
-            self.recorder.cancel()
-            self.failCurrentSession(error: error)
+            let wavURL = self.finishRecorderForTerminal()
+            let capture = self.terminalCaptureIfRequested(
+                sessionID: self.stateStorage.sessionID,
+                outcome: .failed,
+                wavURL: wavURL
+            )
+            self.failCurrentSession(error: error, capture: capture)
         }
+    }
+
+    private func finishRecorderForTerminal() -> URL? {
+        let retainsCapture = activeRecordingSavePolicy.retainsCapture
+        let wavURL = retainsCapture ? recorder.stop() : nil
+        recorder.cancel()
+        activeRecorderRunID = nil
+        return wavURL
+    }
+
+    private func terminalCaptureIfRequested(
+        sessionID: UUID?,
+        outcome: DictationAudioTerminalCaptureOutcome,
+        wavURL: URL?
+    ) -> DictationAudioTerminalCapture? {
+        guard activeRecordingSavePolicy.retainsCapture else { return nil }
+        return DictationAudioTerminalCapture(
+            sessionID: sessionID,
+            outcome: outcome,
+            recordingSavePolicy: activeRecordingSavePolicy,
+            wavURL: wavURL
+        )
     }
 
     private func emitLatency(_ event: String, at date: Date = Date()) {

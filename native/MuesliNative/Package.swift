@@ -92,6 +92,9 @@ let package = Package(
             name: "MuesliTests",
             dependencies: ["MuesliNativeApp", "MuesliCore", "MuesliCLI", "AudioGraphExceptionBridge", "LocalVQEBridge"],
             path: "Tests/MuesliTests",
+            resources: [
+                .copy("Fixtures"),
+            ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
             ]

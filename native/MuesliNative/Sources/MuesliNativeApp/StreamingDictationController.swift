@@ -20,6 +20,16 @@ protocol NemotronStreamingTranscribing: AnyObject {
     ) async throws -> String
 }
 
+struct StreamingDictationTerminalResult: Equatable {
+    let transcript: String
+    let captureURL: URL?
+}
+
+struct StreamingDictationShutdownCapture: Equatable {
+    let recordingSavePolicy: DictationRecordingSavePolicy
+    let captureURL: URL?
+}
+
 @available(macOS 15, *)
 final class StreamingDictationController {
     private enum DrainResult {
@@ -30,12 +40,14 @@ final class StreamingDictationController {
     private enum StopSetup {
         case start(UUID)
         case attached
-        case immediate(String)
+        case immediate(StreamingDictationTerminalResult)
     }
 
     /// Called with the full accumulated transcript so far (on a background thread).
     var onPartialText: ((String) -> Void)?
     var onFailure: ((Error) -> Void)?
+    var onStartFailureWithCapture: ((Error, URL?) -> Void)?
+    var onFailureWithCapture: ((Error, URL?) -> Void)?
 
     private let transcriber: NemotronStreamingTranscribing
     private let recorder: StreamingDictationRecording
@@ -49,7 +61,9 @@ final class StreamingDictationController {
     private let drainLock = OSAllocatedUnfairLock()
     private struct StopState {
         let sessionID: UUID
-        var completions: [(String) -> Void]
+        let recordingSavePolicy: DictationRecordingSavePolicy
+        var captureURL: URL?
+        var completions: [(StreamingDictationTerminalResult) -> Void]
     }
     private var stopState: StopState?
     private let stopLock = OSAllocatedUnfairLock()
@@ -57,6 +71,7 @@ final class StreamingDictationController {
     private var isActive = false
     private var activeSessionID: UUID?
     private var stoppingSessionID: UUID?
+    private var activeRecordingSavePolicy: DictationRecordingSavePolicy = .never
     private var streamStateTask: Task<Void, Never>?
     private let chunkSamples: Int  // 35840 for Nemotron 3.5's 2240ms tier
     private let stopStreamStateTimeout: TimeInterval
@@ -103,7 +118,7 @@ final class StreamingDictationController {
     }
 
     @discardableResult
-    func start() -> Bool {
+    func start(recordingSavePolicy: DictationRecordingSavePolicy = .never) -> Bool {
         guard stopLock.withLock({ stopState == nil }),
               bufferLock.withLock({ stoppingSessionID == nil })
         else { return false }
@@ -112,6 +127,7 @@ final class StreamingDictationController {
             guard !isActive else { return false }
             isActive = true
             activeSessionID = sessionID
+            activeRecordingSavePolicy = recordingSavePolicy
             sampleBuffer.removeAll()
             return true
         }
@@ -140,7 +156,17 @@ final class StreamingDictationController {
             fputs("[streaming-dictation] mic started\n", stderr)
         } catch {
             fputs("[streaming-dictation] mic start failed: \(error)\n", stderr)
-            resetActiveSession(cancelRecorder: true, sessionID: sessionID)
+            let captureURL = resetActiveSession(
+                cancelRecorder: true,
+                sessionID: sessionID
+            )?.captureURL
+            if let onStartFailureWithCapture {
+                onStartFailureWithCapture(error, captureURL)
+            } else if let onFailureWithCapture {
+                onFailureWithCapture(error, captureURL)
+            } else {
+                onFailure?(error)
+            }
             return false
         }
 
@@ -167,36 +193,54 @@ final class StreamingDictationController {
 
     /// Stop recording and finish queued audio off the caller's thread.
     func stop(completion: @escaping (String) -> Void) {
+        stopWithCapture { result in
+            completion(result.transcript)
+        }
+    }
+
+    /// Stop recording and return the finalized source capture when this
+    /// session's save policy requested retention.
+    func stopWithCapture(completion: @escaping (StreamingDictationTerminalResult) -> Void) {
         let setup = stopLock.withLock { () -> StopSetup in
             let sessionIDs = bufferLock.withLock {
-                (active: activeSessionID, stopping: stoppingSessionID)
+                (
+                    active: activeSessionID,
+                    stopping: stoppingSessionID,
+                    recordingSavePolicy: activeRecordingSavePolicy
+                )
             }
             if let activeSessionID = sessionIDs.active {
                 if var stopState {
                     guard stopState.sessionID == activeSessionID else {
-                        return .immediate(currentTranscript())
+                        return .immediate(.init(transcript: currentTranscript(), captureURL: nil))
                     }
                     stopState.completions.append(completion)
                     self.stopState = stopState
                     return .attached
                 }
-                stopState = StopState(sessionID: activeSessionID, completions: [completion])
+                stopState = StopState(
+                    sessionID: activeSessionID,
+                    recordingSavePolicy: sessionIDs.recordingSavePolicy,
+                    captureURL: nil,
+                    completions: [completion]
+                )
                 bufferLock.withLock {
                     isActive = false
                     self.activeSessionID = nil
                     stoppingSessionID = activeSessionID
+                    activeRecordingSavePolicy = .never
                 }
                 return .start(activeSessionID)
             }
             if let stoppingSessionID = sessionIDs.stopping {
                 guard var stopState, stopState.sessionID == stoppingSessionID else {
-                    return .immediate(currentTranscript())
+                    return .immediate(.init(transcript: currentTranscript(), captureURL: nil))
                 }
                 stopState.completions.append(completion)
                 self.stopState = stopState
                 return .attached
             }
-            return .immediate(currentTranscript())
+            return .immediate(.init(transcript: currentTranscript(), captureURL: nil))
         }
 
         let sessionID: UUID
@@ -205,13 +249,29 @@ final class StreamingDictationController {
             sessionID = id
         case .attached:
             return
-        case .immediate(let transcript):
-            completion(transcript)
+        case .immediate(let result):
+            completion(result)
             return
         }
 
-        if let wavURL = recorder.stop() {
-            try? FileManager.default.removeItem(at: wavURL)
+        let retainsCapture = stopLock.withLock { () -> Bool in
+            guard let state = stopState, state.sessionID == sessionID else { return false }
+            return state.recordingSavePolicy.retainsCapture
+        }
+        let finalizedCaptureURL = recorder.stop()
+        let captureURL: URL?
+        if retainsCapture {
+            captureURL = finalizedCaptureURL
+        } else if let finalizedCaptureURL {
+            captureURL = nil
+            try? FileManager.default.removeItem(at: finalizedCaptureURL)
+        } else {
+            captureURL = nil
+        }
+        stopLock.withLock {
+            guard var state = stopState, state.sessionID == sessionID else { return }
+            state.captureURL = captureURL
+            stopState = state
         }
         // stop() leaves the audio queue allocated and its callback still holding a
         // retain on the recorder. Only cancel() disposes the queue and releases it.
@@ -261,7 +321,15 @@ final class StreamingDictationController {
         }
     }
 
-    func cancel() {
+    @discardableResult
+    func cancel() -> URL? {
+        resetActiveSession(cancelRecorder: true)?.captureURL
+    }
+
+    /// Finalizes recorder ownership before application shutdown proceeds. The
+    /// frozen policy is returned even for Never so callers can distinguish a
+    /// deliberately deleted capture from an unavailable retained capture.
+    func finalizeCaptureForShutdown() async -> StreamingDictationShutdownCapture? {
         resetActiveSession(cancelRecorder: true)
     }
 
@@ -271,26 +339,52 @@ final class StreamingDictationController {
 
     private func failActiveSession(sessionID: UUID, error: Error) {
         guard isActiveSession(sessionID) else { return }
-        resetActiveSession(cancelRecorder: true, sessionID: sessionID)
-        onFailure?(error)
+        let captureURL = resetActiveSession(cancelRecorder: true, sessionID: sessionID)?.captureURL
+        if let onFailureWithCapture {
+            onFailureWithCapture(error, captureURL)
+        } else {
+            onFailure?(error)
+        }
     }
 
-    private func resetActiveSession(cancelRecorder: Bool, sessionID expectedSessionID: UUID? = nil) {
-        let completionSessionID = bufferLock.withLock { () -> UUID? in
+    @discardableResult
+    private func resetActiveSession(
+        cancelRecorder: Bool,
+        sessionID expectedSessionID: UUID? = nil
+    ) -> StreamingDictationShutdownCapture? {
+        let reset = bufferLock.withLock { () -> (
+            sessionID: UUID?,
+            recordingSavePolicy: DictationRecordingSavePolicy,
+            wasActive: Bool
+        ) in
             let sessionID = expectedSessionID ?? activeSessionID ?? stoppingSessionID
+            let wasActive = activeSessionID != nil
+            let recordingSavePolicy = activeRecordingSavePolicy
             isActive = false
             activeSessionID = nil
             stoppingSessionID = nil
+            activeRecordingSavePolicy = .never
             sampleBuffer.removeAll()
-            return sessionID
+            return (sessionID, recordingSavePolicy, wasActive)
         }
+        guard let sessionID = reset.sessionID else { return nil }
         streamStateTask?.cancel()
         streamStateTask = nil
-        if let completionSessionID {
-            completeStop(sessionID: completionSessionID, with: currentTranscript())
+        let pendingStop = stopLock.withLock { () -> StopState? in
+            guard let state = stopState, state.sessionID == sessionID else { return nil }
+            return state
         }
+        let recordingSavePolicy = reset.wasActive
+            ? reset.recordingSavePolicy
+            : pendingStop?.recordingSavePolicy ?? .never
+        var captureURL = pendingStop?.captureURL
         if cancelRecorder {
-            recorder.cancel()
+            if reset.wasActive, recordingSavePolicy.retainsCapture {
+                captureURL = recorder.stop()
+            }
+            if reset.wasActive || pendingStop == nil {
+                recorder.cancel()
+            }
         }
         recorder.onAudioBuffer = nil
         recorder.onRecordingFailed = nil
@@ -303,20 +397,38 @@ final class StreamingDictationController {
         streamLock.withLock {
             streamState = nil
         }
+        completeStop(
+            sessionID: sessionID,
+            with: currentTranscript(),
+            captureURL: captureURL
+        )
+        return StreamingDictationShutdownCapture(
+            recordingSavePolicy: recordingSavePolicy,
+            captureURL: captureURL
+        )
     }
 
-    private func completeStop(sessionID: UUID, with transcript: String) {
-        let completions: [(String) -> Void] = stopLock.withLock {
-            guard let state = stopState else { return [] }
+    private func completeStop(sessionID: UUID, with transcript: String, captureURL: URL? = nil) {
+        let resultAndCompletions: (
+            result: StreamingDictationTerminalResult,
+            completions: [(StreamingDictationTerminalResult) -> Void]
+        )? = stopLock.withLock {
+            guard let state = stopState else { return nil }
             if state.sessionID != sessionID {
-                return []
+                return nil
             }
             stopState = nil
-            let completions = state.completions
-            return completions
+            return (
+                StreamingDictationTerminalResult(
+                    transcript: transcript,
+                    captureURL: captureURL ?? state.captureURL
+                ),
+                state.completions
+            )
         }
-        for completion in completions {
-            completion(transcript)
+        guard let resultAndCompletions else { return }
+        for completion in resultAndCompletions.completions {
+            completion(resultAndCompletions.result)
         }
     }
 

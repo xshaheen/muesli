@@ -45,6 +45,14 @@ struct DictationsView: View {
     @State private var selectedFilter: DictationFilter = .all
     @State private var bridgePromptSeen = false
     @State private var isBridgeQRCodePresented = false
+    @State private var selectedDictation: DictationRecord?
+    @State private var audioOnlyDictations: [DictationAudioHistoryRecord] = []
+    @State private var selectedAudioOnlySessionID: UUID?
+
+    private var visibleAudioOnlyDictations: [DictationAudioHistoryRecord] {
+        guard let cutoff = audioOnlyCutoffDate else { return audioOnlyDictations }
+        return audioOnlyDictations.filter { $0.capturedAt >= cutoff }
+    }
 
     private var groupedDictations: [(id: Date, header: String, records: [DictationRecord])] {
         let calendar = Calendar.current
@@ -119,7 +127,7 @@ struct DictationsView: View {
                 .padding(.horizontal, MuesliTheme.spacing24)
                 .padding(.bottom, MuesliTheme.spacing12)
 
-            if appState.dictationRows.isEmpty {
+            if appState.dictationRows.isEmpty, visibleAudioOnlyDictations.isEmpty {
                 Spacer()
                 VStack(spacing: MuesliTheme.spacing12) {
                     Image(systemName: "mic.badge.plus")
@@ -136,6 +144,10 @@ struct DictationsView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
+                        if !visibleAudioOnlyDictations.isEmpty {
+                            audioOnlyHistorySection
+                        }
+
                         ForEach(groupedDictations, id: \.id) { group in
                             VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
                                 HStack {
@@ -152,6 +164,9 @@ struct DictationsView: View {
                                             timeOnly: formatTimeOnly(record.timestamp),
                                             onCopy: {
                                                 controller.copyToClipboard(record.rawText)
+                                            },
+                                            onOpen: {
+                                                selectedDictation = record
                                             },
                                             onCopyTrace: record.computerUseTrace == nil ? nil : {
                                                 controller.copyToClipboard(ComputerUseTraceFormatter.debugText(for: record))
@@ -203,6 +218,95 @@ struct DictationsView: View {
                 deepLinkURL: IPhoneBridgeLinks.iOSSyncDeepLinkURL,
                 installURL: IPhoneBridgeLinks.installURL
             )
+        }
+        .sheet(item: $selectedDictation) { record in
+            DictationDetailView(
+                record: record,
+                onCopy: { controller.copyToClipboard(record.rawText) },
+                onDelete: { controller.deleteDictation(id: record.id) },
+                onClose: { selectedDictation = nil }
+            )
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { selectedAudioOnlyRecord != nil },
+                set: { if !$0 { selectedAudioOnlySessionID = nil } }
+            )
+        ) {
+            if let record = selectedAudioOnlyRecord {
+                AudioOnlyDictationDetailView(
+                    record: record,
+                    onDelete: { deleteAudioOnlyDictation(record.sessionID) },
+                    onClose: { selectedAudioOnlySessionID = nil }
+                )
+            }
+        }
+        .task {
+            await reloadAudioOnlyDictations()
+        }
+        .onChange(of: appState.dictationState) { _, state in
+            guard state == .idle else { return }
+            Task { await reloadAudioOnlyDictations() }
+        }
+    }
+
+    private var selectedAudioOnlyRecord: DictationAudioHistoryRecord? {
+        guard let selectedAudioOnlySessionID else { return nil }
+        return audioOnlyDictations.first { $0.sessionID == selectedAudioOnlySessionID }
+    }
+
+    private var audioOnlyHistorySection: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("RECORDINGS WITHOUT TRANSCRIPT HISTORY")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                Text("Local only · excluded from sync, statistics, CLI, and text export")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            }
+            .padding(.leading, MuesliTheme.spacing4)
+
+            VStack(spacing: 1) {
+                ForEach(visibleAudioOnlyDictations, id: \.sessionID) { record in
+                    AudioOnlyDictationRowView(
+                        record: record,
+                        onOpen: { selectedAudioOnlySessionID = record.sessionID },
+                        onDelete: { deleteAudioOnlyDictation(record.sessionID) }
+                    )
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+            .overlay(
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+            )
+        }
+    }
+
+    private var audioOnlyCutoffDate: Date? {
+        let calendar = Calendar.current
+        let now = Date()
+        switch selectedFilter {
+        case .all: return nil
+        case .last2Days: return calendar.date(byAdding: .day, value: -2, to: now)
+        case .lastWeek: return calendar.date(byAdding: .day, value: -7, to: now)
+        case .last2Weeks: return calendar.date(byAdding: .day, value: -14, to: now)
+        case .lastMonth: return calendar.date(byAdding: .month, value: -1, to: now)
+        case .last3Months: return calendar.date(byAdding: .month, value: -3, to: now)
+        }
+    }
+
+    @MainActor
+    private func reloadAudioOnlyDictations() async {
+        audioOnlyDictations = await controller.audioOnlyDictationHistory()
+    }
+
+    private func deleteAudioOnlyDictation(_ sessionID: UUID) {
+        controller.deleteAudioOnlyDictationHistory(sessionID: sessionID)
+        audioOnlyDictations.removeAll { $0.sessionID == sessionID }
+        if selectedAudioOnlySessionID == sessionID {
+            selectedAudioOnlySessionID = nil
         }
     }
 
@@ -543,8 +647,10 @@ struct DictationsView: View {
         let now = Date()
 
         // Check oldest dictation to determine which filters make sense
-        let oldestDate: Date? = appState.dictationRows.last.flatMap { parseDate($0.timestamp) }
+        let oldestTextDate = appState.dictationRows.last.flatMap { parseDate($0.timestamp) }
             ?? appState.dictationRows.first.flatMap { parseDate($0.timestamp) }
+        let oldestAudioDate = audioOnlyDictations.last?.capturedAt
+        let oldestDate = [oldestTextDate, oldestAudioDate].compactMap { $0 }.min()
 
         guard let oldest = oldestDate else { return filters }
         let daysSinceOldest = calendar.dateComponents([.day], from: oldest, to: now).day ?? 0

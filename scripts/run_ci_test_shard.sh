@@ -20,11 +20,16 @@ case "${shard}" in
       ConfigStoreTests
       DictationStoreTests
       SessionTraceStoreTests
+      RecordingArtifactStoreTests
+      RecordingArtifactPlaybackTests
+      LocalDiagnosticsTests
+      SessionDiagnosticsPresentationTests
       MuesliCKSyncEngineTests
       MuesliCLITests
       ChatGPTAuthTests
       ChatGPTTokenStorageTests
       FloatingIndicatorVisibilityTests
+      FloatingMeetingPanelStyleTests
       IndicatorFrameSizeTests
       OpenAILogoShapeTests
       MeetingChunkCollectorTests
@@ -86,6 +91,7 @@ case "${shard}" in
       AsrVocabularyPromptTests
       WhisperBiasingManualReproTests
       TranscriptionResultCleanupTests
+      DictationTranscriptionStageDiagnosticsTests
       DictationCleanupPolicyTests
       DictationStyleObservabilityTests
       TranscriptionBackendResidencyPolicyTests
@@ -93,22 +99,35 @@ case "${shard}" in
       PostProcessorIdleUnloadPolicyTests
       ModelDeletionExecutorTests
       Nemotron35ModelStoreTests
+      HostedDictationCleanupDeadlineTests
+      OrderedDictationJobQueueTests
+      SessionTraceRuntimeTests
+      SessionTracePerformanceTests
+      TranscriptionQualityFixtureContractTests
     )
     ;;
   meetings)
     filters=(
       AudioGraphExceptionBridgeTests
       DiagnosticIncidentTests
+      DiagnosticIncidentReporterTests
       DictationAudioRouteControllerTests
       MeetingDetectorTests
+      MeetingActivityDetectionPolicyTests
       MeetingRecordingWriterTests
       MeetingResumePolicyTests
+      MeetingSessionDiagnosticsTests
       MeetingStreamingPartialSessionTests
       MeetingFollowUpPolicyTests
       MeetingFollowUpThreadTests
       MeetingFollowUpSummaryPromptTests
       MeetingSummaryClientTests
       MeetingsNavigationTests
+      MeetingDetailResponsiveLayoutTests
+      MeetingFallbackClassificationTests
+      MeetingFinalizationRollbackTests
+      MeetingRawTranscriptAccumulatorTests
+      MeetingTextInteractionTests
       MeetingBrowserLogicTests
       MeetingNotesInlineMarkdownTests
       TranscriptFormatterTests
@@ -131,6 +150,7 @@ case "${shard}" in
       MeetingTranscriptCleanupTests
       DisabledCalendarFilterTests
       GoogleCalendarTests
+      NaturalTextDirectionTests
     )
     ;;
   *)

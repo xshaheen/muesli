@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "maximumCorpusBytes": 524288,
+  "maximumTextFieldBytes": 2048,
+  "files": [
+    {"path":"PROVENANCE.md","bytes":1211,"sha256":"2f925a27e8f81070a240065785ac05b459efbbf6035d1f6a23ad8f3dd07d16e1"},
+    {"path":"README.md","bytes":2944,"sha256":"20b967846b9cac73e9c17b0e6bb40c2099f65e03ce5382670052ad2e45fadb00"},
+    {"path":"baseline-v1.json","bytes":1574,"sha256":"be75b82a935920670efdc4d1849d7f09bfccae1101a1d3e098156c5d6a12ba9e"},
+    {"path":"samples.jsonl","bytes":5354,"sha256":"be927e28d138f36f20f42a1abcfacddda767cef348068d48da8c53b595ddbabe"}
+  ]
+}

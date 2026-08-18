@@ -63,6 +63,24 @@ struct CustomWordMatcherApplyTests {
         #expect(result == "I love muesli")
     }
 
+    @Test("application reports only changes selected by the real matcher pass")
+    func applicationReportsSelectedChanges() {
+        let words = [
+            CustomWord(word: "new york", replacement: "New York"),
+            CustomWord(word: "new", replacement: "NEW"),
+        ]
+
+        let application = CustomWordMatcher.applyWithChanges(
+            text: "visit new york",
+            customWords: words
+        )
+
+        #expect(application.text == "visit New York")
+        #expect(application.changes == [
+            CustomWordAppliedChange(observed: "new york", replacement: "New York")
+        ])
+    }
+
     @Test("case-insensitive exact match")
     func caseInsensitive() {
         let words = [CustomWord(word: "Pranav", replacement: "Pranav")]

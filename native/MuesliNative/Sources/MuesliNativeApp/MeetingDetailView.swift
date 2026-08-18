@@ -286,6 +286,7 @@ struct MeetingDetailView: View {
     let appState: AppState
     let onBack: (() -> Void)?
     let backLabel: String
+    var recordingCoordinator: RecordingArtifactPlaybackCoordinator = .shared
     @State private var isSummarizing = false
     @State private var isRetranscribing = false
     @State private var isEditingNotes = false
@@ -426,10 +427,10 @@ struct MeetingDetailView: View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
             adaptiveHeaderContent(for: meeting, appliedTemplate: appliedTemplate)
 
-            if let savedRecordingPath = meeting.savedRecordingPath,
-               FileManager.default.fileExists(atPath: savedRecordingPath) {
-                MeetingRecordingPlayerView(recordingPath: savedRecordingPath)
-            }
+            RecordingArtifactSection(
+                owner: .meeting(meeting.id),
+                coordinator: recordingCoordinator
+            )
 
             activeMeetingAudioWarningBanner(for: meeting)
 
@@ -931,7 +932,7 @@ struct MeetingDetailView: View {
 
     @ViewBuilder
     private func retranscribeAction(for meeting: MeetingRecord) -> some View {
-        if meeting.savedRecordingPath != nil {
+        if recordingCoordinator.resolution(for: .meeting(meeting.id)).availability == .available {
             if isRetranscribing {
                 HStack(spacing: 6) {
                     ProgressView()
@@ -1248,25 +1249,14 @@ struct MeetingDetailView: View {
     }
 
     private func hasMoreActions(for meeting: MeetingRecord) -> Bool {
-        meeting.savedRecordingPath != nil || controller.canDeleteMeeting(meeting)
+        controller.canDeleteMeeting(meeting)
     }
 
     @ViewBuilder
     private func moreActionsMenu(for meeting: MeetingRecord) -> some View {
         if hasMoreActions(for: meeting) {
             Menu {
-                if let savedRecordingPath = meeting.savedRecordingPath {
-                    Button {
-                        controller.revealMeetingRecordingInFinder(path: savedRecordingPath)
-                    } label: {
-                        Label("Show Recording", systemImage: "folder")
-                    }
-                }
-
                 if controller.canDeleteMeeting(meeting) {
-                    if meeting.savedRecordingPath != nil {
-                        Divider()
-                    }
                     Button(role: .destructive) {
                         showDeleteConfirmation = true
                     } label: {
