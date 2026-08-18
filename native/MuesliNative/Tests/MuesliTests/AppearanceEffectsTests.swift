@@ -12,9 +12,11 @@ struct SoundControllerTests {
         SoundController.playDictationStart(enabled: false)
     }
 
-    @Test("playDictationInsert with enabled=false does not throw")
-    func playInsertDisabled() {
-        SoundController.playDictationInsert(enabled: false)
+    @Test("dictation terminal sounds with enabled=false do not throw")
+    func playTerminalSoundsDisabled() {
+        SoundController.playDictationStop(enabled: false)
+        SoundController.playDictationSuccess(enabled: false)
+        SoundController.playDictationFailure(enabled: false)
     }
 
     @Test("playDictationStart with enabled=true does not throw")
@@ -22,9 +24,11 @@ struct SoundControllerTests {
         SoundController.playDictationStart(enabled: true)
     }
 
-    @Test("playDictationInsert with enabled=true does not throw")
-    func playInsertEnabled() {
-        SoundController.playDictationInsert(enabled: true)
+    @Test("dictation terminal sounds with enabled=true do not throw")
+    func playTerminalSoundsEnabled() {
+        SoundController.playDictationStop(enabled: true)
+        SoundController.playDictationSuccess(enabled: true)
+        SoundController.playDictationFailure(enabled: true)
     }
 }
 
