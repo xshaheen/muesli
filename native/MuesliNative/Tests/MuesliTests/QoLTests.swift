@@ -140,20 +140,27 @@ struct FloatingIndicatorVisibilityTests {
     @Test("meeting transcript hover defaults on and persists")
     func meetingTranscriptHoverRoundTrip() throws {
         var config = AppConfig()
-        #expect(config.showMeetingTranscriptOnIndicatorHover)
-        config.showMeetingTranscriptOnIndicatorHover = false
+        #expect(config.showMeetingTranscriptOnRecordingPanelHover)
+        config.showMeetingTranscriptOnRecordingPanelHover = false
 
         let data = try JSONEncoder().encode(config)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
 
-        #expect(!decoded.showMeetingTranscriptOnIndicatorHover)
+        #expect(!decoded.showMeetingTranscriptOnRecordingPanelHover)
     }
 
-    @Test("meeting transcript hover decodes from snake_case JSON")
-    func meetingTranscriptHoverSnakeCaseDecode() throws {
+    @Test("legacy meeting transcript hover false decodes for the recording panel")
+    func legacyMeetingTranscriptHoverFalseDecode() throws {
         let json = #"{"show_meeting_transcript_on_indicator_hover": false}"#
         let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
-        #expect(!config.showMeetingTranscriptOnIndicatorHover)
+        #expect(!config.showMeetingTranscriptOnRecordingPanelHover)
+    }
+
+    @Test("legacy meeting transcript hover true decodes for the recording panel")
+    func legacyMeetingTranscriptHoverTrueDecode() throws {
+        let json = #"{"show_meeting_transcript_on_indicator_hover": true}"#
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(config.showMeetingTranscriptOnRecordingPanelHover)
     }
 
     @Test("post processor defaults to disabled")

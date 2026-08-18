@@ -344,7 +344,7 @@ final class MeetingRecordingPanelController: NSObject {
     func pointerEntered() {
         guard state == .recording || state == .paused else { return }
         guard !isTranscriptManuallyDismissed else { return }
-        guard configStore.load().showMeetingTranscriptOnIndicatorHover else { return }
+        guard configStore.load().showMeetingTranscriptOnRecordingPanelHover else { return }
         showTranscript()
     }
 

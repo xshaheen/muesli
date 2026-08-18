@@ -1838,9 +1838,8 @@ struct AppConfig: Codable {
     /// Preserves the original unified Nemotron behavior unless the user explicitly
     /// chooses a separate downloaded model for the final transcript.
     var useLiveMeetingTranscriptAsFinal: Bool = true
-    /// Reveals a compact live transcript beside the meeting waveform while the
-    /// pointer is over either floating surface.
-    var showMeetingTranscriptOnIndicatorHover: Bool = true
+    /// Reveals the live transcript while the pointer is over the Meeting Recording Panel.
+    var showMeetingTranscriptOnRecordingPanelHover: Bool = true
     var meetingHookEnabled: Bool = false
     var meetingHookPath: String = ""
     var meetingHookTimeoutSeconds: Int = 30
@@ -1971,7 +1970,7 @@ struct AppConfig: Codable {
         case enableLiveStreamingPartials = "enable_live_streaming_partials"
         case meetingLiveCaptionBackend = "meeting_live_caption_backend"
         case useLiveMeetingTranscriptAsFinal = "use_live_meeting_transcript_as_final"
-        case showMeetingTranscriptOnIndicatorHover = "show_meeting_transcript_on_indicator_hover"
+        case showMeetingTranscriptOnRecordingPanelHover = "show_meeting_transcript_on_recording_panel_hover"
         case meetingHookEnabled = "meeting_hook_enabled"
         case meetingHookPath = "meeting_hook_path"
         case meetingHookTimeoutSeconds = "meeting_hook_timeout_seconds"
@@ -1993,6 +1992,7 @@ struct AppConfig: Codable {
         case dictationStyleCategoryAssignments = "dictation_style_category_assignments"
         case dictationStyleAppRules = "dictation_style_app_rules"
         case dictationStyleDomainRules = "dictation_style_domain_rules"
+        case showMeetingTranscriptOnIndicatorHover = "show_meeting_transcript_on_indicator_hover"
     }
 
     init() {}
@@ -2215,7 +2215,10 @@ struct AppConfig: Codable {
             .rawValue
         useLiveMeetingTranscriptAsFinal = (try? c.decode(Bool.self, forKey: .useLiveMeetingTranscriptAsFinal))
             ?? defaults.useLiveMeetingTranscriptAsFinal
-        showMeetingTranscriptOnIndicatorHover = (try? c.decode(Bool.self, forKey: .showMeetingTranscriptOnIndicatorHover)) ?? defaults.showMeetingTranscriptOnIndicatorHover
+        showMeetingTranscriptOnRecordingPanelHover =
+            (try? c.decode(Bool.self, forKey: .showMeetingTranscriptOnRecordingPanelHover))
+            ?? (try? legacy.decode(Bool.self, forKey: .showMeetingTranscriptOnIndicatorHover))
+            ?? defaults.showMeetingTranscriptOnRecordingPanelHover
         meetingHookEnabled = (try? c.decode(Bool.self, forKey: .meetingHookEnabled)) ?? defaults.meetingHookEnabled
         meetingHookPath = (try? c.decode(String.self, forKey: .meetingHookPath)) ?? defaults.meetingHookPath
         meetingHookTimeoutSeconds = (try? c.decode(Int.self, forKey: .meetingHookTimeoutSeconds)) ?? defaults.meetingHookTimeoutSeconds

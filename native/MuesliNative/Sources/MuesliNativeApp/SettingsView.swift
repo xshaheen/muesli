@@ -500,7 +500,6 @@ struct SettingsView: View {
         .frame(minHeight: 52)
     }
 
-    private let customIndicatorPositionLabel = "Custom (drag to reposition)"
 
     private var settingsPanePicker: some View {
         HStack {
@@ -877,8 +876,8 @@ struct SettingsView: View {
             }
             Divider().background(MuesliTheme.surfaceBorder)
             settingsRow("Show transcript on hover") {
-                settingsSwitch(isOn: appState.config.showMeetingTranscriptOnIndicatorHover) { newValue in
-                    controller.updateConfig { $0.showMeetingTranscriptOnIndicatorHover = newValue }
+                settingsSwitch(isOn: appState.config.showMeetingTranscriptOnRecordingPanelHover) { newValue in
+                    controller.updateConfig { $0.showMeetingTranscriptOnRecordingPanelHover = newValue }
                 }
             }
             settingsDescription("Show recent transcript beside the waveform.")
@@ -1703,42 +1702,6 @@ struct SettingsView: View {
 
     private var appearanceSettingsPane: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
-            settingsSection("Floating Indicator") {
-                settingsRow("Show floating indicator") {
-                    settingsSwitch(isOn: appState.config.showFloatingIndicator) { newValue in
-                        controller.updateConfig { $0.showFloatingIndicator = newValue }
-                        controller.refreshIndicatorVisibility()
-                    }
-                }
-                Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Show hotkey on floating indicator") {
-                    settingsSwitch(isOn: appState.config.showHotkeyOnFloatingIndicator) { newValue in
-                        controller.updateConfig { $0.showHotkeyOnFloatingIndicator = newValue }
-                    }
-                    .disabled(!appState.config.showFloatingIndicator)
-                }
-                Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Indicator position") {
-                    let isCustom = appState.config.indicatorAnchor == .custom
-                    let selection = isCustom ? customIndicatorPositionLabel : appState.config.indicatorAnchor.label
-                    let options = (isCustom ? [customIndicatorPositionLabel] : [])
-                        + IndicatorAnchor.allCases.filter { $0 != .custom }.map(\.label)
-                    settingsMenu(
-                        selection: selection,
-                        options: options
-                    ) { label in
-                        if label == customIndicatorPositionLabel { return }
-                        guard let anchor = IndicatorAnchor.allCases.first(where: { $0.label == label }) else { return }
-                        controller.updateConfig {
-                            $0.indicatorAnchor = anchor
-                            // Only presets reach here; a stale origin would decode back to .custom.
-                            $0.indicatorOrigin = nil
-                        }
-                        controller.refreshIndicatorVisibility()
-                    }
-                }
-            }
-
             settingsSection("Appearance") {
                 settingsRow("Dark mode") {
                     settingsSwitch(isOn: appState.config.darkMode) { newValue in

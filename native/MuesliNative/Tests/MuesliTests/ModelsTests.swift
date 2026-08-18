@@ -1008,7 +1008,7 @@ struct AppConfigTests {
         #expect(config.enableLiveStreamingPartials == false)
         #expect(config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU)
         #expect(config.useLiveMeetingTranscriptAsFinal == true)
-        #expect(config.showMeetingTranscriptOnIndicatorHover == true)
+        #expect(config.showMeetingTranscriptOnRecordingPanelHover == true)
         #expect(config.dictationHotkey == .default)
         #expect(config.computerUseHotkey == .computerUseDefault)
         #expect(config.enableComputerUseHotkey == false)
@@ -1331,7 +1331,7 @@ struct AppConfigTests {
         config.enableAutomaticDiagnosticIssuePrompts = true
         config.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
         config.useLiveMeetingTranscriptAsFinal = false
-        config.showMeetingTranscriptOnIndicatorHover = false
+        config.showMeetingTranscriptOnRecordingPanelHover = false
         config.contributionPromptNextWordCount = 31_000
         config.contributionPromptNextMeetingCount = 75
         config.contributionGitHubStarClicked = true
@@ -1411,7 +1411,7 @@ struct AppConfigTests {
         #expect(decoded.enableAutomaticDiagnosticIssuePrompts == true)
         #expect(decoded.resolvedMeetingLiveCaptionBackend == .nemotron35)
         #expect(decoded.useLiveMeetingTranscriptAsFinal == false)
-        #expect(decoded.showMeetingTranscriptOnIndicatorHover == false)
+        #expect(decoded.showMeetingTranscriptOnRecordingPanelHover == false)
         #expect(decoded.contributionPromptNextWordCount == 31_000)
         #expect(decoded.contributionPromptNextMeetingCount == 75)
         #expect(decoded.contributionGitHubStarClicked == true)
@@ -1506,7 +1506,8 @@ struct AppConfigTests {
         #expect(json["enable_dictation_ocr_context"] != nil)
         #expect(json["enable_live_streaming_partials"] != nil)
         #expect(json["use_live_meeting_transcript_as_final"] != nil)
-        #expect(json["show_meeting_transcript_on_indicator_hover"] != nil)
+        #expect(json["show_meeting_transcript_on_recording_panel_hover"] != nil)
+        #expect(json["show_meeting_transcript_on_indicator_hover"] == nil)
     }
 
     @Test("decodes screen context flags from snake_case")
@@ -1581,7 +1582,7 @@ struct AppConfigTests {
         #expect(config.enableLiveStreamingPartials == false)
         #expect(config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU)
         #expect(config.useLiveMeetingTranscriptAsFinal == true)
-        #expect(config.showMeetingTranscriptOnIndicatorHover == true)
+        #expect(config.showMeetingTranscriptOnRecordingPanelHover == true)
     }
 
     @Test("legacy meeting config preserves its transcription model and leaves streaming off")
