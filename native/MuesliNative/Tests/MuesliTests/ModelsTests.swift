@@ -1021,6 +1021,7 @@ struct AppConfigTests {
         #expect(config.meetingRecordingHotkeyTriggerThresholdMS == HotkeyTriggerTiming.defaultMeetingThresholdMilliseconds)
         #expect(config.showFloatingIndicator == true)
         #expect(config.indicatorAnchor == .midTrailing)
+        #expect(config.meetingRecordingPanelCenter == nil)
         #expect(config.hasCompletedOnboarding == false)
         #expect(config.resolvedOnboardingUseCase == .dictation)
         #expect(config.userName.isEmpty)
@@ -1299,6 +1300,7 @@ struct AppConfigTests {
         config.hotkeyTriggerThresholdMS = 125
         config.computerUseHotkeyTriggerThresholdMS = 350
         config.meetingRecordingHotkeyTriggerThresholdMS = 900
+        config.meetingRecordingPanelCenter = CGPointCodable(x: -640, y: 420)
         config.lmStudioURL = "http://localhost:1234"
         config.lmStudioModel = "local-model"
         config.customLLMURL = "https://example.com"
@@ -1382,6 +1384,8 @@ struct AppConfigTests {
         #expect(decoded.hotkeyTriggerThresholdMS == 125)
         #expect(decoded.computerUseHotkeyTriggerThresholdMS == 350)
         #expect(decoded.meetingRecordingHotkeyTriggerThresholdMS == 900)
+        #expect(decoded.meetingRecordingPanelCenter?.x == -640)
+        #expect(decoded.meetingRecordingPanelCenter?.y == 420)
         #expect(decoded.lmStudioURL == "http://localhost:1234")
         #expect(decoded.lmStudioModel == "local-model")
         #expect(decoded.customLLMURL == "https://example.com")
@@ -1430,6 +1434,7 @@ struct AppConfigTests {
         var config = AppConfig()
         config.contributionPromptNextWordCount = 1_000
         config.contributionPromptNextMeetingCount = 25
+        config.meetingRecordingPanelCenter = CGPointCodable(x: -120, y: 88)
         let data = try JSONEncoder().encode(config)
         let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
 
@@ -1444,6 +1449,7 @@ struct AppConfigTests {
         #expect(json["hotkey_trigger_threshold_ms"] != nil)
         #expect(json["computer_use_hotkey_trigger_threshold_ms"] != nil)
         #expect(json["meeting_recording_hotkey_trigger_threshold_ms"] != nil)
+        #expect(json["meeting_recording_panel_center"] != nil)
         #expect(json["cohere_language"] != nil)
         #expect(json["indic_asr_language"] != nil)
         #expect(json["whisper_language"] != nil)
@@ -2010,6 +2016,22 @@ struct AppConfigTests {
         #expect(config.indicatorAnchor == .custom)
         #expect(config.indicatorOrigin?.x == 640)
         #expect(config.indicatorOrigin?.y == 320)
+        #expect(config.meetingRecordingPanelCenter == nil)
+    }
+
+    @Test("legacy indicator coordinates never seed the meeting recording panel")
+    func legacyIndicatorCoordinatesDoNotSeedMeetingPanel() throws {
+        let json = """
+        {
+          "indicator_origin": [-640, 320],
+          "meeting_panel_origin": [-900, 180]
+        }
+        """
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+
+        #expect(config.indicatorOrigin?.x == -640)
+        #expect(config.meetingPanelOrigin?.x == -900)
+        #expect(config.meetingRecordingPanelCenter == nil)
     }
 
     @Test("custom words decode missing threshold with default")

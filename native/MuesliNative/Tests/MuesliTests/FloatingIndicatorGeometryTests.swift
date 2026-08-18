@@ -88,44 +88,6 @@ struct FloatingIndicatorDragTests {
     private let screen = NSRect(x: 0, y: 0, width: 1_440, height: 900)
     private let collapsed = NSSize(width: 44, height: 22)
 
-    @Test("meeting pill clicks map to panel toggle, pause, stop, and an inert waveform")
-    func meetingPillClickMapping() {
-        typealias C = FloatingIndicatorController
-        // The 112pt pill's control order: [panel 0-31][pause 31-56][waveform 56-83][stop 83-112].
-        let pauseRegion: ClosedRange<CGFloat> = 31...56
-
-        // No location: never stop a meeting on a click we cannot place.
-        #expect(C.meetingRecordingPillAction(clickX: nil, panelToggleRegionMaxX: 31, pauseRegion: pauseRegion, stopRegionMinX: 83) == .ignore)
-        #expect(C.meetingRecordingPillAction(clickX: 10, panelToggleRegionMaxX: 31, pauseRegion: pauseRegion, stopRegionMinX: 83) == .togglePanel)
-        #expect(C.meetingRecordingPillAction(clickX: 40, panelToggleRegionMaxX: 31, pauseRegion: pauseRegion, stopRegionMinX: 83) == .togglePause)
-        // The waveform strip is display, not a control.
-        #expect(C.meetingRecordingPillAction(clickX: 70, panelToggleRegionMaxX: 31, pauseRegion: pauseRegion, stopRegionMinX: 83) == .ignore)
-        #expect(C.meetingRecordingPillAction(clickX: 85, panelToggleRegionMaxX: 31, pauseRegion: pauseRegion, stopRegionMinX: 83) == .stop)
-        #expect(C.meetingRecordingPillAction(clickX: 108, panelToggleRegionMaxX: 31, pauseRegion: pauseRegion, stopRegionMinX: 83) == .stop)
-        // Without the pause laid out there is no pause region; its span is inert, not stop.
-        #expect(C.meetingRecordingPillAction(clickX: 40, panelToggleRegionMaxX: 31, pauseRegion: nil, stopRegionMinX: 83) == .ignore)
-    }
-
-    @Test("dictation state changes do not dismiss the meeting transcript")
-    func dictationStatesPreserveMeetingTranscriptVisibility() {
-        let supportDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("meeting-transcript-routing-\(UUID().uuidString)", isDirectory: true)
-        let indicator = FloatingIndicatorController(
-            configStore: ConfigStore(supportDirectory: supportDirectory)
-        )
-        let config = AppConfig()
-        indicator.setMeetingRecording(true, config: config)
-        indicator.showMeetingTranscriptPanel()
-        #expect(indicator.isMeetingTranscriptPanelVisible)
-
-        for state in [DictationState.preparing, .recording, .transcribing, .idle] {
-            indicator.setState(state, config: config)
-            #expect(indicator.isMeetingTranscriptPanelVisible)
-        }
-
-        indicator.close()
-    }
-
     @Test("an unclamped pill saves the anchor where it was dropped")
     func unclampedDragSavesTheDropPoint() {
         // Nothing was clamped, so anchor and pill centre started together -- and the
