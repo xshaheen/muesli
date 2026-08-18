@@ -684,7 +684,6 @@ final class MuesliController: NSObject {
         }) ?? .chatGPT
         self.selectedPostProcessorBackend = loadedPostProcessorBackend
         self.indicator = FloatingIndicatorController(configStore: configStore)
-        ComputerUseCursorOverlay.shared.attachIndicator(self.indicator)
         super.init()
         dictationAudioSessionManager.onEvent = { [weak self] event in
             Task { @MainActor [weak self] in
@@ -825,23 +824,19 @@ final class MuesliController: NSObject {
             guard let self else { return }
             if self.hotkeyMonitor.isToggleRecording {
                 self.hotkeyMonitor.stopToggleMode()
-            } else if self.computerUseHotkeyMonitor.isToggleRecording {
-                self.computerUseHotkeyMonitor.stopToggleMode()
-            } else if self.computerUseCommandStartedAt != nil {
-                self.handleComputerUseStop()
             } else {
                 self.handleStop()
             }
         }
         indicator.onCancelToggleDictation = { [weak self] in
             guard let self else { return }
-            if self.computerUseHotkeyMonitor.isToggleRecording || self.computerUseCommandStartedAt != nil {
-                self.handleComputerUseCancel()
-                self.computerUseHotkeyMonitor.cancelToggleMode()
-            } else {
-                self.handleCancel()
-                self.hotkeyMonitor.cancelToggleMode()
-            }
+            self.handleCancel()
+            self.hotkeyMonitor.cancelToggleMode()
+        }
+        ComputerUseCursorOverlay.shared.onStop = { [weak self] in self?.handleComputerUseStop() }
+        ComputerUseCursorOverlay.shared.onCancel = { [weak self] in
+            self?.handleComputerUseCancel()
+            self?.computerUseHotkeyMonitor.cancelToggleMode()
         }
         indicator.onPositionSaved = { [weak self] center in
             self?.updateConfig {
@@ -1109,6 +1104,7 @@ final class MuesliController: NSObject {
         }
         await syncEngineCancellationTask?.value
         await transcriptionCoordinator.shutdown()
+        ComputerUseCursorOverlay.shared.close()
         indicator.close()
         CoreAudioSystemRecorder.cleanupStaleDevices()
     }
@@ -8698,7 +8694,7 @@ final class MuesliController: NSObject {
         fputs("[cua] prepare\n", stderr)
         meetingMonitor.suppressWhileActive()
         meetingMonitor.refreshState()
-        setState(.preparing)
+        ComputerUseCursorOverlay.shared.showAcquiring()
         computerUseAudioSessionManager.arm(source: "computer_use_hotkey_prepare")
         activeComputerUseAudioSessionID = computerUseAudioSessionManager.currentSessionID
     }
@@ -8708,10 +8704,7 @@ final class MuesliController: NSObject {
         fputs("[cua] recording start\n", stderr)
         meetingMonitor.suppressWhileActive()
         computerUseCommandStartedAt = Date()
-        indicator.powerProvider = { [weak self] in
-            self?.computerUseAudioSessionManager.currentPower() ?? -160
-        }
-        setState(.preparing)
+        ComputerUseCursorOverlay.shared.showAcquiring()
         computerUseAudioSessionManager.beginRecording(
             mode: "computer_use",
             duckingEnabled: false,
@@ -8750,9 +8743,9 @@ final class MuesliController: NSObject {
         pendingComputerUseStopSessionID = nil
         pendingComputerUseStopStartedAt = nil
         computerUseHotkeyMonitor.cancelToggleMode()
-        indicator.hideComputerUseCursor()
+        ComputerUseCursorOverlay.shared.hideTarget()
         resetComputerUseFloatingStatus()
-        setState(.idle)
+        ComputerUseCursorOverlay.shared.hide()
         meetingMonitor.resumeAfterCooldown()
         meetingMonitor.refreshState()
     }
@@ -8779,7 +8772,7 @@ final class MuesliController: NSObject {
     private func finishComputerUseAudioStop(wavURL: URL?, startedAt: Date) {
         guard let wavURL else {
             fputs("[cua] stop without wav\n", stderr)
-            setState(.idle)
+            ComputerUseCursorOverlay.shared.hide()
             meetingMonitor.resumeAfterCooldown()
             meetingMonitor.refreshState()
             return
@@ -8788,14 +8781,13 @@ final class MuesliController: NSObject {
         if duration < 0.3 {
             fputs("[cua] discarded short recording\n", stderr)
             try? FileManager.default.removeItem(at: wavURL)
-            setState(.idle)
+            ComputerUseCursorOverlay.shared.hide()
             meetingMonitor.resumeAfterCooldown()
             meetingMonitor.refreshState()
             return
         }
 
-        indicator.setTranscribingTitle("Parsing command", config: config)
-        setState(.transcribing)
+        ComputerUseCursorOverlay.shared.showProcessing("Parsing command")
         computerUseCommandTask?.cancel()
         let taskID = UUID()
         let backend = selectedBackend
@@ -8834,7 +8826,7 @@ final class MuesliController: NSObject {
                         guard self.computerUseCommandTaskID == taskID else { return }
                         self.computerUseCommandTask = nil
                         self.computerUseCommandTaskID = nil
-                        self.setState(.idle)
+                        ComputerUseCursorOverlay.shared.hide()
                         self.meetingMonitor.resumeAfterCooldown()
                         self.meetingMonitor.refreshState()
                     }
@@ -8869,7 +8861,7 @@ final class MuesliController: NSObject {
                     guard self.computerUseCommandTaskID == taskID else { return }
                     self.computerUseCommandTask = nil
                     self.computerUseCommandTaskID = nil
-                    self.setState(.idle)
+                    ComputerUseCursorOverlay.shared.hide()
                     self.meetingMonitor.resumeAfterCooldown()
                     self.meetingMonitor.refreshState()
                 }
@@ -8879,8 +8871,7 @@ final class MuesliController: NSObject {
                     guard self.computerUseCommandTaskID == taskID else { return }
                     self.computerUseCommandTask = nil
                     self.computerUseCommandTaskID = nil
-                    self.setState(.idle)
-                    self.indicator.showWarning("CUA command failed", icon: "!")
+                    ComputerUseCursorOverlay.shared.showTerminal("CUA command failed", kind: .failure)
                     self.meetingMonitor.resumeAfterCooldown()
                     self.meetingMonitor.refreshState()
                 }
@@ -8952,7 +8943,6 @@ final class MuesliController: NSObject {
         guard computerUseCommandTaskID == taskID else { return }
         resetComputerUseFloatingStatus()
         presentComputerUseTranscript(transcript)
-        setState(.transcribing)
         let runtime = ComputerUsePlannerRuntime(config: config) { [weak self] status in
             guard let self, self.computerUseCommandTaskID == taskID else { return }
             self.presentComputerUseFloatingStatus(status)
@@ -8960,11 +8950,11 @@ final class MuesliController: NSObject {
 
         let result = await runtime.run(command: transcript)
         guard computerUseCommandTaskID == taskID else { return }
-        indicator.hideComputerUseCursor()
+        ComputerUseCursorOverlay.shared.hideTarget()
         if result.status == .cancelled {
             computerUseCommandTask = nil
             computerUseCommandTaskID = nil
-            setState(.idle)
+            ComputerUseCursorOverlay.shared.hide()
             meetingMonitor.resumeAfterCooldown()
             meetingMonitor.refreshState()
             TelemetryDeck.signal("computer_use.command_finished", parameters: [
@@ -8999,7 +8989,7 @@ final class MuesliController: NSObject {
         computerUseTranscriptVisible = true
         computerUseLastFloatingStatusAt = .distantPast
         computerUseLastFloatingStatus = ""
-        indicator.showComputerUseTranscript(transcript, config: config)
+        ComputerUseCursorOverlay.shared.showTranscript(transcript)
     }
 
     @MainActor
@@ -9008,7 +8998,7 @@ final class MuesliController: NSObject {
         guard !trimmed.isEmpty else { return }
 
         statusBarController?.setStatus(trimmed)
-        guard dictationState == .transcribing else { return }
+        guard computerUseCommandTask != nil else { return }
         guard let floatingStatus = computerUseFloatingStatusLabel(for: trimmed) else { return }
         if computerUseTranscriptVisible && !shouldReplaceComputerUseTranscript(with: floatingStatus) {
             return
@@ -9029,7 +9019,7 @@ final class MuesliController: NSObject {
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             Task { @MainActor in
-                guard self.dictationState == .transcribing else { return }
+                guard self.computerUseCommandTask != nil else { return }
                 self.applyComputerUseFloatingStatus(floatingStatus, at: Date())
                 self.computerUseFloatingStatusWorkItem = nil
             }
@@ -9099,7 +9089,7 @@ final class MuesliController: NSObject {
         computerUseTranscriptVisible = false
         computerUseLastFloatingStatus = status
         computerUseLastFloatingStatusAt = date
-        indicator.setTranscribingTitle(status, config: config)
+        ComputerUseCursorOverlay.shared.showStatus(status)
     }
 
     @MainActor
@@ -9144,34 +9134,38 @@ final class MuesliController: NSObject {
     }
 
     private func presentComputerUseRuntimeResult(_ result: ComputerUsePlannerRuntimeResult) {
-        setState(.idle)
         let message: String
         let floatingMessage: String
-        let icon: String
         switch result.status {
         case .done:
             message = result.message.hasPrefix("Done") ? result.message : "Done: \(result.message)"
             floatingMessage = "Done"
-            icon = ""
         case .timedOut:
             message = result.message
             floatingMessage = "Timed out"
-            icon = "!"
         case .needsConfirmation:
             message = result.message.hasPrefix("Confirm") ? result.message : "Confirm: \(result.message)"
             floatingMessage = "Confirm"
-            icon = "!"
         case .failed:
             message = result.message
             floatingMessage = "Failed"
-            icon = "!"
         case .cancelled:
             message = result.message
             floatingMessage = "Cancelled"
-            icon = ""
         }
         statusBarController?.setStatus(message)
-        indicator.showWarning(floatingMessage, icon: icon, duration: 3.0)
+        let terminalKind: ComputerUseCursorOverlay.TerminalKind
+        switch result.status {
+        case .done:
+            terminalKind = .success
+        case .timedOut, .needsConfirmation:
+            terminalKind = .warning
+        case .failed:
+            terminalKind = .failure
+        case .cancelled:
+            terminalKind = .warning
+        }
+        ComputerUseCursorOverlay.shared.showTerminal(floatingMessage, kind: terminalKind)
     }
 
     /// Streaming RNNT dictation backend (handsfree live text at cursor).
@@ -9365,11 +9359,13 @@ final class MuesliController: NSObject {
             break
         case .acquiringAudio(let sessionID):
             guard activeComputerUseAudioSessionID == sessionID else { break }
-            setState(.preparing)
+            ComputerUseCursorOverlay.shared.showAcquiring()
         case .streamActive(let sessionID, _):
             guard activeComputerUseAudioSessionID == sessionID,
                   computerUseCommandStartedAt != nil else { break }
-            setState(.recording)
+            ComputerUseCursorOverlay.shared.showRecording { [weak self] in
+                self?.computerUseAudioSessionManager.currentPower() ?? -160
+            }
             SoundController.playDictationStart(
                 enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode
             )
@@ -9413,7 +9409,7 @@ final class MuesliController: NSObject {
             pendingComputerUseStopSessionID = nil
             pendingComputerUseStopStartedAt = nil
             computerUseHotkeyMonitor.cancelToggleMode()
-            setState(.idle)
+            ComputerUseCursorOverlay.shared.showTerminal("CUA recording failed", kind: .failure)
             meetingMonitor.resumeAfterCooldown()
             meetingMonitor.refreshState()
         case .latency(_, let event, _):
