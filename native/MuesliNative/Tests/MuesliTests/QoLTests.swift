@@ -31,6 +31,31 @@ struct DictationBackendReadinessTests {
     }
 }
 
+@Suite("Dictation terminal feedback eligibility")
+struct DictationTerminalFeedbackEligibilityTests {
+    @Test("only the first terminal failure remains eligible")
+    func repeatedFailureHasOneWinner() async {
+        let trace = SessionRunTrace(store: nil, kind: .dictation)
+
+        #expect(await trace.fail(stage: "audio_session"))
+        #expect(!(await trace.fail(stage: "dictation_pipeline")))
+    }
+
+    @Test("cancellation and empty output make later failures ineligible")
+    func neutralOutcomesBlockLateFailure() async {
+        let cancelled = SessionRunTrace(store: nil, kind: .dictation)
+        #expect(await cancelled.cancel(stage: "recording"))
+        #expect(!(await cancelled.fail(stage: "dictation_pipeline")))
+
+        let empty = SessionRunTrace(store: nil, kind: .dictation)
+        #expect(await empty.claimTerminal(
+            .success,
+            metadata: ["output_characters": "0"]
+        ))
+        #expect(!(await empty.fail(stage: "dictation_pipeline")))
+    }
+}
+
 // MARK: - ChatGPT File-based Token Storage
 
 @Suite("ChatGPT Token Storage")

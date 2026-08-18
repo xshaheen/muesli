@@ -106,6 +106,26 @@ struct FloatingIndicatorDragTests {
         #expect(C.meetingRecordingPillAction(clickX: 40, panelToggleRegionMaxX: 31, pauseRegion: nil, stopRegionMinX: 83) == .ignore)
     }
 
+    @Test("dictation state changes do not dismiss the meeting transcript")
+    func dictationStatesPreserveMeetingTranscriptVisibility() {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meeting-transcript-routing-\(UUID().uuidString)", isDirectory: true)
+        let indicator = FloatingIndicatorController(
+            configStore: ConfigStore(supportDirectory: supportDirectory)
+        )
+        let config = AppConfig()
+        indicator.setMeetingRecording(true, config: config)
+        indicator.showMeetingTranscriptPanel()
+        #expect(indicator.isMeetingTranscriptPanelVisible)
+
+        for state in [DictationState.preparing, .recording, .transcribing, .idle] {
+            indicator.setState(state, config: config)
+            #expect(indicator.isMeetingTranscriptPanelVisible)
+        }
+
+        indicator.close()
+    }
+
     @Test("an unclamped pill saves the anchor where it was dropped")
     func unclampedDragSavesTheDropPoint() {
         // Nothing was clamped, so anchor and pill centre started together -- and the
