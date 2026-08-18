@@ -132,6 +132,35 @@ struct OrderedDictationJobQueueTests {
         #expect(workerObservedClaim)
     }
 
+    @Test("shutdown cancellation drains the active job and every queued job")
+    @MainActor
+    func cancelAllDrainsQueue() async {
+        var activeFinished = false
+        var queuedCancellations: [Int] = []
+        let queue = OrderedDictationJobQueue<Job>(
+            handler: { _ in
+                do {
+                    try await Task.sleep(for: .seconds(10))
+                } catch {
+                    activeFinished = true
+                }
+            },
+            onCancel: { job in
+                queuedCancellations.append(job.id)
+            }
+        )
+
+        queue.enqueue(Job(id: 1, transcript: "active"))
+        queue.enqueue(Job(id: 2, transcript: "queued"))
+        queue.enqueue(Job(id: 3, transcript: "queued"))
+        await Task.yield()
+        await queue.cancelAllAndWait()
+
+        #expect(activeFinished)
+        #expect(queuedCancellations == [2, 3])
+        #expect(queue.count == 0)
+    }
+
     @Test("completed recordings wait for earlier stop callbacks")
     func outOfOrderStopCallbacks() {
         var buffer = OrderedCompletionBuffer<String>()

@@ -42,7 +42,7 @@ public struct MeetingThreadNavigation: Equatable, Sendable {
 
 public final class DictationStore {
     public static let defaultTombstoneRetentionInterval: TimeInterval = 30 * 24 * 60 * 60
-    static let currentSchemaVersion: Int32 = 2
+    static let currentSchemaVersion: Int32 = 3
 
     private static let iso8601Formatter = ISO8601DateFormatter()
     private static let iso8601FormatterLock = NSLock()
@@ -114,9 +114,14 @@ public final class DictationStore {
                     validate: validateNormalizedSchema
                 ),
                 SQLiteMigrationRunner.Migration(
-                    version: Self.currentSchemaVersion,
+                    version: 2,
                     apply: addSessionTraceSchema,
                     validate: validateSessionTraceSchema
+                ),
+                SQLiteMigrationRunner.Migration(
+                    version: Self.currentSchemaVersion,
+                    apply: addRecordingArtifactSchema,
+                    validate: validateRecordingArtifactSchema
                 ),
             ],
             checkpoint: migrationCheckpoint
@@ -549,6 +554,136 @@ public final class DictationStore {
         }
     }
 
+    private func addRecordingArtifactSchema(db: OpaquePointer?) throws {
+        try exec(
+            """
+            CREATE TABLE IF NOT EXISTS recording_artifacts (
+                artifact_uuid TEXT PRIMARY KEY,
+                session_uuid TEXT NOT NULL UNIQUE,
+                capture_kind TEXT NOT NULL CHECK (capture_kind IN ('dictation', 'meeting', 'audio_import')),
+                file_extension TEXT NOT NULL CHECK (
+                    file_extension IN ('wav', 'm4a', 'caf', 'aiff', 'aif', 'mp3')
+                ),
+                frozen_save_policy TEXT NOT NULL CHECK (frozen_save_policy IN ('prompt', 'always')),
+                lifecycle_state TEXT NOT NULL CHECK (
+                    lifecycle_state IN ('staging', 'pending', 'retained', 'deleting', 'missing')
+                ),
+                byte_count INTEGER NOT NULL CHECK (byte_count >= 0),
+                created_at REAL NOT NULL,
+                terminal_at REAL,
+                pending_expires_at REAL,
+                orphaned_at REAL,
+                deletion_requested_at REAL,
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_recording_artifacts_lifecycle
+                ON recording_artifacts(lifecycle_state, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_recording_artifacts_pending_expiry
+                ON recording_artifacts(pending_expires_at)
+                WHERE lifecycle_state = 'pending';
+            CREATE INDEX IF NOT EXISTS idx_recording_artifacts_orphaned
+                ON recording_artifacts(orphaned_at)
+                WHERE orphaned_at IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS dictation_recording_links (
+                dictation_id INTEGER PRIMARY KEY REFERENCES dictations(id) ON DELETE CASCADE,
+                artifact_uuid TEXT REFERENCES recording_artifacts(artifact_uuid) ON DELETE SET NULL,
+                availability TEXT NOT NULL CHECK (
+                    availability IN (
+                        'never', 'declined', 'pending', 'available', 'missing',
+                        'expired', 'deleted', 'save_failed', 'invalid_legacy'
+                    )
+                ),
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_dictation_recording_links_artifact
+                ON dictation_recording_links(artifact_uuid) WHERE artifact_uuid IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS meeting_recording_links (
+                meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+                artifact_uuid TEXT REFERENCES recording_artifacts(artifact_uuid) ON DELETE SET NULL,
+                availability TEXT NOT NULL CHECK (
+                    availability IN (
+                        'never', 'declined', 'pending', 'available', 'missing',
+                        'expired', 'deleted', 'save_failed', 'invalid_legacy'
+                    )
+                ),
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_meeting_recording_links_artifact
+                ON meeting_recording_links(artifact_uuid) WHERE artifact_uuid IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS dictation_audio_history (
+                session_uuid TEXT PRIMARY KEY,
+                captured_at REAL NOT NULL,
+                duration_seconds REAL NOT NULL CHECK (duration_seconds >= 0),
+                terminal_outcome TEXT NOT NULL CHECK (
+                    terminal_outcome IN ('cancelled', 'timed_out', 'failed', 'empty')
+                ),
+                artifact_uuid TEXT REFERENCES recording_artifacts(artifact_uuid) ON DELETE SET NULL,
+                availability TEXT NOT NULL CHECK (
+                    availability IN (
+                        'declined', 'pending', 'available', 'missing', 'expired',
+                        'deleted', 'save_failed', 'invalid_legacy'
+                    )
+                ),
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_dictation_audio_history_captured
+                ON dictation_audio_history(captured_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_dictation_audio_history_artifact
+                ON dictation_audio_history(artifact_uuid) WHERE artifact_uuid IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS recording_diagnostic_links (
+                session_uuid TEXT PRIMARY KEY REFERENCES session_traces(session_uuid) ON DELETE CASCADE,
+                artifact_uuid TEXT REFERENCES recording_artifacts(artifact_uuid) ON DELETE SET NULL,
+                availability TEXT NOT NULL CHECK (
+                    availability IN (
+                        'never', 'declined', 'pending', 'available', 'missing',
+                        'expired', 'deleted', 'save_failed', 'invalid_legacy'
+                    )
+                ),
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_recording_diagnostic_links_artifact
+                ON recording_diagnostic_links(artifact_uuid) WHERE artifact_uuid IS NOT NULL;
+            """,
+            db: db
+        )
+    }
+
+    private func validateRecordingArtifactSchema(db: OpaquePointer?) throws {
+        try validateSessionTraceSchema(db: db)
+        try validateSchemaObjects(
+            requiredColumns: [
+                "recording_artifacts": [
+                    "artifact_uuid", "session_uuid", "capture_kind", "file_extension",
+                    "frozen_save_policy", "lifecycle_state", "byte_count", "created_at",
+                    "terminal_at", "pending_expires_at", "orphaned_at",
+                    "deletion_requested_at", "updated_at",
+                ],
+                "dictation_recording_links": ["dictation_id", "artifact_uuid", "availability", "updated_at"],
+                "meeting_recording_links": ["meeting_id", "artifact_uuid", "availability", "updated_at"],
+                "dictation_audio_history": [
+                    "session_uuid", "captured_at", "duration_seconds", "terminal_outcome",
+                    "artifact_uuid", "availability", "created_at", "updated_at",
+                ],
+                "recording_diagnostic_links": ["session_uuid", "artifact_uuid", "availability", "updated_at"],
+            ],
+            requiredIndexes: [
+                "idx_recording_artifacts_lifecycle", "idx_recording_artifacts_pending_expiry",
+                "idx_recording_artifacts_orphaned", "idx_dictation_recording_links_artifact",
+                "idx_meeting_recording_links_artifact", "idx_dictation_audio_history_captured",
+                "idx_dictation_audio_history_artifact", "idx_recording_diagnostic_links_artifact",
+            ],
+            db: db
+        )
+        guard try indexColumns("sqlite_autoindex_recording_artifacts_2", db: db) == ["session_uuid"] else {
+            throw schemaPostconditionError("recording artifact session identity is not unique")
+        }
+    }
+
     private func repairDuplicateCloudRecordNames(db: OpaquePointer?) throws {
         for table in ["dictations", "meetings"] {
             // Legacy migrations attempted to add the uniqueness constraint but
@@ -850,7 +985,8 @@ public final class DictationStore {
         dictationStyleSelectionSource: String? = nil,
         dictationCleanupOutcome: String? = nil,
         startedAt: Date,
-        endedAt: Date
+        endedAt: Date,
+        recording: RecordingArtifactReference? = nil
     ) throws -> Int64 {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
@@ -885,10 +1021,27 @@ public final class DictationStore {
         sqlite3_bind_text(statement, 12, (ended as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 13, Date().timeIntervalSince1970)
 
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw lastError(db)
+        guard recording != nil else {
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+            return sqlite3_last_insert_rowid(db)
         }
-        return sqlite3_last_insert_rowid(db)
+
+        try exec("BEGIN IMMEDIATE", db: db)
+        do {
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+            let id = sqlite3_last_insert_rowid(db)
+            if let recording {
+                try upsertRecordingLink(
+                    table: "dictation_recording_links", ownerColumn: "dictation_id",
+                    ownerID: id, recording: recording, db: db
+                )
+            }
+            try exec("COMMIT", db: db)
+            return id
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
+        }
     }
 
     public func recentDictations(
@@ -1435,7 +1588,8 @@ public final class DictationStore {
         selectedTemplateKind: MeetingTemplateKind? = nil,
         selectedTemplatePrompt: String? = nil,
         source: MeetingSource = .meeting,
-        calendarOccurrence: CalendarOccurrenceReference? = nil
+        calendarOccurrence: CalendarOccurrenceReference? = nil,
+        recording: RecordingArtifactReference? = nil
     ) throws -> Int64 {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
@@ -1483,10 +1637,27 @@ public final class DictationStore {
             sqlite3_bind_null(statement, 22)
         }
 
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw lastError(db)
+        guard recording != nil else {
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+            return sqlite3_last_insert_rowid(db)
         }
-        return sqlite3_last_insert_rowid(db)
+
+        try exec("BEGIN IMMEDIATE", db: db)
+        do {
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+            let id = sqlite3_last_insert_rowid(db)
+            if let recording {
+                try upsertRecordingLink(
+                    table: "meeting_recording_links", ownerColumn: "meeting_id",
+                    ownerID: id, recording: recording, db: db
+                )
+            }
+            try exec("COMMIT", db: db)
+            return id
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
+        }
     }
 
     @discardableResult
@@ -2191,10 +2362,16 @@ public final class DictationStore {
         return words
     }
 
-    public func deleteDictation(id: Int64) throws {
+    @discardableResult
+    public func deleteDictation(id: Int64) throws -> RecordingArtifactID? {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        try deleteComputerUseTrace(dictationID: id, db: db)
+        try exec("BEGIN IMMEDIATE", db: db)
+        let recordingIDs = try recordingArtifactIDs(
+            sql: "SELECT artifact_uuid FROM dictation_recording_links WHERE dictation_id = ?",
+            ownerID: id,
+            db: db
+        )
         let sql = """
         UPDATE dictations
         SET raw_text = '',
@@ -2219,18 +2396,30 @@ public final class DictationStore {
         sqlite3_bind_double(statement, 1, now)
         sqlite3_bind_double(statement, 2, now)
         sqlite3_bind_int64(statement, 3, id)
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw lastError(db)
-        }
-        guard sqlite3_changes(db) > 0 else {
-            throw DictationStoreError.dictationNotFound(id: id)
+        do {
+            try deleteComputerUseTrace(dictationID: id, db: db)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+            guard sqlite3_changes(db) > 0 else { throw DictationStoreError.dictationNotFound(id: id) }
+            try exec("DELETE FROM dictation_recording_links WHERE dictation_id = \(id)", db: db)
+            let deletingIDs = try markRecordingsDeletingWhenUnowned(recordingIDs, now: now, db: db)
+            try exec("COMMIT", db: db)
+            return deletingIDs.first
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
         }
     }
 
-    public func deleteMeeting(id: Int64) throws {
+    @discardableResult
+    public func deleteMeeting(id: Int64) throws -> RecordingArtifactID? {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
         try exec("BEGIN IMMEDIATE", db: db)
+        let recordingIDs = try recordingArtifactIDs(
+            sql: "SELECT artifact_uuid FROM meeting_recording_links WHERE meeting_id = ?",
+            ownerID: id,
+            db: db
+        )
 
         do {
             try deleteResumeSnapshot(meetingID: id, db: db)
@@ -2273,18 +2462,28 @@ public final class DictationStore {
                 throw DictationStoreError.meetingNotFound(id: id)
             }
             try detachFollowUpSuccessors(of: id, db: db)
+            try exec("DELETE FROM meeting_recording_links WHERE meeting_id = \(id)", db: db)
+            let deletingIDs = try markRecordingsDeletingWhenUnowned(recordingIDs, now: now, db: db)
             try exec("COMMIT", db: db)
+            return deletingIDs.first
         } catch {
             sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
             throw error
         }
     }
 
-    public func clearDictations() throws {
+    @discardableResult
+    public func clearDictations() throws -> [RecordingArtifactID] {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        try exec("DELETE FROM computer_use_traces", db: db)
-        try exec(
+        try exec("BEGIN IMMEDIATE", db: db)
+        let recordingIDs = try recordingArtifactIDs(
+            sql: "SELECT artifact_uuid FROM dictation_recording_links WHERE artifact_uuid IS NOT NULL UNION SELECT artifact_uuid FROM dictation_audio_history WHERE artifact_uuid IS NOT NULL",
+            db: db
+        )
+        do {
+            try exec("DELETE FROM computer_use_traces", db: db)
+            try exec(
             """
             UPDATE dictations
             SET raw_text = '',
@@ -2299,6 +2498,33 @@ public final class DictationStore {
                 updated_at = strftime('%s','now'),
                 sync_dirty = 1
             WHERE deleted_at IS NULL
+            """,
+                db: db
+            )
+            try exec("DELETE FROM dictation_recording_links; DELETE FROM dictation_audio_history", db: db)
+            let deletingIDs = try markRecordingsDeletingWhenUnowned(
+                recordingIDs, now: Date().timeIntervalSince1970, db: db
+            )
+            try exec("COMMIT", db: db)
+            return deletingIDs
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
+        }
+    }
+
+    public func recordingArtifactsRemovedByClearingDictations() throws -> [RecordingArtifactID] {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        return try recordingArtifactIDs(
+            sql: """
+            SELECT a.artifact_uuid
+            FROM recording_artifacts a
+            WHERE (
+                EXISTS (SELECT 1 FROM dictation_recording_links d WHERE d.artifact_uuid = a.artifact_uuid)
+                OR EXISTS (SELECT 1 FROM dictation_audio_history h WHERE h.artifact_uuid = a.artifact_uuid)
+            )
+            AND NOT EXISTS (SELECT 1 FROM meeting_recording_links m WHERE m.artifact_uuid = a.artifact_uuid)
             """,
             db: db
         )
@@ -2353,12 +2579,19 @@ public final class DictationStore {
         }
     }
 
-    public func clearMeetings() throws {
+    @discardableResult
+    public func clearMeetings() throws -> [RecordingArtifactID] {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        try exec("DELETE FROM meeting_resume_snapshots", db: db)
-        try exec("DELETE FROM meeting_transcript_checkpoints", db: db)
-        try exec(
+        try exec("BEGIN IMMEDIATE", db: db)
+        let recordingIDs = try recordingArtifactIDs(
+            sql: "SELECT artifact_uuid FROM meeting_recording_links WHERE artifact_uuid IS NOT NULL",
+            db: db
+        )
+        do {
+            try exec("DELETE FROM meeting_resume_snapshots", db: db)
+            try exec("DELETE FROM meeting_transcript_checkpoints", db: db)
+            try exec(
             """
             UPDATE meetings
             SET title = 'Deleted Meeting',
@@ -2378,6 +2611,31 @@ public final class DictationStore {
                 updated_at = strftime('%s','now'),
                 sync_dirty = 1
             WHERE deleted_at IS NULL
+            """,
+                db: db
+            )
+            try exec("DELETE FROM meeting_recording_links", db: db)
+            let deletingIDs = try markRecordingsDeletingWhenUnowned(
+                recordingIDs, now: Date().timeIntervalSince1970, db: db
+            )
+            try exec("COMMIT", db: db)
+            return deletingIDs
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
+        }
+    }
+
+    public func recordingArtifactsRemovedByClearingMeetings() throws -> [RecordingArtifactID] {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        return try recordingArtifactIDs(
+            sql: """
+            SELECT a.artifact_uuid
+            FROM recording_artifacts a
+            WHERE EXISTS (SELECT 1 FROM meeting_recording_links m WHERE m.artifact_uuid = a.artifact_uuid)
+              AND NOT EXISTS (SELECT 1 FROM dictation_recording_links d WHERE d.artifact_uuid = a.artifact_uuid)
+              AND NOT EXISTS (SELECT 1 FROM dictation_audio_history h WHERE h.artifact_uuid = a.artifact_uuid)
             """,
             db: db
         )
@@ -2830,7 +3088,11 @@ public final class DictationStore {
     /// Resumed meetings use their durable resume snapshot for transcript/timing state;
     /// ordinary live meetings return to the exact pre-completion draft fields.
     @discardableResult
-    public func rollbackProvisionalLiveMeeting(id: Int64, priorRecord: MeetingRecord) throws -> Bool {
+    public func rollbackProvisionalLiveMeeting(
+        id: Int64,
+        priorRecord: MeetingRecord,
+        priorRecording: RecordingArtifactReference? = nil
+    ) throws -> Bool {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
         let snapshot = try resumeSnapshot(meetingID: id, db: db)
@@ -2839,6 +3101,11 @@ public final class DictationStore {
             throw lastError(db)
         }
         do {
+            let provisionalRecordingIDs = try recordingArtifactIDs(
+                sql: "SELECT artifact_uuid FROM meeting_recording_links WHERE meeting_id = ?",
+                ownerID: id,
+                db: db
+            )
             if let snapshot {
                 try completeResumedRecovery(
                     id: id,
@@ -2856,6 +3123,19 @@ public final class DictationStore {
                 try restoreProvisionalLiveMeetingRow(id: id, from: priorRecord, db: db)
                 try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
             }
+            if let priorRecording {
+                try upsertRecordingLink(
+                    table: "meeting_recording_links", ownerColumn: "meeting_id",
+                    ownerID: id, recording: priorRecording, db: db
+                )
+            } else {
+                try exec("DELETE FROM meeting_recording_links WHERE meeting_id = \(id)", db: db)
+            }
+            _ = try markRecordingsDeletingWhenUnowned(
+                provisionalRecordingIDs,
+                now: Date().timeIntervalSince1970,
+                db: db
+            )
             guard sqlite3_exec(db, "COMMIT", nil, nil, nil) == SQLITE_OK else {
                 throw lastError(db)
             }
@@ -2929,7 +3209,8 @@ public final class DictationStore {
         selectedTemplateName: String? = nil,
         selectedTemplateKind: MeetingTemplateKind? = nil,
         selectedTemplatePrompt: String? = nil,
-        preserveRecoveryMetadata: Bool = false
+        preserveRecoveryMetadata: Bool = false,
+        recording: RecordingArtifactReference? = nil
     ) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
@@ -2969,16 +3250,147 @@ public final class DictationStore {
         bindOptionalText(selectedTemplatePrompt, at: 16, statement: statement)
         sqlite3_bind_double(statement, 17, Date().timeIntervalSince1970)
         sqlite3_bind_int64(statement, 18, id)
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw lastError(db)
+        try exec("BEGIN IMMEDIATE", db: db)
+        do {
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+            guard sqlite3_changes(db) > 0 else { throw DictationStoreError.meetingNotFound(id: id) }
+            if !preserveRecoveryMetadata {
+                try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
+                try deleteResumeSnapshot(meetingID: id, db: db)
+            }
+            if let recording {
+                try upsertRecordingLink(
+                    table: "meeting_recording_links", ownerColumn: "meeting_id",
+                    ownerID: id, recording: recording, db: db
+                )
+            }
+            try exec("COMMIT", db: db)
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
         }
-        guard sqlite3_changes(db) > 0 else {
-            throw DictationStoreError.meetingNotFound(id: id)
+    }
+
+    private func upsertRecordingLink(
+        table: String,
+        ownerColumn: String,
+        ownerID: Int64,
+        recording: RecordingArtifactReference,
+        db: OpaquePointer?
+    ) throws {
+        let sql = "INSERT INTO \(table) (\(ownerColumn), artifact_uuid, availability, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(\(ownerColumn)) DO UPDATE SET artifact_uuid=excluded.artifact_uuid, availability=excluded.availability, updated_at=excluded.updated_at"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, ownerID)
+        bindOptionalText(recording.artifactID?.storedValue, at: 2, statement: statement)
+        sqlite3_bind_text(statement, 3, (recording.availability.rawValue as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_double(statement, 4, Date().timeIntervalSince1970)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+        if let artifactID = recording.artifactID {
+            var artifactStatement: OpaquePointer?
+            guard sqlite3_prepare_v2(
+                db,
+                "UPDATE recording_artifacts SET orphaned_at=NULL, updated_at=? WHERE artifact_uuid=?",
+                -1,
+                &artifactStatement,
+                nil
+            ) == SQLITE_OK else { throw lastError(db) }
+            defer { sqlite3_finalize(artifactStatement) }
+            sqlite3_bind_double(artifactStatement, 1, Date().timeIntervalSince1970)
+            sqlite3_bind_text(
+                artifactStatement,
+                2,
+                (artifactID.storedValue as NSString).utf8String,
+                -1,
+                sqliteTransient
+            )
+            guard sqlite3_step(artifactStatement) == SQLITE_DONE else { throw lastError(db) }
         }
-        if !preserveRecoveryMetadata {
-            try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
-            try deleteResumeSnapshot(meetingID: id, db: db)
+    }
+
+    private func recordingArtifactIDs(
+        sql: String,
+        ownerID: Int64? = nil,
+        db: OpaquePointer?
+    ) throws -> [RecordingArtifactID] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
+        defer { sqlite3_finalize(statement) }
+        if let ownerID { sqlite3_bind_int64(statement, 1, ownerID) }
+        var values: [RecordingArtifactID] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let pointer = sqlite3_column_text(statement, 0),
+                  let id = RecordingArtifactID(storedValue: String(cString: pointer)) else { continue }
+            values.append(id)
         }
+        return values
+    }
+
+    private func markRecordingsDeletingWhenUnowned(
+        _ ids: [RecordingArtifactID],
+        now: Double,
+        db: OpaquePointer?
+    ) throws -> [RecordingArtifactID] {
+        var deleting: [RecordingArtifactID] = []
+        for id in ids {
+            let value = id.storedValue
+            let ownerSQL = """
+            SELECT
+                (SELECT COUNT(*) FROM dictation_recording_links WHERE artifact_uuid = ?) +
+                (SELECT COUNT(*) FROM meeting_recording_links WHERE artifact_uuid = ?) +
+                (SELECT COUNT(*) FROM dictation_audio_history WHERE artifact_uuid = ?)
+            """
+            var ownerStatement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, ownerSQL, -1, &ownerStatement, nil) == SQLITE_OK else {
+                throw lastError(db)
+            }
+            for index in 1...3 {
+                sqlite3_bind_text(ownerStatement, Int32(index), (value as NSString).utf8String, -1, sqliteTransient)
+            }
+            guard sqlite3_step(ownerStatement) == SQLITE_ROW else {
+                sqlite3_finalize(ownerStatement)
+                throw lastError(db)
+            }
+            let ownerCount = sqlite3_column_int64(ownerStatement, 0)
+            sqlite3_finalize(ownerStatement)
+            guard ownerCount == 0 else { continue }
+            deleting.append(id)
+
+            var artifactStatement: OpaquePointer?
+            guard sqlite3_prepare_v2(
+                db,
+                "UPDATE recording_artifacts SET lifecycle_state='deleting', deletion_requested_at=?, updated_at=? WHERE artifact_uuid=?",
+                -1,
+                &artifactStatement,
+                nil
+            ) == SQLITE_OK else { throw lastError(db) }
+            sqlite3_bind_double(artifactStatement, 1, now)
+            sqlite3_bind_double(artifactStatement, 2, now)
+            sqlite3_bind_text(artifactStatement, 3, (value as NSString).utf8String, -1, sqliteTransient)
+            guard sqlite3_step(artifactStatement) == SQLITE_DONE else {
+                sqlite3_finalize(artifactStatement)
+                throw lastError(db)
+            }
+            sqlite3_finalize(artifactStatement)
+
+            var diagnosticStatement: OpaquePointer?
+            guard sqlite3_prepare_v2(
+                db,
+                "UPDATE recording_diagnostic_links SET artifact_uuid=NULL, availability='deleted', updated_at=? WHERE artifact_uuid=?",
+                -1,
+                &diagnosticStatement,
+                nil
+            ) == SQLITE_OK else { throw lastError(db) }
+            sqlite3_bind_double(diagnosticStatement, 1, now)
+            sqlite3_bind_text(diagnosticStatement, 2, (value as NSString).utf8String, -1, sqliteTransient)
+            guard sqlite3_step(diagnosticStatement) == SQLITE_DONE else {
+                sqlite3_finalize(diagnosticStatement)
+                throw lastError(db)
+            }
+            sqlite3_finalize(diagnosticStatement)
+        }
+        return deleting
     }
 
     private func manualNoteWordCountIfNeeded(for status: MeetingStatus, id: Int64, db: OpaquePointer?) throws -> Int? {

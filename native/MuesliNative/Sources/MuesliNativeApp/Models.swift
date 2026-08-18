@@ -1393,6 +1393,16 @@ enum OnboardingUseCase: String, Codable, CaseIterable {
     }
 }
 
+enum DictationRecordingSavePolicy: String, Codable, CaseIterable {
+    case never
+    case prompt
+    case always
+
+    var retainsCapture: Bool {
+        self != .never
+    }
+}
+
 struct AppConfig: Codable {
     var dictationHotkey: HotkeyConfig = .default
     var computerUseHotkey: HotkeyConfig = .computerUseDefault
@@ -1423,6 +1433,7 @@ struct AppConfig: Codable {
     var scheduledMeetingNotificationLeadTime: ScheduledMeetingNotificationLeadTime = .atStart
     var showMeetingDetectionNotification: Bool = true
     var mutedMeetingDetectionAppBundleIDs: [String] = []
+    var dictationRecordingSavePolicy: DictationRecordingSavePolicy = .never
     var meetingRecordingSavePolicy: MeetingRecordingSavePolicy = .never
     var meetingRecordingFileFormat: String = MeetingRecordingFileFormat.m4a.rawValue
     var waveformCacheOrphanCleanupMigrationApplied: Bool = false
@@ -1575,6 +1586,7 @@ struct AppConfig: Codable {
         case scheduledMeetingNotificationLeadTime = "scheduled_meeting_notification_lead_time"
         case showMeetingDetectionNotification = "show_meeting_detection_notification"
         case mutedMeetingDetectionAppBundleIDs = "muted_meeting_detection_app_bundle_ids"
+        case dictationRecordingSavePolicy = "dictation_recording_save_policy"
         case meetingRecordingSavePolicy = "meeting_recording_save_policy"
         case meetingRecordingFileFormat = "meeting_recording_file_format"
         case waveformCacheOrphanCleanupMigrationApplied = "waveform_cache_orphan_cleanup_migration_applied"
@@ -1732,6 +1744,9 @@ struct AppConfig: Codable {
             ?? defaults.scheduledMeetingNotificationLeadTime
         showMeetingDetectionNotification = decodedShowMeetingDetectionNotification ?? defaults.showMeetingDetectionNotification
         mutedMeetingDetectionAppBundleIDs = (try? c.decode([String].self, forKey: .mutedMeetingDetectionAppBundleIDs)) ?? defaults.mutedMeetingDetectionAppBundleIDs
+        dictationRecordingSavePolicy =
+            (try? c.decode(DictationRecordingSavePolicy.self, forKey: .dictationRecordingSavePolicy))
+            ?? defaults.dictationRecordingSavePolicy
         meetingRecordingSavePolicy = (try? c.decode(MeetingRecordingSavePolicy.self, forKey: .meetingRecordingSavePolicy)) ?? defaults.meetingRecordingSavePolicy
         let decodedMeetingRecordingFileFormat = (try? c.decode(String.self, forKey: .meetingRecordingFileFormat))
             ?? defaults.meetingRecordingFileFormat

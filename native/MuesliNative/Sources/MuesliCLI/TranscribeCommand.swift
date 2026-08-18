@@ -162,7 +162,6 @@ struct TranscribeCommand: AsyncParsableCommand {
                 meta: MetaBody(
                     schemaVersion: 1,
                     generatedAt: timestampString(),
-                    dbPath: context.databaseURL.path,
                     warnings: result.warnings
                 )
             )
@@ -342,33 +341,68 @@ struct MuesliAudioTranscriptionPipeline {
         let savedMeetingID: Int64?
         if request.saveMeeting {
             try context.store.migrateIfNeeded()
-            let savedRecordingPath: String?
+            var recordingStore: RecordingArtifactStore?
+            var recording: RecordingArtifactReference?
+            var stagedLegacyURL: URL?
             do {
-                savedRecordingPath = try persistRecording(sourceURL: request.sourceURL, title: title, supportDirectory: context.supportDirectory)
+                let store = try RecordingArtifactStore(
+                    databaseURL: context.databaseURL,
+                    recordingsRootURL: context.supportDirectory.appendingPathComponent("recordings", isDirectory: true),
+                    legacyMeetingRootURL: context.supportDirectory.appendingPathComponent("meeting-recordings", isDirectory: true)
+                )
+                recordingStore = store
+                let savedPath = try persistRecording(
+                    sourceURL: request.sourceURL,
+                    title: title,
+                    supportDirectory: context.supportDirectory
+                )
+                let savedURL = URL(fileURLWithPath: savedPath)
+                stagedLegacyURL = savedURL
+                let artifact = try store.adoptCapture(
+                    at: savedURL,
+                    sessionID: UUID(),
+                    captureKind: .meeting,
+                    savePolicy: .always
+                )
+                stagedLegacyURL = nil
+                recording = RecordingArtifactReference(
+                    artifactID: artifact.id,
+                    availability: .available
+                )
             } catch {
+                if let stagedLegacyURL {
+                    try? FileManager.default.removeItem(at: stagedLegacyURL)
+                }
                 let message = "Saving audio copy failed: \(error.localizedDescription)"
                 warnings.append(message)
                 fputs("[muesli-cli] \(message)\n", stderr)
-                savedRecordingPath = nil
             }
             let now = Date()
             let notes = summary ?? Self.rawTranscriptNotes(transcript: transcript, title: title, summaryRequested: request.summarize, warnings: warnings)
-            savedMeetingID = try context.store.insertMeeting(
-                title: title,
-                calendarEventID: nil,
-                startTime: now.addingTimeInterval(-max(duration, 0)),
-                endTime: now,
-                rawTranscript: transcript,
-                formattedNotes: notes,
-                micAudioPath: nil,
-                systemAudioPath: nil,
-                savedRecordingPath: savedRecordingPath,
-                selectedTemplateID: "cli-audio-import",
-                selectedTemplateName: "CLI Audio Import",
-                selectedTemplateKind: .custom,
-                selectedTemplatePrompt: nil,
-                source: .audioImport
-            )
+            do {
+                savedMeetingID = try context.store.insertMeeting(
+                    title: title,
+                    calendarEventID: nil,
+                    startTime: now.addingTimeInterval(-max(duration, 0)),
+                    endTime: now,
+                    rawTranscript: transcript,
+                    formattedNotes: notes,
+                    micAudioPath: nil,
+                    systemAudioPath: nil,
+                    savedRecordingPath: nil,
+                    selectedTemplateID: "cli-audio-import",
+                    selectedTemplateName: "CLI Audio Import",
+                    selectedTemplateKind: .custom,
+                    selectedTemplatePrompt: nil,
+                    source: .audioImport,
+                    recording: recording
+                )
+            } catch {
+                if let artifactID = recording?.artifactID {
+                    try? recordingStore?.deleteArtifact(id: artifactID)
+                }
+                throw error
+            }
             dataChangePoster()
         } else {
             savedMeetingID = nil

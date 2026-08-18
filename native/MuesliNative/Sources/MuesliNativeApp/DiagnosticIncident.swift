@@ -133,6 +133,45 @@ struct DiagnosticIncident: Codable, Equatable, Identifiable, Sendable {
     let telemetryCategory: DiagnosticTelemetryCategory
     let metadata: DiagnosticAppMetadata
 
+    /// Keep the persisted and externally serialized envelope allowlisted. New
+    /// runtime fields must never become exportable merely by being added here.
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case severity
+        case occurredAt
+        case stage
+        case userImpact
+        case backend
+        case model
+        case errorFingerprint
+        case telemetryCategory
+        case metadata
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        kind = try container.decode(DiagnosticIncidentKind.self, forKey: .kind)
+        severity = try container.decode(DiagnosticIncidentSeverity.self, forKey: .severity)
+        occurredAt = try container.decode(Date.self, forKey: .occurredAt)
+        stage = try container.decode(DiagnosticIncidentStage.self, forKey: .stage)
+        userImpact = kind.userImpact
+        let identity = Self.allowlistedIdentity(
+            backend: try container.decode(String.self, forKey: .backend),
+            model: try container.decode(String.self, forKey: .model)
+        )
+        backend = identity.backend
+        model = identity.model
+        errorFingerprint = DiagnosticErrorCatalog.sanitizedPersistedFingerprint(
+            try container.decode(DiagnosticErrorFingerprint.self, forKey: .errorFingerprint),
+            kind: kind,
+            stage: stage
+        )
+        telemetryCategory = try container.decode(DiagnosticTelemetryCategory.self, forKey: .telemetryCategory)
+        metadata = try container.decode(DiagnosticAppMetadata.self, forKey: .metadata)
+    }
+
     var telemetryErrorID: String {
         kind.telemetryErrorID(signature: errorFingerprint.signature)
     }
@@ -169,11 +208,28 @@ struct DiagnosticIncident: Codable, Equatable, Identifiable, Sendable {
         self.occurredAt = occurredAt
         self.stage = stage
         self.userImpact = kind.userImpact
-        self.backend = backendOption?.backend ?? "unknown"
-        self.model = backendOption?.model ?? "unknown"
+        let identity = Self.allowlistedIdentity(
+            backend: backendOption?.backend,
+            model: backendOption?.model
+        )
+        self.backend = identity.backend
+        self.model = identity.model
         self.errorFingerprint = DiagnosticErrorCatalog.fingerprint(for: error, kind: kind, stage: stage)
         self.telemetryCategory = error == nil ? .appState : .thrownException
         self.metadata = metadata
+    }
+
+    private static func allowlistedIdentity(
+        backend: String?,
+        model: String?
+    ) -> (backend: String, model: String) {
+        guard let backend else { return ("unknown", "unknown") }
+        let family = BackendOption.all.first { $0.backend == backend }
+        guard let family else { return ("unknown", "unknown") }
+        let exact = BackendOption.all.first {
+            $0.backend == backend && $0.model == model
+        }
+        return (family.backend, exact?.model ?? "unknown")
     }
 
     var telemetryParameters: [String: String] {

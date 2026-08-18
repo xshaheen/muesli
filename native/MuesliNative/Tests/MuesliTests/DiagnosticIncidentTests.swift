@@ -61,6 +61,105 @@ struct DiagnosticIncidentTests {
         #expect(incident.errorDisplayIdentifier == "unclassified")
     }
 
+    @Test("all external incident representations reject rich-content canaries")
+    func externalRepresentationsRejectRichContentCanaries() throws {
+        let canaries = [
+            "TRANSCRIPT_CANARY_91B7",
+            "OCR_CANARY_42D1",
+            "PERSONAL_CONTEXT_CANARY_8E2A",
+            "DICTIONARY_TERM_CANARY_C3F4",
+            "AUDIO_CANARY_6A5D",
+            "CREDENTIAL_CANARY_0F9C",
+            "/Users/private/RECORDING_PATH_CANARY.wav",
+            "RAW_ERROR_DOMAIN_CANARY",
+            "RAW_ERROR_DESCRIPTION_CANARY",
+            "RAW_ERROR_USER_INFO_CANARY",
+        ]
+        let error = NSError(
+            domain: canaries[7],
+            code: 9_876,
+            userInfo: [
+                NSLocalizedDescriptionKey: canaries.joined(separator: " "),
+                "private": canaries[9],
+            ]
+        )
+        let incident = DiagnosticIncident(
+            kind: .meetingProcessingFailed,
+            stage: .meetingStopProcessing,
+            backendOption: BackendOption(
+                backend: canaries[5],
+                model: canaries[6],
+                label: "private",
+                sizeLabel: "private",
+                description: "private",
+                recommended: false
+            ),
+            error: error,
+            metadata: metadata
+        )
+
+        let encoded = try JSONEncoder().encode(incident)
+        let encodedString = try #require(String(data: encoded, encoding: .utf8))
+        let telemetry = incident.telemetryParameters
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: " ")
+        let externalOutput = [
+            encodedString,
+            telemetry,
+            incident.issueTitle,
+            incident.issueBody,
+            incident.githubIssueURL?.absoluteString ?? "",
+        ].joined(separator: "\n")
+
+        for canary in canaries {
+            #expect(!externalOutput.contains(canary))
+        }
+        #expect(!encodedString.contains("localizedDescription"))
+        #expect(!encodedString.contains("userInfo"))
+        #expect(incident.backend == "unknown")
+        #expect(incident.model == "unknown")
+    }
+
+    @Test("persisted incident decoding re-applies external content allowlists")
+    func persistedIncidentDecodingIsSanitized() throws {
+        let canary = "CREDENTIAL_PATH_CANARY_/Users/private/token"
+        let incident = DiagnosticIncident(
+            kind: .dictationTranscriptionFailed,
+            stage: .standardDictationTranscribe,
+            backendOption: .whisper,
+            error: NSError(domain: "MicrophoneRecorder", code: 3),
+            metadata: metadata
+        )
+        let encoded = try JSONEncoder().encode(incident)
+        var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object["backend"] = BackendOption.whisper.backend
+        object["model"] = canary
+        object["errorFingerprint"] = [
+            "signature": canary,
+            "summary": canary,
+            "area": canary,
+            "safeDomain": canary,
+            "safeCode": canary,
+            "isKnown": true,
+        ]
+
+        let decoded = try JSONDecoder().decode(
+            DiagnosticIncident.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+        let externalOutput = [
+            String(data: try JSONEncoder().encode(decoded), encoding: .utf8) ?? "",
+            decoded.telemetryParameters.values.joined(separator: " "),
+            decoded.issueBody,
+        ].joined(separator: "\n")
+
+        #expect(decoded.backend == BackendOption.whisper.backend)
+        #expect(decoded.model == "unknown")
+        #expect(decoded.errorFingerprint == .unclassified())
+        #expect(!externalOutput.contains(canary))
+    }
+
     @Test("known internal error codes emit stable allowlisted fingerprints")
     func knownInternalErrorCodesIncludeMeaning() {
         let incident = DiagnosticIncident(
@@ -411,5 +510,29 @@ struct DiagnosticIncidentReporterTests {
 
         #expect(restartedReporter.recentIncidents().map(\.id) == [incident.id])
         #expect(restartedReporter.recentIncidents().first?.errorFingerprint == incident.errorFingerprint)
+    }
+
+    @Test("clearing incident history is explicit and idempotent")
+    func clearHistoryIsIdempotent() throws {
+        let suiteName = "DiagnosticIncidentReporterClearTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let appState = AppState()
+        let reporter = DiagnosticIncidentReporter(
+            appState: appState,
+            defaults: defaults,
+            telemetrySink: { _ in }
+        )
+        _ = reporter.record(
+            kind: .meetingProcessingFailed,
+            stage: .meetingStopProcessing,
+            promptUser: false
+        )
+
+        reporter.clearHistory()
+        reporter.clearHistory()
+
+        #expect(reporter.recentIncidents().isEmpty)
+        #expect(appState.pendingDiagnosticIncident == nil)
     }
 }
