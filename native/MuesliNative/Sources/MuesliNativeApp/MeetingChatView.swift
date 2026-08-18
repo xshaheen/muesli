@@ -17,6 +17,7 @@ enum MeetingChatPresentation: Equatable {
 /// without branching on meeting state internally.
 struct MeetingChatView: View {
     @Bindable var conversation: MeetingChatConversation
+    @Binding var draft: String
     /// Resolved when a question is sent, never in `body`. During a recording the
     /// transcript grows on every chunk, and a body that read it re-rendered this whole
     /// surface — composer included — each time, which showed up as flicker in the
@@ -33,7 +34,6 @@ struct MeetingChatView: View {
     let config: () -> AppConfig
     var presentation: MeetingChatPresentation = .standard
 
-    @State private var draft: String = ""
     /// Which answer was just copied, so the button can confirm it happened.
     @State private var copiedTurnText: String?
     @FocusState private var isInputFocused: Bool
@@ -90,6 +90,9 @@ struct MeetingChatView: View {
                 scrollToEnd(proxy)
             }
             .onChange(of: conversation.isSending) { _, _ in
+                scrollToEnd(proxy)
+            }
+            .onAppear {
                 scrollToEnd(proxy)
             }
         }

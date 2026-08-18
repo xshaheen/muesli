@@ -668,6 +668,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
     var onSelectTab: (FloatingMeetingPanelTab) -> Void = { _ in }
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @State private var chatDraft = ""
 
     private var partialYou: String {
         model.presentation.partialYou.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -723,6 +724,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
                     // user saw as the chat tab flickering while people spoke.
                     MeetingChatView(
                         conversation: MeetingChatConversations.shared.conversation(for: model.chatContext!.meetingID),
+                        draft: $chatDraft,
                         transcript: { [model] in model.chatTranscript },
                         hasTranscript: model.chatHasTranscript,
                         systemPrompt: MeetingChatSource.systemPrompt(isRecording: true),

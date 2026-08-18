@@ -127,7 +127,6 @@ struct MeetingTextInteractionTests {
     func largeMeetingNotesUseNativeScrolling() throws {
         let markdown = Self.recoveredMeetingMarkdown(characterCount: 143_542)
         #expect(markdown.count == 143_542)
-        #expect(MeetingNotesPresentation.usesNativeScrolling(for: markdown))
         #expect(MeetingNotesPresentation.renderedMarkdown(for: markdown) == markdown)
 
         let host = NSHostingView(rootView: MeetingNotesView(markdown: markdown))
@@ -145,13 +144,74 @@ struct MeetingTextInteractionTests {
         let textView = try #require(Self.firstTextView(in: host))
         #expect(textView.isSelectable)
         #expect(!textView.isEditable)
-        #expect(textView.enclosingScrollView != nil)
+        #expect(textView.enclosingScrollView?.documentView === textView)
         let expectedContentWidth = host.bounds.width - 2 * MuesliTheme.spacing24
         #expect(textView.textContainer?.containerSize.width == expectedContentWidth)
         #expect(textView.frame.height > host.bounds.height)
         #expect(textView.string.contains("A recovered transcript line"))
         #expect(textView.string.count == markdown.count)
         window.orderOut(nil)
+    }
+
+    @Test("mixed-language meeting notes avoid intrinsic text measurement")
+    @MainActor
+    func mixedLanguageMeetingNotesUseNativeScrolling() throws {
+        let markdown = Self.mixedLanguageMeetingMarkdown(characterCount: 5_012)
+        #expect(markdown.count == 5_012)
+
+        let host = NSHostingView(rootView: MeetingNotesView(markdown: markdown))
+        host.frame = NSRect(x: 0, y: 0, width: 920, height: 640)
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+
+        let textView = try #require(Self.firstTextView(in: host))
+        #expect(textView.isSelectable)
+        #expect(!textView.isEditable)
+        #expect(textView.enclosingScrollView?.documentView === textView)
+        #expect(textView.string.count == markdown.count)
+        #expect(textView.string.contains("مرحبا"))
+        #expect(textView.string.contains("สวัสดี"))
+        window.orderOut(nil)
+    }
+
+    @Test("chat draft survives the chat view being recreated")
+    @MainActor
+    func chatDraftSurvivesViewRecreation() throws {
+        var draft = "Unsent follow-up question"
+        let draftBinding = Binding(
+            get: { draft },
+            set: { draft = $0 }
+        )
+        let conversation = MeetingChatConversation()
+        let makeChat = {
+            AnyView(MeetingChatView(
+                conversation: conversation,
+                draft: draftBinding,
+                transcript: { "A completed meeting transcript" },
+                hasTranscript: true,
+                systemPrompt: MeetingChatPrompts.completed,
+                config: { AppConfig() }
+            ))
+        }
+        let host = NSHostingView(rootView: makeChat())
+        host.frame = NSRect(x: 0, y: 0, width: 720, height: 480)
+        host.layoutSubtreeIfNeeded()
+
+        #expect(try #require(Self.firstEditableField(in: host)).stringValue == draft)
+
+        host.rootView = AnyView(Text("Notes"))
+        host.layoutSubtreeIfNeeded()
+        host.rootView = makeChat()
+        host.layoutSubtreeIfNeeded()
+
+        #expect(try #require(Self.firstEditableField(in: host)).stringValue == draft)
     }
 
     @Test("meeting notes trim only the rendered copy after the display cap")
@@ -220,12 +280,29 @@ struct MeetingTextInteractionTests {
     }
 
     private static func firstTextView(in view: NSView) -> NSTextView? {
-        if let textView = view as? NSTextView { return textView }
+        if let textView = view as? NSTextView,
+           textView.enclosingScrollView?.documentView === textView {
+            return textView
+        }
         return view.subviews.lazy.compactMap(firstTextView(in:)).first
+    }
+
+    private static func firstEditableField(in view: NSView) -> NSTextField? {
+        if let field = view as? NSTextField, field.isEditable { return field }
+        return view.subviews.lazy.compactMap(firstEditableField(in:)).first
     }
 
     private static func recoveredMeetingMarkdown(characterCount: Int) -> String {
         let line = "[10:04:00] Speaker 1: A recovered transcript line that remains selectable.\n"
+        return repeatedMarkdown(line: line, characterCount: characterCount)
+    }
+
+    private static func mixedLanguageMeetingMarkdown(characterCount: Int) -> String {
+        let line = "[10:04:00] Speaker 1: مرحبا team 你好 สวัสดี — mixed meeting notes.\n"
+        return repeatedMarkdown(line: line, characterCount: characterCount)
+    }
+
+    private static func repeatedMarkdown(line: String, characterCount: Int) -> String {
         let lineCount = characterCount / line.count + 1
         return String(String(repeating: line, count: lineCount).prefix(characterCount))
     }

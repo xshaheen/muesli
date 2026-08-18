@@ -158,6 +158,22 @@ struct MeetingDetailResponsiveLayoutTests {
         #expect(exportMenu.contains(".help(\"Export meeting\")"))
     }
 
+    @Test("completed meeting constructs only the active document pane")
+    func completedMeetingUsesActiveDocumentPaneOnly() throws {
+        let source = try meetingDetailSource()
+        let documentContent = try sourceSection(
+            in: source,
+            from: "private func readOnlyDocumentContent",
+            to: "/// Chat needs a backend"
+        )
+
+        #expect(documentContent.contains("switch documentMode"))
+        #expect(!documentContent.contains("ZStack"))
+        #expect(!documentContent.contains(".opacity(documentMode"))
+        #expect(documentContent.contains("draft: $chatDraft"))
+        #expect(source.contains("readOnlyDocumentContent(for: meeting)"))
+    }
+
     private func meetingDetailSource() throws -> String {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
