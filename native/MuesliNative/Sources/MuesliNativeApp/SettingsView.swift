@@ -1368,6 +1368,16 @@ struct SettingsView: View {
                     .frame(height: 24)
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Save dictation recording") {
+                    settingsMenu(
+                        selection: dictationRecordingSaveLabel(for: appState.config.dictationRecordingSavePolicy),
+                        options: DictationRecordingSavePolicy.allCases.map(dictationRecordingSaveLabel(for:))
+                    ) { label in
+                        guard let policy = dictationRecordingSavePolicy(for: label) else { return }
+                        controller.updateConfig { $0.dictationRecordingSavePolicy = policy }
+                    }
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("AI transcript cleanup") {
                     settingsSwitch(isOn: appState.config.enablePostProcessor) { newValue in
                         controller.setPostProcessorEnabled(newValue)
@@ -3161,6 +3171,27 @@ struct SettingsView: View {
         case .always:
             return "Always"
         }
+    }
+
+    private func dictationRecordingSaveLabel(for policy: DictationRecordingSavePolicy) -> String {
+        switch policy {
+        case .never:
+            return "Never"
+        case .prompt:
+            return "Ask every time"
+        case .always:
+            return "Always"
+        }
+    }
+
+    private func dictationRecordingSavePolicy(for label: String) -> DictationRecordingSavePolicy? {
+        let policy = DictationRecordingSavePolicy.allCases.first {
+            dictationRecordingSaveLabel(for: $0) == label
+        }
+        if policy == nil {
+            assertionFailure("Unexpected dictation recording save label: \(label)")
+        }
+        return policy
     }
 
     private func recordingSavePolicy(for label: String) -> MeetingRecordingSavePolicy? {

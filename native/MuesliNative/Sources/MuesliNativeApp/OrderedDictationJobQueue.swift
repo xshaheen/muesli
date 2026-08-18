@@ -67,6 +67,23 @@ final class OrderedDictationJobQueue<Job: Identifiable> {
         onCountChanged(count)
     }
 
+    /// Cancels the active worker and removes every queued job, waiting until the
+    /// active worker has finished its terminal cleanup before returning.
+    func cancelAllAndWait() async {
+        if let current {
+            await onCurrentCancellationRequested(current)
+            currentTask?.cancel()
+        }
+        let queued = Array(pending[pendingHead...])
+        pending.removeAll(keepingCapacity: true)
+        pendingHead = 0
+        for job in queued {
+            await onCancel(job)
+        }
+        onCountChanged(count)
+        await currentTask?.value
+    }
+
     private func startNextIfNeeded() {
         guard current == nil, pendingHead < pending.count else { return }
         let job = pending[pendingHead]

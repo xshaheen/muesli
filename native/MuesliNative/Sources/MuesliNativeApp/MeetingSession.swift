@@ -270,6 +270,11 @@ struct MeetingSessionResult {
     let retainedRecordingError: Error?
     let systemRecordingURL: URL?
     let templateSnapshot: MeetingTemplateSnapshot
+    /// Recording retention is frozen with the rest of the meeting capture
+    /// configuration. Finalization must not re-read a setting that may have
+    /// changed while the meeting was running.
+    var recordingSavePolicy: MeetingRecordingSavePolicy = .never
+    var recordingFileFormat: MeetingRecordingFileFormat = .wav
     /// Screen/OCR context this summary was built from.
     ///
     /// Carried out of the session rather than discarded, so a regeneration after
@@ -310,6 +315,8 @@ extension MeetingSessionResult {
             retainedRecordingError: retainedRecordingError,
             systemRecordingURL: systemRecordingURL,
             templateSnapshot: templateSnapshot,
+            recordingSavePolicy: recordingSavePolicy,
+            recordingFileFormat: recordingFileFormat,
             visualContext: visualContext,
             previousMeetingNotes: previousMeetingNotes,
             usedSummaryFallback: usedSummaryFallback,
@@ -1282,6 +1289,8 @@ final class MeetingSession {
             retainedRecordingError: retainedRecordingWriterError,
             systemRecordingURL: systemAudioURL,
             templateSnapshot: templateSnapshot,
+            recordingSavePolicy: config.meetingRecordingSavePolicy,
+            recordingFileFormat: config.resolvedMeetingRecordingFileFormat,
             visualContext: visualContext,
             previousMeetingNotes: previousMeetingNotes ?? "",
             usedSummaryFallback: usedSummaryFallback,

@@ -22,6 +22,16 @@ private enum DictationOutputMode {
     }
 }
 
+private extension DictationRecordingSavePolicy {
+    var artifactPolicySnapshot: RecordingSavePolicySnapshot? {
+        switch self {
+        case .never: nil
+        case .prompt: .prompt
+        case .always: .always
+        }
+    }
+}
+
 private struct DictationLatencyTraceSnapshot {
     let id: UUID
     let startedAt: Date
@@ -45,6 +55,7 @@ private struct PendingStandardDictationStop {
     let customWords: [[String: Any]]
     let cleanupRequest: DictationCleanupRequestSnapshot
     let detectedSpeech: Bool
+    let recordingSavePolicy: DictationRecordingSavePolicy
     let latencyTrace: DictationLatencyTraceSnapshot?
     let sessionTrace: SessionRunTrace
 }
@@ -71,6 +82,7 @@ private struct StandardDictationJob: Identifiable {
     let customWords: [[String: Any]]
     let cleanupRequest: DictationCleanupRequestSnapshot
     let detectedSpeech: Bool
+    let recordingSavePolicy: DictationRecordingSavePolicy
     let latencyTrace: DictationLatencyTraceSnapshot?
     let sessionTrace: SessionRunTrace
 }
@@ -268,8 +280,19 @@ enum MeetingRecordingSavePlan {
 struct PreparedMeetingRecordingSave {
     let path: String?
     let error: MeetingLifecycleError?
+    let recording: RecordingArtifactReference?
 
-    static let none = PreparedMeetingRecordingSave(path: nil, error: nil)
+    init(
+        path: String?,
+        error: MeetingLifecycleError?,
+        recording: RecordingArtifactReference? = nil
+    ) {
+        self.path = path
+        self.error = error
+        self.recording = recording
+    }
+
+    static let none = PreparedMeetingRecordingSave(path: nil, error: nil, recording: nil)
 }
 
 private final class DictationLatencyLogWriter: @unchecked Sendable {
@@ -339,10 +362,14 @@ final class MuesliController: NSObject {
     private let configStore: ConfigStore
     private let dictationStore: DictationStore
     private let sessionTraceStore: SessionTraceStore?
+    private let recordingArtifactStore: RecordingArtifactStore?
     lazy var localDiagnosticsService = LocalDiagnosticsService(
         store: sessionTraceStore,
         flushActiveWriters: { [weak self] in
             await self?.flushActiveSessionTraces()
+        },
+        clearRecordingAssociations: { [weak self] in
+            try self?.recordingArtifactStore?.clearDiagnosticAssociations()
         },
         loadIncidentHistory: { [weak self] in
             self?.diagnosticIncidentReporter.recentIncidents() ?? []
@@ -377,13 +404,26 @@ final class MuesliController: NSObject {
             await self?.processStandardDictationJob(job)
         },
         onCurrentCancellationRequested: { job in
-            await job.sessionTrace.cancel(stage: "dictation_queue")
+            await job.sessionTrace.recordCancellationRequested(stage: "dictation_queue")
         },
         onCancel: { [weak self] job in
-            try? FileManager.default.removeItem(at: job.wavURL)
             self?.dictationTestJobIDs.remove(job.id)
             self?.dictationSessionTraces.removeValue(forKey: job.id)
-            await job.sessionTrace.cancel(stage: "dictation_queue")
+            let didWin = await job.sessionTrace.cancel(stage: "dictation_queue")
+            if didWin, job.recordingSavePolicy != .never, let self {
+                await self.persistAudioOnlyDictationRecording(
+                    capture: DictationAudioTerminalCapture(
+                        sessionID: job.id,
+                        outcome: .cancelled,
+                        recordingSavePolicy: job.recordingSavePolicy,
+                        wavURL: job.wavURL
+                    ),
+                    startedAt: job.startedAt,
+                    durationSeconds: job.duration
+                )
+            } else {
+                try? FileManager.default.removeItem(at: job.wavURL)
+            }
         },
         onCountChanged: { [weak self] count in
             self?.standardDictationJobCountChanged(count)
@@ -486,6 +526,7 @@ final class MuesliController: NSObject {
     private var _streamingDictationController: Any?  // StreamingDictationController (macOS 15+)
     private var isNemotron35Streaming = false
     private var nemotron35StreamingSessionID: UUID?
+    private var nemotron35StreamingRecordingSavePolicy: DictationRecordingSavePolicy = .never
     private var previousStreamText = ""
     private var openWindowCount = 0
     private var lastExternalApp: NSRunningApplication?
@@ -525,6 +566,8 @@ final class MuesliController: NSObject {
     private var importTask: Task<Void, Never>?
     private var importSessionID: UUID?
     private var meetingFinalizationTasks: [UUID: Task<Void, Never>] = [:]
+    private var recordingStartupRecoveryTask: Task<Void, Never>?
+    private var recordingMaintenanceTask: Task<Void, Never>?
     private var canceledMeetingStartIDs = Set<Int64>()
     /// Prior transcript captured when resuming a finished meeting, keyed by meeting id.
     /// Present only while a resume is in flight; consumed at stop to merge old + new
@@ -555,6 +598,7 @@ final class MuesliController: NSObject {
         runtime: RuntimePaths,
         dictationStore: DictationStore? = nil,
         sessionTraceStore: SessionTraceStore? = nil,
+        recordingArtifactStore: RecordingArtifactStore? = nil,
         configStore: ConfigStore = ConfigStore(),
         meetingHookDispatcher: MeetingHookDispatching = MeetingHookRunner(),
         meetingMarkdownAutoExporter: MeetingMarkdownAutoExporting = MeetingMarkdownAutoExporter(),
@@ -583,8 +627,29 @@ final class MuesliController: NSObject {
             databaseURL: MuesliPaths.defaultDatabaseURL(appName: AppIdentity.supportDirectoryName)
         )
         self.dictationStore = resolvedDictationStore
-        self.sessionTraceStore = sessionTraceStore
-            ?? (try? SessionTraceStore(databaseURL: resolvedDictationStore.resolvedDatabaseURL))
+        let databaseMigrated: Bool
+        do {
+            try resolvedDictationStore.migrateIfNeeded()
+            databaseMigrated = true
+        } catch {
+            fputs("[muesli-native] startup migration failed: \(error)\n", stderr)
+            databaseMigrated = false
+        }
+        self.sessionTraceStore = sessionTraceStore ?? (databaseMigrated
+            ? try? SessionTraceStore(
+                databaseURL: resolvedDictationStore.resolvedDatabaseURL,
+                migrateDatabase: false
+            )
+            : nil)
+        let supportDirectory = configStore.supportDirectory()
+        self.recordingArtifactStore = recordingArtifactStore ?? (databaseMigrated
+            ? try? RecordingArtifactStore(
+                databaseURL: resolvedDictationStore.resolvedDatabaseURL,
+                recordingsRootURL: supportDirectory.appendingPathComponent("recordings", isDirectory: true),
+                legacyMeetingRootURL: supportDirectory.appendingPathComponent("meeting-recordings", isDirectory: true),
+                migrateDatabase: false
+            )
+            : nil)
         self.meetingHookDispatcher = meetingHookDispatcher
         self.meetingMarkdownAutoExporter = meetingMarkdownAutoExporter
         self.launchAtLoginCoordinator = LaunchAtLoginCoordinator(manager: launchAtLoginManager)
@@ -648,10 +713,40 @@ final class MuesliController: NSObject {
         Task.detached(priority: .utility) {
             MeetingSessionDiagnostics.prepareStore()
         }
-        do {
-            try dictationStore.migrateIfNeeded()
-        } catch {
-            fputs("[muesli-native] startup error: \(error)\n", stderr)
+        configureRecordingArtifactPlayback()
+        if let recordingArtifactStore {
+            let historyStore = dictationStore
+            recordingStartupRecoveryTask?.cancel()
+            recordingStartupRecoveryTask = Task { [weak self] in
+                do {
+                    try await Task.detached(priority: .utility) {
+                        try Self.migrateLegacyMeetingRecordings(
+                            historyStore: historyStore,
+                            artifactStore: recordingArtifactStore
+                        )
+                        try recordingArtifactStore.discardPendingArtifacts()
+                        try recordingArtifactStore.recoverAndPrune()
+                    }.value
+                } catch {
+                    fputs("[recordings] startup recovery failed: \(error)\n", stderr)
+                }
+                guard !Task.isCancelled, let self else { return }
+                await RecordingArtifactPlaybackCoordinator.shared.refreshAllCachedOwners()
+                self.historyWindowController?.reload()
+                self.syncAppState()
+                self.recordingMaintenanceTask?.cancel()
+                self.recordingMaintenanceTask = Task { [weak self] in
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .seconds(60))
+                        guard !Task.isCancelled, let self else { return }
+                        try? await Task.detached(priority: .utility) {
+                            try recordingArtifactStore.recoverAndPrune()
+                        }.value
+                        await RecordingArtifactPlaybackCoordinator.shared.refreshAllCachedOwners()
+                        self.historyWindowController?.reload()
+                    }
+                }
+            }
         }
         recoverStaleLiveMeetings()
         resumePendingMeetingNotesRegeneration()
@@ -925,6 +1020,10 @@ final class MuesliController: NSObject {
     }
 
     func shutdown() async {
+        await recordingStartupRecoveryTask?.value
+        recordingStartupRecoveryTask = nil
+        recordingMaintenanceTask?.cancel()
+        recordingMaintenanceTask = nil
         if let workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
             self.workspaceObserver = nil
@@ -979,8 +1078,9 @@ final class MuesliController: NSObject {
         }
         activeMeetingAudioWarning = nil
         endMeetingActivity()
-        dictationAudioSessionManager.cancel(reason: "shutdown")
+        await finalizeActiveDictationCaptureForShutdown()
         computerUseAudioSessionManager.cancel(reason: "shutdown")
+        await standardDictationJobQueue.cancelAllAndWait()
         let importTaskToAwait = importTask
         let meetingFinalizationTasksToAwait = Array(meetingFinalizationTasks.values)
         let traces = activeSessionTraces()
@@ -997,10 +1097,96 @@ final class MuesliController: NSObject {
         for trace in traces {
             await trace.flush()
         }
+        if let recordingArtifactStore {
+            try? await Task.detached(priority: .utility) {
+                try recordingArtifactStore.discardPendingArtifacts()
+            }.value
+        }
         await syncEngineCancellationTask?.value
         await transcriptionCoordinator.shutdown()
         indicator.close()
         CoreAudioSystemRecorder.cleanupStaleDevices()
+    }
+
+    private func finalizeActiveDictationCaptureForShutdown() async {
+        let startedAt = dictationStartedAt ?? Date()
+        if let capture = await dictationAudioSessionManager.finalizeCaptureForShutdown(reason: "shutdown") {
+            await resolveShutdownDictationCapture(capture, startedAt: startedAt)
+        }
+
+        if isNemotron35Streaming {
+            let sessionID = nemotron35StreamingSessionID
+            let frozenPolicy = nemotron35StreamingRecordingSavePolicy
+            let capture: StreamingDictationShutdownCapture?
+            if #available(macOS 15, *),
+               let controller = _streamingDictationController as? StreamingDictationController {
+                capture = await controller.finalizeCaptureForShutdown()
+            } else {
+                capture = nil
+            }
+            if let sessionID {
+                await resolveShutdownDictationCapture(
+                    DictationAudioTerminalCapture(
+                        sessionID: sessionID,
+                        outcome: .cancelled,
+                        recordingSavePolicy: capture?.recordingSavePolicy ?? frozenPolicy,
+                        wavURL: capture?.captureURL
+                    ),
+                    startedAt: startedAt
+                )
+            } else if let captureURL = capture?.captureURL {
+                try? FileManager.default.removeItem(at: captureURL)
+            }
+        }
+
+        isNemotron35Streaming = false
+        _streamingDictationController = nil
+        nemotron35StreamingSessionID = nil
+        nemotron35StreamingRecordingSavePolicy = .never
+        previousStreamText = ""
+        dictationStartedAt = nil
+        pendingStandardDictationStops.removeAll()
+        pendingReleaseSoundSessionIDs.removeAll()
+        clearCapturedDictationSessionContext()
+        resetDictationOutputMode()
+        setState(.idle)
+        standardDictationWorkChanged()
+    }
+
+    func resolveShutdownDictationCapture(
+        _ capture: DictationAudioTerminalCapture,
+        startedAt: Date
+    ) async {
+        guard let sessionID = capture.sessionID else {
+            if let wavURL = capture.wavURL { try? FileManager.default.removeItem(at: wavURL) }
+            return
+        }
+        let trace = dictationSessionTraces.removeValue(forKey: sessionID)
+        let didWin = await trace?.cancel(stage: "shutdown") ?? true
+        guard didWin else {
+            if let wavURL = capture.wavURL { try? FileManager.default.removeItem(at: wavURL) }
+            return
+        }
+        let duration = max(Date().timeIntervalSince(startedAt), 0)
+        switch capture.recordingSavePolicy {
+        case .always:
+            await persistAudioOnlyDictationRecording(
+                capture: capture,
+                startedAt: startedAt,
+                durationSeconds: duration
+            )
+        case .prompt:
+            if let wavURL = capture.wavURL { try? FileManager.default.removeItem(at: wavURL) }
+            await persistUnavailableAudioOnlyDictation(
+                sessionID: sessionID,
+                startedAt: startedAt,
+                durationSeconds: duration,
+                outcome: .cancelled,
+                availability: .deleted
+            )
+        case .never:
+            if let wavURL = capture.wavURL { try? FileManager.default.removeItem(at: wavURL) }
+        }
     }
 
     /// Ensures every trace wrapper already exposed by the controller has entered
@@ -1011,12 +1197,144 @@ final class MuesliController: NSObject {
         }
     }
 
+    private func configureRecordingArtifactPlayback() {
+        guard let store = recordingArtifactStore else {
+            RecordingArtifactPlaybackCoordinator.shared.configure(client: .unavailable)
+            return
+        }
+        let supportDirectory = configStore.supportDirectory()
+        RecordingArtifactPlaybackCoordinator.shared.configure(client: RecordingArtifactPlaybackClient(
+            resolve: { owner in
+                let reference: RecordingArtifactReference?
+                switch owner {
+                case .dictation(let id):
+                    reference = try store.recordingForDictation(id: id)
+                case .meeting(let id):
+                    reference = try store.recordingForMeeting(id: id)
+                case .session(let sessionID):
+                    reference = try store.recordingForDiagnostic(sessionID: sessionID)
+                        ?? store.recordingForAudioOnlyDictation(sessionID: sessionID)
+                }
+                guard let reference else {
+                    return .unavailable(.notRetained)
+                }
+                let artifact = try reference.artifactID.map { try store.artifact(id: $0) }
+                return RecordingArtifactResolution(
+                    artifactID: reference.artifactID,
+                    availability: RecordingArtifactAvailability(
+                        reference.availability,
+                        pendingExpiresAt: artifact?.pendingExpiresAt
+                    )
+                )
+            },
+            playbackURL: { artifactID in
+                try store.playableURL(id: artifactID)
+            },
+            reveal: { artifactID in
+                let url = try store.playableURL(id: artifactID)
+                await MainActor.run {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                }
+            },
+            delete: { artifactID in
+                let url = try? store.playableURL(id: artifactID)
+                if let url {
+                    try? RecordingWaveformCacheFiles.removeCachedWaveform(
+                        for: url,
+                        supportDirectory: supportDirectory
+                    )
+                }
+                try store.deleteArtifact(id: artifactID)
+            }
+        ))
+    }
+
+    nonisolated static func migrateLegacyMeetingRecordings(
+        historyStore: DictationStore,
+        artifactStore: RecordingArtifactStore
+    ) throws {
+        let groupedReferences = Dictionary(
+            grouping: try historyStore.meetingRecordingReferences(),
+            by: { URL(fileURLWithPath: $0.savedRecordingPath).standardizedFileURL.path }
+        )
+        for path in groupedReferences.keys.sorted() {
+            guard let references = groupedReferences[path]?.sorted(by: { $0.id < $1.id }),
+                  let first = references.first else { continue }
+            let sessionID = legacyMeetingRecordingSessionID(meetingID: first.id)
+            do {
+                let artifact = try artifactStore.migrateLegacyMeetingRecording(
+                    meetingID: first.id,
+                    legacyURL: URL(fileURLWithPath: path),
+                    sessionID: sessionID,
+                    savePolicy: .always
+                )
+                for reference in references.dropFirst() {
+                    try artifactStore.attachExistingLegacyMeetingRecording(
+                        meetingID: reference.id,
+                        artifactID: artifact.id
+                    )
+                }
+            } catch RecordingArtifactStoreError.unsafeSource,
+                    RecordingArtifactStoreError.unsupportedFileExtension {
+                for reference in references {
+                    try artifactStore.markLegacyMeetingRecordingInvalid(meetingID: reference.id)
+                }
+            } catch {
+                // Leave transient failures in the legacy column so the next launch can retry.
+                fputs("[recordings] legacy meeting migration retry deferred: \(error)\n", stderr)
+            }
+        }
+    }
+
+    private nonisolated static func legacyMeetingRecordingSessionID(meetingID: Int64) -> UUID {
+        let suffix = String(format: "%012llX", UInt64(bitPattern: meetingID)).suffix(12)
+        return UUID(uuidString: "4D554553-4C49-4D47-0000-\(suffix)")!
+    }
+
     private func activeSessionTraces() -> [SessionRunTrace] {
         Array(sessionTraceRegistry.values)
     }
 
     func recentDictations() -> [DictationRecord] {
         (try? dictationStore.recentDictations(limit: 10)) ?? []
+    }
+
+    func audioOnlyDictationHistory() async -> [DictationAudioHistoryRecord] {
+        guard let recordingArtifactStore else { return [] }
+        return await Task.detached(priority: .utility) {
+            (try? recordingArtifactStore.audioOnlyDictationHistory()) ?? []
+        }.value
+    }
+
+    func deleteAudioOnlyDictationHistory(sessionID: UUID) {
+        guard let recordingArtifactStore else { return }
+        var reference: RecordingArtifactReference?
+        var beganDeletion = false
+        do {
+            reference = try recordingArtifactStore.recordingForAudioOnlyDictation(sessionID: sessionID)
+            if let artifactID = reference?.artifactID,
+               try recordingArtifactStore.isLastOwningHistoryReference(artifactID: artifactID) {
+                RecordingArtifactPlaybackCoordinator.shared.beginExternalDeletion(artifactID: artifactID)
+                beganDeletion = true
+            }
+            if let artifactID = try recordingArtifactStore.deleteAudioOnlyDictationHistory(sessionID: sessionID) {
+                finishDurableRecordingDeletion(artifactID)
+            } else if let artifactID = reference?.artifactID {
+                Task {
+                    await RecordingArtifactPlaybackCoordinator.shared
+                        .restoreAfterSharedOwnerRemoval(artifactID: artifactID)
+                }
+            }
+            historyWindowController?.reload()
+        } catch {
+            if beganDeletion, let artifactID = reference?.artifactID {
+                Task {
+                    await RecordingArtifactPlaybackCoordinator.shared
+                        .restoreAfterSharedOwnerRemoval(artifactID: artifactID)
+                }
+            }
+            fputs("[dictation-recording] failed to delete audio-only history: \(error)\n", stderr)
+        }
     }
 
     func recentMeetings() -> [MeetingRecord] {
@@ -4474,14 +4792,12 @@ final class MuesliController: NSObject {
             }
             var didSetProcessing = false
             do {
-                guard let savedRecordingPath = meeting.savedRecordingPath,
-                      !savedRecordingPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                guard let recordingArtifactStore,
+                      let reference = try recordingArtifactStore.recordingForMeeting(id: meeting.id),
+                      let artifactID = reference.artifactID else {
                     throw MeetingRetranscriptionError.recordingUnavailable
                 }
-                let recordingURL = URL(fileURLWithPath: savedRecordingPath)
-                guard FileManager.default.fileExists(atPath: recordingURL.path) else {
-                    throw MeetingRetranscriptionError.recordingUnavailable
-                }
+                let recordingURL = try recordingArtifactStore.playableURL(id: artifactID)
                 guard let backend = self.normalizeMeetingTranscriptionSelectionForAvailability() else {
                     throw MeetingRetranscriptionError.noDownloadedTranscriptionModel
                 }
@@ -4940,9 +5256,100 @@ final class MuesliController: NSObject {
     }
 
     func deleteDictation(id: Int64) {
-        try? dictationStore.deleteDictation(id: id)
+        var preparedArtifactID: RecordingArtifactID?
+        var beganRecordingDeletion = false
+        do {
+            if let recordingArtifactStore {
+                preparedArtifactID = try recordingArtifactStore.recordingForDictation(id: id)?.artifactID
+                if let preparedArtifactID,
+                   try recordingArtifactStore.isLastOwningHistoryReference(artifactID: preparedArtifactID) {
+                    RecordingArtifactPlaybackCoordinator.shared.beginExternalDeletion(artifactID: preparedArtifactID)
+                    beganRecordingDeletion = true
+                }
+            }
+            if let artifactID = try dictationStore.deleteDictation(id: id) {
+                finishDurableRecordingDeletion(artifactID)
+            } else if let preparedArtifactID {
+                Task {
+                    await RecordingArtifactPlaybackCoordinator.shared
+                        .restoreAfterSharedOwnerRemoval(artifactID: preparedArtifactID)
+                }
+            }
+        } catch {
+            if beganRecordingDeletion, let preparedArtifactID {
+                Task {
+                    await RecordingArtifactPlaybackCoordinator.shared
+                        .restoreAfterSharedOwnerRemoval(artifactID: preparedArtifactID)
+                }
+            }
+            presentErrorAlert(title: "Couldn't Delete Dictation", message: error.localizedDescription)
+            return
+        }
         scheduleICloudSyncAfterLocalChange()
         syncAppState()
+    }
+
+    private func finishDurableRecordingDeletion(_ artifactID: RecordingArtifactID) {
+        guard let recordingArtifactStore else { return }
+        Task { @MainActor in
+            let succeeded = await Task.detached(priority: .utility) {
+                do {
+                    try recordingArtifactStore.finishDurableDeletion(id: artifactID)
+                    return true
+                } catch {
+                    return false
+                }
+            }.value
+            RecordingArtifactPlaybackCoordinator.shared.finishExternalDeletion(
+                artifactID: artifactID,
+                succeeded: succeeded
+            )
+        }
+    }
+
+    private func restorePlaybackAfterBulkDeletion(
+        candidates: [RecordingArtifactID],
+        deleted: [RecordingArtifactID]
+    ) {
+        let deletedSet = Set(deleted)
+        for artifactID in candidates where !deletedSet.contains(artifactID) {
+            Task {
+                await RecordingArtifactPlaybackCoordinator.shared
+                    .restoreAfterSharedOwnerRemoval(artifactID: artifactID)
+            }
+        }
+    }
+
+    private func migrateLegacyRecordingForDeletionIfNeeded(_ meeting: MeetingRecord) throws {
+        guard let path = meeting.savedRecordingPath else { return }
+        guard let recordingArtifactStore else {
+            throw RecordingArtifactStoreError.unsafeRecordingRoot
+        }
+        let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        let matchingMeetingIDs = try dictationStore.meetingRecordingReferences().compactMap { reference in
+            URL(fileURLWithPath: reference.savedRecordingPath).standardizedFileURL.path == standardizedPath
+                ? reference.id
+                : nil
+        }
+        do {
+            let artifact = try recordingArtifactStore.migrateLegacyMeetingRecording(
+                meetingID: meeting.id,
+                legacyURL: URL(fileURLWithPath: path),
+                sessionID: Self.legacyMeetingRecordingSessionID(meetingID: meeting.id),
+                savePolicy: .always
+            )
+            for meetingID in matchingMeetingIDs where meetingID != meeting.id {
+                try recordingArtifactStore.attachExistingLegacyMeetingRecording(
+                    meetingID: meetingID,
+                    artifactID: artifact.id
+                )
+            }
+        } catch RecordingArtifactStoreError.unsafeSource,
+                RecordingArtifactStoreError.unsupportedFileExtension {
+            for meetingID in matchingMeetingIDs {
+                try recordingArtifactStore.markLegacyMeetingRecordingInvalid(meetingID: meetingID)
+            }
+        }
     }
 
     /// Whether the selected summary backend can actually answer. Mirrors the detail view's
@@ -4972,14 +5379,26 @@ final class MuesliController: NSObject {
         guard let meeting = meeting(id: id) else { return }
         guard canDeleteMeeting(meeting) else { return }
 
+        var preparedArtifactID: RecordingArtifactID?
+        var beganRecordingDeletion = false
         do {
-            // Delete the retained file first so a failed file removal does not orphan
-            // user-visible recording data after the meeting row disappears.
-            if let savedRecordingPath = meeting.savedRecordingPath,
-               try shouldDeleteSavedMeetingRecording(at: savedRecordingPath, excluding: id) {
-                try deleteSavedMeetingRecording(at: savedRecordingPath)
+            try migrateLegacyRecordingForDeletionIfNeeded(meeting)
+            let recordingReference = try recordingArtifactStore?.recordingForMeeting(id: id)
+            preparedArtifactID = recordingReference?.artifactID
+            if let preparedArtifactID,
+               try recordingArtifactStore?.isLastOwningHistoryReference(artifactID: preparedArtifactID) == true {
+                RecordingArtifactPlaybackCoordinator.shared.beginExternalDeletion(artifactID: preparedArtifactID)
+                beganRecordingDeletion = true
             }
-            try dictationStore.deleteMeeting(id: id)
+            let artifactID = try dictationStore.deleteMeeting(id: id)
+            if let artifactID {
+                finishDurableRecordingDeletion(artifactID)
+            } else if let preparedArtifactID {
+                Task {
+                    await RecordingArtifactPlaybackCoordinator.shared
+                        .restoreAfterSharedOwnerRemoval(artifactID: preparedArtifactID)
+                }
+            }
             // Chat history is held in memory keyed by meeting. Without this, deleting a
             // meeting would remove its row and recording while leaving the questions and
             // answers about it resident until the app quits.
@@ -4987,9 +5406,21 @@ final class MuesliController: NSObject {
             cleanupOrphanedMeetingWaveformCacheFiles()
             scheduleICloudSyncAfterLocalChange()
         } catch let error as MeetingLifecycleError {
+            if beganRecordingDeletion, let preparedArtifactID {
+                Task {
+                    await RecordingArtifactPlaybackCoordinator.shared
+                        .restoreAfterSharedOwnerRemoval(artifactID: preparedArtifactID)
+                }
+            }
             presentErrorAlert(title: "Couldn't Delete Meeting", message: error.localizedDescription)
             return
         } catch {
+            if beganRecordingDeletion, let preparedArtifactID {
+                Task {
+                    await RecordingArtifactPlaybackCoordinator.shared
+                        .restoreAfterSharedOwnerRemoval(artifactID: preparedArtifactID)
+                }
+            }
             presentErrorAlert(
                 title: "Couldn't Delete Meeting",
                 message: MeetingLifecycleError.failedToDeleteMeeting(underlying: error).localizedDescription
@@ -5014,7 +5445,20 @@ final class MuesliController: NSObject {
     }
 
     func clearDictationHistory() {
-        try? dictationStore.clearDictations()
+        var candidates: [RecordingArtifactID] = []
+        do {
+            candidates = try dictationStore.recordingArtifactsRemovedByClearingDictations()
+            candidates.forEach {
+                RecordingArtifactPlaybackCoordinator.shared.beginExternalDeletion(artifactID: $0)
+            }
+            let artifactIDs = try dictationStore.clearDictations()
+            artifactIDs.forEach(finishDurableRecordingDeletion)
+            restorePlaybackAfterBulkDeletion(candidates: candidates, deleted: artifactIDs)
+        } catch {
+            restorePlaybackAfterBulkDeletion(candidates: candidates, deleted: [])
+            presentErrorAlert(title: "Couldn't Clear Dictation History", message: error.localizedDescription)
+            return
+        }
         scheduleICloudSyncAfterLocalChange()
         statusBarController?.refresh()
         historyWindowController?.reload()
@@ -5063,17 +5507,33 @@ final class MuesliController: NSObject {
         }
 
         do {
-            try? clearSavedMeetingWaveformCache()
-            try clearSavedMeetingRecordingsDirectory()
+            for reference in try dictationStore.meetingRecordingReferences() {
+                guard let meeting = try dictationStore.meeting(id: reference.id) else { continue }
+                try migrateLegacyRecordingForDeletionIfNeeded(meeting)
+            }
         } catch {
             presentErrorAlert(
                 title: "Couldn't Clear Meeting History",
-                message: "Saved meeting audio files could not be deleted, so meeting history was left in place. \(error.localizedDescription)"
+                message: "Saved meeting audio could not be prepared safely, so meeting history was left in place. \(error.localizedDescription)"
             )
             return
         }
 
-        try? dictationStore.clearMeetings()
+        var candidates: [RecordingArtifactID] = []
+        do {
+            candidates = try dictationStore.recordingArtifactsRemovedByClearingMeetings()
+            candidates.forEach {
+                RecordingArtifactPlaybackCoordinator.shared.beginExternalDeletion(artifactID: $0)
+            }
+            let artifactIDs = try dictationStore.clearMeetings()
+            artifactIDs.forEach(finishDurableRecordingDeletion)
+            restorePlaybackAfterBulkDeletion(candidates: candidates, deleted: artifactIDs)
+        } catch {
+            restorePlaybackAfterBulkDeletion(candidates: candidates, deleted: [])
+            presentErrorAlert(title: "Couldn't Clear Meeting History", message: error.localizedDescription)
+            return
+        }
+        try? clearSavedMeetingWaveformCache()
         scheduleICloudSyncAfterLocalChange()
         // Clearing every meeting must clear the questions and answers about them too.
         MeetingChatConversations.shared.forgetAll()
@@ -5796,6 +6256,7 @@ final class MuesliController: NSObject {
         micAudioPath: String?,
         systemAudioPath: String?,
         savedRecordingPath: String?,
+        sessionID: UUID? = nil,
         selectedTemplateID: String?,
         selectedTemplateName: String?,
         selectedTemplateKind: MeetingTemplateKind?,
@@ -5811,6 +6272,7 @@ final class MuesliController: NSObject {
             micAudioPath: micAudioPath,
             systemAudioPath: systemAudioPath,
             savedRecordingPath: savedRecordingPath,
+            sessionID: sessionID,
             selectedTemplateID: selectedTemplateID,
             selectedTemplateName: selectedTemplateName,
             selectedTemplateKind: selectedTemplateKind,
@@ -5830,12 +6292,42 @@ final class MuesliController: NSObject {
         micAudioPath: String?,
         systemAudioPath: String?,
         savedRecordingPath: String?,
+        sessionID: UUID? = nil,
         selectedTemplateID: String?,
         selectedTemplateName: String?,
         selectedTemplateKind: MeetingTemplateKind?,
         selectedTemplatePrompt: String?
     ) throws -> Int64 {
-        let meetingID = try dictationStore.insertMeeting(
+        var adoptedArtifactID: RecordingArtifactID?
+        let recording: RecordingArtifactReference?
+        if let savedRecordingPath {
+            guard let recordingArtifactStore else {
+                throw RecordingArtifactStoreError.unsafeRecordingRoot
+            }
+            let artifact = try recordingArtifactStore.adoptCapture(
+                at: URL(fileURLWithPath: savedRecordingPath),
+                sessionID: sessionID ?? UUID(),
+                captureKind: .meeting,
+                savePolicy: .always,
+                terminalAt: endTime
+            )
+            adoptedArtifactID = artifact.id
+            if let sessionID {
+                try recordingArtifactStore.attachDiagnostic(
+                    sessionID: sessionID,
+                    artifactID: artifact.id,
+                    availability: .available
+                )
+            }
+            recording = RecordingArtifactReference(
+                artifactID: artifact.id,
+                availability: .available
+            )
+        } else {
+            recording = nil
+        }
+        do {
+            return try dictationStore.insertMeeting(
             title: title,
             calendarEventID: calendarEventID,
             startTime: startTime,
@@ -5844,14 +6336,20 @@ final class MuesliController: NSObject {
             formattedNotes: formattedNotes,
             micAudioPath: micAudioPath,
             systemAudioPath: systemAudioPath,
-            savedRecordingPath: savedRecordingPath,
+            savedRecordingPath: nil,
             selectedTemplateID: selectedTemplateID,
             selectedTemplateName: selectedTemplateName,
             selectedTemplateKind: selectedTemplateKind,
             selectedTemplatePrompt: selectedTemplatePrompt,
-            source: .audioImport
-        )
-        return meetingID
+            source: .audioImport,
+            recording: recording
+            )
+        } catch {
+            if let adoptedArtifactID {
+                try? recordingArtifactStore?.deleteArtifact(id: adoptedArtifactID)
+            }
+            throw error
+        }
     }
 
     private func publishImportedAudioMeeting(meetingID: Int64, completedAt: Date) {
@@ -5869,11 +6367,11 @@ final class MuesliController: NSObject {
     func discardProvisionalImportedMeeting(id: Int64) {
         guard let meeting = meeting(id: id), meeting.source == .audioImport else { return }
         do {
-            if let savedRecordingPath = meeting.savedRecordingPath,
-               try shouldDeleteSavedMeetingRecording(at: savedRecordingPath, excluding: id) {
-                try deleteSavedMeetingRecording(at: savedRecordingPath)
+            try migrateLegacyRecordingForDeletionIfNeeded(meeting)
+            if let artifactID = try dictationStore.deleteMeeting(id: id) {
+                RecordingArtifactPlaybackCoordinator.shared.beginExternalDeletion(artifactID: artifactID)
+                finishDurableRecordingDeletion(artifactID)
             }
-            try dictationStore.deleteMeeting(id: id)
         } catch {
             fputs("[import] failed to discard provisional meeting \(id): \(error)\n", stderr)
         }
@@ -6745,6 +7243,7 @@ final class MuesliController: NSObject {
             var provisionalPersistenceResult: CompletedMeetingPersistenceResult?
             var provisionalRecordingSave: PreparedMeetingRecordingSave?
             var provisionalPriorMeetingRecord: MeetingRecord?
+            var provisionalPriorMeetingRecording: RecordingArtifactReference?
             var didWinTerminal = sessionTrace == nil
             var didComplete = false
             do {
@@ -6758,11 +7257,14 @@ final class MuesliController: NSObject {
                 let recordingSaveDecision = await self.recordingSaveDecision(for: result)
                 let preparedRecordingSave = await self.prepareMeetingRecordingSave(
                     for: result,
-                    saveDecision: recordingSaveDecision
+                    saveDecision: recordingSaveDecision,
+                    sessionID: sessionTrace?.sessionID ?? UUID()
                 )
                 provisionalRecordingSave = preparedRecordingSave
                 if let liveMeetingID {
                     provisionalPriorMeetingRecord = try self.dictationStore.meeting(id: liveMeetingID)
+                    provisionalPriorMeetingRecording = try self.recordingArtifactStore?
+                        .recordingForMeeting(id: liveMeetingID)
                 }
                 let persistenceResult = try await MainActor.run {
                     try self.persistCompletedMeetingResult(
@@ -6795,6 +7297,7 @@ final class MuesliController: NSObject {
                     provisionalPersistenceResult = nil
                     provisionalRecordingSave = nil
                     provisionalPriorMeetingRecord = nil
+                    provisionalPriorMeetingRecording = nil
                     completedMeetingID = persistenceResult.meetingID
                     didComplete = true
                     await MainActor.run {
@@ -6823,6 +7326,7 @@ final class MuesliController: NSObject {
                             persistenceResult: persistenceResult,
                             originalMeetingID: liveMeetingID,
                             priorMeetingRecord: provisionalPriorMeetingRecord,
+                            priorMeetingRecording: provisionalPriorMeetingRecording,
                             preparedRecordingSave: preparedRecordingSave
                         )
                     }
@@ -6841,6 +7345,7 @@ final class MuesliController: NSObject {
                             persistenceResult: provisionalPersistenceResult,
                             originalMeetingID: liveMeetingID,
                             priorMeetingRecord: provisionalPriorMeetingRecord,
+                            priorMeetingRecording: provisionalPriorMeetingRecording,
                             preparedRecordingSave: provisionalRecordingSave
                         )
                     }
@@ -6905,18 +7410,6 @@ final class MuesliController: NSObject {
         meetingFinalizationTasks[finalizationTaskID] = finalizationTask
     }
 
-    func revealMeetingRecordingInFinder(path: String) {
-        let url = URL(fileURLWithPath: path)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            presentErrorAlert(
-                title: "Recording Not Found",
-                message: "The saved meeting recording is no longer available on disk."
-            )
-            return
-        }
-        NSWorkspace.shared.activateFileViewerSelecting([url])
-    }
-
     func persistCompletedMeetingResult(
         _ result: MeetingSessionResult,
         existingMeetingID: Int64? = nil,
@@ -6948,7 +7441,8 @@ final class MuesliController: NSObject {
                 selectedTemplateName: result.templateSnapshot.name,
                 selectedTemplateKind: result.templateSnapshot.kind,
                 selectedTemplatePrompt: result.templateSnapshot.prompt,
-                preserveRecoveryMetadata: preserveRecoveryMetadata
+                preserveRecoveryMetadata: preserveRecoveryMetadata,
+                recording: preparedRecordingSave.recording
             )
             meetingID = existingMeetingID
             clearCachedMeetingManualNotes(id: existingMeetingID)
@@ -6967,7 +7461,8 @@ final class MuesliController: NSObject {
                 selectedTemplateID: result.templateSnapshot.id,
                 selectedTemplateName: result.templateSnapshot.name,
                 selectedTemplateKind: result.templateSnapshot.kind,
-                selectedTemplatePrompt: result.templateSnapshot.prompt
+                selectedTemplatePrompt: result.templateSnapshot.prompt,
+                recording: preparedRecordingSave.recording
             )
         }
         return CompletedMeetingPersistenceResult(meetingID: meetingID, recordingSaveError: recordingSaveError)
@@ -6980,16 +7475,26 @@ final class MuesliController: NSObject {
         persistenceResult: CompletedMeetingPersistenceResult,
         originalMeetingID: Int64?,
         priorMeetingRecord: MeetingRecord?,
+        priorMeetingRecording: RecordingArtifactReference? = nil,
         preparedRecordingSave: PreparedMeetingRecordingSave
     ) -> Bool {
         let meetingID = persistenceResult.meetingID
+        let provisionalArtifactID = preparedRecordingSave.recording?.artifactID
+        let removesProvisionalArtifact = provisionalArtifactID != nil
+            && provisionalArtifactID != priorMeetingRecording?.artifactID
+        if removesProvisionalArtifact, let provisionalArtifactID {
+            RecordingArtifactPlaybackCoordinator.shared.beginExternalDeletion(
+                artifactID: provisionalArtifactID
+            )
+        }
         do {
             if originalMeetingID == nil {
-                try dictationStore.deleteMeeting(id: meetingID)
+                _ = try dictationStore.deleteMeeting(id: meetingID)
             } else if let priorMeetingRecord {
                 let restoredResume = try dictationStore.rollbackProvisionalLiveMeeting(
                     id: meetingID,
-                    priorRecord: priorMeetingRecord
+                    priorRecord: priorMeetingRecord,
+                    priorRecording: priorMeetingRecording
                 )
                 if !restoredResume {
                     resolveLiveMeetingAfterStopFailure(id: meetingID)
@@ -6999,18 +7504,18 @@ final class MuesliController: NSObject {
             }
 
         } catch {
+            if removesProvisionalArtifact, let provisionalArtifactID {
+                Task {
+                    await RecordingArtifactPlaybackCoordinator.shared
+                        .restoreAfterSharedOwnerRemoval(artifactID: provisionalArtifactID)
+                }
+            }
             fputs("[muesli-native] failed to roll back provisional meeting \(meetingID): \(error)\n", stderr)
             return false
         }
 
-        if let path = preparedRecordingSave.path {
-            do {
-                if try !isSavedMeetingRecordingReferenced(at: path) {
-                    try deleteSavedMeetingRecording(at: path)
-                }
-            } catch {
-                fputs("[muesli-native] failed to remove provisional meeting recording: \(error)\n", stderr)
-            }
+        if removesProvisionalArtifact, let provisionalArtifactID {
+            finishDurableRecordingDeletion(provisionalArtifactID)
         }
         clearCachedMeetingManualNotes(id: meetingID)
         clearCachedMeetingTitle(id: meetingID)
@@ -7360,7 +7865,7 @@ final class MuesliController: NSObject {
         if let saveDecision {
             shouldSave = saveDecision
         } else {
-            switch config.meetingRecordingSavePolicy {
+            switch result.recordingSavePolicy {
             case .never:
                 shouldSave = false
             case .always:
@@ -7390,16 +7895,56 @@ final class MuesliController: NSObject {
             meetingTitle: result.title,
             startedAt: result.startTime,
             supportDirectory: configStore.supportDirectory(),
-            fileFormat: config.resolvedMeetingRecordingFileFormat
+            fileFormat: result.recordingFileFormat
         ))
     }
 
     func prepareMeetingRecordingSave(
         for result: MeetingSessionResult,
-        saveDecision: Bool? = nil
+        saveDecision: Bool? = nil,
+        sessionID: UUID = UUID()
     ) async -> PreparedMeetingRecordingSave {
         let plan = meetingRecordingSavePlan(for: result, saveDecision: saveDecision)
-        return await Self.prepareMeetingRecordingSave(plan)
+        let prepared = await Self.prepareMeetingRecordingSave(plan)
+        guard let path = prepared.path,
+              let store = recordingArtifactStore else { return prepared }
+        let frozenSavePolicy: RecordingSavePolicySnapshot = switch result.recordingSavePolicy {
+        case .prompt: .prompt
+        case .always, .never: .always
+        }
+        do {
+            let artifact = try await Task.detached(priority: .utility) {
+                try store.adoptCapture(
+                    at: URL(fileURLWithPath: path),
+                    sessionID: sessionID,
+                    captureKind: .meeting,
+                    savePolicy: frozenSavePolicy,
+                    terminalAt: result.endTime
+                )
+            }.value
+            try? await Task.detached(priority: .utility) {
+                try store.attachDiagnostic(
+                    sessionID: sessionID,
+                    artifactID: artifact.id,
+                    availability: .available
+                )
+            }.value
+            return PreparedMeetingRecordingSave(
+                path: nil,
+                error: prepared.error,
+                recording: RecordingArtifactReference(
+                    artifactID: artifact.id,
+                    availability: .available
+                )
+            )
+        } catch {
+            try? FileManager.default.removeItem(atPath: path)
+            return PreparedMeetingRecordingSave(
+                path: nil,
+                error: .failedToSaveRecording(underlying: error),
+                recording: RecordingArtifactReference(artifactID: nil, availability: .saveFailed)
+            )
+        }
     }
 
     private nonisolated static func prepareMeetingRecordingSave(
@@ -7497,57 +8042,10 @@ final class MuesliController: NSObject {
         return true
     }
 
-    private func clearSavedMeetingRecordingsDirectory() throws {
-        let recordingsDirectory = configStore.supportDirectory()
-            .appendingPathComponent("meeting-recordings", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: recordingsDirectory.path) else { return }
-        try FileManager.default.removeItem(at: recordingsDirectory)
-    }
-
     private func clearSavedMeetingWaveformCache() throws {
         try RecordingWaveformCacheFiles.removeAllCachedWaveforms(
             supportDirectory: configStore.supportDirectory()
         )
-    }
-
-    private func deleteSavedMeetingRecording(at path: String) throws {
-        guard let url = savedRecordingURL(from: path) else { return }
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-
-        do {
-            // Waveform cache is derived data; recording deletion must still proceed if cache cleanup fails.
-            try? RecordingWaveformCacheFiles.removeCachedWaveform(
-                for: url,
-                supportDirectory: configStore.supportDirectory()
-            )
-            try FileManager.default.removeItem(at: url)
-        } catch {
-            throw MeetingLifecycleError.failedToDeleteRecording(underlying: error)
-        }
-    }
-
-    private func shouldDeleteSavedMeetingRecording(at path: String, excluding meetingID: Int64) throws -> Bool {
-        guard let url = savedRecordingURL(from: path) else { return false }
-        let targetPath = url.standardizedFileURL.path
-        let references = try dictationStore.meetingRecordingReferences()
-        return !references.contains { reference in
-            guard reference.id != meetingID,
-                  let otherURL = savedRecordingURL(from: reference.savedRecordingPath) else {
-                return false
-            }
-            return otherURL.standardizedFileURL.path == targetPath
-        }
-    }
-
-    private func isSavedMeetingRecordingReferenced(at path: String) throws -> Bool {
-        guard let url = savedRecordingURL(from: path) else { return false }
-        let targetPath = url.standardizedFileURL.path
-        return try dictationStore.meetingRecordingReferences().contains { reference in
-            guard let otherURL = savedRecordingURL(from: reference.savedRecordingPath) else {
-                return false
-            }
-            return otherURL.standardizedFileURL.path == targetPath
-        }
     }
 
     private func savedRecordingURL(from path: String?) -> URL? {
@@ -7559,7 +8057,7 @@ final class MuesliController: NSObject {
 
     @MainActor
     private func recordingSaveDecision(for result: MeetingSessionResult) async -> Bool? {
-        guard config.meetingRecordingSavePolicy == .prompt else { return nil }
+        guard result.recordingSavePolicy == .prompt else { return nil }
         guard result.retainedRecordingURL != nil, result.retainedRecordingError == nil else { return nil }
         return await promptToSaveMeetingRecording(for: result.title)
     }
@@ -8819,6 +9317,9 @@ final class MuesliController: NSObject {
                 if let wavURL {
                     try? FileManager.default.removeItem(at: wavURL)
                 }
+                if let eventSessionID {
+                    dictationAudioSessionManager.acknowledgeTerminalCapture(sessionID: eventSessionID)
+                }
                 break
             }
             guard computerUseAudioSessionManager.currentSessionID == nil else {
@@ -8834,7 +9335,7 @@ final class MuesliController: NSObject {
             finishComputerUseAudioStop(wavURL: wavURL, startedAt: startedAt)
         case .audioRestored, .cancelled:
             break
-        case .failed(let sessionID, let error):
+        case .failed(let sessionID, let error, _):
             guard let sessionID,
                   activeComputerUseAudioSessionID == sessionID
                     || pendingComputerUseStopSessionID == sessionID else { break }
@@ -8876,6 +9377,7 @@ final class MuesliController: NSObject {
                 break
             }
             finishStandardDictationStop(wavURL: wavURL, pendingStop: pendingStop)
+            dictationAudioSessionManager.acknowledgeTerminalCapture(sessionID: eventSessionID)
         case .audioRestored(let eventSessionID):
             guard let eventSessionID,
                   pendingReleaseSoundSessionIDs.remove(eventSessionID) != nil else { break }
@@ -8883,23 +9385,61 @@ final class MuesliController: NSObject {
             // Reuse the insert cue as the hotkey-release cue once ducked audio has
             // been restored; waiting for transcription would make release feedback lag.
             SoundController.playDictationInsert(enabled: shouldPlayDictationLifecycleSounds)
-        case .cancelled(let sessionID, let reason):
+        case .cancelled(let sessionID, let reason, let terminalCapture):
             guard let sessionID else { break }
+            let startedAt = pendingStandardDictationStops[sessionID]?.startedAt
+                ?? dictationStartedAt
+                ?? Date()
             let trace = dictationSessionTraces.removeValue(forKey: sessionID)
                 ?? ensureDictationSessionTrace(id: sessionID)
-            Task {
-                await trace.cancel(
+            Task { @MainActor [weak self] in
+                defer { self?.dictationAudioSessionManager.acknowledgeTerminalCapture(sessionID: sessionID) }
+                let didWin = await trace.cancel(
                     stage: "dictation_audio_session",
                     metadata: ["reason": reason]
                 )
+                guard didWin, let self, let terminalCapture else {
+                    if let wavURL = terminalCapture?.wavURL {
+                        try? FileManager.default.removeItem(at: wavURL)
+                    }
+                    return
+                }
+                await self.persistAudioOnlyDictationRecording(
+                    capture: terminalCapture,
+                    startedAt: startedAt,
+                    durationSeconds: max(Date().timeIntervalSince(startedAt), 0)
+                )
             }
-        case .failed(let sessionID, let error):
+        case .failed(let sessionID, let error, let terminalCapture):
             fputs("[muesli-native] recorder start failed: \(error)\n", stderr)
+            let terminalStartedAt = sessionID.flatMap { pendingStandardDictationStops[$0]?.startedAt }
+                ?? dictationStartedAt
+                ?? Date()
             if let sessionID {
                 let trace = dictationSessionTraces.removeValue(forKey: sessionID)
                     ?? ensureDictationSessionTrace(id: sessionID)
-                Task {
-                    await trace.fail(stage: "dictation_audio_session")
+                Task { @MainActor [weak self] in
+                    defer { self?.dictationAudioSessionManager.acknowledgeTerminalCapture(sessionID: sessionID) }
+                    let didWin: Bool
+                    if terminalCapture?.outcome == .timedOut {
+                        didWin = await trace.claimTerminal(
+                            .timedOut,
+                            metadata: ["stage": "dictation_audio_session"]
+                        )
+                    } else {
+                        didWin = await trace.fail(stage: "dictation_audio_session")
+                    }
+                    guard didWin, let self, let terminalCapture else {
+                        if let wavURL = terminalCapture?.wavURL {
+                            try? FileManager.default.removeItem(at: wavURL)
+                        }
+                        return
+                    }
+                    await self.persistAudioOnlyDictationRecording(
+                        capture: terminalCapture,
+                        startedAt: terminalStartedAt,
+                        durationSeconds: max(Date().timeIntervalSince(terminalStartedAt), 0)
+                    )
                 }
             }
             if let sessionID,
@@ -9137,13 +9677,20 @@ final class MuesliController: NSObject {
         dictationAudioSessionManager.beginRecording(
             mode: "hold-start",
             duckingEnabled: config.muteSystemAudioDuringDictation,
-            mediaPauseEnabled: config.pauseMediaDuringDictation
+            mediaPauseEnabled: config.pauseMediaDuringDictation,
+            recordingSavePolicy: activeDictationRecordingSavePolicy
         )
+    }
+
+    private var activeDictationRecordingSavePolicy: DictationRecordingSavePolicy {
+        activeDictationStyleSession?.config.dictationRecordingSavePolicy
+            ?? config.dictationRecordingSavePolicy
     }
 
     @available(macOS 15, *)
     private func startNemotronStreamingAsync(
-        sessionID: UUID
+        sessionID: UUID,
+        recordingSavePolicy: DictationRecordingSavePolicy
     ) {
         Task {
             let transcriber: Nemotron35StreamingTranscriber
@@ -9152,7 +9699,11 @@ final class MuesliController: NSObject {
                 transcriber = try await transcriptionCoordinator.getLoadedNemotron35Transcriber()
             } catch {
                 await MainActor.run {
-                    self.handleNemotronStreamingRuntimeFailure(error: error, sessionID: sessionID)
+                    self.handleNemotronStreamingStartFailure(
+                        error: error,
+                        sessionID: sessionID,
+                        recordingSavePolicy: recordingSavePolicy
+                    )
                 }
                 return
             }
@@ -9188,14 +9739,28 @@ final class MuesliController: NSObject {
                         }
                     }
                 }
-                controller.onFailure = { [weak self] error in
+                controller.onFailureWithCapture = { [weak self] error, captureURL in
                     DispatchQueue.main.async {
-                        self?.handleNemotronStreamingRuntimeFailure(error: error, sessionID: sessionID)
+                        self?.handleNemotronStreamingRuntimeFailure(
+                            error: error,
+                            sessionID: sessionID,
+                            captureURL: captureURL,
+                            recordingSavePolicy: recordingSavePolicy
+                        )
+                    }
+                }
+                controller.onStartFailureWithCapture = { [weak self] error, captureURL in
+                    DispatchQueue.main.async {
+                        self?.handleNemotronStreamingStartFailure(
+                            error: error,
+                            sessionID: sessionID,
+                            captureURL: captureURL,
+                            recordingSavePolicy: recordingSavePolicy
+                        )
                     }
                 }
                 self._streamingDictationController = controller
-                guard controller.start() else {
-                    self.handleNemotronStreamingStartFailure(sessionID: sessionID)
+                guard controller.start(recordingSavePolicy: recordingSavePolicy) else {
                     return
                 }
                 self.activateDictationRecordingIndicator()
@@ -9208,23 +9773,45 @@ final class MuesliController: NSObject {
     }
 
     @MainActor
-    private func handleNemotronStreamingStartFailure(sessionID: UUID) {
+    private func handleNemotronStreamingStartFailure(
+        error: Error,
+        sessionID: UUID,
+        captureURL: URL? = nil,
+        recordingSavePolicy: DictationRecordingSavePolicy
+    ) {
+        guard isNemotron35Streaming, nemotron35StreamingSessionID == sessionID else { return }
+        let startedAt = dictationStartedAt ?? Date()
         fputs("[muesli-native] Nemotron streaming controller failed to start\n", stderr)
         if !isDictationTestMode {
             recordDiagnosticIncident(
                 kind: .streamingDictationStartFailed,
                 stage: .nemotronStreamingStart,
                 backend: selectedBackend,
-                error: nil
+                error: error
             )
         }
         let trace = dictationSessionTraces.removeValue(forKey: sessionID)
-        Task {
-            await trace?.fail(stage: "nemotron_streaming_start")
+        Task { @MainActor [weak self] in
+            let didWin = await trace?.fail(stage: "nemotron_streaming_start") ?? true
+            guard didWin, let self, recordingSavePolicy != .never else {
+                if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
+                return
+            }
+            await self.persistAudioOnlyDictationRecording(
+                capture: DictationAudioTerminalCapture(
+                    sessionID: sessionID,
+                    outcome: .failed,
+                    recordingSavePolicy: recordingSavePolicy,
+                    wavURL: captureURL
+                ),
+                startedAt: startedAt,
+                durationSeconds: max(Date().timeIntervalSince(startedAt), 0)
+            )
         }
         isNemotron35Streaming = false
         _streamingDictationController = nil
         nemotron35StreamingSessionID = nil
+        nemotron35StreamingRecordingSavePolicy = .never
         previousStreamText = ""
         dictationStartedAt = nil
         clearCapturedDictationSessionContext()
@@ -9239,8 +9826,14 @@ final class MuesliController: NSObject {
     }
 
     @MainActor
-    private func handleNemotronStreamingRuntimeFailure(error: Error, sessionID: UUID) {
+    private func handleNemotronStreamingRuntimeFailure(
+        error: Error,
+        sessionID: UUID,
+        captureURL: URL? = nil,
+        recordingSavePolicy: DictationRecordingSavePolicy = .never
+    ) {
         guard isNemotron35Streaming, nemotron35StreamingSessionID == sessionID else { return }
+        let startedAt = dictationStartedAt ?? Date()
         fputs("[muesli-native] Nemotron streaming failed: \(error)\n", stderr)
         if !isDictationTestMode {
             recordDiagnosticIncident(
@@ -9251,12 +9844,27 @@ final class MuesliController: NSObject {
             )
         }
         let trace = dictationSessionTraces.removeValue(forKey: sessionID)
-        Task {
-            await trace?.fail(stage: "nemotron_streaming_runtime")
+        Task { @MainActor [weak self] in
+            let didWin = await trace?.fail(stage: "nemotron_streaming_runtime") ?? true
+            guard didWin, let self, recordingSavePolicy != .never else {
+                if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
+                return
+            }
+            await self.persistAudioOnlyDictationRecording(
+                capture: DictationAudioTerminalCapture(
+                    sessionID: sessionID,
+                    outcome: .failed,
+                    recordingSavePolicy: recordingSavePolicy,
+                    wavURL: captureURL
+                ),
+                startedAt: startedAt,
+                durationSeconds: max(Date().timeIntervalSince(startedAt), 0)
+            )
         }
         isNemotron35Streaming = false
         _streamingDictationController = nil
         nemotron35StreamingSessionID = nil
+        nemotron35StreamingRecordingSavePolicy = .never
         previousStreamText = ""
         dictationStartedAt = nil
         clearCapturedDictationSessionContext()
@@ -9278,17 +9886,37 @@ final class MuesliController: NSObject {
 
         if isNemotron35Streaming {
             let sessionID = nemotron35StreamingSessionID
+            let startedAt = dictationStartedAt ?? Date()
+            let recordingSavePolicy = nemotron35StreamingRecordingSavePolicy
+            let captureURL: URL?
             isNemotron35Streaming = false
             if #available(macOS 15, *), let sdc = _streamingDictationController as? StreamingDictationController {
-                sdc.cancel()
+                captureURL = sdc.cancel()
+            } else {
+                captureURL = nil
             }
             _streamingDictationController = nil
             nemotron35StreamingSessionID = nil
+            nemotron35StreamingRecordingSavePolicy = .never
             previousStreamText = ""
             if let sessionID {
                 let trace = dictationSessionTraces.removeValue(forKey: sessionID)
-                Task {
-                    await trace?.cancel(stage: "nemotron_streaming")
+                Task { @MainActor [weak self] in
+                    let didWin = await trace?.cancel(stage: "nemotron_streaming") ?? true
+                    guard didWin, let self, recordingSavePolicy != .never else {
+                        if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
+                        return
+                    }
+                    await self.persistAudioOnlyDictationRecording(
+                        capture: DictationAudioTerminalCapture(
+                            sessionID: sessionID,
+                            outcome: .cancelled,
+                            recordingSavePolicy: recordingSavePolicy,
+                            wavURL: captureURL
+                        ),
+                        startedAt: startedAt,
+                        durationSeconds: max(Date().timeIntervalSince(startedAt), 0)
+                    )
                 }
             }
         }
@@ -9324,8 +9952,10 @@ final class MuesliController: NSObject {
         if isStreamingDictationBackend {
             if #available(macOS 15, *) {
                 let sessionID = UUID()
+                let recordingSavePolicy = activeDictationRecordingSavePolicy
                 isNemotron35Streaming = true
                 nemotron35StreamingSessionID = sessionID
+                nemotron35StreamingRecordingSavePolicy = recordingSavePolicy
                 let sessionTrace = ensureDictationSessionTrace(
                     id: sessionID,
                     backend: selectedBackend,
@@ -9357,7 +9987,8 @@ final class MuesliController: NSObject {
                 meetingMonitor.refreshState()
                 fputs("[muesli-native] Nemotron streaming toggle mode active\n", stderr)
                 startNemotronStreamingAsync(
-                    sessionID: sessionID
+                    sessionID: sessionID,
+                    recordingSavePolicy: recordingSavePolicy
                 )
                 return
             }
@@ -9366,7 +9997,8 @@ final class MuesliController: NSObject {
         dictationAudioSessionManager.beginRecording(
             mode: "toggle",
             duckingEnabled: config.muteSystemAudioDuringDictation,
-            mediaPauseEnabled: config.pauseMediaDuringDictation
+            mediaPauseEnabled: config.pauseMediaDuringDictation,
+            recordingSavePolicy: activeDictationRecordingSavePolicy
         )
     }
 
@@ -9396,11 +10028,14 @@ final class MuesliController: NSObject {
         // Nemotron streaming: text already typed — just finalize and store
         if isNemotron35Streaming {
             let sessionID = nemotron35StreamingSessionID
+            let recordingSavePolicy = nemotron35StreamingRecordingSavePolicy
             if #available(macOS 15, *), let controller = _streamingDictationController as? StreamingDictationController {
-                controller.stop { [weak self] finalText in
+                controller.stopWithCapture { [weak self] result in
                     DispatchQueue.main.async {
                         self?.finishNemotronStreamingStop(
-                            finalText: finalText,
+                            finalText: result.transcript,
+                            captureURL: result.captureURL,
+                            recordingSavePolicy: recordingSavePolicy,
                             startedAt: startedAt,
                             sessionID: sessionID
                         )
@@ -9414,6 +10049,8 @@ final class MuesliController: NSObject {
                 // so this path must not be moved back to .transcribing.
                 finishNemotronStreamingStop(
                     finalText: "",
+                    captureURL: nil,
+                    recordingSavePolicy: recordingSavePolicy,
                     startedAt: startedAt,
                     sessionID: sessionID
                 )
@@ -9545,6 +10182,7 @@ final class MuesliController: NSObject {
             customWords: serializedCustomWords(from: sessionConfig),
             cleanupRequest: cleanupRequest,
             detectedSpeech: detectedSpeech,
+            recordingSavePolicy: sessionConfig.dictationRecordingSavePolicy,
             latencyTrace: detachDictationLatencyTrace("stop_requested"),
             sessionTrace: sessionTrace
         )
@@ -9615,17 +10253,37 @@ final class MuesliController: NSObject {
 
         if isNemotron35Streaming {
             let streamingSessionID = nemotron35StreamingSessionID
+            let startedAt = dictationStartedAt ?? Date()
+            let recordingSavePolicy = nemotron35StreamingRecordingSavePolicy
+            let captureURL: URL?
             isNemotron35Streaming = false
             if #available(macOS 15, *), let controller = _streamingDictationController as? StreamingDictationController {
-                controller.cancel()
+                captureURL = controller.cancel()
+            } else {
+                captureURL = nil
             }
             _streamingDictationController = nil
             nemotron35StreamingSessionID = nil
+            nemotron35StreamingRecordingSavePolicy = .never
             previousStreamText = ""
             if let streamingSessionID {
                 let trace = dictationSessionTraces.removeValue(forKey: streamingSessionID)
-                Task {
-                    await trace?.cancel(stage: "meeting_started")
+                Task { @MainActor [weak self] in
+                    let didWin = await trace?.cancel(stage: "meeting_started") ?? true
+                    guard didWin, let self, recordingSavePolicy != .never else {
+                        if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
+                        return
+                    }
+                    await self.persistAudioOnlyDictationRecording(
+                        capture: DictationAudioTerminalCapture(
+                            sessionID: streamingSessionID,
+                            outcome: .cancelled,
+                            recordingSavePolicy: recordingSavePolicy,
+                            wavURL: captureURL
+                        ),
+                        startedAt: startedAt,
+                        durationSeconds: max(Date().timeIntervalSince(startedAt), 0)
+                    )
                 }
             }
             indicator.setToggleDictation(false, config: config)
@@ -9650,6 +10308,8 @@ final class MuesliController: NSObject {
 
     private func finishNemotronStreamingStop(
         finalText: String,
+        captureURL: URL?,
+        recordingSavePolicy: DictationRecordingSavePolicy,
         startedAt: Date,
         sessionID: UUID?
     ) {
@@ -9660,6 +10320,7 @@ final class MuesliController: NSObject {
         isNemotron35Streaming = false
         _streamingDictationController = nil
         nemotron35StreamingSessionID = nil
+        nemotron35StreamingRecordingSavePolicy = .never
         previousStreamText = ""
         let duration = max(Date().timeIntervalSince(startedAt), 0)
         fputs("[muesli-native] Nemotron streaming stop, got \(finalText.count) chars\n", stderr)
@@ -9669,20 +10330,53 @@ final class MuesliController: NSObject {
 
         if !config.maraudersMapUnlocked { checkMaraudersMapActivation(cleaned) }
 
-        let dictationID: Int64?
-        if !cleaned.isEmpty {
-            dictationID = try? dictationStore.insertDictation(
-                text: cleaned,
-                durationSeconds: duration,
-                dictationCleanupOutcome: DictationCleanupOutcome.skippedStreaming.rawValue,
-                startedAt: startedAt,
-                endedAt: Date()
-            )
-        } else {
-            dictationID = nil
-        }
         Task { @MainActor [weak self] in
             guard let self else { return }
+            let recordingArtifact: RecordingArtifact?
+            if recordingSavePolicy != .never,
+               let captureURL,
+               let sessionID {
+                recordingArtifact = await self.adoptDictationRecording(
+                    at: captureURL,
+                    sessionID: sessionID,
+                    policy: recordingSavePolicy,
+                    terminalAt: Date()
+                )
+            } else {
+                recordingArtifact = nil
+                if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
+            }
+            let recordingAvailability = recordingAvailability(for: recordingArtifact)
+            let recordingReference = dictationRecordingReference(
+                policy: recordingSavePolicy,
+                artifact: recordingArtifact
+            )
+            let dictationID: Int64?
+            if !cleaned.isEmpty {
+                dictationID = try? self.dictationStore.insertDictation(
+                    text: cleaned,
+                    durationSeconds: duration,
+                    dictationCleanupOutcome: DictationCleanupOutcome.skippedStreaming.rawValue,
+                    startedAt: startedAt,
+                    endedAt: Date(),
+                    recording: recordingReference
+                )
+            } else {
+                dictationID = nil
+                if let sessionID, let store = self.recordingArtifactStore,
+                   recordingSavePolicy != .never {
+                    try? await Task.detached(priority: .utility) {
+                        try store.insertAudioOnlyDictationHistory(
+                            sessionID: sessionID,
+                            capturedAt: startedAt,
+                            durationSeconds: duration,
+                            terminalOutcome: .empty,
+                            artifactID: recordingArtifact?.id,
+                            availability: recordingAvailability
+                        )
+                    }.value
+                }
+            }
             await sessionTrace?.storeArtifact(finalText, kind: .rawASR)
             await sessionTrace?.storeArtifact(cleaned, kind: .cleanupResult)
             await sessionTrace?.storeArtifact(
@@ -9701,7 +10395,24 @@ final class MuesliController: NSObject {
                     "output_characters": String(cleaned.count),
                 ]
             ) ?? true
-            guard didWin else { return }
+            guard didWin else {
+                if let dictationID,
+                   let artifactID = try? self.dictationStore.deleteDictation(id: dictationID),
+                   let store = self.recordingArtifactStore {
+                    try? await Task.detached(priority: .utility) {
+                        try store.finishDurableDeletion(id: artifactID)
+                    }.value
+                } else if let sessionID {
+                    await self.discardLateAudioOnlyDictation(
+                        sessionID: sessionID,
+                        artifact: recordingArtifact
+                    )
+                }
+                return
+            }
+            if recordingSavePolicy == .prompt, let recordingArtifact {
+                self.presentDictationRecordingDecision(for: recordingArtifact.id)
+            }
             if dictationID != nil {
                 self.scheduleICloudSyncAfterLocalChange()
             }
@@ -9719,6 +10430,229 @@ final class MuesliController: NSObject {
         }
     }
 
+    private func adoptDictationRecording(
+        at sourceURL: URL,
+        sessionID: UUID,
+        policy: DictationRecordingSavePolicy,
+        terminalAt: Date
+    ) async -> RecordingArtifact? {
+        guard let store = recordingArtifactStore,
+              let savePolicy = policy.artifactPolicySnapshot else {
+            try? FileManager.default.removeItem(at: sourceURL)
+            return nil
+        }
+        do {
+            let artifact = try await Task.detached(priority: .utility) {
+                try store.adoptCapture(
+                    at: sourceURL,
+                    sessionID: sessionID,
+                    captureKind: .dictation,
+                    savePolicy: savePolicy,
+                    terminalAt: terminalAt
+                )
+            }.value
+            try? await Task.detached(priority: .utility) {
+                try store.attachDiagnostic(
+                    sessionID: sessionID,
+                    artifactID: artifact.id,
+                    availability: artifact.lifecycleState == .pending ? .pending : .available
+                )
+            }.value
+            return artifact
+        } catch {
+            try? FileManager.default.removeItem(at: sourceURL)
+            fputs("[dictation-recording] failed to retain capture: \(error)\n", stderr)
+            return nil
+        }
+    }
+
+    private func recordingAvailability(for artifact: RecordingArtifact?) -> RecordingAvailability {
+        guard let artifact else { return .saveFailed }
+        return artifact.lifecycleState == .pending ? .pending : .available
+    }
+
+    private func dictationRecordingReference(
+        policy: DictationRecordingSavePolicy,
+        artifact: RecordingArtifact?
+    ) -> RecordingArtifactReference? {
+        guard policy != .never else { return nil }
+        return RecordingArtifactReference(
+            artifactID: artifact?.id,
+            availability: recordingAvailability(for: artifact)
+        )
+    }
+
+    private func discardLateAudioOnlyDictation(
+        sessionID: UUID,
+        artifact: RecordingArtifact?
+    ) async {
+        guard let store = recordingArtifactStore else { return }
+        let artifactToDelete = try? await Task.detached(priority: .utility) {
+            try store.deleteAudioOnlyDictationHistory(sessionID: sessionID)
+        }.value
+        if let artifactToDelete {
+            try? await Task.detached(priority: .utility) {
+                try store.finishDurableDeletion(id: artifactToDelete)
+            }.value
+        } else if let artifact {
+            try? await Task.detached(priority: .utility) {
+                try store.deleteArtifact(id: artifact.id)
+            }.value
+        }
+    }
+
+    private func persistAudioOnlyDictationRecording(
+        capture: DictationAudioTerminalCapture,
+        startedAt: Date,
+        durationSeconds: TimeInterval
+    ) async {
+        guard let sessionID = capture.sessionID,
+              capture.recordingSavePolicy != .never,
+              let store = recordingArtifactStore else {
+            if let wavURL = capture.wavURL {
+                try? FileManager.default.removeItem(at: wavURL)
+            }
+            return
+        }
+
+        let terminalAt = Date()
+        let artifact: RecordingArtifact?
+        if let wavURL = capture.wavURL {
+            artifact = await adoptDictationRecording(
+                at: wavURL,
+                sessionID: sessionID,
+                policy: capture.recordingSavePolicy,
+                terminalAt: terminalAt
+            )
+        } else {
+            artifact = nil
+        }
+        let availability = recordingAvailability(for: artifact)
+        let outcome: DictationAudioTerminalOutcome = switch capture.outcome {
+        case .cancelled: .cancelled
+        case .timedOut: .timedOut
+        case .failed: .failed
+        }
+        do {
+            try await Task.detached(priority: .utility) {
+                try store.insertAudioOnlyDictationHistory(
+                    sessionID: sessionID,
+                    capturedAt: startedAt,
+                    durationSeconds: durationSeconds,
+                    terminalOutcome: outcome,
+                    artifactID: artifact?.id,
+                    availability: availability
+                )
+            }.value
+        } catch {
+            if let artifact {
+                try? await Task.detached(priority: .utility) {
+                    try store.deleteArtifact(id: artifact.id)
+                }.value
+            }
+            fputs("[dictation-recording] failed to create audio-only history: \(error)\n", stderr)
+            return
+        }
+
+        historyWindowController?.reload()
+        if capture.recordingSavePolicy == .prompt, let artifact {
+            presentDictationRecordingDecision(for: artifact.id)
+        }
+    }
+
+    private func persistUnavailableAudioOnlyDictation(
+        sessionID: UUID,
+        startedAt: Date,
+        durationSeconds: TimeInterval,
+        outcome: DictationAudioTerminalOutcome,
+        availability: RecordingAvailability
+    ) async {
+        guard let store = recordingArtifactStore else { return }
+        do {
+            try await Task.detached(priority: .utility) {
+                try store.insertAudioOnlyDictationHistory(
+                    sessionID: sessionID,
+                    capturedAt: startedAt,
+                    durationSeconds: durationSeconds,
+                    terminalOutcome: outcome,
+                    artifactID: nil,
+                    availability: availability
+                )
+            }.value
+            historyWindowController?.reload()
+        } catch {
+            fputs("[dictation-recording] failed to create unavailable audio history: \(error)\n", stderr)
+        }
+    }
+
+    private func presentDictationRecordingDecision(for artifactID: RecordingArtifactID) {
+        Task { @MainActor [weak self] in
+            guard let self, let store = self.recordingArtifactStore else { return }
+            let artifact = try? await Task.detached(priority: .utility) {
+                try store.enforcePendingCapacity()
+                return try store.artifact(id: artifactID)
+            }.value
+            await RecordingArtifactPlaybackCoordinator.shared.refreshAllCachedOwners()
+            guard artifact != nil else {
+                self.historyWindowController?.reload()
+                self.syncAppState()
+                return
+            }
+            self.scheduleDictationRecordingExpiry(artifactID)
+            let shouldKeep = await self.promptToSaveDictationRecording()
+            guard let store = self.recordingArtifactStore else { return }
+            do {
+                try await Task.detached(priority: .utility) {
+                    if shouldKeep {
+                        try store.retainPendingArtifact(id: artifactID)
+                    } else {
+                        try store.declinePendingArtifact(id: artifactID)
+                    }
+                }.value
+            } catch {
+                fputs("[dictation-recording] failed to resolve save decision: \(error)\n", stderr)
+            }
+            await RecordingArtifactPlaybackCoordinator.shared.refreshAllCachedOwners()
+            self.historyWindowController?.reload()
+        }
+    }
+
+    private func scheduleDictationRecordingExpiry(_ artifactID: RecordingArtifactID) {
+        guard let store = recordingArtifactStore,
+              let artifact = try? store.artifact(id: artifactID),
+              let expiresAt = artifact.pendingExpiresAt else { return }
+        Task { @MainActor [weak self] in
+            let delay = max(expiresAt.timeIntervalSinceNow, 0)
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            let expired = (try? await Task.detached(priority: .utility) {
+                try store.expirePendingArtifactIfNeeded(id: artifactID, now: Date())
+            }.value) == true
+            guard expired, let self else { return }
+            await RecordingArtifactPlaybackCoordinator.shared.refreshAllCachedOwners()
+            self.historyWindowController?.reload()
+            self.syncAppState()
+        }
+    }
+
+    private func promptToSaveDictationRecording() async -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Save dictation recording?"
+        alert.informativeText = "Keep the source audio with this dictation. If you close this prompt, the temporary recording is deleted."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Save Recording")
+        alert.addButton(withTitle: "Delete Recording")
+        guard let window = alertPresentationWindow(showHistoryIfNeeded: true) else {
+            return false
+        }
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { response in
+                continuation.resume(returning: response == .alertFirstButtonReturn)
+            }
+        }
+    }
+
     private func finishStandardDictationStop(
         wavURL stoppedWavURL: URL?,
         pendingStop: PendingStandardDictationStop
@@ -9732,10 +10666,21 @@ final class MuesliController: NSObject {
                 markDictationLatency("stop_without_wav", trace: trace)
             }
             dictationSessionTraces.removeValue(forKey: pendingStop.id)
-            Task {
-                await pendingStop.sessionTrace.cancel(
+            Task { @MainActor [weak self] in
+                let didWin = await pendingStop.sessionTrace.cancel(
                     stage: "dictation_stop",
                     metadata: ["reason": "missing_wav"]
+                )
+                guard didWin, let self, pendingStop.recordingSavePolicy != .never else { return }
+                await self.persistAudioOnlyDictationRecording(
+                    capture: DictationAudioTerminalCapture(
+                        sessionID: pendingStop.id,
+                        outcome: .cancelled,
+                        recordingSavePolicy: pendingStop.recordingSavePolicy,
+                        wavURL: nil
+                    ),
+                    startedAt: pendingStop.startedAt,
+                    durationSeconds: max(Date().timeIntervalSince(pendingStop.startedAt), 0)
                 )
             }
             completeStandardDictationStop(.discarded, sequence: pendingStop.sequence)
@@ -9744,7 +10689,9 @@ final class MuesliController: NSObject {
         let duration = max(Date().timeIntervalSince(pendingStop.startedAt), 0)
         if duration < 0.3 {
             fputs("[muesli-native] discarded short recording\n", stderr)
-            try? FileManager.default.removeItem(at: wavURL)
+            if pendingStop.recordingSavePolicy == .never {
+                try? FileManager.default.removeItem(at: wavURL)
+            }
             if pendingStop.isTestMode {
                 dictationTestCallback?("")
             }
@@ -9752,10 +10699,26 @@ final class MuesliController: NSObject {
                 markDictationLatency("short_recording", trace: trace)
             }
             dictationSessionTraces.removeValue(forKey: pendingStop.id)
-            Task {
-                await pendingStop.sessionTrace.cancel(
+            Task { @MainActor [weak self] in
+                let didWin = await pendingStop.sessionTrace.cancel(
                     stage: "dictation_stop",
                     metadata: ["reason": "short_recording"]
+                )
+                guard didWin, let self, pendingStop.recordingSavePolicy != .never else {
+                    if pendingStop.recordingSavePolicy != .never {
+                        try? FileManager.default.removeItem(at: wavURL)
+                    }
+                    return
+                }
+                await self.persistAudioOnlyDictationRecording(
+                    capture: DictationAudioTerminalCapture(
+                        sessionID: pendingStop.id,
+                        outcome: .cancelled,
+                        recordingSavePolicy: pendingStop.recordingSavePolicy,
+                        wavURL: wavURL
+                    ),
+                    startedAt: pendingStop.startedAt,
+                    durationSeconds: duration
                 )
             }
             completeStandardDictationStop(.discarded, sequence: pendingStop.sequence)
@@ -9779,6 +10742,7 @@ final class MuesliController: NSObject {
             customWords: pendingStop.customWords,
             cleanupRequest: pendingStop.cleanupRequest,
             detectedSpeech: pendingStop.detectedSpeech,
+            recordingSavePolicy: pendingStop.recordingSavePolicy,
             latencyTrace: pendingStop.latencyTrace,
             sessionTrace: pendingStop.sessionTrace
         )
@@ -9881,30 +10845,55 @@ final class MuesliController: NSObject {
             try Task.checkCancellation()
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            if job.isTestMode {
-                guard await job.sessionTrace.publish(
-                    text,
-                    outcome: result.cleanupOutcome.terminalTraceOutcome,
-                    metadata: [
-                        "cleanup_outcome": result.cleanupOutcome.rawValue,
-                        "output_characters": String(text.count),
-                    ]
-                ) != nil else { return }
-                dictationTestCallback?(text)
-                if let trace = job.latencyTrace {
-                    markDictationLatency("pipeline_completed chars:\(text.count)", trace: trace)
-                }
-                return
+            let recordingArtifact: RecordingArtifact?
+            if job.recordingSavePolicy == .never {
+                recordingArtifact = nil
+            } else {
+                recordingArtifact = await adoptDictationRecording(
+                    at: job.wavURL,
+                    sessionID: job.id,
+                    policy: job.recordingSavePolicy,
+                    terminalAt: Date()
+                )
             }
+            let recordingAvailability = recordingAvailability(for: recordingArtifact)
+            let recordingReference = dictationRecordingReference(
+                policy: job.recordingSavePolicy,
+                artifact: recordingArtifact
+            )
 
             guard !text.isEmpty else {
-                _ = await job.sessionTrace.claimTerminal(
+                if job.recordingSavePolicy != .never,
+                   let store = recordingArtifactStore {
+                    try? await Task.detached(priority: .utility) {
+                        try store.insertAudioOnlyDictationHistory(
+                            sessionID: job.id,
+                            capturedAt: job.startedAt,
+                            durationSeconds: job.duration,
+                            terminalOutcome: .empty,
+                            artifactID: recordingArtifact?.id,
+                            availability: recordingAvailability
+                        )
+                    }.value
+                }
+                let didWin = await job.sessionTrace.claimTerminal(
                     result.cleanupOutcome.terminalTraceOutcome,
                     metadata: [
                         "cleanup_outcome": result.cleanupOutcome.rawValue,
                         "output_characters": "0",
                     ]
                 )
+                if didWin, job.recordingSavePolicy == .prompt, let recordingArtifact {
+                    presentDictationRecordingDecision(for: recordingArtifact.id)
+                } else if !didWin {
+                    await discardLateAudioOnlyDictation(
+                        sessionID: job.id,
+                        artifact: recordingArtifact
+                    )
+                }
+                if job.isTestMode, didWin {
+                    dictationTestCallback?(text)
+                }
                 if let trace = job.latencyTrace {
                     let speechStatus = job.detectedSpeech ? "detected_speech" : "no_detected_speech"
                     markDictationLatency("empty_result:\(speechStatus)", trace: trace)
@@ -9921,8 +10910,22 @@ final class MuesliController: NSObject {
                 dictationStyleSelectionSource: result.cleanupStyle?.source.rawValue,
                 dictationCleanupOutcome: result.cleanupOutcome.rawValue,
                 startedAt: job.startedAt,
-                endedAt: Date()
+                endedAt: Date(),
+                recording: recordingReference
             )
+            if dictationID == nil, let store = recordingArtifactStore,
+               job.recordingSavePolicy != .never {
+                try? await Task.detached(priority: .utility) {
+                    try store.insertAudioOnlyDictationHistory(
+                        sessionID: job.id,
+                        capturedAt: job.startedAt,
+                        durationSeconds: job.duration,
+                        terminalOutcome: .failed,
+                        artifactID: recordingArtifact?.id,
+                        availability: recordingAvailability
+                    )
+                }.value
+            }
             if let dictationID {
                 await job.sessionTrace.associate(dictationID: dictationID)
             }
@@ -9936,7 +10939,31 @@ final class MuesliController: NSObject {
             )
             guard didWinTerminal else {
                 if let dictationID {
-                    try? dictationStore.deleteDictation(id: dictationID)
+                    if let artifactID = try? dictationStore.deleteDictation(id: dictationID),
+                       let store = recordingArtifactStore {
+                        try? await Task.detached(priority: .utility) {
+                            try store.finishDurableDeletion(id: artifactID)
+                        }.value
+                    }
+                } else {
+                    await discardLateAudioOnlyDictation(
+                        sessionID: job.id,
+                        artifact: recordingArtifact
+                    )
+                }
+                return
+            }
+            if job.recordingSavePolicy == .prompt, let recordingArtifact {
+                presentDictationRecordingDecision(for: recordingArtifact.id)
+            }
+            if job.isTestMode {
+                scheduleICloudSyncAfterLocalChange()
+                statusBarController?.refresh()
+                historyWindowController?.reload()
+                syncAppState()
+                dictationTestCallback?(text)
+                if let trace = job.latencyTrace {
+                    markDictationLatency("pipeline_completed chars:\(text.count)", trace: trace)
                 }
                 return
             }
@@ -9980,13 +11007,37 @@ final class MuesliController: NSObject {
             telemetryParameters["paste_method"] = job.outputMode.pasteMethod
             TelemetryDeck.signal("dictation.completed", parameters: telemetryParameters)
         } catch is CancellationError {
-            await job.sessionTrace.cancel(stage: "dictation_pipeline")
+            let didWin = await job.sessionTrace.cancel(stage: "dictation_pipeline")
+            if didWin, job.recordingSavePolicy != .never {
+                await persistAudioOnlyDictationRecording(
+                    capture: DictationAudioTerminalCapture(
+                        sessionID: job.id,
+                        outcome: .cancelled,
+                        recordingSavePolicy: job.recordingSavePolicy,
+                        wavURL: job.wavURL
+                    ),
+                    startedAt: job.startedAt,
+                    durationSeconds: job.duration
+                )
+            }
             fputs("[muesli-native] test dictation cancelled\n", stderr)
             if let trace = job.latencyTrace {
                 markDictationLatency("pipeline_cancelled", trace: trace)
             }
         } catch {
-            await job.sessionTrace.fail(stage: "dictation_pipeline")
+            let didWin = await job.sessionTrace.fail(stage: "dictation_pipeline")
+            if didWin, job.recordingSavePolicy != .never {
+                await persistAudioOnlyDictationRecording(
+                    capture: DictationAudioTerminalCapture(
+                        sessionID: job.id,
+                        outcome: .failed,
+                        recordingSavePolicy: job.recordingSavePolicy,
+                        wavURL: job.wavURL
+                    ),
+                    startedAt: job.startedAt,
+                    durationSeconds: job.duration
+                )
+            }
             fputs("[muesli-native] transcription failed: \(error)\n", stderr)
             if job.isTestMode {
                 dictationTestFailureCallback?(userFacingDictationTestError(error))

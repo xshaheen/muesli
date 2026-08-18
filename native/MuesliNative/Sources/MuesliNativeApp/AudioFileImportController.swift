@@ -453,6 +453,7 @@ enum AudioFileImportController {
                 micAudioPath: nil,
                 systemAudioPath: nil,
                 savedRecordingPath: savedRecordingPath,
+                sessionID: sessionTrace?.sessionID ?? UUID(),
                 selectedTemplateID: templateSnapshot.id,
                 selectedTemplateName: templateSnapshot.name,
                 selectedTemplateKind: templateSnapshot.kind,
