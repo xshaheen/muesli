@@ -543,6 +543,8 @@ final class MuesliController: NSObject {
     private var isShowingCalendarNotification = false
     private var presentedMeetingCandidate: MeetingCandidate?
     private var meetingEndTimer: Timer?
+    private var meetingDurationWarningTimer: Timer?
+    private var meetingDurationStopTimer: Timer?
     private var activeMeetingCalendarEndDate: Date?
     private var latestMeetingActivityCandidate: MeetingCandidate?
     private var latestMeetingActivityCandidateObservedAt: Date?
@@ -1065,6 +1067,7 @@ final class MuesliController: NSObject {
         autoRecordedCalendarEventIDs.removeAll()
         meetingFeatureMonitorsAllowed = false
         disarmMeetingAutoStop()
+        cancelMeetingDurationLimit()
         meetingMonitor.stop()
         meetingDetectionMonitorStarted = false
         dismissPresentedMeetingDetection()
@@ -5629,6 +5632,7 @@ final class MuesliController: NSObject {
         preparingMeetingSession = nil
         clearLiveMeetingTranscript()
         disarmMeetingAutoStop()
+        cancelMeetingDurationLimit()
         if let meetingStartMeetingID {
             canceledMeetingStartIDs.insert(meetingStartMeetingID)
             resolveLiveMeetingAfterStartFailure(id: meetingStartMeetingID)
@@ -6663,6 +6667,7 @@ final class MuesliController: NSObject {
                 }
                 activeMeetingSession = meetingSession
                 activeMeetingID = meetingID
+                armMeetingDurationLimit(meetingID: meetingID, startedAt: meetingSession.startTime ?? Date())
                 activeMeetingAutoStop.markRecordingStarted(now: Date())
                 meetingMonitor.suppressWhileActive()
                 meetingMonitor.refreshState()
@@ -6894,6 +6899,7 @@ final class MuesliController: NSObject {
             // Fallback recovery: reset indicator if session is nil
             guard !isStartingMeetingRecording else { return }
             disarmMeetingAutoStop()
+            cancelMeetingDurationLimit()
             indicator.setMeetingRecording(false, config: config)
             if let meetingID = activeMeetingID {
                 activeMeetingID = nil
@@ -6908,6 +6914,7 @@ final class MuesliController: NSObject {
         }
         sessionToDiscard.discard()
         disarmMeetingAutoStop()
+        cancelMeetingDurationLimit()
         self.activeMeetingSession = nil
         indicator.setMeetingRecording(false, config: config)
         if let meetingID = activeMeetingID {
@@ -7171,6 +7178,7 @@ final class MuesliController: NSObject {
             // Fallback recovery: reset indicator if session is nil
             guard !isStartingMeetingRecording else { return }
             disarmMeetingAutoStop()
+            cancelMeetingDurationLimit()
             if let activeMeetingID {
                 let trace = meetingSessionTraces.removeValue(forKey: activeMeetingID)
                 Task {
@@ -7194,6 +7202,7 @@ final class MuesliController: NSObject {
         }
         isStoppingMeetingRecording = true
         disarmMeetingAutoStop()
+        cancelMeetingDurationLimit()
         meetingEndTimer?.invalidate()
         meetingEndTimer = nil
         meetingNotification.close()
@@ -11335,6 +11344,80 @@ final class MuesliController: NSObject {
                 self?.showMeetingEndNotification(title: title)
             }
         }
+    }
+
+    private func armMeetingDurationLimit(meetingID: Int64, startedAt: Date) {
+        cancelMeetingDurationLimit()
+
+        let warningDelay = MeetingDurationLimitPolicy.warningDate(startedAt: startedAt).timeIntervalSinceNow
+        if warningDelay > 0 {
+            meetingDurationWarningTimer = scheduleMeetingDurationTimer(after: warningDelay) {
+                [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.showMeetingDurationLimitWarning(meetingID: meetingID)
+                }
+            }
+        } else {
+            showMeetingDurationLimitWarning(meetingID: meetingID)
+        }
+
+        let stopDelay = MeetingDurationLimitPolicy.stopDate(startedAt: startedAt).timeIntervalSinceNow
+        guard stopDelay > 0 else {
+            stopMeetingAtDurationLimit(meetingID: meetingID)
+            return
+        }
+        meetingDurationStopTimer = scheduleMeetingDurationTimer(after: stopDelay) {
+            [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.stopMeetingAtDurationLimit(meetingID: meetingID)
+            }
+        }
+    }
+
+    private func scheduleMeetingDurationTimer(
+        after delay: TimeInterval,
+        action: @escaping @Sendable (Timer) -> Void
+    ) -> Timer {
+        let timer = Timer(timeInterval: delay, repeats: false, block: action)
+        // Tracking menus or dragging the floating panel must not postpone the hard limit.
+        RunLoop.main.add(timer, forMode: .common)
+        return timer
+    }
+
+    private func cancelMeetingDurationLimit() {
+        meetingDurationWarningTimer?.invalidate()
+        meetingDurationWarningTimer = nil
+        meetingDurationStopTimer?.invalidate()
+        meetingDurationStopTimer = nil
+    }
+
+    private func showMeetingDurationLimitWarning(meetingID: Int64) {
+        meetingDurationWarningTimer = nil
+        guard activeMeetingID == meetingID,
+              activeMeetingSession?.isRecording == true,
+              !isStoppingMeetingRecording else { return }
+
+        meetingNotification.show(
+            promptID: "meeting-duration-limit:\(meetingID)",
+            title: "Meeting recording limit",
+            subtitle: "This meeting will stop and finalize at the 3-hour limit.",
+            actionLabel: "Stop Now",
+            dismissAfter: MeetingDurationLimitPolicy.warningLeadTime,
+            onStartRecording: { [weak self] in
+                guard let self, self.activeMeetingID == meetingID else { return }
+                self.stopMeetingRecording()
+            }
+        )
+    }
+
+    private func stopMeetingAtDurationLimit(meetingID: Int64) {
+        meetingDurationStopTimer = nil
+        guard activeMeetingID == meetingID,
+              activeMeetingSession?.isRecording == true,
+              !isStoppingMeetingRecording else { return }
+
+        fputs("[meeting] auto-stopping recording at the three-hour safety limit\n", stderr)
+        stopMeetingRecording()
     }
 
     private func showMeetingEndNotification(title: String) {

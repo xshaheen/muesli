@@ -1,18 +1,145 @@
+import AppKit
 import SwiftUI
 import MuesliCore
+
+enum MeetingNotesPresentation {
+    static let maximumContentWidth: CGFloat = 880
+    // Bound layout work without altering the persisted meeting or transcript.
+    static let maximumRenderedCharacters = 150_000
+    static var truncationNotice: String { """
+
+
+    ---
+
+    *Meeting notes were truncated for display after \(maximumRenderedCharacters) characters. The stored meeting was not changed.*
+    """
+    }
+
+    // Large intrinsic NSTextField documents are synchronously remeasured during
+    // SwiftUI layout. A bounded NSTextView scrolls without sizing the full document.
+    static let nativeScrollThreshold = 20_000
+
+    static func usesNativeScrolling(for markdown: String) -> Bool {
+        let utf16 = markdown.utf16
+        return utf16.index(
+            utf16.startIndex,
+            offsetBy: nativeScrollThreshold,
+            limitedBy: utf16.endIndex
+        ) != nil
+    }
+
+    static func renderedMarkdown(for markdown: String) -> String {
+        guard let trimIndex = markdown.index(
+            markdown.startIndex,
+            offsetBy: maximumRenderedCharacters,
+            limitedBy: markdown.endIndex
+        ), trimIndex < markdown.endIndex else {
+            return markdown
+        }
+
+        return String(markdown[..<trimIndex]) + truncationNotice
+    }
+}
 
 struct MeetingNotesView: View {
     let markdown: String
 
+    @ViewBuilder
     var body: some View {
-        ScrollView {
-            MeetingMarkdownContent(markdown: markdown)
-                .frame(maxWidth: 880, alignment: .leading)
-                .padding(.horizontal, MuesliTheme.spacing24)
-                .padding(.vertical, MuesliTheme.spacing16)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        if MeetingNotesPresentation.usesNativeScrolling(for: markdown) {
+            MeetingScrollableNotesText(markdown: markdown)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                MeetingMarkdownContent(markdown: markdown)
+                    .frame(maxWidth: MeetingNotesPresentation.maximumContentWidth, alignment: .leading)
+                    .padding(.horizontal, MuesliTheme.spacing24)
+                    .padding(.vertical, MuesliTheme.spacing16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct MeetingScrollableNotesText: NSViewRepresentable {
+    let markdown: String
+
+    final class Coordinator {
+        var sourceMarkdown: String?
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.contentView.drawsBackground = false
+
+        let textView = MeetingScrollableNotesTextView(frame: scrollView.contentView.bounds)
+        textView.minSize = NSSize(width: 0, height: scrollView.contentSize.height)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.autoresizingMask = [.width]
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.isRichText = true
+        textView.usesFindBar = true
+        textView.textContainer?.widthTracksTextView = false
+        textView.textContainer?.heightTracksTextView = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        scrollView.documentView = textView
+        textView.updateTextContainerWidth()
+        update(textView, coordinator: context.coordinator)
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        update(textView, coordinator: context.coordinator)
+    }
+
+    private func update(_ textView: NSTextView, coordinator: Coordinator) {
+        guard coordinator.sourceMarkdown != markdown else { return }
+        let renderedMarkdown = MeetingNotesPresentation.renderedMarkdown(for: markdown)
+        let attributedText = MeetingSelectableTextContent.markdown(renderedMarkdown, bodyPointSize: 14)
+        textView.textStorage?.setAttributedString(attributedText)
+        coordinator.sourceMarkdown = markdown
+    }
+}
+
+private final class MeetingScrollableNotesTextView: NSTextView {
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateTextContainerWidth()
+    }
+
+    func updateTextContainerWidth() {
+        let minimumInset = MuesliTheme.spacing24
+        let availableWidth = max(0, bounds.width - 2 * minimumInset)
+        let contentWidth = min(MeetingNotesPresentation.maximumContentWidth, availableWidth)
+        let nextInset = NSSize(
+            width: max(minimumInset, (bounds.width - contentWidth) / 2),
+            height: MuesliTheme.spacing16
+        )
+        guard textContainerInset != nextInset || textContainer?.containerSize.width != contentWidth else {
+            return
+        }
+
+        textContainerInset = nextInset
+        textContainer?.containerSize = NSSize(
+            width: contentWidth,
+            height: CGFloat.greatestFiniteMagnitude
+        )
     }
 }
 
