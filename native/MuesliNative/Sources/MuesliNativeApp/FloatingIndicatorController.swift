@@ -21,11 +21,6 @@ enum FloatingIndicatorPointerIntent {
     }
 }
 
-final class InteractiveFloatingPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-}
-
 @MainActor
 private final class HoverIndicatorView: NSView {
     weak var owner: FloatingIndicatorController?
@@ -135,17 +130,6 @@ final class FloatingIndicatorController: NSObject {
     private var hoverExitWorkItem: DispatchWorkItem?
     private var warningDismissWorkItem: DispatchWorkItem?
     private let configStore: ConfigStore
-    private var isMeetingRecording = false
-    private var isMeetingRecordingPaused = false
-    private var isMeetingTranscriptManuallyDismissed = false
-    private lazy var meetingTranscriptPanel = FloatingMeetingTranscriptPanelController(
-        onOpenNotes: { [weak self] in
-            self?.openMeetingNotesFromTranscript()
-        },
-        onDismiss: { [weak self] in
-            self?.dismissMeetingTranscript()
-        }
-    )
     private var glassView: NSVisualEffectView?
     private var tintLayer: CALayer?
     private var micIconView: NSImageView?
@@ -164,14 +148,9 @@ final class FloatingIndicatorController: NSObject {
     private var dragStartPillCenter: CGPoint?
     private var dragScreenFrames: [NSRect] = []
     var powerProvider: (() -> Float)?
-    var onStopMeeting: (() -> Void)?
-    var onDiscardMeeting: (() -> Void)?
-    var onToggleMeetingPause: (() -> Void)?
-    var onOpenMeetingNotes: (() -> Void)?
     var onCancelToggleDictation: (() -> Void)?
     var onPositionSaved: ((CGPoint) -> Void)?
     private var stopLayer: CALayer?
-    private var panelToggleLayer: CALayer?
     private var transcribingTitle = "Transcribing"
     private var computerUseTranscriptText: String?
     private var loadingSpinner: NSProgressIndicator?
@@ -208,9 +187,6 @@ final class FloatingIndicatorController: NSObject {
     init(configStore: ConfigStore) {
         self.configStore = configStore
         super.init()
-        meetingTranscriptPanel.savedOriginProvider = { [weak self] in
-            self?.configStore.load().meetingPanelOrigin.map { CGPoint(x: $0.x, y: $0.y) }
-        }
         // Display attach/detach moves windows without the app's involvement: macOS
         // constrains them onto whatever screens remain, leaving the pill wherever it
         // landed until the next state change. Re-resolve it from its anchor as soon as
@@ -273,36 +249,6 @@ final class FloatingIndicatorController: NSObject {
 
     var onStopToggleDictation: (() -> Void)?
 
-    /// Persists the user's panel position; wired by MuesliController to config.
-    var onMeetingPanelPositionSaved: ((CGPoint) -> Void)? {
-        get { meetingTranscriptPanel.onUserMovedPanel }
-        set { meetingTranscriptPanel.onUserMovedPanel = newValue }
-    }
-
-    /// Whether the transcript window is on screen, for the menu item's title.
-    var isMeetingTranscriptPanelVisible: Bool { meetingTranscriptPanel.isVisible }
-
-    /// Menu-bar toggle: shows the transcript at the user's saved position (or beside
-    /// the pill on first use) regardless of hover state, or hides a visible one.
-    ///
-    /// Both directions are deliberate, so both move the latch: hiding from here suppresses
-    /// hover-to-show for the rest of the meeting exactly as the chevron does, and showing
-    /// from here is the way back.
-    func toggleMeetingTranscriptPanel() {
-        if meetingTranscriptPanel.isVisible {
-            isMeetingTranscriptManuallyDismissed = true
-            hideMeetingTranscript()
-        } else {
-            showMeetingTranscriptPanel()
-        }
-    }
-
-    /// Shows the transcript window without toggling a panel that is already visible.
-    func showMeetingTranscriptPanel() {
-        isMeetingTranscriptManuallyDismissed = false
-        showMeetingTranscript()
-    }
-
     var currentFrame: NSRect? {
         indicatorScreenFrame
     }
@@ -353,20 +299,6 @@ final class FloatingIndicatorController: NSObject {
 
     func handleClick(atX x: CGFloat? = nil) {
         guard state == .recording else { return }
-        if isMeetingRecording {
-            switch Self.meetingRecordingPillAction(
-                clickX: x,
-                panelToggleRegionMaxX: panelToggleRegionMaxX(),
-                pauseRegion: pauseHitRegion(),
-                stopRegionMinX: stopHitRegionMinX()
-            ) {
-            case .togglePause: onToggleMeetingPause?()
-            case .togglePanel: toggleMeetingTranscriptPanel()
-            case .stop: onStopMeeting?()
-            case .ignore: break
-            }
-            return
-        }
         if let x, x < recordingPauseRegionMaxX() {
             onCancelToggleDictation?()
             return
@@ -374,67 +306,7 @@ final class FloatingIndicatorController: NSObject {
         onStopToggleDictation?()
     }
 
-    enum MeetingRecordingPillAction: Equatable {
-        case togglePause
-        case togglePanel
-        case stop
-        case ignore
-    }
-
-    /// Maps a click on the meeting pill to its control: the panel toggle on the
-    /// left, pause beside it, stop only in its own trailing region. The waveform
-    /// strip between them is display, not a control — a meeting must not stop
-    /// because a click meant for a nearby control missed by a few points.
-    static func meetingRecordingPillAction(
-        clickX: CGFloat?,
-        panelToggleRegionMaxX: CGFloat,
-        pauseRegion: ClosedRange<CGFloat>?,
-        stopRegionMinX: CGFloat
-    ) -> MeetingRecordingPillAction {
-        guard let clickX else { return .ignore }
-        if clickX < panelToggleRegionMaxX { return .togglePanel }
-        if let pauseRegion, pauseRegion.contains(clickX) { return .togglePause }
-        if clickX >= stopRegionMinX { return .stop }
-        return .ignore
-    }
-
-    /// Where the panel toggle's hit region ends: it holds the pill's leftmost
-    /// slot, so everything left of this is the toggle.
-    private func panelToggleRegionMaxX() -> CGFloat {
-        guard let panelToggleLayer, panelToggleLayer.superlayer != nil else { return 0 }
-        let padded = panelToggleLayer.frame.midX + Self.minimumControlHitWidth / 2
-        guard let stopMinX = stopLayer?.frame.minX else { return padded }
-        return min(padded, stopMinX)
-    }
-
-    /// The pause control's hit region: the comfortable minimum width centred on the
-    /// glyph, stopping short of the panel toggle's region and the stop square.
-    private func pauseHitRegion() -> ClosedRange<CGFloat>? {
-        guard let iconLabel, !iconLabel.isHidden, iconLabel.frame.width > 0 else { return nil }
-        let mid = iconLabel.frame.midX
-        let lower = max(panelToggleRegionMaxX(), mid - Self.minimumControlHitWidth / 2)
-        let upper = min(stopLayer?.frame.minX ?? .greatestFiniteMagnitude, mid + Self.minimumControlHitWidth / 2)
-        guard lower < upper else { return nil }
-        return lower...upper
-    }
-
-    /// Where the stop control's hit region begins: the comfortable minimum width
-    /// centred on the square, never reaching back into the pause control. Falls
-    /// back to everything-right-of-the-leading-controls if the square is somehow
-    /// missing, so the pill can never lose its stop control.
-    private func stopHitRegionMinX() -> CGFloat {
-        guard let stopLayer, stopLayer.superlayer != nil else {
-            return pauseHitRegion()?.upperBound ?? panelToggleRegionMaxX()
-        }
-        return max(
-            pauseHitRegion()?.upperBound ?? panelToggleRegionMaxX(),
-            stopLayer.frame.midX - Self.minimumControlHitWidth / 2
-        )
-    }
-
     /// Where the leading ✕ control's hit region ends on a dictation recording pill.
-    /// (A meeting pill routes through `panelToggleRegionMaxX`/`pauseHitRegion`
-    /// instead — its leftmost control is the panel toggle, not the pause.)
     ///
     /// Derived from the chrome rather than fixed at 30pt: the glyph and the stop square
     /// are both laid out against the pill's width, so on a pill that is not 76pt wide a
@@ -450,9 +322,7 @@ final class FloatingIndicatorController: NSObject {
     }
 
     func handleOptionClick() {
-        if isMeetingRecording, state == .recording {
-            onDiscardMeeting?()
-        } else if state == .recording {
+        if state == .recording {
             onCancelToggleDictation?()
         }
     }
@@ -607,27 +477,6 @@ final class FloatingIndicatorController: NSObject {
         }
     }
 
-    func setMeetingRecording(_ recording: Bool, config: AppConfig) {
-        isMeetingRecording = recording
-        recordingWaveformMode = .level
-        // A dismissal holds for the meeting it was made in, and no longer: letting it
-        // survive the boundary leaves hover-to-show dead in a meeting the user dismissed
-        // nothing in.
-        isMeetingTranscriptManuallyDismissed = false
-        if !recording {
-            isMeetingRecordingPaused = false
-            hideMeetingTranscript(reset: true)
-            // The provider reads the meeting session's level; the session is gone.
-            powerProvider = nil
-        }
-        if recording {
-            clearLoadingChrome()
-            setState(.recording, config: config)
-        } else {
-            setState(.idle, config: config)
-        }
-    }
-
     func setRecordingWaveformWaiting(config: AppConfig) {
         recordingWaveformMode = .waiting
         guard state == .recording else { return }
@@ -667,35 +516,6 @@ final class FloatingIndicatorController: NSObject {
         applyWaveformChrome(for: state, mode: mode, in: chromeLayoutSize(for: state, config: config))
     }
 
-    func setMeetingRecordingPaused(_ paused: Bool, config: AppConfig) {
-        guard isMeetingRecordingPaused != paused else { return }
-        isMeetingRecordingPaused = paused
-        // The panel reports the pause in its own header, so pausing is not a reason to
-        // take it down: hiding it here meant the user lost the transcript for asking the
-        // recording to wait, and the re-show on resume then had to guess from the pointer.
-        meetingTranscriptPanel.setPaused(paused)
-        guard isMeetingRecording, state == .recording else { return }
-        setState(.recording, config: config)
-    }
-
-    func updateMeetingTranscript(
-        transcript: String,
-        partialYou: String,
-        partialOthers: String
-    ) {
-        meetingTranscriptPanel.update(
-            transcript: transcript,
-            partialYou: partialYou,
-            partialOthers: partialOthers
-        )
-    }
-
-    /// Gives the panel what it needs to answer questions, or clears it when no meeting is
-    /// recording. Set once per session — the prior transcript does not change mid-meeting.
-    func setMeetingChatContext(_ context: FloatingMeetingChatContext?) {
-        meetingTranscriptPanel.setChatContext(context)
-    }
-
     /// Honours a change to the hover preference, and nothing else.
     ///
     /// Where the pill is anchored, independent of what size it currently is.
@@ -708,47 +528,6 @@ final class FloatingIndicatorController: NSObject {
     private var indicatorScreenFrame: NSRect? {
         guard let panel, let contentView else { return nil }
         return panel.convertToScreen(contentView.frame)
-    }
-
-    /// Shows the transcript, offering the pill's frame as a first-time position.
-    ///
-    /// The panel only uses that frame until the user drags it; from then on it shows at
-    /// its saved origin and the pill is irrelevant. The live frame rather than the anchor:
-    /// loading, the computer-use cursor, and a drag all move the window away from its
-    /// anchor, and a first-time placement derived from the anchor would land beside a
-    /// pill that is not there.
-    private func showMeetingTranscript() {
-        let source: String
-        let indicatorFrame: NSRect
-        if let live = indicatorScreenFrame {
-            source = "live"
-            indicatorFrame = live
-        } else {
-            source = "anchor"
-            indicatorFrame = frameForState(state, config: configStore.load())
-        }
-        guard let visibleFrame = Self.screenVisibleFrame(intersecting: indicatorFrame) else { return }
-        Self.logger.notice("transcript show source=\(source, privacy: .public) pill=\(NSStringFromRect(indicatorFrame), privacy: .public)")
-        meetingTranscriptPanel.show(beside: indicatorFrame, in: visibleFrame)
-        refreshMeetingPanelToggleChrome()
-    }
-
-
-    private func hideMeetingTranscript(reset: Bool = false) {
-        // Nothing to resize. The transcript owns its window, so showing and hiding it
-        // cannot disturb the indicator's geometry -- which is what used to move the
-        // pill out from under the cursor mid-drag.
-        if reset {
-            meetingTranscriptPanel.reset()
-        } else {
-            meetingTranscriptPanel.hide()
-        }
-        refreshMeetingPanelToggleChrome()
-    }
-
-    private func refreshMeetingPanelToggleChrome() {
-        guard state == .recording, isMeetingRecording else { return }
-        addPanelToggleLayer(in: chromeLayoutSize(for: state, config: configStore.load()))
     }
 
     /// Applies a new indicator geometry.
@@ -819,7 +598,6 @@ final class FloatingIndicatorController: NSObject {
     func setState(_ state: DictationState, config: AppConfig) {
         let previousState = self.state
         let previousHover = isHovered
-        meetingTranscriptPanel.setSelectionAccentHex(MuesliTheme.resolvedAccentDarkHex)
         if isComputerUseCursorMode {
             exitComputerUseCursorMode(restoreFrame: false)
         }
@@ -1190,7 +968,7 @@ final class FloatingIndicatorController: NSObject {
         // every call site of it belongs to an import or backend-prepare flow -- so a
         // loading pill raised over one strands the flag, and with it hover,
         // hover-to-transcript, and drag-collapse, for as long as the recording lasts.
-        guard !isMeetingRecording, state != .recording else {
+        guard state != .recording else {
             Self.logger.notice("Ignoring loading pill during recording: \(message, privacy: .public)")
             return
         }
@@ -1319,18 +1097,6 @@ final class FloatingIndicatorController: NSObject {
     }
 
     func setHovered(_ hovered: Bool) {
-        if state == .recording, isMeetingRecording, !isShowingLoading, !isDragging {
-            // Hover opens the transcript and never closes it. The panel is its own window
-            // at a position the user chose, which may be nowhere near the pill, so the
-            // pointer leaving says nothing about whether they still want it -- it usually
-            // means they are on their way over to read it.
-            guard hovered else { return }
-            guard !isMeetingTranscriptManuallyDismissed else { return }
-            let config = configStore.load()
-            guard config.showMeetingTranscriptOnIndicatorHover, panel != nil else { return }
-            showMeetingTranscript()
-            return
-        }
         guard state == .idle, !isShowingLoading, !isDragging, isHovered != hovered else { return }
         hoverExitWorkItem?.cancel()
         isHovered = hovered
@@ -1339,10 +1105,6 @@ final class FloatingIndicatorController: NSObject {
     }
 
     func scheduleHoverExit() {
-        // A meeting pill has no hover exit. Nothing here is a preview the pointer owns:
-        // the transcript stays until the chevron, the menu bar, or the meeting ends, and
-        // the dismissal that suppresses hover-to-show holds for the same reasons.
-        if state == .recording, isMeetingRecording { return }
         guard state == .idle, !isShowingLoading, isHovered else { return }
         hoverExitWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
@@ -1378,9 +1140,6 @@ final class FloatingIndicatorController: NSObject {
         pendingWaveformChromeGeneration = nil
         loadingSpinner = nil
         powerProvider = nil
-        // The transcript window goes down with the pill below, so the latch suppressing
-        // its re-show has nothing left to suppress.
-        isMeetingTranscriptManuallyDismissed = false
         preservesCollapsedLeftEdge = false
         panel?.close()
         panel = nil
@@ -1392,29 +1151,11 @@ final class FloatingIndicatorController: NSObject {
         tintLayer = nil
         micIconView = nil
         wandIconView = nil
-        meetingTranscriptPanel.close()
-    }
-
-    /// The chevron in the panel's own header.
-    ///
-    /// The latch it sets holds for the rest of the meeting: only a deliberate show --
-    /// the menu bar -- or the next meeting clears it. It used to clear itself after
-    /// 0.2s, which made the chevron a button that undid itself while the user was still
-    /// looking at it.
-    private func dismissMeetingTranscript() {
-        isMeetingTranscriptManuallyDismissed = true
-        hideMeetingTranscript()
-    }
-
-    private func openMeetingNotesFromTranscript() {
-        hideMeetingTranscript()
-        onOpenMeetingNotes?()
     }
 
     // MARK: - Recording chrome
 
-    /// The recording pill's leading control: cancel for dictation, pause/resume for a
-    /// meeting.
+    /// The dictation recording pill's leading cancel control.
     ///
     /// Shared with the drag collapse so the two can never disagree. The generic
     /// icon/title layout is wrong for this control -- it centres the glyph over the
@@ -1428,10 +1169,8 @@ final class FloatingIndicatorController: NSObject {
     ) {
         iconLabel.isHidden = false
         iconLabel.stringValue = recordingControlSymbol()
-        iconLabel.textColor = isMeetingRecordingPaused
-            ? .colorWith(hex: MuesliTheme.transcribingHex, alpha: 0.92)
-            : .white.withAlphaComponent(isMeetingRecording ? 0.86 : 0.45)
-        iconLabel.font = NSFont.systemFont(ofSize: isMeetingRecording ? 10 : 7, weight: .semibold)
+        iconLabel.textColor = .white.withAlphaComponent(0.45)
+        iconLabel.font = NSFont.systemFont(ofSize: 7, weight: .semibold)
         // Frame from the measured glyph, centred on the control point. A fixed
         // 10x10 box let the text field's font metrics decide where the glyph sat
         // inside it, which is why the pause bars floated off the row's centreline
@@ -1440,11 +1179,7 @@ final class FloatingIndicatorController: NSObject {
         let glyphSize = iconLabel.attributedStringValue.size()
         let width = max(controlSize, ceil(glyphSize.width) + 2)
         let height = max(controlSize, ceil(glyphSize.height))
-        // A meeting pill's pause sits in the second slot, after the panel toggle;
-        // dictation's ✕ has no toggle and stays leftmost.
-        let centerX = isMeetingRecording
-            ? Self.meetingPauseCenterX
-            : Self.recordingControlLeadingInset + controlSize / 2
+        let centerX = Self.recordingControlLeadingInset + controlSize / 2
         iconLabel.frame = NSRect(
             x: round(centerX - width / 2),
             y: round((size.height - height) / 2),
@@ -1506,66 +1241,12 @@ final class FloatingIndicatorController: NSObject {
 
         contentView.layer?.addSublayer(stop)
         stopLayer = stop
-        addPanelToggleLayer(in: size)
-    }
-
-    /// The panel-toggle glyph in a meeting pill's leftmost slot. Added and removed
-    /// with the stop layer so the two cannot drift apart across relayouts.
-    private func addPanelToggleLayer(in size: NSSize) {
-        removePanelToggleLayer()
-        guard isMeetingRecording, let contentView else { return }
-
-        let scale = contentView.window?.backingScaleFactor ?? 2
-        let glyph = CALayer()
-        // A captions bubble, not a directional caret: the control opens the live
-        // transcript, and this is the one glyph on the pill that says so.
-        let image = panelToggleGlyphImage()
-        glyph.contents = image?.layerContents(forContentsScale: scale)
-        glyph.contentsGravity = .resizeAspect
-        glyph.contentsScale = scale
-        glyph.frame = Self.panelToggleLayerFrame(in: size, imageSize: image?.size)
-        contentView.layer?.addSublayer(glyph)
-        panelToggleLayer = glyph
-    }
-
-    /// The captions bubble becomes the one blue selection cue in the compact control
-    /// while its panel is visible. The pill material and every inactive glyph stay neutral.
-    private func panelToggleGlyphImage() -> NSImage? {
-        guard let symbol = NSImage(systemSymbolName: "captions.bubble", accessibilityDescription: "Show live transcript")?
-            // Two points below the pause glyph's font size: the bubble is a wide
-            // outline shape, so matching point sizes made it visually dominate the
-            // row. Chosen from rendered side-by-side variants, not arithmetic.
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 8, weight: .semibold))
-        else { return nil }
-        let tint = meetingTranscriptPanel.isVisible
-            ? NSColor.colorWith(hex: MuesliTheme.resolvedAccentDarkHex, alpha: 0.95)
-            : NSColor.white.withAlphaComponent(0.8)
-        return NSImage(size: symbol.size, flipped: false) { rect in
-            symbol.draw(in: rect)
-            tint.set()
-            rect.fill(using: .sourceAtop)
-            return true
-        }
-    }
-
-    private func removePanelToggleLayer() {
-        panelToggleLayer?.removeFromSuperlayer()
-        panelToggleLayer = nil
     }
 
     private static let stopSquareSize: CGFloat = 6
     private static let stopSquareTrailingInset: CGFloat = 8
     private static let recordingControlSize: CGFloat = 10
     private static let recordingControlLeadingInset: CGFloat = 7
-    private static let panelToggleGlyphSize: CGFloat = 12
-    /// The panel toggle holds the meeting pill's leftmost slot:
-    /// [panel] [pause] [waveform] [stop].
-    private static let panelToggleLeadingInset: CGFloat = 8
-    /// Where the meeting pause glyph centres — the second slot, clear of the
-    /// toggle's hit region, which ends at the toggle's centre plus half the
-    /// minimum hit width (14 + 18 = 32). Dictation's ✕ has no toggle beside it
-    /// and keeps the plain leading inset.
-    private static let meetingPauseCenterX: CGFloat = 34
     /// The smallest region a pointer can comfortably aim at, used to pad the recording
     /// pill's 10pt leading control out to a clickable width.
     private static let minimumControlHitWidth: CGFloat = 36
@@ -1579,34 +1260,13 @@ final class FloatingIndicatorController: NSObject {
         )
     }
 
-    private static func panelToggleLayerFrame(in size: NSSize, imageSize: NSSize?) -> CGRect {
-        // The image's natural size, centred on the control point: aspect-fitting
-        // into an arbitrary square rescales the glyph, so a fixed box dictated its
-        // drawn size and a leftover -1 nudge (tuned for the old text glyph) held
-        // it below the centreline the rest of the chrome sits on.
-        let imageSize = imageSize ?? NSSize(width: panelToggleGlyphSize, height: panelToggleGlyphSize)
-        let centerX = panelToggleLeadingInset + panelToggleGlyphSize / 2
-        return CGRect(
-            x: round(centerX - imageSize.width / 2),
-            // Exact geometric centre. An optical raise compensating for the
-            // bubble's tail helped at 6pt, but at 8pt the symbol's bounding box is
-            // already balanced — the user's own ruler screenshot showed the raised
-            // bubble floating ~1.5pt above the line the other glyphs sit on.
-            y: (size.height - imageSize.height) / 2,
-            width: imageSize.width,
-            height: imageSize.height
-        )
-    }
-
     private func recordingControlSymbol() -> String {
-        guard isMeetingRecording else { return "\u{2715}" }
-        return isMeetingRecordingPaused ? "\u{25B6}" : "\u{23F8}"
+        "\u{2715}"
     }
 
     private func removeStopLayer() {
         stopLayer?.removeFromSuperlayer()
         stopLayer = nil
-        removePanelToggleLayer()
     }
 
     private func stopWaveformAnimation() {
@@ -1616,10 +1276,8 @@ final class FloatingIndicatorController: NSObject {
         barLayers.removeAll()
         smoothedAmplitude = 0
         waveformAnimationMode = .level
-        // The power provider is wiring, not animation state: the computer-use cursor stops
-        // the animation on a recording that is still running, and clearing it here left the
-        // waveform flat at minimum height for the rest of that meeting. It is cleared where
-        // the recording it belongs to actually ends.
+        // The power provider is wiring, not animation state: computer-use cursor mode may
+        // stop animation while the recording remains live, so lifecycle owners clear it.
         contentView?.layer?.transform = CATransform3DIdentity
         removeStopLayer()
     }
@@ -1666,20 +1324,8 @@ final class FloatingIndicatorController: NSObject {
         CATransaction.commit()
     }
 
-    /// Where the bars start. A meeting pill carries controls on both sides and an
-    /// inert waveform, so its bars centre in the gap between the panel toggle's hit
-    /// region and the stop square's — derived from the same constants the click map
-    /// uses, so the visible bars and the inert interval cannot drift apart.
     private func waveformStartX(totalWidth: CGFloat, frameWidth: CGFloat) -> CGFloat {
-        guard state == .recording, isMeetingRecording else {
-            return (frameWidth - totalWidth) / 2
-        }
-        // Clear of the *second* control's hit region — the pause, since the slot
-        // swap. Measuring from the toggle left the bars starting at x31, right on
-        // top of the pause glyph at x38, which read as two extra waveform dots.
-        let leading = Self.meetingPauseCenterX + Self.minimumControlHitWidth / 2
-        let trailing = frameWidth - Self.stopSquareTrailingInset - Self.stopSquareSize / 2 - Self.minimumControlHitWidth / 2
-        return leading + max(0, trailing - leading - totalWidth) / 2
+        (frameWidth - totalWidth) / 2
     }
 
     private func ensureWaveformAnimation(in frameSize: NSSize, mode: WaveformAnimationMode) {
@@ -2400,13 +2046,6 @@ final class FloatingIndicatorController: NSObject {
             }
             return Self.idleIndicatorSize
         case .preparing, .recording:
-            // A meeting pill carries a third control (the panel toggle), and its
-            // waveform strip is inert — so the width must hold two full-size hit
-            // regions on the left, one on the right, and 27pt of bars that overlap
-            // none of them.
-            if state == .recording, isMeetingRecording {
-                return NSSize(width: 112, height: Self.compactIndicatorHeight)
-            }
             return NSSize(width: 76, height: Self.compactIndicatorHeight)
         case .transcribing:
             if let transcript = computerUseTranscriptText {
@@ -2726,7 +2365,7 @@ final class FloatingIndicatorController: NSObject {
     }
 }
 
-private extension NSColor {
+extension NSColor {
     static func colorWith(hex: Int, alpha: CGFloat) -> NSColor {
         NSColor(
             red: CGFloat((hex >> 16) & 0xFF) / 255.0,

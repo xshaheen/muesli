@@ -449,6 +449,7 @@ final class MuesliController: NSObject {
     )
     private let dictationLatencyTimestampFormatter = ISO8601DateFormatter()
     private let indicator: FloatingIndicatorController
+    private let meetingRecordingPanel: MeetingRecordingPanelController
     private let calendarMonitor = CalendarMonitor()
     private let meetingMonitor = MeetingMonitor()
     private let meetingNotification = MeetingNotificationController()
@@ -486,6 +487,7 @@ final class MuesliController: NSObject {
     private(set) var selectedMeetingSummaryBackend: MeetingSummaryBackendOption
     private(set) var selectedPostProcessorBackend: TranscriptCleanupBackendOption
     private var activeMeetingSession: MeetingSession?
+    private var activeMeetingPanelOwnerID: UUID?
     private weak var preparingMeetingSession: MeetingSession?
     private var activeMeetingID: Int64?
     private var meetingSessionTraces: [Int64: SessionRunTrace] = [:]
@@ -684,6 +686,7 @@ final class MuesliController: NSObject {
         }) ?? .chatGPT
         self.selectedPostProcessorBackend = loadedPostProcessorBackend
         self.indicator = FloatingIndicatorController(configStore: configStore)
+        self.meetingRecordingPanel = MeetingRecordingPanelController(configStore: configStore)
         super.init()
         dictationAudioSessionManager.onEvent = { [weak self] event in
             Task { @MainActor [weak self] in
@@ -816,10 +819,10 @@ final class MuesliController: NSObject {
             startMeetingRecordingHotkeyMonitorIfNeeded()
         }
         syncDictationRecorderWarmup(intent: .idlePrewarm(.startup))
-        indicator.onStopMeeting = { [weak self] in self?.stopMeetingRecording() }
-        indicator.onDiscardMeeting = { [weak self] in self?.discardMeetingWithConfirmation() }
-        indicator.onToggleMeetingPause = { [weak self] in self?.toggleMeetingRecordingPause() }
-        indicator.onOpenMeetingNotes = { [weak self] in self?.openActiveMeetingNotes() }
+        meetingRecordingPanel.onStop = { [weak self] in self?.stopMeetingRecording() }
+        meetingRecordingPanel.onDiscard = { [weak self] in self?.discardMeetingWithConfirmation() }
+        meetingRecordingPanel.onTogglePause = { [weak self] in self?.toggleMeetingRecordingPause() }
+        meetingRecordingPanel.onOpenNotes = { [weak self] in self?.openActiveMeetingNotes() }
         indicator.onStopToggleDictation = { [weak self] in
             guard let self else { return }
             if self.hotkeyMonitor.isToggleRecording {
@@ -844,7 +847,12 @@ final class MuesliController: NSObject {
                 $0.indicatorOrigin = CGPointCodable(x: center.x, y: center.y)
             }
         }
-        indicator.onMeetingPanelPositionSaved = { [weak self] origin in
+        meetingRecordingPanel.onControlCenterSaved = { [weak self] center in
+            self?.updateConfig {
+                $0.meetingRecordingPanelCenter = CGPointCodable(x: center.x, y: center.y)
+            }
+        }
+        meetingRecordingPanel.onTranscriptPanelOriginSaved = { [weak self] origin in
             self?.updateConfig {
                 $0.meetingPanelOrigin = CGPointCodable(x: origin.x, y: origin.y)
             }
@@ -1069,6 +1077,8 @@ final class MuesliController: NSObject {
         meetingDetectionMonitorStarted = false
         dismissPresentedMeetingDetection()
         meetingNotification.close()
+        meetingRecordingPanel.close()
+        activeMeetingPanelOwnerID = nil
         dictationCorrectionMonitor.cancel()
         activeMeetingSession?.discard()
         activeMeetingSession = nil
@@ -1626,7 +1636,6 @@ final class MuesliController: NSObject {
         appState.isMeetingStarting = isStartingMeetingRecording
         appState.meetingStartStatus = meetingStartStatus
         appState.activeMeetingAudioWarning = activeMeetingAudioWarning
-        indicator.setMeetingRecordingPaused(appState.isMeetingRecordingPaused, config: config)
         appState.isChatGPTAuthenticated = chatGPTAuth.isAuthenticated
         appState.isGoogleCalendarAvailable = googleCalAuth.isAvailable
         appState.isGoogleCalendarVerified = googleCalAuth.isVerified
@@ -1798,7 +1807,6 @@ final class MuesliController: NSObject {
         let previousShowFloatingIndicator = config.showFloatingIndicator
         let previousIndicatorAnchor = config.indicatorAnchor
         let previousIndicatorOrigin = config.indicatorOrigin
-        let previousShowMeetingTranscriptOnIndicatorHover = config.showMeetingTranscriptOnIndicatorHover
         let previousRecordingColorHex = config.recordingColorHex
         let previousDictationHotkey = config.dictationHotkey
         mutate(&config)
@@ -1823,13 +1831,12 @@ final class MuesliController: NSObject {
             || config.meetingRecordingHotkeyTriggerThresholdMS != previousMeetingRecordingHotkeyTriggerThresholdMS
         // Every field the pill re-reads when it re-lays out: anchor/origin (frame),
         // showFloatingIndicator (existence), recordingColorHex (tint), dictationHotkey
-        // (hovered idle title), and the hover-transcript preference. Anything else in the
+        // (hovered idle title). Anything else in the
         // config leaves the pill alone, so it must not trigger an animated re-layout.
         let indicatorConfigChanged = config.showFloatingIndicator != previousShowFloatingIndicator
             || config.indicatorAnchor != previousIndicatorAnchor
             || config.indicatorOrigin?.x != previousIndicatorOrigin?.x
             || config.indicatorOrigin?.y != previousIndicatorOrigin?.y
-            || config.showMeetingTranscriptOnIndicatorHover != previousShowMeetingTranscriptOnIndicatorHover
             || config.recordingColorHex != previousRecordingColorHex
             || config.dictationHotkey != previousDictationHotkey
         MuesliTheme.accentOverrideHex = config.recordingColorHex == "1e1e2e" ? nil : config.recordingColorHex
@@ -1985,7 +1992,7 @@ final class MuesliController: NSObject {
     private func clearLiveMeetingPartialTails() {
         appState.liveMeetingPartialYou = ""
         appState.liveMeetingPartialOthers = ""
-        indicator.updateMeetingTranscript(
+        meetingRecordingPanel.updateMeetingTranscript(
             transcript: appState.liveMeetingTranscript,
             partialYou: "",
             partialOthers: ""
@@ -2000,9 +2007,9 @@ final class MuesliController: NSObject {
         appState.liveMeetingPartialOthers = ""
         appState.liveMeetingTranscriptOwnerID = nil
         liveMeetingTranscriptGeneration = nil
-        indicator.updateMeetingTranscript(transcript: "", partialYou: "", partialOthers: "")
+        meetingRecordingPanel.updateMeetingTranscript(transcript: "", partialYou: "", partialOthers: "")
         // No live meeting means no panel chat, and no reason for the panel to hold focus.
-        indicator.setMeetingChatContext(nil)
+        meetingRecordingPanel.setMeetingChatContext(nil)
     }
 
     private func isCurrentLiveMeetingTranscriptSession(ownerID: Int64, generation: UUID) -> Bool {
@@ -5623,7 +5630,7 @@ final class MuesliController: NSObject {
     }
 
     func isMeetingTranscriptPanelVisible() -> Bool {
-        indicator.isMeetingTranscriptPanelVisible
+        meetingRecordingPanel.isTranscriptPanelVisible
     }
 
     private var meetingTerminationState: MeetingTerminationState {
@@ -5690,6 +5697,8 @@ final class MuesliController: NSObject {
     }
 
     private func discardMeetingStateForTermination() {
+        meetingRecordingPanel.close()
+        activeMeetingPanelOwnerID = nil
         activeMeetingSession?.discard()
         activeMeetingSession = nil
         preparingMeetingSession?.discard()
@@ -5726,7 +5735,7 @@ final class MuesliController: NSObject {
     }
 
     @objc func toggleMeetingTranscriptPanel() {
-        indicator.toggleMeetingTranscriptPanel()
+        meetingRecordingPanel.toggleTranscriptPanel()
     }
 
     /// Menu-bar toggle for the floating pill itself. Goes through config so the
@@ -5749,7 +5758,9 @@ final class MuesliController: NSObject {
               !activeMeetingSession.isPaused,
               !isStoppingMeetingRecording else { return }
         activeMeetingSession.pause()
-        indicator.setMeetingRecordingPaused(true, config: config)
+        if let activeMeetingPanelOwnerID {
+            meetingRecordingPanel.setPaused(true, ownerID: activeMeetingPanelOwnerID)
+        }
         statusBarController?.setStatus("Meeting paused")
         statusBarController?.refresh()
         syncAppState()
@@ -5761,7 +5772,9 @@ final class MuesliController: NSObject {
               activeMeetingSession.isPaused,
               !isStoppingMeetingRecording else { return }
         activeMeetingSession.resume()
-        indicator.setMeetingRecordingPaused(false, config: config)
+        if let activeMeetingPanelOwnerID {
+            meetingRecordingPanel.setPaused(false, ownerID: activeMeetingPanelOwnerID)
+        }
         statusBarController?.setStatus("Meeting: \(activeMeetingDisplayTitle())")
         statusBarController?.refresh()
         syncAppState()
@@ -5901,7 +5914,6 @@ final class MuesliController: NSObject {
         syncDictationRecorderWarmup(intent: .idlePrewarm(.meetingStateChanged))
         meetingStartMeetingID = meetingID
         updateMeetingStartStatus("Meeting transcription will start shortly.")
-        indicator.setState(.preparing, config: config)
         beginMeetingActivity(reason: "Recording and transcribing a meeting")
         meetingMonitor.suppressWhileActive()
         meetingMonitor.refreshState()
@@ -6077,7 +6089,6 @@ final class MuesliController: NSObject {
         syncDictationRecorderWarmup(intent: .idlePrewarm(.meetingStateChanged))
         meetingStartMeetingID = meetingID
         updateMeetingStartStatus("Resuming meeting recording…")
-        indicator.setState(.preparing, config: config)
         beginMeetingActivity(reason: "Recording and transcribing a meeting")
         meetingMonitor.suppressWhileActive()
         meetingMonitor.refreshState()
@@ -6607,7 +6618,7 @@ final class MuesliController: NSObject {
                         // by segment timestamps, so the durable fallback stays temporally ordered.
                         let lines = entries.map { "[\($0.timestampLabel)] \($0.speaker): \($0.text)" }
                         self.appState.liveMeetingTranscript += lines.joined(separator: "\n") + "\n"
-                        self.indicator.updateMeetingTranscript(
+                        self.meetingRecordingPanel.updateMeetingTranscript(
                             transcript: self.appState.liveMeetingTranscript,
                             partialYou: self.appState.liveMeetingPartialYou,
                             partialOthers: self.appState.liveMeetingPartialOthers
@@ -6628,7 +6639,7 @@ final class MuesliController: NSObject {
                             guard self.appState.liveMeetingPartialOthers != tail else { return }
                             self.appState.liveMeetingPartialOthers = tail
                         }
-                        self.indicator.updateMeetingTranscript(
+                        self.meetingRecordingPanel.updateMeetingTranscript(
                             transcript: self.appState.liveMeetingTranscript,
                             partialYou: self.appState.liveMeetingPartialYou,
                             partialOthers: self.appState.liveMeetingPartialOthers
@@ -6640,7 +6651,7 @@ final class MuesliController: NSObject {
                 appState.liveMeetingTranscript = ""
                 appState.liveMeetingPartialYou = ""
                 appState.liveMeetingPartialOthers = ""
-                indicator.updateMeetingTranscript(
+                meetingRecordingPanel.updateMeetingTranscript(
                     transcript: "",
                     partialYou: "",
                     partialOthers: ""
@@ -6648,7 +6659,7 @@ final class MuesliController: NSObject {
                 // Carry the pre-resume transcript so panel chat sees the whole meeting, not
                 // just what this session recorded. Empty for a fresh meeting.
                 let priorTranscriptForChat = (try? dictationStore.meeting(id: meetingID))?.displayTranscript ?? ""
-                indicator.setMeetingChatContext(
+                meetingRecordingPanel.setMeetingChatContext(
                     FloatingMeetingChatContext(
                         meetingID: meetingID,
                         priorTranscript: priorTranscriptForChat,
@@ -6715,24 +6726,24 @@ final class MuesliController: NSObject {
                 }
                 activeMeetingSession = meetingSession
                 activeMeetingID = meetingID
-                armMeetingDurationLimit(meetingID: meetingID, startedAt: meetingSession.startTime ?? Date())
+                let meetingStartedAt = meetingSession.startTime ?? Date()
+                armMeetingDurationLimit(meetingID: meetingID, startedAt: meetingStartedAt)
                 activeMeetingAutoStop.markRecordingStarted(now: Date())
                 meetingMonitor.suppressWhileActive()
                 meetingMonitor.refreshState()
                 statusBarController?.setStatus("Meeting: \(title)")
-                indicator.powerProvider = { [weak meetingSession] in
-                    meetingSession?.currentPower() ?? -160
-                }
-                // Anything that raised a loading pill during the start window (an import
-                // that preceded this meeting) must not leave the pill's loading flag set,
-                // or hover and drag stay dead for the whole recording.
-                indicator.hideLoading()
-                indicator.setMeetingRecording(true, config: config)
-                // A compact start shows its panel only after capture is live; otherwise
-                // an asynchronous start failure would strand an empty panel at idle.
-                if showFloatingPanelWhenActive {
-                    indicator.showMeetingTranscriptPanel()
-                }
+                let panelOwnerID = UUID()
+                activeMeetingPanelOwnerID = panelOwnerID
+                // The compact controller becomes visible only after capture is live, so
+                // asynchronous start failures can never strand an empty recording panel.
+                meetingRecordingPanel.showRecording(
+                    ownerID: panelOwnerID,
+                    startedAt: meetingStartedAt,
+                    powerProvider: { [weak meetingSession] in
+                        meetingSession?.currentPower() ?? -160
+                    },
+                    showTranscript: showFloatingPanelWhenActive
+                )
                 statusBarController?.refresh()
                 syncAppState()
                 scheduleMeetingEndNotification(endDate: endDate, title: title)
@@ -6944,11 +6955,14 @@ final class MuesliController: NSObject {
         meetingRecordingHotkeyMonitor.cancelToggleMode()
         clearLiveMeetingTranscript()
         guard let sessionToDiscard = activeMeetingSession else {
-            // Fallback recovery: reset indicator if session is nil
+            // Fallback recovery: reset the matching meeting controller if session is nil.
             guard !isStartingMeetingRecording else { return }
             disarmMeetingAutoStop()
             cancelMeetingDurationLimit()
-            indicator.setMeetingRecording(false, config: config)
+            if let activeMeetingPanelOwnerID {
+                meetingRecordingPanel.close(ownerID: activeMeetingPanelOwnerID)
+                self.activeMeetingPanelOwnerID = nil
+            }
             if let meetingID = activeMeetingID {
                 activeMeetingID = nil
                 if activeMeetingAudioWarning?.meetingID == meetingID {
@@ -6964,7 +6978,10 @@ final class MuesliController: NSObject {
         disarmMeetingAutoStop()
         cancelMeetingDurationLimit()
         self.activeMeetingSession = nil
-        indicator.setMeetingRecording(false, config: config)
+        if let activeMeetingPanelOwnerID {
+            meetingRecordingPanel.close(ownerID: activeMeetingPanelOwnerID)
+            self.activeMeetingPanelOwnerID = nil
+        }
         if let meetingID = activeMeetingID {
             activeMeetingID = nil
             if activeMeetingAudioWarning?.meetingID == meetingID {
@@ -7223,7 +7240,7 @@ final class MuesliController: NSObject {
         meetingRecordingHotkeyMonitor.cancelToggleMode()
         guard !isStoppingMeetingRecording else { return }
         guard let sessionToStop = activeMeetingSession else {
-            // Fallback recovery: reset indicator if session is nil
+            // Fallback recovery: reset the matching meeting controller if session is nil.
             guard !isStartingMeetingRecording else { return }
             disarmMeetingAutoStop()
             cancelMeetingDurationLimit()
@@ -7241,7 +7258,10 @@ final class MuesliController: NSObject {
                 }
                 self.activeMeetingID = nil
             }
-            indicator.setMeetingRecording(false, config: config)
+            if let activeMeetingPanelOwnerID {
+                meetingRecordingPanel.close(ownerID: activeMeetingPanelOwnerID)
+                self.activeMeetingPanelOwnerID = nil
+            }
             isStoppingMeetingRecording = false
             syncMeetingDetectionMonitor()
             endMeetingActivity()
@@ -7254,6 +7274,10 @@ final class MuesliController: NSObject {
         meetingEndTimer?.invalidate()
         meetingEndTimer = nil
         meetingNotification.close()
+        let meetingPanelOwnerID = activeMeetingPanelOwnerID
+        if let meetingPanelOwnerID {
+            meetingRecordingPanel.beginFinalizing(ownerID: meetingPanelOwnerID)
+        }
         let liveMeetingID = activeMeetingID
         if let liveMeetingID {
             flushCachedMeetingManualNotes(id: liveMeetingID, sync: false)
@@ -7261,9 +7285,6 @@ final class MuesliController: NSObject {
             updateMeetingStatusAndScheduleSync(id: liveMeetingID, status: .processing)
             syncAppState()
         }
-        indicator.setMeetingRecording(false, config: config)
-        indicator.setTranscribingTitle("Transcribing", config: config)
-        setState(.transcribing)
         let processingGeneration = backgroundMeetingProcessingCount + 1
         sessionToStop.onProgress = { [weak self] stage in
             Task { @MainActor [weak self] in
@@ -7271,7 +7292,7 @@ final class MuesliController: NSObject {
                       !self.isMeetingRecording(),
                       !self.isStartingMeetingRecording,
                       self.backgroundMeetingProcessingCount == processingGeneration else { return }
-                self.setMeetingProcessingStage(stage)
+                self.setMeetingProcessingStage(stage, panelOwnerID: meetingPanelOwnerID)
             }
         }
 
@@ -7309,7 +7330,7 @@ final class MuesliController: NSObject {
                 meetingResult = result
                 meetingTitle = result.title
                 await MainActor.run {
-                    self.setMeetingProcessingStatus("Finalizing")
+                    self.setMeetingProcessingStatus("Finalizing", panelOwnerID: meetingPanelOwnerID)
                 }
                 let recordingSaveDecision = await self.recordingSaveDecision(for: result)
                 let preparedRecordingSave = await self.prepareMeetingRecordingSave(
@@ -7435,6 +7456,12 @@ final class MuesliController: NSObject {
                 }
             }
             await MainActor.run {
+                if let meetingPanelOwnerID {
+                    self.meetingRecordingPanel.close(ownerID: meetingPanelOwnerID)
+                    if self.activeMeetingPanelOwnerID == meetingPanelOwnerID {
+                        self.activeMeetingPanelOwnerID = nil
+                    }
+                }
                 self.meetingFinalizationTasks.removeValue(forKey: finalizationTaskID)
                 if let liveMeetingID {
                     self.meetingSessionTraces.removeValue(forKey: liveMeetingID)
@@ -8669,24 +8696,26 @@ final class MuesliController: NSObject {
     }
 
     @MainActor
-    private func setMeetingProcessingStage(_ stage: MeetingProcessingStage) {
+    private func setMeetingProcessingStage(_ stage: MeetingProcessingStage, panelOwnerID: UUID?) {
         switch stage {
         case .transcribingAudio:
-            setMeetingProcessingStatus("Transcribing")
+            setMeetingProcessingStatus("Transcribing", panelOwnerID: panelOwnerID)
         case .cleaningAudio:
-            setMeetingProcessingStatus("Cleaning")
+            setMeetingProcessingStatus("Cleaning", panelOwnerID: panelOwnerID)
         case .generatingTitle:
-            setMeetingProcessingStatus("Titling")
+            setMeetingProcessingStatus("Titling", panelOwnerID: panelOwnerID)
         case .summarizingNotes:
-            setMeetingProcessingStatus("Summarizing")
+            setMeetingProcessingStatus("Summarizing", panelOwnerID: panelOwnerID)
         }
     }
 
     @MainActor
-    private func setMeetingProcessingStatus(_ status: String) {
+    private func setMeetingProcessingStatus(_ status: String, panelOwnerID: UUID?) {
         statusBarController?.setStatus(status)
         statusBarController?.refresh()
-        indicator.setTranscribingTitle(status, config: config)
+        if let panelOwnerID {
+            meetingRecordingPanel.updateFinalizingStatus(status, ownerID: panelOwnerID)
+        }
     }
 
     private func handleComputerUsePrepare() {
@@ -10936,7 +10965,7 @@ final class MuesliController: NSObject {
               !isStartingMeetingRecording else { return }
         let ownership = TranscriptionActivityOwnership(
             queuedDictations: standardDictationWorkCount,
-            meetingFinalizations: backgroundMeetingProcessingCount
+            meetingFinalizations: 0
         )
         if ownership.isActive {
             guard dictationState != .transcribing else { return }

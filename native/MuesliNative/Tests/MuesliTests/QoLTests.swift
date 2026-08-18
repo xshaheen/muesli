@@ -573,12 +573,12 @@ struct FloatingIndicatorPointerInteractionTests {
     }
 
     @MainActor
-    @Test("single-click retains its existing meeting command")
+    @Test("single-click retains its existing dictation command")
     func singleClickStillRuns() {
         let indicator = makeIndicator()
         var stopCount = 0
-        indicator.onStopMeeting = { stopCount += 1 }
-        indicator.setMeetingRecording(true, config: AppConfig())
+        indicator.onStopToggleDictation = { stopCount += 1 }
+        indicator.setToggleDictation(true, config: AppConfig())
 
         indicator.handleClick(atX: 50)
 

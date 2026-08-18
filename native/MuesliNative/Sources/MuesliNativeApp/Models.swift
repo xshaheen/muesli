@@ -1747,6 +1747,9 @@ struct AppConfig: Codable {
     var indicatorAnchor: IndicatorAnchor = .midTrailing
     var dashboardWindowFrame: WindowFrame? = nil
     var indicatorOrigin: CGPointCodable? = nil
+    /// Stable center of the independent compact meeting recording controller.
+    /// This is intentionally separate from the legacy dictation indicator origin.
+    var meetingRecordingPanelCenter: CGPointCodable? = nil
     /// Bottom-left origin the user last dragged the floating transcript panel to.
     /// The panel is user-positioned, not pill-attached; nil means never moved.
     var meetingPanelOrigin: CGPointCodable? = nil
@@ -1902,6 +1905,7 @@ struct AppConfig: Codable {
         case indicatorAnchor = "indicator_anchor"
         case dashboardWindowFrame = "dashboard_window_frame"
         case indicatorOrigin = "indicator_origin"
+        case meetingRecordingPanelCenter = "meeting_recording_panel_center"
         case meetingPanelOrigin = "meeting_panel_origin"
         case openAIAPIKey = "openai_api_key"
         case openRouterAPIKey = "openrouter_api_key"
@@ -2097,6 +2101,7 @@ struct AppConfig: Codable {
             ?? ((try? c.decodeIfPresent(CGPointCodable.self, forKey: .indicatorOrigin)) != nil ? .custom : .midTrailing)
         dashboardWindowFrame = try? c.decode(WindowFrame.self, forKey: .dashboardWindowFrame)
         indicatorOrigin = try? c.decode(CGPointCodable.self, forKey: .indicatorOrigin)
+        meetingRecordingPanelCenter = try? c.decode(CGPointCodable.self, forKey: .meetingRecordingPanelCenter)
         meetingPanelOrigin = try? c.decode(CGPointCodable.self, forKey: .meetingPanelOrigin)
         openAIAPIKey = (try? c.decode(String.self, forKey: .openAIAPIKey)) ?? defaults.openAIAPIKey
         openRouterAPIKey = (try? c.decode(String.self, forKey: .openRouterAPIKey)) ?? defaults.openRouterAPIKey
