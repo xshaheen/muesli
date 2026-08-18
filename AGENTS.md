@@ -84,3 +84,4 @@ swift test --package-path native/MuesliNative --scratch-path "/Volumes/MuesliBui
 - Meeting chat history is stored locally in `meetings.chat_history_json`, uses the active `AppIdentity.supportDirectoryName`, and is intentionally excluded from CloudKit sync. (2026-08-09)
 - `MeetingSelectableText.sizeThatFits` must honor the native text field's fitting height; attributed-string bounds can be one point shorter and clip the final transcript line. (2026-08-13)
 - Large meeting notes must use the scroll-backed `NSTextView` path instead of intrinsic `MeetingSelectableText` sizing, and display at most 150,000 characters without mutating storage; active recordings warn five minutes before and finalize at the three-hour safety limit. (2026-08-18)
+- Completed meeting details must construct only the selected Notes, Transcript, or Chat pane; keep unsent chat drafts above that conditional pane lifecycle so tab switches preserve user input. (2026-08-19)

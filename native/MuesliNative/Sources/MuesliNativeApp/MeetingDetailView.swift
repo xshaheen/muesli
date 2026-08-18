@@ -227,6 +227,7 @@ private struct LiveChatSection: View {
     let conversation: MeetingChatConversation
     let manualNotes: String
     let config: AppConfig
+    @State private var draft = ""
 
     /// Fresh on every call: the send-time resolver below reaches through `appState`,
     /// so a question asked minutes into the recording sees the transcript up to now.
@@ -241,6 +242,7 @@ private struct LiveChatSection: View {
     var body: some View {
         MeetingChatView(
             conversation: conversation,
+            draft: $draft,
             transcript: { currentTranscript },
             hasTranscript: !currentTranscript
                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -295,6 +297,7 @@ struct MeetingDetailView: View {
     @State private var editableNotes: String
     @State private var editableTranscript: String
     @State private var editableManualNotes: String
+    @State private var chatDraft = ""
     @State private var loadedMeetingID: Int64?
     @State private var manualNotesSaveStatus: ManualNotesSaveStatus = .saved
     @State private var manualEditorCommand: MarkdownEditorCommand?
@@ -685,43 +688,43 @@ struct MeetingDetailView: View {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                 contentToolbar(for: meeting)
 
-                ZStack(alignment: .topLeading) {
-                    MeetingNotesView(markdown: Self.notesContent(for: meeting))
-                        .opacity(documentMode == .notes ? 1 : 0)
-                        .allowsHitTesting(documentMode == .notes)
-                        .accessibilityHidden(documentMode != .notes)
-
-                    MeetingTranscriptView(transcript: meeting.displayTranscript)
-                        .opacity(documentMode == .transcript ? 1 : 0)
-                        .allowsHitTesting(documentMode == .transcript)
-                        .accessibilityHidden(documentMode != .transcript)
-
-                    if isChatAvailable {
-                        MeetingChatView(
-                            conversation: MeetingChatConversations.shared.conversation(for: meeting.id),
-                            transcript: { MeetingChatSource.transcript(
-                                for: meeting,
-                                live: "",
-                                isRecording: false
-                            ) },
-                            hasTranscript: !meeting.displayTranscript
-                                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                            systemPrompt: MeetingChatSource.systemPrompt(isRecording: false),
-                            manualNotes: { meeting.manualNotes },
-                            config: { appState.config }
-                        )
-                        .opacity(documentMode == .chat ? 1 : 0)
-                        .allowsHitTesting(documentMode == .chat)
-                        .accessibilityHidden(documentMode != .chat)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                readOnlyDocumentContent(for: meeting)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .frame(maxWidth: 1080, maxHeight: .infinity, alignment: .topLeading)
             .padding(.horizontal, 40)
             .padding(.top, 12)
             .padding(.bottom, 24)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    @ViewBuilder
+    private func readOnlyDocumentContent(for meeting: MeetingRecord) -> some View {
+        switch documentMode {
+        case .notes:
+            MeetingNotesView(markdown: Self.notesContent(for: meeting))
+        case .transcript:
+            MeetingTranscriptView(transcript: meeting.displayTranscript)
+        case .chat:
+            if isChatAvailable {
+                MeetingChatView(
+                    conversation: MeetingChatConversations.shared.conversation(for: meeting.id),
+                    draft: $chatDraft,
+                    transcript: { MeetingChatSource.transcript(
+                        for: meeting,
+                        live: "",
+                        isRecording: false
+                    ) },
+                    hasTranscript: !meeting.displayTranscript
+                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    systemPrompt: MeetingChatSource.systemPrompt(isRecording: false),
+                    manualNotes: { meeting.manualNotes },
+                    config: { appState.config }
+                )
+            } else {
+                MeetingNotesView(markdown: Self.notesContent(for: meeting))
+            }
         }
     }
 
@@ -1932,6 +1935,7 @@ struct MeetingDetailView: View {
         }
         if meetingChanged {
             editableManualNotes = meeting?.manualNotes ?? ""
+            chatDraft = ""
             manualNotesSaveStatus = .saved
             transcriptResummaryPromptMeetingID = nil
             transcriptEditOriginalTranscript = nil

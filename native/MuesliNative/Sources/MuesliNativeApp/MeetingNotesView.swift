@@ -15,19 +15,6 @@ enum MeetingNotesPresentation {
     """
     }
 
-    // Large intrinsic NSTextField documents are synchronously remeasured during
-    // SwiftUI layout. A bounded NSTextView scrolls without sizing the full document.
-    static let nativeScrollThreshold = 20_000
-
-    static func usesNativeScrolling(for markdown: String) -> Bool {
-        let utf16 = markdown.utf16
-        return utf16.index(
-            utf16.startIndex,
-            offsetBy: nativeScrollThreshold,
-            limitedBy: utf16.endIndex
-        ) != nil
-    }
-
     static func renderedMarkdown(for markdown: String) -> String {
         guard let trimIndex = markdown.index(
             markdown.startIndex,
@@ -44,21 +31,12 @@ enum MeetingNotesPresentation {
 struct MeetingNotesView: View {
     let markdown: String
 
-    @ViewBuilder
     var body: some View {
-        if MeetingNotesPresentation.usesNativeScrolling(for: markdown) {
-            MeetingScrollableNotesText(markdown: markdown)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            ScrollView {
-                MeetingMarkdownContent(markdown: markdown)
-                    .frame(maxWidth: MeetingNotesPresentation.maximumContentWidth, alignment: .leading)
-                    .padding(.horizontal, MuesliTheme.spacing24)
-                    .padding(.vertical, MuesliTheme.spacing16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
+        // Intrinsic NSTextField sizing shapes the complete document on every
+        // parent layout pass. Keep read-only notes in one scroll-backed native
+        // surface so title edits never remeasure the meeting body.
+        MeetingScrollableNotesText(markdown: markdown)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -126,7 +104,9 @@ private final class MeetingScrollableNotesTextView: NSTextView {
     func updateTextContainerWidth() {
         let minimumInset = MuesliTheme.spacing24
         let availableWidth = max(0, bounds.width - 2 * minimumInset)
-        let contentWidth = min(MeetingNotesPresentation.maximumContentWidth, availableWidth)
+        let contentWidth = bounds.width > 0
+            ? min(MeetingNotesPresentation.maximumContentWidth, availableWidth)
+            : MeetingNotesPresentation.maximumContentWidth
         let nextInset = NSSize(
             width: max(minimumInset, (bounds.width - contentWidth) / 2),
             height: MuesliTheme.spacing16
