@@ -449,6 +449,7 @@ final class MuesliController: NSObject {
     )
     private let dictationLatencyTimestampFormatter = ISO8601DateFormatter()
     private let indicator: FloatingIndicatorController
+    private let dictationMiniIndicator: DictationMiniIndicatorController
     private let meetingRecordingPanel: MeetingRecordingPanelController
     private let calendarMonitor = CalendarMonitor()
     private let meetingMonitor = MeetingMonitor()
@@ -515,7 +516,7 @@ final class MuesliController: NSObject {
     private var completedStandardDictationStops = OrderedCompletionBuffer<CompletedStandardDictationStop>()
     private var nextStandardDictationStopSequence: UInt64 = 0
     private var pendingReleaseSoundSessionIDs: Set<UUID> = []
-    private var pendingPreparingIndicatorWorkItem: DispatchWorkItem?
+    private var dictationMiniGeneration: DictationMiniIndicatorController.Generation?
     private var activeComputerUseAudioSessionID: UUID?
     private var computerUseCommandStartedAt: Date?
     private var pendingComputerUseStopStartedAt: Date?
@@ -686,6 +687,7 @@ final class MuesliController: NSObject {
         }) ?? .chatGPT
         self.selectedPostProcessorBackend = loadedPostProcessorBackend
         self.indicator = FloatingIndicatorController(configStore: configStore)
+        self.dictationMiniIndicator = DictationMiniIndicatorController()
         self.meetingRecordingPanel = MeetingRecordingPanelController(configStore: configStore)
         super.init()
         dictationAudioSessionManager.onEvent = { [weak self] event in
@@ -1115,6 +1117,7 @@ final class MuesliController: NSObject {
         await syncEngineCancellationTask?.value
         await transcriptionCoordinator.shutdown()
         ComputerUseCursorOverlay.shared.close()
+        dictationMiniIndicator.close()
         indicator.close()
         CoreAudioSystemRecorder.cleanupStaleDevices()
     }
@@ -8269,8 +8272,7 @@ final class MuesliController: NSObject {
     }
 
     private func setState(_ state: DictationState) {
-        pendingPreparingIndicatorWorkItem?.cancel()
-        pendingPreparingIndicatorWorkItem = nil
+        let previousState = dictationState
         dictationState = state
         appState.dictationState = state
         let status: String
@@ -8281,17 +8283,28 @@ final class MuesliController: NSObject {
         case .transcribing: status = "Transcribing"
         }
         statusBarController?.setStatus(status)
-        if !isDictationTestMode {
-            if state == .preparing {
-                let workItem = DispatchWorkItem { [weak self] in
-                    guard let self, self.dictationState == .preparing else { return }
-                    self.indicator.setPreparingWaveformWaiting(config: self.config)
-                }
-                pendingPreparingIndicatorWorkItem = workItem
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
-            } else {
-                indicator.setState(state, config: config)
+        guard !isDictationTestMode else { return }
+
+        switch state {
+        case .idle:
+            if let dictationMiniGeneration {
+                dictationMiniIndicator.dismiss(generation: dictationMiniGeneration)
+                self.dictationMiniGeneration = nil
             }
+        case .preparing:
+            if previousState != .preparing || dictationMiniGeneration == nil {
+                dictationMiniGeneration = dictationMiniIndicator.beginPreparing()
+            }
+        case .recording:
+            let token = dictationMiniGeneration ?? dictationMiniIndicator.beginPreparing()
+            dictationMiniGeneration = token
+            dictationMiniIndicator.showRecording(generation: token) { [weak self] in
+                self?.dictationAudioSessionManager.currentPower() ?? -160
+            }
+        case .transcribing:
+            let token = dictationMiniGeneration ?? dictationMiniIndicator.beginPreparing()
+            dictationMiniGeneration = token
+            dictationMiniIndicator.showProcessing(generation: token)
         }
     }
 
@@ -9211,14 +9224,7 @@ final class MuesliController: NSObject {
 
         statusBarController?.setStatus(message)
         statusBarController?.refresh()
-        switch dictationBackendReadiness {
-        case .preparing:
-            indicator.showLoading(message)
-        case .failed:
-            indicator.showWarning(message, icon: "!")
-        case .ready:
-            break
-        }
+        dictationMiniIndicator.showWarning(message)
         return false
     }
 
@@ -9607,27 +9613,10 @@ final class MuesliController: NSObject {
 
     private func activateDictationPreparingIndicator() {
         setState(.preparing)
-        if !isDictationTestMode {
-            indicator.powerProvider = { [weak self] in
-                self?.dictationAudioSessionManager.currentPower() ?? -160
-            }
-        }
     }
 
     private func activateDictationRecordingIndicator() {
-        if hotkeyMonitor.isToggleRecording {
-            setState(.recording)
-            indicator.setToggleDictation(true, config: config)
-            indicator.setRecordingWaveformLevel(config: config)
-        } else {
-            setState(.recording)
-            indicator.setRecordingWaveformLevel(config: config)
-        }
-        if !isDictationTestMode {
-            indicator.powerProvider = { [weak self] in
-                self?.dictationAudioSessionManager.currentPower() ?? -160
-            }
-        }
+        setState(.recording)
     }
 
     private func handleDictationStreamActive(capturedAt: Date) {
@@ -9888,8 +9877,10 @@ final class MuesliController: NSObject {
                     return
                 }
                 self.activateDictationRecordingIndicator()
-                self.indicator.powerProvider = { [weak controller] in
-                    controller?.currentPower() ?? -160
+                if let token = self.dictationMiniGeneration {
+                    self.dictationMiniIndicator.updatePowerProvider(generation: token) { [weak controller] in
+                        controller?.currentPower() ?? -160
+                    }
                 }
                 fputs("[muesli-native] Nemotron streaming controller started\n", stderr)
             }
@@ -9940,7 +9931,6 @@ final class MuesliController: NSObject {
         dictationStartedAt = nil
         clearCapturedDictationSessionContext()
         dictationAudioSessionManager.endExternalSession(reason: "nemotron-start-failed")
-        indicator.setToggleDictation(false, config: config)
         resetDictationOutputMode()
         finishDictationLatencyTrace("nemotron_start_failed")
         standardDictationWorkChanged()
@@ -9993,7 +9983,6 @@ final class MuesliController: NSObject {
         dictationStartedAt = nil
         clearCapturedDictationSessionContext()
         dictationAudioSessionManager.endExternalSession(reason: "nemotron-runtime-failed")
-        indicator.setToggleDictation(false, config: config)
         resetDictationOutputMode()
         finishDictationLatencyTrace("nemotron_runtime_failed")
         standardDictationWorkChanged()
@@ -10462,7 +10451,6 @@ final class MuesliController: NSObject {
                     )
                 }
             }
-            indicator.setToggleDictation(false, config: config)
             dictationAudioSessionManager.endExternalSession(reason: "meeting-active")
         } else if dictationAudioSessionManager.hasActiveSession {
             dictationAudioSessionManager.cancel(reason: "meeting-active")

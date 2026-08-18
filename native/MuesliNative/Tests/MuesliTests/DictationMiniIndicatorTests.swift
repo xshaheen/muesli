@@ -1,0 +1,91 @@
+import AppKit
+import Testing
+@testable import MuesliNativeApp
+
+@MainActor
+@Suite("Dictation Mini indicator", .serialized)
+struct DictationMiniIndicatorTests {
+    private let screen = DictationMiniPlacement.Screen(
+        frame: CGRect(x: 0, y: 0, width: 800, height: 600),
+        visibleFrame: CGRect(x: 0, y: 24, width: 800, height: 576)
+    )
+
+    @Test("idle owns no visible surface and every state has a distinct silhouette")
+    func stateVocabulary() {
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .hidden) == .zero)
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .preparing) == CGSize(width: 14, height: 14))
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .recording) == CGSize(width: 58, height: 22))
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .processing) == CGSize(width: 38, height: 38))
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .success) == CGSize(width: 12, height: 12))
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .failure) == CGSize(width: 22, height: 22))
+        #expect(DictationMiniIndicatorController.accessibilityLabel(for: .recording) == "Recording dictation")
+        #expect(DictationMiniIndicatorController.accessibilityLabel(for: .processing) == "Generating transcription")
+        #expect(DictationMiniIndicatorController.accessibilityLabel(for: .success) == "Dictation complete")
+        #expect(DictationMiniIndicatorController.accessibilityLabel(for: .failure) == "Dictation failed")
+    }
+
+    @Test("recording is mouse-transparent and processing freezes the recording anchor")
+    func frozenProcessingAnchor() {
+        var pointer = CGPoint(x: 220, y: 320)
+        let controller = makeController(pointer: { pointer })
+        let token = controller.beginPreparing()
+        controller.showRecording(generation: token) { -24 }
+        let recordingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+
+        pointer = CGPoint(x: 700, y: 100)
+        controller.showProcessing(generation: token)
+        let processingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+
+        #expect(controller.presentation == .processing)
+        #expect(controller.isMouseTransparentForTesting)
+        #expect(!controller.isFollowingPointerForTesting)
+        #expect(recordingCenter == processingCenter)
+        controller.close()
+    }
+
+    @Test("a stale terminal dismissal cannot close a newer session")
+    func terminalGenerationSafety() async {
+        let controller = makeController()
+        let first = controller.beginPreparing()
+        controller.showSuccess(generation: first, duration: 0.01)
+        _ = controller.beginPreparing(at: CGPoint(x: 300, y: 300))
+        try? await Task.sleep(for: .milliseconds(30))
+
+        #expect(controller.presentation == .preparing)
+        #expect(controller.isVisibleForTesting)
+        controller.close()
+    }
+
+    @Test("warnings yield to an active capture and announce accepted transitions once")
+    func warningPriorityAndAnnouncements() {
+        var announcements: [String] = []
+        let controller = makeController(accessibilitySink: { announcements.append($0) })
+        let token = controller.beginPreparing()
+        controller.showRecording(generation: token) { -30 }
+        controller.showRecording(generation: token) { -30 }
+
+        #expect(controller.showWarning("Model warming") == nil)
+        #expect(announcements == ["Recording dictation"])
+        controller.dismiss(generation: token)
+        #expect(controller.presentation == .hidden)
+        controller.close()
+    }
+
+    @Test("Reduce Motion replaces continuous processing animation with a static field")
+    func reducedMotionPolicy() {
+        #expect(DictationMiniIndicatorController.processingAnimationIsContinuous(reduceMotion: false))
+        #expect(!DictationMiniIndicatorController.processingAnimationIsContinuous(reduceMotion: true))
+    }
+
+    private func makeController(
+        pointer: @escaping () -> CGPoint = { CGPoint(x: 220, y: 320) },
+        accessibilitySink: @escaping DictationMiniIndicatorController.AccessibilitySink = { _ in }
+    ) -> DictationMiniIndicatorController {
+        DictationMiniIndicatorController(
+            screenProvider: { [screen] },
+            pointerProvider: pointer,
+            movementCoalescingDelay: 0,
+            accessibilitySink: accessibilitySink
+        )
+    }
+}
