@@ -42,11 +42,13 @@ public struct MeetingThreadNavigation: Equatable, Sendable {
 
 public final class DictationStore {
     public static let defaultTombstoneRetentionInterval: TimeInterval = 30 * 24 * 60 * 60
+    static let currentSchemaVersion: Int32 = 3
 
     private static let iso8601Formatter = ISO8601DateFormatter()
     private static let iso8601FormatterLock = NSLock()
 
     private let databaseURL: URL
+    private let migrationCheckpoint: SQLiteMigrationRunner.CheckpointHook?
     private static let dictationColumns = """
     d.id, d.timestamp, d.duration_seconds, d.raw_text, d.app_context, d.word_count, d.source,
     t.id, t.final_status, t.final_message, t.trace_json, t.created_at,
@@ -75,10 +77,20 @@ public final class DictationStore {
 
     public init() {
         self.databaseURL = MuesliPaths.defaultDatabaseURL()
+        self.migrationCheckpoint = nil
     }
 
     public init(databaseURL: URL) {
         self.databaseURL = databaseURL
+        self.migrationCheckpoint = nil
+    }
+
+    init(
+        databaseURL: URL,
+        migrationCheckpoint: @escaping SQLiteMigrationRunner.CheckpointHook
+    ) {
+        self.databaseURL = databaseURL
+        self.migrationCheckpoint = migrationCheckpoint
     }
 
     public var resolvedDatabaseURL: URL {
@@ -92,6 +104,33 @@ public final class DictationStore {
     public func migrateIfNeeded() throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
+
+        let runner = SQLiteMigrationRunner(
+            db: db,
+            migrations: [
+                SQLiteMigrationRunner.Migration(
+                    version: 1,
+                    apply: normalizeLegacySchema,
+                    validate: validateNormalizedSchema
+                ),
+                SQLiteMigrationRunner.Migration(
+                    version: 2,
+                    apply: addSessionTraceSchema,
+                    validate: validateSessionTraceSchema
+                ),
+                SQLiteMigrationRunner.Migration(
+                    version: Self.currentSchemaVersion,
+                    apply: addRecordingArtifactSchema,
+                    validate: validateRecordingArtifactSchema
+                ),
+            ],
+            checkpoint: migrationCheckpoint
+        )
+        try runner.run()
+        _ = try purgeSoftDeletedTextRecords(olderThan: Self.defaultTombstoneRetentionInterval, db: db)
+    }
+
+    private func normalizeLegacySchema(db: OpaquePointer?) throws {
 
         let createSQL = """
         CREATE TABLE IF NOT EXISTS dictations (
@@ -200,8 +239,6 @@ public final class DictationStore {
         );
         """
         try exec(createSQL, db: db)
-        try migrateDictationStyleProvenance(db: db)
-
         let foldersSQL = """
         CREATE TABLE IF NOT EXISTS meeting_folders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -213,69 +250,58 @@ public final class DictationStore {
         """
         try exec(foldersSQL, db: db)
 
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN folder_id INTEGER REFERENCES meeting_folders(id)", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        // These template columns are also present in CREATE TABLE for fresh databases.
-        // The ALTER TABLE path upgrades pre-existing databases where meetings already exists.
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN selected_template_id TEXT", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN selected_template_name TEXT", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN selected_template_kind TEXT", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN selected_template_prompt TEXT", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN saved_recording_path TEXT", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN meeting_status TEXT NOT NULL DEFAULT 'completed'", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN manual_notes TEXT NOT NULL DEFAULT ''", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN source TEXT NOT NULL DEFAULT 'meeting'", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        if sqlite3_exec(db, "ALTER TABLE dictations ADD COLUMN source TEXT NOT NULL DEFAULT 'dictation'", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
-        }
-        for sql in [
-            "ALTER TABLE dictations ADD COLUMN updated_at REAL NOT NULL DEFAULT 0",
-            "ALTER TABLE dictations ADD COLUMN deleted_at REAL",
-            "ALTER TABLE dictations ADD COLUMN cloud_record_name TEXT",
-            "ALTER TABLE dictations ADD COLUMN cloud_change_tag TEXT",
-            "ALTER TABLE dictations ADD COLUMN cloud_system_fields BLOB",
-            "ALTER TABLE dictations ADD COLUMN last_synced_at REAL",
-            "ALTER TABLE dictations ADD COLUMN sync_dirty INTEGER NOT NULL DEFAULT 1",
-            "ALTER TABLE meetings ADD COLUMN updated_at REAL NOT NULL DEFAULT 0",
-            "ALTER TABLE meetings ADD COLUMN deleted_at REAL",
-            "ALTER TABLE meetings ADD COLUMN cloud_record_name TEXT",
-            "ALTER TABLE meetings ADD COLUMN cloud_change_tag TEXT",
-            "ALTER TABLE meetings ADD COLUMN cloud_system_fields BLOB",
-            "ALTER TABLE meetings ADD COLUMN cloud_transcript_record_name TEXT",
-            "ALTER TABLE meetings ADD COLUMN last_synced_at REAL",
-            "ALTER TABLE meetings ADD COLUMN sync_dirty INTEGER NOT NULL DEFAULT 1",
-            "ALTER TABLE meetings ADD COLUMN calendar_occurrence_key TEXT",
-            "ALTER TABLE meetings ADD COLUMN calendar_source TEXT",
-            "ALTER TABLE meetings ADD COLUMN calendar_id TEXT",
-            "ALTER TABLE meetings ADD COLUMN calendar_series_id TEXT",
-            "ALTER TABLE meetings ADD COLUMN calendar_occurrence_start REAL",
-            "ALTER TABLE meetings ADD COLUMN cleaned_transcript TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE meetings ADD COLUMN visual_context TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE meetings ADD COLUMN previous_meeting_notes TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE meetings ADD COLUMN notes_source TEXT NOT NULL DEFAULT 'raw'"
-        ] {
-            _ = sqlite3_exec(db, sql, nil, nil, nil)
-        }
-        if try !columnExists("chat_history_json", in: "meetings", db: db) {
-            try exec(
-                "ALTER TABLE meetings ADD COLUMN chat_history_json TEXT NOT NULL DEFAULT '[]'",
+        // These columns are present in CREATE TABLE for fresh databases. The
+        // inspected ALTER path upgrades supported legacy and partially migrated
+        // databases without swallowing unrelated SQLite errors.
+        let columnMigrations: [(table: String, column: String, definition: String)] = [
+            ("meetings", "folder_id", "INTEGER REFERENCES meeting_folders(id)"),
+            ("meetings", "selected_template_id", "TEXT"),
+            ("meetings", "selected_template_name", "TEXT"),
+            ("meetings", "selected_template_kind", "TEXT"),
+            ("meetings", "selected_template_prompt", "TEXT"),
+            ("meetings", "saved_recording_path", "TEXT"),
+            ("meetings", "meeting_status", "TEXT NOT NULL DEFAULT 'completed'"),
+            ("meetings", "manual_notes", "TEXT NOT NULL DEFAULT ''"),
+            ("meetings", "chat_history_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("meetings", "source", "TEXT NOT NULL DEFAULT 'meeting'"),
+            ("dictations", "source", "TEXT NOT NULL DEFAULT 'dictation'"),
+            ("dictations", "updated_at", "REAL NOT NULL DEFAULT 0"),
+            ("dictations", "deleted_at", "REAL"),
+            ("dictations", "cloud_record_name", "TEXT"),
+            ("dictations", "cloud_change_tag", "TEXT"),
+            ("dictations", "cloud_system_fields", "BLOB"),
+            ("dictations", "last_synced_at", "REAL"),
+            ("dictations", "sync_dirty", "INTEGER NOT NULL DEFAULT 1"),
+            ("dictations", "dictation_style_id", "TEXT"),
+            ("dictations", "dictation_style_name", "TEXT"),
+            ("dictations", "dictation_style_selection_source", "TEXT"),
+            ("dictations", "dictation_cleanup_outcome", "TEXT"),
+            ("meetings", "updated_at", "REAL NOT NULL DEFAULT 0"),
+            ("meetings", "deleted_at", "REAL"),
+            ("meetings", "cloud_record_name", "TEXT"),
+            ("meetings", "cloud_change_tag", "TEXT"),
+            ("meetings", "cloud_system_fields", "BLOB"),
+            ("meetings", "cloud_transcript_record_name", "TEXT"),
+            ("meetings", "last_synced_at", "REAL"),
+            ("meetings", "sync_dirty", "INTEGER NOT NULL DEFAULT 1"),
+            ("meetings", "calendar_occurrence_key", "TEXT"),
+            ("meetings", "calendar_source", "TEXT"),
+            ("meetings", "calendar_id", "TEXT"),
+            ("meetings", "calendar_series_id", "TEXT"),
+            ("meetings", "calendar_occurrence_start", "REAL"),
+            ("meetings", "cleaned_transcript", "TEXT NOT NULL DEFAULT ''"),
+            ("meetings", "visual_context", "TEXT NOT NULL DEFAULT ''"),
+            ("meetings", "previous_meeting_notes", "TEXT NOT NULL DEFAULT ''"),
+            ("meetings", "notes_source", "TEXT NOT NULL DEFAULT 'raw'"),
+            ("meeting_folders", "parent_id", "INTEGER REFERENCES meeting_folders(id)"),
+            ("meetings", "follow_up_to_id", "INTEGER REFERENCES meetings(id) ON DELETE SET NULL"),
+            ("meetings", "follow_up_to_record_name", "TEXT"),
+        ]
+        for migration in columnMigrations {
+            try addColumnIfNeeded(
+                migration.column,
+                definition: migration.definition,
+                to: migration.table,
                 db: db
             )
         }
@@ -334,60 +360,554 @@ public final class DictationStore {
             """,
             db: db
         )
-        if sqlite3_exec(db, "ALTER TABLE meeting_folders ADD COLUMN parent_id INTEGER REFERENCES meeting_folders(id)", nil, nil, nil) != SQLITE_OK {
-            let msg = String(cString: sqlite3_errmsg(db))
-            if !msg.localizedCaseInsensitiveContains("duplicate column") {
-                throw lastError(db)
-            }
-        }
-        let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meeting_folders_parent ON meeting_folders(parent_id)", nil, nil, nil)
-        let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meetings_folder ON meetings(folder_id)", nil, nil, nil)
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN follow_up_to_id INTEGER REFERENCES meetings(id) ON DELETE SET NULL", nil, nil, nil) != SQLITE_OK {
-            let msg = String(cString: sqlite3_errmsg(db))
-            if !msg.localizedCaseInsensitiveContains("duplicate column") {
-                throw lastError(db)
-            }
-        }
-        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN follow_up_to_record_name TEXT", nil, nil, nil) != SQLITE_OK {
-            let msg = String(cString: sqlite3_errmsg(db))
-            if !msg.localizedCaseInsensitiveContains("duplicate column") {
-                throw lastError(db)
-            }
-        }
-        let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meetings_follow_up ON meetings(follow_up_to_id)", nil, nil, nil)
-        let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meetings_follow_up_record_name ON meetings(follow_up_to_record_name)", nil, nil, nil)
-        let _ = sqlite3_exec(db, "DROP INDEX IF EXISTS idx_meetings_live_follow_up_unique", nil, nil, nil)
-        let _ = sqlite3_exec(db, "DROP INDEX IF EXISTS idx_dictations_cloud_record_name", nil, nil, nil)
-        let _ = sqlite3_exec(db, "DROP INDEX IF EXISTS idx_meetings_cloud_record_name", nil, nil, nil)
-        let _ = sqlite3_exec(db, "CREATE UNIQUE INDEX IF NOT EXISTS idx_dictations_cloud_record_name ON dictations(cloud_record_name)", nil, nil, nil)
-        let _ = sqlite3_exec(db, "CREATE UNIQUE INDEX IF NOT EXISTS idx_meetings_cloud_record_name ON meetings(cloud_record_name)", nil, nil, nil)
-        let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_dictations_sync_dirty ON dictations(updated_at DESC) WHERE sync_dirty = 1", nil, nil, nil)
-        let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meetings_sync_dirty ON meetings(updated_at DESC) WHERE sync_dirty = 1", nil, nil, nil)
+        try exec(
+            """
+            CREATE INDEX IF NOT EXISTS idx_meeting_folders_parent ON meeting_folders(parent_id);
+            CREATE INDEX IF NOT EXISTS idx_meetings_folder ON meetings(folder_id);
+            CREATE INDEX IF NOT EXISTS idx_meetings_follow_up ON meetings(follow_up_to_id);
+            CREATE INDEX IF NOT EXISTS idx_meetings_follow_up_record_name ON meetings(follow_up_to_record_name);
+            DROP INDEX IF EXISTS idx_meetings_live_follow_up_unique;
+            """,
+            db: db
+        )
+        try repairDuplicateCloudRecordNames(db: db)
+        try exec(
+            """
+            DROP INDEX IF EXISTS idx_dictations_cloud_record_name;
+            DROP INDEX IF EXISTS idx_meetings_cloud_record_name;
+            CREATE UNIQUE INDEX idx_dictations_cloud_record_name ON dictations(cloud_record_name);
+            CREATE UNIQUE INDEX idx_meetings_cloud_record_name ON meetings(cloud_record_name);
+            CREATE INDEX IF NOT EXISTS idx_dictations_sync_dirty
+                ON dictations(updated_at DESC) WHERE sync_dirty = 1;
+            CREATE INDEX IF NOT EXISTS idx_meetings_sync_dirty
+                ON meetings(updated_at DESC) WHERE sync_dirty = 1;
+            """,
+            db: db
+        )
         try migrateInsightsCache(db: db)
         try repairLegacyMacOriginSources(db: db)
-        _ = try purgeSoftDeletedTextRecords(olderThan: Self.defaultTombstoneRetentionInterval, db: db)
     }
 
-    private func migrateDictationStyleProvenance(db: OpaquePointer?) throws {
-        let migrations = [
-            ("dictation_style_id", "ALTER TABLE dictations ADD COLUMN dictation_style_id TEXT"),
-            ("dictation_style_name", "ALTER TABLE dictations ADD COLUMN dictation_style_name TEXT"),
-            (
-                "dictation_style_selection_source",
-                "ALTER TABLE dictations ADD COLUMN dictation_style_selection_source TEXT"
-            ),
-            ("dictation_cleanup_outcome", "ALTER TABLE dictations ADD COLUMN dictation_cleanup_outcome TEXT"),
+    private func addSessionTraceSchema(db: OpaquePointer?) throws {
+        try exec(
+            """
+            CREATE TABLE IF NOT EXISTS session_trace_settings (
+                singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                clear_generation INTEGER NOT NULL DEFAULT 0 CHECK (clear_generation >= 0),
+                updated_at REAL NOT NULL
+            );
+            INSERT OR IGNORE INTO session_trace_settings (singleton_id, clear_generation, updated_at)
+            VALUES (1, 0, (julianday('now') - 2440587.5) * 86400.0);
+
+            CREATE TABLE IF NOT EXISTS session_traces (
+                session_uuid TEXT PRIMARY KEY,
+                writer_uuid TEXT NOT NULL,
+                clear_generation INTEGER NOT NULL CHECK (clear_generation >= 0),
+                kind TEXT NOT NULL CHECK (kind IN ('dictation', 'meeting')),
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                terminal_at REAL,
+                terminal_outcome TEXT CHECK (
+                    terminal_outcome IS NULL OR terminal_outcome IN (
+                        'success', 'fallback_success', 'cancelled', 'timed_out', 'failed'
+                    )
+                ),
+                dictation_id INTEGER REFERENCES dictations(id) ON DELETE SET NULL,
+                meeting_id INTEGER REFERENCES meetings(id) ON DELETE SET NULL,
+                backend_identity TEXT,
+                fallback_backend_identity TEXT,
+                rich_content_state TEXT NOT NULL DEFAULT 'available' CHECK (
+                    rich_content_state IN (
+                        'available', 'pruned', 'cleared_while_active'
+                    )
+                ),
+                event_count INTEGER NOT NULL DEFAULT 0 CHECK (event_count BETWEEN 0 AND 512),
+                rich_byte_count INTEGER NOT NULL DEFAULT 0 CHECK (rich_byte_count >= 0)
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_traces_created_at
+                ON session_traces(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_session_traces_terminal_at
+                ON session_traces(terminal_at)
+                WHERE terminal_at IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_session_traces_dictation_id
+                ON session_traces(dictation_id)
+                WHERE dictation_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_session_traces_meeting_id
+                ON session_traces(meeting_id)
+                WHERE meeting_id IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS session_trace_artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_uuid TEXT NOT NULL REFERENCES session_traces(session_uuid) ON DELETE CASCADE,
+                content_fingerprint TEXT NOT NULL,
+                content BLOB NOT NULL,
+                byte_count INTEGER NOT NULL CHECK (byte_count BETWEEN 0 AND 1048576),
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_trace_artifacts_session
+                ON session_trace_artifacts(session_uuid, id);
+            CREATE INDEX IF NOT EXISTS idx_session_trace_artifacts_fingerprint
+                ON session_trace_artifacts(session_uuid, content_fingerprint);
+
+            CREATE TABLE IF NOT EXISTS session_trace_artifact_references (
+                session_uuid TEXT NOT NULL REFERENCES session_traces(session_uuid) ON DELETE CASCADE,
+                artifact_kind TEXT NOT NULL CHECK (
+                    artifact_kind IN (
+                        'raw_asr', 'cleanup_result', 'dictionary_changes',
+                        'final_output', 'language_profile', 'context_sources'
+                    )
+                ),
+                artifact_id INTEGER NOT NULL REFERENCES session_trace_artifacts(id) ON DELETE CASCADE,
+                created_at REAL NOT NULL,
+                PRIMARY KEY (session_uuid, artifact_kind)
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_trace_artifact_references_artifact
+                ON session_trace_artifact_references(artifact_id);
+
+            CREATE TABLE IF NOT EXISTS session_trace_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_uuid TEXT NOT NULL REFERENCES session_traces(session_uuid) ON DELETE CASCADE,
+                sequence INTEGER NOT NULL CHECK (sequence BETWEEN 1 AND 512),
+                vocabulary TEXT NOT NULL CHECK (
+                    vocabulary IN (
+                        'session_started', 'stage_started', 'stage_completed',
+                        'stage_failed', 'fallback_started', 'cancellation_requested',
+                        'timeout_requested', 'terminal'
+                    )
+                ),
+                stage TEXT NOT NULL,
+                elapsed_milliseconds INTEGER,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                artifact_id INTEGER REFERENCES session_trace_artifacts(id) ON DELETE SET NULL,
+                created_at REAL NOT NULL,
+                UNIQUE (session_uuid, sequence)
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_trace_events_session
+                ON session_trace_events(session_uuid, sequence);
+            """,
+            db: db
+        )
+    }
+
+    private func validateSessionTraceSchema(db: OpaquePointer?) throws {
+        try validateNormalizedSchema(db: db)
+
+        let requiredColumns: [String: Set<String>] = [
+            "session_trace_settings": ["singleton_id", "clear_generation", "updated_at"],
+            "session_traces": [
+                "session_uuid", "writer_uuid", "clear_generation", "kind", "created_at",
+                "updated_at", "terminal_at", "terminal_outcome", "dictation_id", "meeting_id",
+                "backend_identity", "fallback_backend_identity", "rich_content_state",
+                "event_count", "rich_byte_count",
+            ],
+            "session_trace_artifacts": [
+                "id", "session_uuid", "content_fingerprint", "content", "byte_count", "created_at",
+            ],
+            "session_trace_artifact_references": [
+                "session_uuid", "artifact_kind", "artifact_id", "created_at",
+            ],
+            "session_trace_events": [
+                "id", "session_uuid", "sequence", "vocabulary", "stage",
+                "elapsed_milliseconds", "metadata_json", "artifact_id", "created_at",
+            ],
         ]
-        var existingColumns = try tableColumns("dictations", db: db)
-        for (column, sql) in migrations where !existingColumns.contains(column) {
-            if sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK {
-                let message = String(cString: sqlite3_errmsg(db))
-                guard message.localizedCaseInsensitiveContains("duplicate column") else {
-                    throw lastError(db)
-                }
-            }
-            existingColumns.insert(column)
+        let requiredIndexes = [
+            "idx_session_traces_created_at",
+            "idx_session_traces_terminal_at",
+            "idx_session_traces_dictation_id",
+            "idx_session_traces_meeting_id",
+            "idx_session_trace_artifacts_session",
+            "idx_session_trace_artifacts_fingerprint",
+            "idx_session_trace_artifact_references_artifact",
+            "idx_session_trace_events_session",
+        ]
+        try validateSchemaObjects(
+            requiredColumns: requiredColumns,
+            requiredIndexes: requiredIndexes,
+            db: db
+        )
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "SELECT clear_generation FROM session_trace_settings WHERE singleton_id = 1",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK else {
+            throw lastError(db)
         }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            throw schemaPostconditionError("session trace clear generation singleton is missing")
+        }
+
+        guard try indexColumns("idx_session_trace_artifacts_fingerprint", db: db) == [
+            "session_uuid", "content_fingerprint",
+        ] else {
+            throw schemaPostconditionError("session trace artifact fingerprint index has unexpected columns")
+        }
+        for index in try tableIndexNames("session_trace_artifacts", db: db) {
+            guard try !indexColumns(index, db: db).contains("content") else {
+                throw schemaPostconditionError("session trace artifact payload is indexed by \(index)")
+            }
+        }
+    }
+
+    private func addRecordingArtifactSchema(db: OpaquePointer?) throws {
+        try exec(
+            """
+            CREATE TABLE IF NOT EXISTS recording_artifacts (
+                artifact_uuid TEXT PRIMARY KEY,
+                session_uuid TEXT NOT NULL UNIQUE,
+                capture_kind TEXT NOT NULL CHECK (capture_kind IN ('dictation', 'meeting', 'audio_import')),
+                file_extension TEXT NOT NULL CHECK (
+                    file_extension IN ('wav', 'm4a', 'caf', 'aiff', 'aif', 'mp3')
+                ),
+                frozen_save_policy TEXT NOT NULL CHECK (frozen_save_policy IN ('prompt', 'always')),
+                lifecycle_state TEXT NOT NULL CHECK (
+                    lifecycle_state IN ('staging', 'pending', 'retained', 'deleting', 'missing')
+                ),
+                byte_count INTEGER NOT NULL CHECK (byte_count >= 0),
+                created_at REAL NOT NULL,
+                terminal_at REAL,
+                pending_expires_at REAL,
+                orphaned_at REAL,
+                deletion_requested_at REAL,
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_recording_artifacts_lifecycle
+                ON recording_artifacts(lifecycle_state, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_recording_artifacts_pending_expiry
+                ON recording_artifacts(pending_expires_at)
+                WHERE lifecycle_state = 'pending';
+            CREATE INDEX IF NOT EXISTS idx_recording_artifacts_orphaned
+                ON recording_artifacts(orphaned_at)
+                WHERE orphaned_at IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS dictation_recording_links (
+                dictation_id INTEGER PRIMARY KEY REFERENCES dictations(id) ON DELETE CASCADE,
+                artifact_uuid TEXT REFERENCES recording_artifacts(artifact_uuid) ON DELETE SET NULL,
+                availability TEXT NOT NULL CHECK (
+                    availability IN (
+                        'never', 'declined', 'pending', 'available', 'missing',
+                        'expired', 'deleted', 'save_failed', 'invalid_legacy'
+                    )
+                ),
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_dictation_recording_links_artifact
+                ON dictation_recording_links(artifact_uuid) WHERE artifact_uuid IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS meeting_recording_links (
+                meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+                artifact_uuid TEXT REFERENCES recording_artifacts(artifact_uuid) ON DELETE SET NULL,
+                availability TEXT NOT NULL CHECK (
+                    availability IN (
+                        'never', 'declined', 'pending', 'available', 'missing',
+                        'expired', 'deleted', 'save_failed', 'invalid_legacy'
+                    )
+                ),
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_meeting_recording_links_artifact
+                ON meeting_recording_links(artifact_uuid) WHERE artifact_uuid IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS dictation_audio_history (
+                session_uuid TEXT PRIMARY KEY,
+                captured_at REAL NOT NULL,
+                duration_seconds REAL NOT NULL CHECK (duration_seconds >= 0),
+                terminal_outcome TEXT NOT NULL CHECK (
+                    terminal_outcome IN ('cancelled', 'timed_out', 'failed', 'empty')
+                ),
+                artifact_uuid TEXT REFERENCES recording_artifacts(artifact_uuid) ON DELETE SET NULL,
+                availability TEXT NOT NULL CHECK (
+                    availability IN (
+                        'declined', 'pending', 'available', 'missing', 'expired',
+                        'deleted', 'save_failed', 'invalid_legacy'
+                    )
+                ),
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_dictation_audio_history_captured
+                ON dictation_audio_history(captured_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_dictation_audio_history_artifact
+                ON dictation_audio_history(artifact_uuid) WHERE artifact_uuid IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS recording_diagnostic_links (
+                session_uuid TEXT PRIMARY KEY REFERENCES session_traces(session_uuid) ON DELETE CASCADE,
+                artifact_uuid TEXT REFERENCES recording_artifacts(artifact_uuid) ON DELETE SET NULL,
+                availability TEXT NOT NULL CHECK (
+                    availability IN (
+                        'never', 'declined', 'pending', 'available', 'missing',
+                        'expired', 'deleted', 'save_failed', 'invalid_legacy'
+                    )
+                ),
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_recording_diagnostic_links_artifact
+                ON recording_diagnostic_links(artifact_uuid) WHERE artifact_uuid IS NOT NULL;
+            """,
+            db: db
+        )
+    }
+
+    private func validateRecordingArtifactSchema(db: OpaquePointer?) throws {
+        try validateSessionTraceSchema(db: db)
+        try validateSchemaObjects(
+            requiredColumns: [
+                "recording_artifacts": [
+                    "artifact_uuid", "session_uuid", "capture_kind", "file_extension",
+                    "frozen_save_policy", "lifecycle_state", "byte_count", "created_at",
+                    "terminal_at", "pending_expires_at", "orphaned_at",
+                    "deletion_requested_at", "updated_at",
+                ],
+                "dictation_recording_links": ["dictation_id", "artifact_uuid", "availability", "updated_at"],
+                "meeting_recording_links": ["meeting_id", "artifact_uuid", "availability", "updated_at"],
+                "dictation_audio_history": [
+                    "session_uuid", "captured_at", "duration_seconds", "terminal_outcome",
+                    "artifact_uuid", "availability", "created_at", "updated_at",
+                ],
+                "recording_diagnostic_links": ["session_uuid", "artifact_uuid", "availability", "updated_at"],
+            ],
+            requiredIndexes: [
+                "idx_recording_artifacts_lifecycle", "idx_recording_artifacts_pending_expiry",
+                "idx_recording_artifacts_orphaned", "idx_dictation_recording_links_artifact",
+                "idx_meeting_recording_links_artifact", "idx_dictation_audio_history_captured",
+                "idx_dictation_audio_history_artifact", "idx_recording_diagnostic_links_artifact",
+            ],
+            db: db
+        )
+        guard try indexColumns("sqlite_autoindex_recording_artifacts_2", db: db) == ["session_uuid"] else {
+            throw schemaPostconditionError("recording artifact session identity is not unique")
+        }
+    }
+
+    private func repairDuplicateCloudRecordNames(db: OpaquePointer?) throws {
+        for table in ["dictations", "meetings"] {
+            // Legacy migrations attempted to add the uniqueness constraint but
+            // swallowed failures. Preserve every user row while retaining the
+            // newest CloudKit identity deterministically for each record name.
+            try exec(
+                """
+                UPDATE \(table) AS duplicate
+                SET cloud_record_name = NULL,
+                    cloud_change_tag = NULL,
+                    cloud_system_fields = NULL,
+                    last_synced_at = NULL,
+                    sync_dirty = 1
+                WHERE duplicate.cloud_record_name IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM \(table) AS keeper
+                      WHERE keeper.cloud_record_name = duplicate.cloud_record_name
+                        AND (
+                            COALESCE(keeper.updated_at, 0) > COALESCE(duplicate.updated_at, 0)
+                            OR (
+                                COALESCE(keeper.updated_at, 0) = COALESCE(duplicate.updated_at, 0)
+                                AND keeper.id > duplicate.id
+                            )
+                        )
+                  );
+                """,
+                db: db
+            )
+        }
+    }
+
+    private func addColumnIfNeeded(
+        _ column: String,
+        definition: String,
+        to table: String,
+        db: OpaquePointer?
+    ) throws {
+        guard try !columnExists(column, in: table, db: db) else { return }
+        try exec("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)", db: db)
+    }
+
+    private func validateNormalizedSchema(db: OpaquePointer?) throws {
+        let requiredColumns: [String: Set<String>] = [
+            "dictations": [
+                "id", "timestamp", "duration_seconds", "raw_text", "app_context", "word_count", "source",
+                "started_at", "ended_at", "updated_at", "deleted_at", "cloud_record_name", "cloud_change_tag",
+                "cloud_system_fields", "last_synced_at", "sync_dirty", "dictation_style_id",
+                "dictation_style_name", "dictation_style_selection_source", "dictation_cleanup_outcome", "created_at",
+            ],
+            "computer_use_traces": [
+                "id", "dictation_id", "final_status", "final_message", "trace_json", "created_at",
+            ],
+            "meetings": [
+                "id", "title", "calendar_event_id", "calendar_occurrence_key", "calendar_source", "calendar_id",
+                "calendar_series_id", "calendar_occurrence_start", "start_time", "end_time", "duration_seconds",
+                "raw_transcript", "formatted_notes", "mic_audio_path", "system_audio_path", "saved_recording_path",
+                "meeting_status", "manual_notes", "chat_history_json", "word_count", "selected_template_id",
+                "selected_template_name", "selected_template_kind", "selected_template_prompt", "source", "updated_at",
+                "deleted_at", "cloud_record_name", "cloud_change_tag", "cloud_system_fields",
+                "cloud_transcript_record_name", "last_synced_at", "sync_dirty", "follow_up_to_id",
+                "follow_up_to_record_name", "folder_id", "created_at", "cleaned_transcript", "visual_context",
+                "previous_meeting_notes", "notes_source",
+            ],
+            "meeting_transcript_checkpoints": [
+                "id", "meeting_id", "timestamp_label", "speaker", "start_seconds", "end_seconds", "text", "created_at",
+            ],
+            "cloud_sync_state": ["key", "value", "updated_at"],
+            "meeting_resume_snapshots": [
+                "meeting_id", "raw_transcript", "formatted_notes", "duration_seconds", "start_time", "end_time", "created_at",
+            ],
+            "meeting_folders": ["id", "name", "sort_order", "parent_id", "created_at"],
+            "insights_cache_meta": ["key", "value"],
+            "insights_tokens": ["id", "token"],
+            "insights_record_cache": [
+                "kind", "record_id", "source_updated_at", "activity_day", "word_count", "duration_seconds",
+                "dictation_sessions", "meeting_words", "meetings", "token_blob",
+            ],
+            "insights_daily_cache": [
+                "day", "dictation_words", "dictation_sessions", "meeting_words", "meetings", "duration_seconds",
+            ],
+            "insights_token_totals": ["token_id", "dictation_count", "meeting_count"],
+            "insights_daily_tokens": ["day", "token_id", "dictation_count", "meeting_count"],
+        ]
+
+        let requiredIndexes = [
+            "idx_dictations_timestamp",
+            "idx_computer_use_traces_dictation_id",
+            "idx_meetings_start_time",
+            "idx_meetings_calendar_event_lookup",
+            "idx_meetings_calendar_occurrence_key",
+            "idx_meeting_transcript_checkpoints_meeting",
+            "idx_meeting_folders_parent",
+            "idx_meetings_folder",
+            "idx_meetings_follow_up",
+            "idx_meetings_follow_up_record_name",
+            "idx_dictations_cloud_record_name",
+            "idx_meetings_cloud_record_name",
+            "idx_dictations_sync_dirty",
+            "idx_meetings_sync_dirty",
+            "idx_insights_record_updated",
+            "idx_insights_daily_tokens_token",
+        ]
+        try validateSchemaObjects(
+            requiredColumns: requiredColumns,
+            requiredIndexes: requiredIndexes,
+            db: db
+        )
+        for obsoleteIndex in ["idx_meetings_calendar_event_id", "idx_meetings_live_follow_up_unique"] {
+            guard try !schemaObjectExists(type: "index", name: obsoleteIndex, db: db) else {
+                throw schemaPostconditionError("obsolete index remains: \(obsoleteIndex)")
+            }
+        }
+
+        guard try !schemaObjectExists(type: "trigger", name: "meetings_clear_cleaned_transcript", db: db) else {
+            throw schemaPostconditionError("obsolete transcript invalidation trigger remains")
+        }
+        let triggerSQL = try schemaObjectSQL(
+            type: "trigger",
+            name: "meetings_clear_cleaned_transcript_v2",
+            db: db
+        )
+        guard triggerSQL?.contains("notes_source") == true else {
+            throw schemaPostconditionError("current transcript invalidation trigger is missing or incomplete")
+        }
+
+        for uniqueIndex in ["idx_dictations_cloud_record_name", "idx_meetings_cloud_record_name"] {
+            let sql = try schemaObjectSQL(type: "index", name: uniqueIndex, db: db) ?? ""
+            guard sql.uppercased().contains("CREATE UNIQUE INDEX") else {
+                throw schemaPostconditionError("index \(uniqueIndex) is not unique")
+            }
+        }
+    }
+
+    private func validateSchemaObjects(
+        requiredColumns: [String: Set<String>],
+        requiredIndexes: [String],
+        db: OpaquePointer?
+    ) throws {
+        for (table, expectedColumns) in requiredColumns {
+            guard try schemaObjectExists(type: "table", name: table, db: db) else {
+                throw schemaPostconditionError("missing table \(table)")
+            }
+            let missingColumns = expectedColumns.subtracting(try tableColumns(table, db: db)).sorted()
+            guard missingColumns.isEmpty else {
+                throw schemaPostconditionError(
+                    "table \(table) is missing columns: \(missingColumns.joined(separator: ", "))"
+                )
+            }
+        }
+        for index in requiredIndexes {
+            guard try schemaObjectExists(type: "index", name: index, db: db) else {
+                throw schemaPostconditionError("missing index \(index)")
+            }
+        }
+    }
+
+    private func schemaObjectExists(
+        type: String,
+        name: String,
+        db: OpaquePointer?
+    ) throws -> Bool {
+        try schemaObjectSQL(type: type, name: name, db: db) != nil
+    }
+
+    private func tableIndexNames(_ table: String, db: OpaquePointer?) throws -> [String] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA index_list(\(table))", -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var names: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            names.append(stringColumn(statement, index: 1))
+        }
+        return names
+    }
+
+    private func indexColumns(_ index: String, db: OpaquePointer?) throws -> [String] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA index_info(\(index))", -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var columns: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            columns.append(stringColumn(statement, index: 2))
+        }
+        return columns
+    }
+
+    private func schemaObjectSQL(
+        type: String,
+        name: String,
+        db: OpaquePointer?
+    ) throws -> String? {
+        var statement: OpaquePointer?
+        let sql = "SELECT sql FROM sqlite_master WHERE type = ? AND name = ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (type as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, (name as NSString).utf8String, -1, sqliteTransient)
+
+        switch sqlite3_step(statement) {
+        case SQLITE_ROW:
+            guard let pointer = sqlite3_column_text(statement, 0) else { return "" }
+            return String(cString: pointer)
+        case SQLITE_DONE:
+            return nil
+        default:
+            throw lastError(db)
+        }
+    }
+
+    private func schemaPostconditionError(_ description: String) -> NSError {
+        NSError(
+            domain: "MuesliDBMigration",
+            code: Int(SQLITE_SCHEMA),
+            userInfo: [NSLocalizedDescriptionKey: "Schema postcondition failed: \(description)."]
+        )
     }
 
     private func tableColumns(_ table: String, db: OpaquePointer?) throws -> Set<String> {
@@ -465,7 +985,8 @@ public final class DictationStore {
         dictationStyleSelectionSource: String? = nil,
         dictationCleanupOutcome: String? = nil,
         startedAt: Date,
-        endedAt: Date
+        endedAt: Date,
+        recording: RecordingArtifactReference? = nil
     ) throws -> Int64 {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
@@ -500,10 +1021,27 @@ public final class DictationStore {
         sqlite3_bind_text(statement, 12, (ended as NSString).utf8String, -1, sqliteTransient)
         sqlite3_bind_double(statement, 13, Date().timeIntervalSince1970)
 
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw lastError(db)
+        guard recording != nil else {
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+            return sqlite3_last_insert_rowid(db)
         }
-        return sqlite3_last_insert_rowid(db)
+
+        try exec("BEGIN IMMEDIATE", db: db)
+        do {
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+            let id = sqlite3_last_insert_rowid(db)
+            if let recording {
+                try upsertRecordingLink(
+                    table: "dictation_recording_links", ownerColumn: "dictation_id",
+                    ownerID: id, recording: recording, db: db
+                )
+            }
+            try exec("COMMIT", db: db)
+            return id
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
+        }
     }
 
     public func recentDictations(
@@ -1050,7 +1588,8 @@ public final class DictationStore {
         selectedTemplateKind: MeetingTemplateKind? = nil,
         selectedTemplatePrompt: String? = nil,
         source: MeetingSource = .meeting,
-        calendarOccurrence: CalendarOccurrenceReference? = nil
+        calendarOccurrence: CalendarOccurrenceReference? = nil,
+        recording: RecordingArtifactReference? = nil
     ) throws -> Int64 {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
@@ -1098,10 +1637,27 @@ public final class DictationStore {
             sqlite3_bind_null(statement, 22)
         }
 
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw lastError(db)
+        guard recording != nil else {
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+            return sqlite3_last_insert_rowid(db)
         }
-        return sqlite3_last_insert_rowid(db)
+
+        try exec("BEGIN IMMEDIATE", db: db)
+        do {
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+            let id = sqlite3_last_insert_rowid(db)
+            if let recording {
+                try upsertRecordingLink(
+                    table: "meeting_recording_links", ownerColumn: "meeting_id",
+                    ownerID: id, recording: recording, db: db
+                )
+            }
+            try exec("COMMIT", db: db)
+            return id
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
+        }
     }
 
     @discardableResult
@@ -1806,10 +2362,16 @@ public final class DictationStore {
         return words
     }
 
-    public func deleteDictation(id: Int64) throws {
+    @discardableResult
+    public func deleteDictation(id: Int64) throws -> RecordingArtifactID? {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        try deleteComputerUseTrace(dictationID: id, db: db)
+        try exec("BEGIN IMMEDIATE", db: db)
+        let recordingIDs = try recordingArtifactIDs(
+            sql: "SELECT artifact_uuid FROM dictation_recording_links WHERE dictation_id = ?",
+            ownerID: id,
+            db: db
+        )
         let sql = """
         UPDATE dictations
         SET raw_text = '',
@@ -1834,18 +2396,30 @@ public final class DictationStore {
         sqlite3_bind_double(statement, 1, now)
         sqlite3_bind_double(statement, 2, now)
         sqlite3_bind_int64(statement, 3, id)
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw lastError(db)
-        }
-        guard sqlite3_changes(db) > 0 else {
-            throw DictationStoreError.dictationNotFound(id: id)
+        do {
+            try deleteComputerUseTrace(dictationID: id, db: db)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+            guard sqlite3_changes(db) > 0 else { throw DictationStoreError.dictationNotFound(id: id) }
+            try exec("DELETE FROM dictation_recording_links WHERE dictation_id = \(id)", db: db)
+            let deletingIDs = try markRecordingsDeletingWhenUnowned(recordingIDs, now: now, db: db)
+            try exec("COMMIT", db: db)
+            return deletingIDs.first
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
         }
     }
 
-    public func deleteMeeting(id: Int64) throws {
+    @discardableResult
+    public func deleteMeeting(id: Int64) throws -> RecordingArtifactID? {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
         try exec("BEGIN IMMEDIATE", db: db)
+        let recordingIDs = try recordingArtifactIDs(
+            sql: "SELECT artifact_uuid FROM meeting_recording_links WHERE meeting_id = ?",
+            ownerID: id,
+            db: db
+        )
 
         do {
             try deleteResumeSnapshot(meetingID: id, db: db)
@@ -1888,18 +2462,28 @@ public final class DictationStore {
                 throw DictationStoreError.meetingNotFound(id: id)
             }
             try detachFollowUpSuccessors(of: id, db: db)
+            try exec("DELETE FROM meeting_recording_links WHERE meeting_id = \(id)", db: db)
+            let deletingIDs = try markRecordingsDeletingWhenUnowned(recordingIDs, now: now, db: db)
             try exec("COMMIT", db: db)
+            return deletingIDs.first
         } catch {
             sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
             throw error
         }
     }
 
-    public func clearDictations() throws {
+    @discardableResult
+    public func clearDictations() throws -> [RecordingArtifactID] {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        try exec("DELETE FROM computer_use_traces", db: db)
-        try exec(
+        try exec("BEGIN IMMEDIATE", db: db)
+        let recordingIDs = try recordingArtifactIDs(
+            sql: "SELECT artifact_uuid FROM dictation_recording_links WHERE artifact_uuid IS NOT NULL UNION SELECT artifact_uuid FROM dictation_audio_history WHERE artifact_uuid IS NOT NULL",
+            db: db
+        )
+        do {
+            try exec("DELETE FROM computer_use_traces", db: db)
+            try exec(
             """
             UPDATE dictations
             SET raw_text = '',
@@ -1914,6 +2498,33 @@ public final class DictationStore {
                 updated_at = strftime('%s','now'),
                 sync_dirty = 1
             WHERE deleted_at IS NULL
+            """,
+                db: db
+            )
+            try exec("DELETE FROM dictation_recording_links; DELETE FROM dictation_audio_history", db: db)
+            let deletingIDs = try markRecordingsDeletingWhenUnowned(
+                recordingIDs, now: Date().timeIntervalSince1970, db: db
+            )
+            try exec("COMMIT", db: db)
+            return deletingIDs
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
+        }
+    }
+
+    public func recordingArtifactsRemovedByClearingDictations() throws -> [RecordingArtifactID] {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        return try recordingArtifactIDs(
+            sql: """
+            SELECT a.artifact_uuid
+            FROM recording_artifacts a
+            WHERE (
+                EXISTS (SELECT 1 FROM dictation_recording_links d WHERE d.artifact_uuid = a.artifact_uuid)
+                OR EXISTS (SELECT 1 FROM dictation_audio_history h WHERE h.artifact_uuid = a.artifact_uuid)
+            )
+            AND NOT EXISTS (SELECT 1 FROM meeting_recording_links m WHERE m.artifact_uuid = a.artifact_uuid)
             """,
             db: db
         )
@@ -1968,12 +2579,19 @@ public final class DictationStore {
         }
     }
 
-    public func clearMeetings() throws {
+    @discardableResult
+    public func clearMeetings() throws -> [RecordingArtifactID] {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
-        try exec("DELETE FROM meeting_resume_snapshots", db: db)
-        try exec("DELETE FROM meeting_transcript_checkpoints", db: db)
-        try exec(
+        try exec("BEGIN IMMEDIATE", db: db)
+        let recordingIDs = try recordingArtifactIDs(
+            sql: "SELECT artifact_uuid FROM meeting_recording_links WHERE artifact_uuid IS NOT NULL",
+            db: db
+        )
+        do {
+            try exec("DELETE FROM meeting_resume_snapshots", db: db)
+            try exec("DELETE FROM meeting_transcript_checkpoints", db: db)
+            try exec(
             """
             UPDATE meetings
             SET title = 'Deleted Meeting',
@@ -1993,6 +2611,31 @@ public final class DictationStore {
                 updated_at = strftime('%s','now'),
                 sync_dirty = 1
             WHERE deleted_at IS NULL
+            """,
+                db: db
+            )
+            try exec("DELETE FROM meeting_recording_links", db: db)
+            let deletingIDs = try markRecordingsDeletingWhenUnowned(
+                recordingIDs, now: Date().timeIntervalSince1970, db: db
+            )
+            try exec("COMMIT", db: db)
+            return deletingIDs
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
+        }
+    }
+
+    public func recordingArtifactsRemovedByClearingMeetings() throws -> [RecordingArtifactID] {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        return try recordingArtifactIDs(
+            sql: """
+            SELECT a.artifact_uuid
+            FROM recording_artifacts a
+            WHERE EXISTS (SELECT 1 FROM meeting_recording_links m WHERE m.artifact_uuid = a.artifact_uuid)
+              AND NOT EXISTS (SELECT 1 FROM dictation_recording_links d WHERE d.artifact_uuid = a.artifact_uuid)
+              AND NOT EXISTS (SELECT 1 FROM dictation_audio_history h WHERE h.artifact_uuid = a.artifact_uuid)
             """,
             db: db
         )
@@ -2441,6 +3084,88 @@ public final class DictationStore {
         return true
     }
 
+    /// Restores a row written provisionally before a session terminal winner was known.
+    /// Resumed meetings use their durable resume snapshot for transcript/timing state;
+    /// ordinary live meetings return to the exact pre-completion draft fields.
+    @discardableResult
+    public func rollbackProvisionalLiveMeeting(
+        id: Int64,
+        priorRecord: MeetingRecord,
+        priorRecording: RecordingArtifactReference? = nil
+    ) throws -> Bool {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        let snapshot = try resumeSnapshot(meetingID: id, db: db)
+
+        guard sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        do {
+            let provisionalRecordingIDs = try recordingArtifactIDs(
+                sql: "SELECT artifact_uuid FROM meeting_recording_links WHERE meeting_id = ?",
+                ownerID: id,
+                db: db
+            )
+            if let snapshot {
+                try completeResumedRecovery(
+                    id: id,
+                    snapshot: snapshot,
+                    rawTranscript: snapshot.rawTranscript,
+                    formattedNotes: snapshot.formattedNotes,
+                    endTime: snapshot.endTime,
+                    durationSeconds: snapshot.durationSeconds,
+                    wordCount: Self.countWords(in: snapshot.rawTranscript)
+                        + Self.countWords(in: priorRecord.manualNotes),
+                    db: db
+                )
+                try restoreCompletionAncillaryFields(id: id, from: priorRecord, db: db)
+            } else {
+                try restoreProvisionalLiveMeetingRow(id: id, from: priorRecord, db: db)
+                try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
+            }
+            if let priorRecording {
+                try upsertRecordingLink(
+                    table: "meeting_recording_links", ownerColumn: "meeting_id",
+                    ownerID: id, recording: priorRecording, db: db
+                )
+            } else {
+                try exec("DELETE FROM meeting_recording_links WHERE meeting_id = \(id)", db: db)
+            }
+            _ = try markRecordingsDeletingWhenUnowned(
+                provisionalRecordingIDs,
+                now: Date().timeIntervalSince1970,
+                db: db
+            )
+            guard sqlite3_exec(db, "COMMIT", nil, nil, nil) == SQLITE_OK else {
+                throw lastError(db)
+            }
+        } catch {
+            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw error
+        }
+        return snapshot != nil
+    }
+
+    /// Deletes only recovery metadata after the completed product row is durable.
+    /// Safe to retry when a prior cleanup was interrupted.
+    public func finalizeCompletedMeetingRecoveryMetadata(id: Int64) throws {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        guard sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        do {
+            try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
+            try deleteResumeSnapshot(meetingID: id, db: db)
+            guard sqlite3_exec(db, "COMMIT", nil, nil, nil) == SQLITE_OK else {
+                throw lastError(db)
+            }
+        } catch {
+            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw error
+        }
+    }
+
     private func updateMeetingStatus(id: Int64, status: MeetingStatus, db: OpaquePointer?) throws {
         let wordCount = try manualNoteWordCountIfNeeded(for: status, id: id, db: db)
         let sql = wordCount == nil
@@ -2483,7 +3208,9 @@ public final class DictationStore {
         selectedTemplateID: String? = nil,
         selectedTemplateName: String? = nil,
         selectedTemplateKind: MeetingTemplateKind? = nil,
-        selectedTemplatePrompt: String? = nil
+        selectedTemplatePrompt: String? = nil,
+        preserveRecoveryMetadata: Bool = false,
+        recording: RecordingArtifactReference? = nil
     ) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
@@ -2523,14 +3250,147 @@ public final class DictationStore {
         bindOptionalText(selectedTemplatePrompt, at: 16, statement: statement)
         sqlite3_bind_double(statement, 17, Date().timeIntervalSince1970)
         sqlite3_bind_int64(statement, 18, id)
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw lastError(db)
+        try exec("BEGIN IMMEDIATE", db: db)
+        do {
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+            guard sqlite3_changes(db) > 0 else { throw DictationStoreError.meetingNotFound(id: id) }
+            if !preserveRecoveryMetadata {
+                try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
+                try deleteResumeSnapshot(meetingID: id, db: db)
+            }
+            if let recording {
+                try upsertRecordingLink(
+                    table: "meeting_recording_links", ownerColumn: "meeting_id",
+                    ownerID: id, recording: recording, db: db
+                )
+            }
+            try exec("COMMIT", db: db)
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
         }
-        guard sqlite3_changes(db) > 0 else {
-            throw DictationStoreError.meetingNotFound(id: id)
+    }
+
+    private func upsertRecordingLink(
+        table: String,
+        ownerColumn: String,
+        ownerID: Int64,
+        recording: RecordingArtifactReference,
+        db: OpaquePointer?
+    ) throws {
+        let sql = "INSERT INTO \(table) (\(ownerColumn), artifact_uuid, availability, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(\(ownerColumn)) DO UPDATE SET artifact_uuid=excluded.artifact_uuid, availability=excluded.availability, updated_at=excluded.updated_at"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, ownerID)
+        bindOptionalText(recording.artifactID?.storedValue, at: 2, statement: statement)
+        sqlite3_bind_text(statement, 3, (recording.availability.rawValue as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_double(statement, 4, Date().timeIntervalSince1970)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+        if let artifactID = recording.artifactID {
+            var artifactStatement: OpaquePointer?
+            guard sqlite3_prepare_v2(
+                db,
+                "UPDATE recording_artifacts SET orphaned_at=NULL, updated_at=? WHERE artifact_uuid=?",
+                -1,
+                &artifactStatement,
+                nil
+            ) == SQLITE_OK else { throw lastError(db) }
+            defer { sqlite3_finalize(artifactStatement) }
+            sqlite3_bind_double(artifactStatement, 1, Date().timeIntervalSince1970)
+            sqlite3_bind_text(
+                artifactStatement,
+                2,
+                (artifactID.storedValue as NSString).utf8String,
+                -1,
+                sqliteTransient
+            )
+            guard sqlite3_step(artifactStatement) == SQLITE_DONE else { throw lastError(db) }
         }
-        try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
-        try deleteResumeSnapshot(meetingID: id, db: db)
+    }
+
+    private func recordingArtifactIDs(
+        sql: String,
+        ownerID: Int64? = nil,
+        db: OpaquePointer?
+    ) throws -> [RecordingArtifactID] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
+        defer { sqlite3_finalize(statement) }
+        if let ownerID { sqlite3_bind_int64(statement, 1, ownerID) }
+        var values: [RecordingArtifactID] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let pointer = sqlite3_column_text(statement, 0),
+                  let id = RecordingArtifactID(storedValue: String(cString: pointer)) else { continue }
+            values.append(id)
+        }
+        return values
+    }
+
+    private func markRecordingsDeletingWhenUnowned(
+        _ ids: [RecordingArtifactID],
+        now: Double,
+        db: OpaquePointer?
+    ) throws -> [RecordingArtifactID] {
+        var deleting: [RecordingArtifactID] = []
+        for id in ids {
+            let value = id.storedValue
+            let ownerSQL = """
+            SELECT
+                (SELECT COUNT(*) FROM dictation_recording_links WHERE artifact_uuid = ?) +
+                (SELECT COUNT(*) FROM meeting_recording_links WHERE artifact_uuid = ?) +
+                (SELECT COUNT(*) FROM dictation_audio_history WHERE artifact_uuid = ?)
+            """
+            var ownerStatement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, ownerSQL, -1, &ownerStatement, nil) == SQLITE_OK else {
+                throw lastError(db)
+            }
+            for index in 1...3 {
+                sqlite3_bind_text(ownerStatement, Int32(index), (value as NSString).utf8String, -1, sqliteTransient)
+            }
+            guard sqlite3_step(ownerStatement) == SQLITE_ROW else {
+                sqlite3_finalize(ownerStatement)
+                throw lastError(db)
+            }
+            let ownerCount = sqlite3_column_int64(ownerStatement, 0)
+            sqlite3_finalize(ownerStatement)
+            guard ownerCount == 0 else { continue }
+            deleting.append(id)
+
+            var artifactStatement: OpaquePointer?
+            guard sqlite3_prepare_v2(
+                db,
+                "UPDATE recording_artifacts SET lifecycle_state='deleting', deletion_requested_at=?, updated_at=? WHERE artifact_uuid=?",
+                -1,
+                &artifactStatement,
+                nil
+            ) == SQLITE_OK else { throw lastError(db) }
+            sqlite3_bind_double(artifactStatement, 1, now)
+            sqlite3_bind_double(artifactStatement, 2, now)
+            sqlite3_bind_text(artifactStatement, 3, (value as NSString).utf8String, -1, sqliteTransient)
+            guard sqlite3_step(artifactStatement) == SQLITE_DONE else {
+                sqlite3_finalize(artifactStatement)
+                throw lastError(db)
+            }
+            sqlite3_finalize(artifactStatement)
+
+            var diagnosticStatement: OpaquePointer?
+            guard sqlite3_prepare_v2(
+                db,
+                "UPDATE recording_diagnostic_links SET artifact_uuid=NULL, availability='deleted', updated_at=? WHERE artifact_uuid=?",
+                -1,
+                &diagnosticStatement,
+                nil
+            ) == SQLITE_OK else { throw lastError(db) }
+            sqlite3_bind_double(diagnosticStatement, 1, now)
+            sqlite3_bind_text(diagnosticStatement, 2, (value as NSString).utf8String, -1, sqliteTransient)
+            guard sqlite3_step(diagnosticStatement) == SQLITE_DONE else {
+                sqlite3_finalize(diagnosticStatement)
+                throw lastError(db)
+            }
+            sqlite3_finalize(diagnosticStatement)
+        }
+        return deleting
     }
 
     private func manualNoteWordCountIfNeeded(for status: MeetingStatus, id: Int64, db: OpaquePointer?) throws -> Int? {
@@ -2811,6 +3671,80 @@ public final class DictationStore {
         }
         try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
         try deleteResumeSnapshot(meetingID: id, db: db)
+    }
+
+    private func restoreCompletionAncillaryFields(
+        id: Int64,
+        from record: MeetingRecord,
+        db: OpaquePointer?
+    ) throws {
+        let sql = """
+        UPDATE meetings
+        SET title = ?, calendar_event_id = ?, mic_audio_path = ?, system_audio_path = ?, saved_recording_path = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, updated_at = ?, sync_dirty = 1
+        WHERE id = ? AND deleted_at IS NULL
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (record.title as NSString).utf8String, -1, sqliteTransient)
+        bindOptionalText(record.calendarEventID, at: 2, statement: statement)
+        bindOptionalText(record.micAudioPath, at: 3, statement: statement)
+        bindOptionalText(record.systemAudioPath, at: 4, statement: statement)
+        bindOptionalText(record.savedRecordingPath, at: 5, statement: statement)
+        bindOptionalText(record.selectedTemplateID, at: 6, statement: statement)
+        bindOptionalText(record.selectedTemplateName, at: 7, statement: statement)
+        bindOptionalText(record.selectedTemplateKind?.rawValue, at: 8, statement: statement)
+        bindOptionalText(record.selectedTemplatePrompt, at: 9, statement: statement)
+        sqlite3_bind_double(statement, 10, Date().timeIntervalSince1970)
+        sqlite3_bind_int64(statement, 11, id)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
+        guard sqlite3_changes(db) > 0 else {
+            throw DictationStoreError.meetingNotFound(id: id)
+        }
+    }
+
+    private func restoreProvisionalLiveMeetingRow(
+        id: Int64,
+        from record: MeetingRecord,
+        db: OpaquePointer?
+    ) throws {
+        let sql = """
+        UPDATE meetings
+        SET title = ?, calendar_event_id = ?, start_time = ?, end_time = NULL, duration_seconds = ?, raw_transcript = ?, formatted_notes = ?, mic_audio_path = ?, system_audio_path = ?, saved_recording_path = ?, meeting_status = ?, word_count = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, updated_at = ?, sync_dirty = 1
+        WHERE id = ? AND deleted_at IS NULL
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (record.title as NSString).utf8String, -1, sqliteTransient)
+        bindOptionalText(record.calendarEventID, at: 2, statement: statement)
+        sqlite3_bind_text(statement, 3, (record.startTime as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_double(statement, 4, record.durationSeconds)
+        sqlite3_bind_text(statement, 5, (record.rawTranscript as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 6, (record.formattedNotes as NSString).utf8String, -1, sqliteTransient)
+        bindOptionalText(record.micAudioPath, at: 7, statement: statement)
+        bindOptionalText(record.systemAudioPath, at: 8, statement: statement)
+        bindOptionalText(record.savedRecordingPath, at: 9, statement: statement)
+        sqlite3_bind_text(statement, 10, (record.status.rawValue as NSString).utf8String, -1, sqliteTransient)
+        sqlite3_bind_int(statement, 11, Int32(record.wordCount))
+        bindOptionalText(record.selectedTemplateID, at: 12, statement: statement)
+        bindOptionalText(record.selectedTemplateName, at: 13, statement: statement)
+        bindOptionalText(record.selectedTemplateKind?.rawValue, at: 14, statement: statement)
+        bindOptionalText(record.selectedTemplatePrompt, at: 15, statement: statement)
+        sqlite3_bind_double(statement, 16, Date().timeIntervalSince1970)
+        sqlite3_bind_int64(statement, 17, id)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
+        guard sqlite3_changes(db) > 0 else {
+            throw DictationStoreError.meetingNotFound(id: id)
+        }
     }
 
     private func combinedResumeRecoveryTranscript(prior: String, new: String) -> String {

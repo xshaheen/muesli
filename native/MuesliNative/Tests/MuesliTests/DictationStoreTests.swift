@@ -1,8 +1,9 @@
 import Testing
 import CloudKit
+import CryptoKit
 import Foundation
-import MuesliCore
 import SQLite3
+@testable import MuesliCore
 @testable import MuesliNativeApp
 
 @Suite("DictationStore", .serialized)
@@ -221,6 +222,352 @@ struct DictationStoreTests {
     func migration() throws {
         let store = try makeStore()
         try store.migrateIfNeeded() // idempotent
+        #expect(try firstTextColumns(
+            store.resolvedDatabaseURL,
+            "PRAGMA user_version",
+            count: 1
+        ) == [String(DictationStore.currentSchemaVersion)])
+    }
+
+    @Test("current unversioned schema is normalized without changing record content")
+    func currentUnversionedMigrationPreservesRecords() throws {
+        let (store, url) = try makeStoreWithURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let endedAt = Date(timeIntervalSince1970: 1_775_817_600)
+        _ = try store.insertDictation(
+            text: "Preserve this dictation exactly",
+            durationSeconds: 4,
+            appContext: "com.example.Editor",
+            startedAt: endedAt.addingTimeInterval(-4),
+            endedAt: endedAt
+        )
+        _ = try store.insertMeeting(
+            title: "Preservation meeting",
+            calendarEventID: "event-1",
+            startTime: endedAt,
+            endTime: endedAt.addingTimeInterval(60),
+            rawTranscript: "Preserve this meeting transcript exactly",
+            formattedNotes: "Preserve these notes exactly",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        let before = try migrationContentDigest(url)
+        let countsBefore = try firstTextColumns(
+            url,
+            "SELECT (SELECT COUNT(*) FROM dictations), (SELECT COUNT(*) FROM meetings)",
+            count: 2
+        )
+        try rawExec(url, "PRAGMA user_version = 0")
+
+        try store.migrateIfNeeded()
+
+        #expect(try migrationContentDigest(url) == before)
+        #expect(try firstTextColumns(
+            url,
+            "SELECT (SELECT COUNT(*) FROM dictations), (SELECT COUNT(*) FROM meetings)",
+            count: 2
+        ) == countsBefore)
+        #expect(try firstTextColumns(
+            url,
+            "PRAGMA user_version",
+            count: 1
+        ) == [String(DictationStore.currentSchemaVersion)])
+    }
+
+    @Test("legacy duplicate CloudKit identities are repaired transactionally without losing content")
+    func legacyDuplicateCloudIdentitiesAreRepairedTransactionally() throws {
+        enum InjectedFailure: Error { case beforeVersionOneCommit }
+
+        let (store, url) = try makeStoreWithURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try rawExec(
+            url,
+            """
+            DROP INDEX idx_dictations_cloud_record_name;
+            DROP INDEX idx_meetings_cloud_record_name;
+
+            INSERT INTO dictations (
+                id, timestamp, raw_text, app_context, word_count, source,
+                updated_at, cloud_record_name, cloud_change_tag,
+                cloud_system_fields, last_synced_at, sync_dirty
+            ) VALUES
+                (100, '2026-08-14T01:00:00Z', 'Older dictation content', 'older.app', 3, 'dictation',
+                 10, 'duplicate-dictation', 'older-tag', X'CAFE', 10, 0),
+                (101, '2026-08-14T02:00:00Z', 'Newer dictation content', 'newer.app', 3, 'dictation',
+                 20, 'duplicate-dictation', 'newer-tag', X'BEEF', 20, 0);
+            INSERT INTO computer_use_traces (
+                dictation_id, final_status, final_message, trace_json
+            ) VALUES (100, 'failed', 'Preserved diagnostic', '{}');
+
+            INSERT INTO meetings (
+                id, title, start_time, raw_transcript, formatted_notes, word_count, source,
+                updated_at, cloud_record_name, cloud_change_tag,
+                cloud_system_fields, last_synced_at, sync_dirty
+            ) VALUES
+                (200, 'Older meeting', '2026-08-14T03:00:00Z', 'Older meeting transcript',
+                 'Older meeting notes', 3, 'meeting', 30, 'duplicate-meeting', 'older-meeting-tag',
+                 X'ABCD', 30, 0),
+                (201, 'Newer meeting', '2026-08-14T04:00:00Z', 'Newer meeting transcript',
+                 'Newer meeting notes', 3, 'meeting', 30, 'duplicate-meeting', 'newer-meeting-tag',
+                 X'DEAD', 30, 0);
+            INSERT INTO meeting_transcript_checkpoints (
+                meeting_id, timestamp_label, speaker, start_seconds, end_seconds, text
+            ) VALUES (200, '00:01', 'Speaker 1', 1, 2, 'Preserved checkpoint');
+
+            PRAGMA user_version = 0;
+            """
+        )
+        let digestBefore = try migrationContentDigest(url)
+        let countsBefore = try firstTextColumns(
+            url,
+            """
+            SELECT (SELECT COUNT(*) FROM dictations),
+                   (SELECT COUNT(*) FROM meetings),
+                   (SELECT COUNT(*) FROM computer_use_traces),
+                   (SELECT COUNT(*) FROM meeting_transcript_checkpoints)
+            """,
+            count: 4
+        )
+
+        let failingStore = DictationStore(
+            databaseURL: url,
+            migrationCheckpoint: { checkpoint in
+                if checkpoint == .willCommit(version: 1) {
+                    throw InjectedFailure.beforeVersionOneCommit
+                }
+            }
+        )
+        #expect(throws: InjectedFailure.self) {
+            try failingStore.migrateIfNeeded()
+        }
+        #expect(try firstTextColumns(url, "PRAGMA user_version", count: 1) == ["0"])
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM dictations WHERE cloud_record_name = 'duplicate-dictation'",
+            count: 1
+        ) == ["2"])
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM meetings WHERE cloud_record_name = 'duplicate-meeting'",
+            count: 1
+        ) == ["2"])
+
+        try store.migrateIfNeeded()
+        let repairedDictations = try firstTextColumns(
+            url,
+            """
+            SELECT group_concat(material, char(30))
+            FROM (
+                SELECT printf('%d|%s|%s|%s|%s|%d', id,
+                              COALESCE(cloud_record_name, ''), COALESCE(cloud_change_tag, ''),
+                              COALESCE(hex(cloud_system_fields), ''), COALESCE(last_synced_at, ''),
+                              sync_dirty) AS material
+                FROM dictations WHERE id IN (100, 101) ORDER BY id
+            )
+            """,
+            count: 1
+        )[0]
+        let repairedMeetings = try firstTextColumns(
+            url,
+            """
+            SELECT group_concat(material, char(30))
+            FROM (
+                SELECT printf('%d|%s|%s|%s|%s|%d', id,
+                              COALESCE(cloud_record_name, ''), COALESCE(cloud_change_tag, ''),
+                              COALESCE(hex(cloud_system_fields), ''), COALESCE(last_synced_at, ''),
+                              sync_dirty) AS material
+                FROM meetings WHERE id IN (200, 201) ORDER BY id
+            )
+            """,
+            count: 1
+        )[0]
+
+        #expect(try firstTextColumns(
+            url,
+            "PRAGMA user_version",
+            count: 1
+        ) == [String(DictationStore.currentSchemaVersion)])
+        #expect(try migrationContentDigest(url) == digestBefore)
+        #expect(try firstTextColumns(
+            url,
+            """
+            SELECT (SELECT COUNT(*) FROM dictations),
+                   (SELECT COUNT(*) FROM meetings),
+                   (SELECT COUNT(*) FROM computer_use_traces),
+                   (SELECT COUNT(*) FROM meeting_transcript_checkpoints)
+            """,
+            count: 4
+        ) == countsBefore)
+        #expect(repairedDictations == "100|||||1\u{1e}101|duplicate-dictation|newer-tag|BEEF|20.0|0")
+        #expect(repairedMeetings == "200|||||1\u{1e}201|duplicate-meeting|newer-meeting-tag|DEAD|30.0|0")
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM pragma_foreign_key_check",
+            count: 1
+        ) == ["0"])
+        #expect(try firstTextColumns(
+            url,
+            """
+            SELECT (SELECT \"unique\" FROM pragma_index_list('dictations')
+                    WHERE name = 'idx_dictations_cloud_record_name'),
+                   (SELECT \"unique\" FROM pragma_index_list('meetings')
+                    WHERE name = 'idx_meetings_cloud_record_name')
+            """,
+            count: 2
+        ) == ["1", "1"])
+
+        try store.migrateIfNeeded()
+        #expect(try migrationContentDigest(url) == digestBefore)
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM pragma_foreign_key_check",
+            count: 1
+        ) == ["0"])
+        #expect(try firstTextColumns(
+            url,
+            """
+            SELECT (SELECT COUNT(*) FROM dictations WHERE cloud_record_name = 'duplicate-dictation'),
+                   (SELECT COUNT(*) FROM meetings WHERE cloud_record_name = 'duplicate-meeting')
+            """,
+            count: 2
+        ) == ["1", "1"])
+    }
+
+    @Test("session artifact schema indexes fingerprints without indexing payload bytes")
+    func sessionArtifactSchemaDoesNotIndexPayload() throws {
+        let (store, url) = try makeStoreWithURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try store.migrateIfNeeded()
+
+        #expect(try firstTextColumns(
+            url,
+            """
+            SELECT group_concat(name, ',')
+            FROM (
+                SELECT name FROM pragma_index_info('idx_session_trace_artifacts_fingerprint')
+                ORDER BY seqno
+            )
+            """,
+            count: 1
+        ) == ["session_uuid,content_fingerprint"])
+        #expect(try firstTextColumns(
+            url,
+            """
+            SELECT COUNT(*)
+            FROM pragma_index_list('session_trace_artifacts') AS indexes
+            JOIN pragma_index_info(indexes.name) AS columns
+            WHERE columns.name = 'content'
+            """,
+            count: 1
+        ) == ["0"])
+    }
+
+    @Test("failed migration rolls back schema, data, and version and can be retried")
+    func failedMigrationRollsBackAndRetries() throws {
+        enum InjectedFailure: Error { case stopBeforeCommit }
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-migration-rollback-\(UUID().uuidString).db")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try rawExec(
+            url,
+            """
+            CREATE TABLE meetings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                calendar_event_id TEXT,
+                start_time TEXT NOT NULL,
+                end_time TEXT,
+                duration_seconds REAL,
+                raw_transcript TEXT,
+                formatted_notes TEXT,
+                mic_audio_path TEXT,
+                system_audio_path TEXT,
+                word_count INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'meeting',
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            INSERT INTO meetings (title, start_time, raw_transcript, formatted_notes)
+            VALUES ('Before migration', '2026-08-14T00:00:00Z', 'Raw evidence', 'Notes evidence');
+            """
+        )
+        let legacyDigest = try migrationContentDigest(url)
+        let failingStore = DictationStore(
+            databaseURL: url,
+            migrationCheckpoint: { checkpoint in
+                if checkpoint == .versionRecorded(version: DictationStore.currentSchemaVersion) {
+                    throw InjectedFailure.stopBeforeCommit
+                }
+            }
+        )
+
+        #expect(throws: InjectedFailure.self) {
+            try failingStore.migrateIfNeeded()
+        }
+        // Migrations commit independently. Versions 1 and 2 remain valid and
+        // version 3 rolls back completely, so retry starts at the last good schema.
+        #expect(try firstTextColumns(url, "PRAGMA user_version", count: 1) == ["2"])
+        #expect(try migrationContentDigest(url) == legacyDigest)
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'dictations'",
+            count: 1
+        ) == ["1"])
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_traces'",
+            count: 1
+        ) == ["1"])
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'recording_artifacts'",
+            count: 1
+        ) == ["0"])
+
+        let retryStore = DictationStore(databaseURL: url)
+        try retryStore.migrateIfNeeded()
+        #expect(try firstTextColumns(
+            url,
+            "PRAGMA user_version",
+            count: 1
+        ) == [String(DictationStore.currentSchemaVersion)])
+        #expect(try migrationContentDigest(url) == legacyDigest)
+        #expect(try retryStore.recentMeetings(limit: 10).count == 1)
+    }
+
+    @Test("current schema postconditions reject missing migration objects")
+    func migrationValidatesCurrentSchemaPostconditions() throws {
+        let (store, url) = try makeStoreWithURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try rawExec(url, "DROP INDEX idx_meetings_folder")
+
+        #expect(throws: Error.self) {
+            try store.migrateIfNeeded()
+        }
+        #expect(try firstTextColumns(
+            url,
+            "PRAGMA user_version",
+            count: 1
+        ) == [String(DictationStore.currentSchemaVersion)])
+    }
+
+    @Test("migration rejects pre-existing foreign key violations")
+    func migrationRunsForeignKeyCheck() throws {
+        let (store, url) = try makeStoreWithURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try rawExec(
+            url,
+            """
+            PRAGMA foreign_keys = OFF;
+            INSERT INTO meeting_transcript_checkpoints (
+                meeting_id, timestamp_label, speaker, start_seconds, end_seconds, text
+            ) VALUES (999, '00:01', 'Speaker 1', 1, 2, 'orphan');
+            """
+        )
+
+        #expect(throws: SQLiteMigrationRunner.RunnerError.self) {
+            try store.migrateIfNeeded()
+        }
     }
 
     @Test("CloudKit engine state persists independently by key")
@@ -1415,6 +1762,7 @@ struct DictationStoreTests {
         let updatedAt = Date(timeIntervalSince1970: 1_770_000_000).timeIntervalSince1970
         let recordName = "meeting-00000000-0000-4000-8000-000000000001"
         let sql = """
+        PRAGMA user_version = 0;
         INSERT INTO meetings (
             title, start_time, end_time, duration_seconds, raw_transcript,
             formatted_notes, word_count, source, updated_at, cloud_record_name,
@@ -4034,6 +4382,41 @@ struct DictationStoreTests {
         }
     }
 
+    private func migrationContentDigest(_ url: URL) throws -> String {
+        let meetingMaterial = try firstTextColumns(
+            url,
+            """
+            SELECT COALESCE(group_concat(material, char(30)), '')
+            FROM (
+                SELECT printf('%d|%s|%s|%s|%s', id, title, start_time,
+                              COALESCE(raw_transcript, ''), COALESCE(formatted_notes, '')) AS material
+                FROM meetings ORDER BY id
+            )
+            """,
+            count: 1
+        )[0]
+        let hasDictations = try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'dictations'",
+            count: 1
+        ) == ["1"]
+        let dictationMaterial = hasDictations ? try firstTextColumns(
+            url,
+            """
+            SELECT COALESCE(group_concat(material, char(30)), '')
+            FROM (
+                SELECT printf('%d|%s|%s|%s', id, timestamp,
+                              COALESCE(raw_text, ''), COALESCE(app_context, '')) AS material
+                FROM dictations ORDER BY id
+            )
+            """,
+            count: 1
+        )[0] : ""
+        return SHA256.hash(data: Data("\(meetingMaterial)\u{1f}\(dictationMaterial)".utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
     private func firstTextColumns(_ url: URL, _ sql: String, count: Int) throws -> [String] {
         var db: OpaquePointer?
         #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
@@ -4089,6 +4472,7 @@ struct DictationStoreTests {
         // would keep clearing only the column and leave notes_source stale.
         let (store, url) = try makeStoreWithURL()
         try rawExec(url, """
+        PRAGMA user_version = 0;
         DROP TRIGGER IF EXISTS meetings_clear_cleaned_transcript_v2;
         CREATE TRIGGER meetings_clear_cleaned_transcript
         AFTER UPDATE OF raw_transcript ON meetings

@@ -5,6 +5,7 @@ import os
 
 enum FloatingMeetingTranscriptPlacement {
     static let panelSize = NSSize(width: 360, height: 320)
+    static let minimumPanelSize = NSSize(width: 360, height: 240)
     /// Keeps the independently movable panel clear of the pill while making their shared
     /// glass chrome read as one floating system.
     static let gap: CGFloat = 4
@@ -301,6 +302,11 @@ final class FloatingMeetingTranscriptPanelController {
     /// to undo it, and edge-clamping fed back into the indicator's position -- a whole
     /// class of bug that simply does not exist once the two are separate windows.
     private var window: NSPanel?
+    var presentationWindow: NSPanel? { window }
+
+    private var currentPanelSize: NSSize {
+        window?.frame.size ?? FloatingMeetingTranscriptPlacement.panelSize
+    }
     /// The side of the pill the panel last landed on.
     ///
     /// Held across hide/show so the panel stays put while the pill moves and resizes
@@ -374,6 +380,7 @@ final class FloatingMeetingTranscriptPanelController {
         // first drag onward the user owns the position.
         let placement = FloatingMeetingTranscriptPlacement.placement(
             beside: indicatorFrame,
+            panelSize: currentPanelSize,
             visibleFrame: visibleFrame,
             preferredSide: placementSide
         )
@@ -387,7 +394,7 @@ final class FloatingMeetingTranscriptPanelController {
     /// nil when the user has never moved the panel or that display is gone.
     private func savedFrameOnAnAttachedScreen() -> NSRect? {
         guard let origin = savedOriginProvider?() else { return nil }
-        let size = FloatingMeetingTranscriptPlacement.panelSize
+        let size = currentPanelSize
         let frame = NSRect(origin: origin, size: size)
         let center = CGPoint(x: frame.midX, y: frame.midY)
         guard let visible = NSScreen.screens.first(where: { $0.frame.contains(center) })?.visibleFrame
@@ -424,10 +431,11 @@ final class FloatingMeetingTranscriptPanelController {
     private func makeWindow() -> NSPanel {
         let window = InteractiveFloatingPanel(
             contentRect: NSRect(origin: .zero, size: FloatingMeetingTranscriptPlacement.panelSize),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
             defer: false
         )
+        window.contentMinSize = FloatingMeetingTranscriptPlacement.minimumPanelSize
         window.level = .floating
         window.isOpaque = false
         window.backgroundColor = .clear
@@ -728,10 +736,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
                     transcript
                 }
             }
-            .frame(
-                width: FloatingMeetingTranscriptPlacement.panelSize.width,
-                height: FloatingMeetingTranscriptPlacement.panelSize.height
-            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background {
                 ZStack {
                     if surfaceStyle.glass.usesGlassEffect {

@@ -121,6 +121,122 @@ struct TranscriptionResultCleanupTests {
             #expect(cleaned.segments.isEmpty)
         }
     }
+
+    @Test("meeting transcription evidence preserves recognizer text separately")
+    func meetingEvidencePreservesRawRecognizerText() {
+        let raw = SpeechTranscriptionResult(
+            text: "Hello [blank_audio] world",
+            segments: [segment]
+        )
+
+        let evidence = MeetingTranscriptionEvidence(raw: raw)
+
+        #expect(evidence.raw.text == "Hello [blank_audio] world")
+        #expect(evidence.raw.segments.count == 1)
+        #expect(evidence.cleaned.text == "Hello world")
+        #expect(evidence.cleaned.segments.isEmpty)
+    }
+}
+
+@Suite("Meeting raw transcript evidence")
+struct MeetingRawTranscriptAccumulatorTests {
+    @Test("orders concurrent channel evidence by timeline and retains raw text")
+    func ordersEvidenceByTimeline() {
+        let accumulator = MeetingRawTranscriptAccumulator()
+        accumulator.appendBatch(
+            SpeechTranscriptionResult(text: "system [blank_audio]", segments: []),
+            start: 8,
+            end: 9,
+            source: .system
+        )
+        accumulator.appendBatch(
+            SpeechTranscriptionResult(text: "mic um", segments: []),
+            start: 2,
+            end: 3,
+            source: .microphone
+        )
+
+        #expect(accumulator.transcript() == "mic um\nsystem [blank_audio]")
+    }
+
+    @Test("uses unified streaming text only for channels without batch evidence")
+    func usesStreamingFallbackPerChannel() {
+        let accumulator = MeetingRawTranscriptAccumulator()
+        accumulator.appendBatch(
+            SpeechTranscriptionResult(text: "batch system", segments: []),
+            start: 4,
+            end: 5,
+            source: .system
+        )
+        accumulator.appendStreamingSegmentsOutsideBatchEvidence(
+            [SpeechSegment(start: 1, end: 2, text: "streaming mic")],
+            source: .microphone
+        )
+        accumulator.appendStreamingSegmentsOutsideBatchEvidence(
+            [
+                SpeechSegment(start: 1, end: 2, text: "earlier streaming system"),
+                SpeechSegment(start: 4.25, end: 4.75, text: "covered streaming system"),
+            ],
+            source: .system
+        )
+
+        #expect(
+            accumulator.transcript()
+                == "streaming mic\nearlier streaming system\nbatch system"
+        )
+    }
+
+    @Test("bounds accumulated recognizer evidence by the artifact cap")
+    func boundsEvidence() {
+        let accumulator = MeetingRawTranscriptAccumulator()
+        let oversized = String(
+            repeating: "a",
+            count: SessionTraceRetentionPolicy.default.maximumArtifactBytes + 100
+        )
+
+        accumulator.appendBatch(
+            SpeechTranscriptionResult(text: oversized, segments: []),
+            start: 0,
+            end: 1,
+            source: .microphone
+        )
+
+        #expect(
+            accumulator.transcript().utf8.count
+                == SessionTraceRetentionPolicy.default.maximumArtifactBytes
+        )
+    }
+}
+
+@Suite("Meeting fallback classification")
+struct MeetingFallbackClassificationTests {
+    @Test("classifies every live fallback while retaining summary compatibility")
+    func classifiesFallbackReasons() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let base = MeetingSessionResult(
+            title: "Meeting",
+            originalTitle: "Meeting",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            durationSeconds: 60,
+            rawTranscript: "Transcript",
+            formattedNotes: "Notes",
+            retainedRecordingURL: nil,
+            retainedRecordingError: nil,
+            systemRecordingURL: nil,
+            templateSnapshot: MeetingTemplates.auto.snapshot
+        )
+        #expect(!base.usedFallback)
+
+        var legacySummaryFallback = base
+        legacySummaryFallback.usedSummaryFallback = true
+        #expect(legacySummaryFallback.usedFallback)
+
+        var titleFallback = base
+        titleFallback.fallbackReasons = [.titleGeneration]
+        #expect(titleFallback.usedFallback)
+    }
 }
 
 @Suite("Per-dictation cleanup policy")

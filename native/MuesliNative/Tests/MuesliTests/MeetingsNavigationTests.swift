@@ -298,7 +298,7 @@ struct MeetingsNavigationTests {
         #expect(controller.appState.meetingsNavigationState == .browser)
     }
 
-    @Test("deleteMeeting clears selected detail state and removes saved recording")
+    @Test("deleteMeeting clears selected detail state without following an unsafe legacy path")
     func deleteMeetingClearsSelection() throws {
         let store = try makeStore()
         let savedRecordingURL = FileManager.default.temporaryDirectory
@@ -330,7 +330,10 @@ struct MeetingsNavigationTests {
         #expect(controller.appState.selectedMeetingID == nil)
         #expect(controller.appState.selectedMeetingRecord == nil)
         #expect(controller.appState.meetingsNavigationState == .browser)
-        #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path) == false)
+        // Legacy files outside the app-owned meeting-recordings root are
+        // quarantined, never followed or removed by history deletion.
+        #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path))
+        try? FileManager.default.removeItem(at: savedRecordingURL)
     }
 
     @Test("deleteMeeting removes saved recording waveform cache")
@@ -419,7 +422,7 @@ struct MeetingsNavigationTests {
         controller.clearMeetingHistory()
 
         #expect(try store.recentMeetings(limit: 10).isEmpty)
-        #expect(FileManager.default.fileExists(atPath: recordingsDirectory.path) == false)
+        #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path) == false)
         #expect(FileManager.default.fileExists(atPath: cacheURL.path) == false)
         #expect(FileManager.default.fileExists(atPath: strandedCacheURL.path) == false)
     }
@@ -452,12 +455,12 @@ struct MeetingsNavigationTests {
         controller.clearMeetingHistory()
 
         #expect(try store.recentMeetings(limit: 10).isEmpty)
-        #expect(FileManager.default.fileExists(atPath: recordingsDirectory.path) == false)
+        #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path) == false)
         #expect(FileManager.default.fileExists(atPath: cacheURL.path))
     }
 
-    @Test("deleteMeeting keeps shared saved recording and waveform cache")
-    func deleteMeetingKeepsSharedSavedRecordingAndWaveformCache() throws {
+    @Test("deleteMeeting keeps a shared recording while removing the obsolete legacy waveform cache")
+    func deleteMeetingKeepsSharedSavedRecordingAndRemovesLegacyWaveformCache() throws {
         let store = try makeStore()
         let supportDirectory = makeSupportDirectory()
         defer { try? FileManager.default.removeItem(at: supportDirectory) }
@@ -479,7 +482,49 @@ struct MeetingsNavigationTests {
         #expect(try store.meeting(id: firstID) == nil)
         #expect(try store.meeting(id: secondID) != nil)
         #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path))
-        #expect(FileManager.default.fileExists(atPath: cacheURL.path))
+        #expect(FileManager.default.fileExists(atPath: cacheURL.path) == false)
+    }
+
+    @Test("startup migration preserves every owner of a shared legacy recording")
+    func startupMigrationPreservesSharedLegacyRecordingOwners() throws {
+        let supportDirectory = makeSupportDirectory()
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+        try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
+        let database = supportDirectory.appendingPathComponent("muesli.sqlite")
+        let historyStore = DictationStore(databaseURL: database)
+        try historyStore.migrateIfNeeded()
+        let legacyRoot = supportDirectory.appendingPathComponent("meeting-recordings", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyRoot, withIntermediateDirectories: true)
+        let legacyURL = legacyRoot.appendingPathComponent("shared.wav")
+        try Data("shared-recording".utf8).write(to: legacyURL)
+        let firstID = try insertMeeting(in: historyStore, title: "Shared legacy A", savedRecordingPath: legacyURL.path)
+        let secondID = try insertMeeting(in: historyStore, title: "Shared legacy B", savedRecordingPath: legacyURL.path)
+        let artifactStore = try RecordingArtifactStore(
+            databaseURL: database,
+            recordingsRootURL: supportDirectory.appendingPathComponent("recordings", isDirectory: true),
+            legacyMeetingRootURL: legacyRoot
+        )
+
+        try MuesliController.migrateLegacyMeetingRecordings(
+            historyStore: historyStore,
+            artifactStore: artifactStore
+        )
+
+        let loadedFirstReference = try artifactStore.recordingForMeeting(id: firstID)
+        let loadedSecondReference = try artifactStore.recordingForMeeting(id: secondID)
+        let firstReference = try #require(loadedFirstReference)
+        let secondReference = try #require(loadedSecondReference)
+        let artifactID = try #require(firstReference.artifactID)
+        #expect(secondReference.artifactID == artifactID)
+        #expect(!FileManager.default.fileExists(atPath: legacyURL.path))
+        let retainedURL = try artifactStore.playableURL(id: artifactID)
+        #expect(FileManager.default.fileExists(atPath: retainedURL.path))
+
+        #expect(try historyStore.deleteMeeting(id: firstID) == nil)
+        #expect(FileManager.default.fileExists(atPath: retainedURL.path))
+        #expect(try historyStore.deleteMeeting(id: secondID) == artifactID)
+        try artifactStore.finishDurableDeletion(id: artifactID)
+        #expect(!FileManager.default.fileExists(atPath: retainedURL.path))
     }
 
     @Test("orphan sweep removes waveform cache when source recording is gone")
@@ -784,7 +829,8 @@ struct MeetingsNavigationTests {
             retainedRecordingURL: invalidRecordingURL,
             retainedRecordingError: nil,
             systemRecordingURL: nil,
-            templateSnapshot: MeetingTemplates.auto.snapshot
+            templateSnapshot: MeetingTemplates.auto.snapshot,
+            recordingSavePolicy: .always
         )
 
         let preparedRecordingSave = await controller.prepareMeetingRecordingSave(for: result)
@@ -858,6 +904,11 @@ struct MeetingsNavigationTests {
             dictationStore: store,
             configStore: ConfigStore(supportDirectory: supportDirectory)
         )
+        let artifactStore = try RecordingArtifactStore(
+            databaseURL: store.resolvedDatabaseURL,
+            recordingsRootURL: supportDirectory.appendingPathComponent("recordings", isDirectory: true),
+            legacyMeetingRootURL: supportDirectory.appendingPathComponent("meeting-recordings", isDirectory: true)
+        )
         controller.updateConfig {
             $0.meetingRecordingSavePolicy = .never
             $0.meetingRecordingFileFormat = MeetingRecordingFileFormat.wav.rawValue
@@ -893,9 +944,12 @@ struct MeetingsNavigationTests {
         )
 
         let storedMeeting = try #require(try store.meeting(id: persistenceResult.meetingID))
-        let savedRecordingPath = try #require(storedMeeting.savedRecordingPath)
-        #expect(FileManager.default.fileExists(atPath: savedRecordingPath))
-        #expect(savedRecordingPath.hasPrefix(supportDirectory.path + "/"))
+        #expect(storedMeeting.savedRecordingPath == nil)
+        let reference = try #require(try artifactStore.recordingForMeeting(id: storedMeeting.id))
+        let artifactID = try #require(reference.artifactID)
+        let savedRecordingURL = try artifactStore.playableURL(id: artifactID)
+        #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path))
+        #expect(savedRecordingURL.path.hasPrefix(supportDirectory.path + "/recordings/"))
         #expect(FileManager.default.fileExists(atPath: retainedRecordingURL.path) == false)
     }
 
@@ -925,7 +979,8 @@ struct MeetingsNavigationTests {
             retainedRecordingURL: nil,
             retainedRecordingError: CocoaError(.fileWriteUnknown),
             systemRecordingURL: nil,
-            templateSnapshot: MeetingTemplates.auto.snapshot
+            templateSnapshot: MeetingTemplates.auto.snapshot,
+            recordingSavePolicy: .prompt
         )
 
         let preparedRecordingSave = await controller.prepareMeetingRecordingSave(for: result)

@@ -82,9 +82,54 @@ struct MeetingTextInteractionTests {
         window.orderOut(nil)
     }
 
+    @Test("live transcript renders every committed message body")
+    @MainActor
+    func liveTranscriptRendersEveryCommittedMessageBody() {
+        let messages = TranscriptChatMessage.messages(from: """
+        [20:02:09] You: That's okay, baby.
+        [20:02:13] You: I do.
+        [20:02:14] You: It's okay.
+        """)
+        let host = NSHostingView(rootView: LiveTranscriptFeedView(
+            messages: messages,
+            partialYou: "",
+            partialOthers: "",
+            horizontalPadding: 16,
+            topPadding: 8,
+            bottomPadding: 8,
+            surfacePresentation: .floatingPanel
+        ))
+        host.frame = NSRect(x: 0, y: 0, width: 360, height: 320)
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        host.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = NSColor(calibratedRed: 0.08, green: 0.08, blue: 0.12, alpha: 1)
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+
+        let fields = Self.selectableFields(in: host)
+        #expect(fields.map(\.stringValue) == [
+            "You  20:02:09\nThat's okay, baby.",
+            "You  20:02:13\nI do.",
+            "You  20:02:14\nIt's okay.",
+        ])
+        #expect(fields.allSatisfy { $0.frame.height >= $0.fittingSize.height })
+        window.orderOut(nil)
+    }
+
     private static func firstSelectableField(in view: NSView) -> NSTextField? {
         if let field = view as? NSTextField, field.isSelectable { return field }
         return view.subviews.lazy.compactMap(firstSelectableField(in:)).first
+    }
+
+    private static func selectableFields(in view: NSView) -> [NSTextField] {
+        let current = (view as? NSTextField).map { [$0] } ?? []
+        return current + view.subviews.flatMap(selectableFields(in:))
     }
 
 }

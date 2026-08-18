@@ -1,5 +1,6 @@
 import AVFoundation
 import CryptoKit
+import Observation
 import SwiftUI
 
 private struct RecordingWaveformData: Equatable {
@@ -284,6 +285,15 @@ private actor RecordingWaveformCache {
         return waveform
     }
 
+    func invalidate(for url: URL) throws {
+        let cacheURL = try RecordingWaveformCacheFiles.cacheURL(
+            for: url,
+            fileManager: fileManager,
+            createDirectory: false
+        )
+        memory[cacheURL.path] = nil
+    }
+
     private func persist(_ waveform: RecordingWaveformData, to cacheURL: URL) {
         do {
             try waveform.encodedCacheData().write(to: cacheURL, options: .atomic)
@@ -313,14 +323,38 @@ private extension Data {
     }
 }
 
-struct MeetingRecordingPlayerView: View {
-    let recordingPath: String
+@MainActor
+@Observable
+private final class RecordingArtifactPlayerSession {
+    var waveform: RecordingWaveformData?
+    var player: AVAudioPlayer?
+    var loadedURL: URL?
+    var isPlaying = false
+    var currentTime: TimeInterval = 0
+    var loadFailed = false
 
-    @State private var waveform: RecordingWaveformData?
-    @State private var player: AVAudioPlayer?
-    @State private var isPlaying = false
-    @State private var currentTime: TimeInterval = 0
-    @State private var loadFailed = false
+    func reset() {
+        player?.stop()
+        player = nil
+        waveform = nil
+        loadedURL = nil
+        isPlaying = false
+        currentTime = 0
+        loadFailed = false
+    }
+
+    func invalidate() {
+        reset()
+        loadFailed = true
+    }
+}
+
+struct RecordingArtifactPlayerView: View {
+    let artifactID: RecordingArtifactPlaybackID
+    var coordinator: RecordingArtifactPlaybackCoordinator = .shared
+
+    @State private var session = RecordingArtifactPlayerSession()
+    @State private var registrationToken: UUID?
 
     private let timer = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
 
@@ -329,7 +363,7 @@ struct MeetingRecordingPlayerView: View {
             Button {
                 togglePlayback()
             } label: {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                Image(systemName: session.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(MuesliTheme.textPrimary)
                     .frame(width: 34, height: 34)
@@ -341,17 +375,17 @@ struct MeetingRecordingPlayerView: View {
                     )
             }
             .buttonStyle(.plain)
-            .disabled(player == nil)
-            .help(isPlaying ? "Pause recording" : "Play recording")
+            .disabled(session.player == nil)
+            .help(session.isPlaying ? "Pause recording" : "Play recording")
 
             Group {
-                if let waveform {
+                if let waveform = session.waveform {
                     RecordingWaveformView(
                         peaks: waveform.peaks,
                         progress: progress,
                         onSeek: seek(to:)
                     )
-                } else if loadFailed {
+                } else if session.loadFailed {
                     Text("Recording unavailable")
                         .font(MuesliTheme.captionMedium())
                         .foregroundStyle(MuesliTheme.textTertiary)
@@ -369,7 +403,7 @@ struct MeetingRecordingPlayerView: View {
             }
             .frame(height: 44)
 
-            Text("\(formatTime(currentTime)) / \(formatTime(duration))")
+            Text("\(formatTime(session.currentTime)) / \(formatTime(duration))")
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .frame(minWidth: 88, alignment: .trailing)
@@ -382,79 +416,94 @@ struct MeetingRecordingPlayerView: View {
             RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
-        .task(id: recordingPath) {
+        .task(id: artifactID) {
+            registerPlayerIfNeeded()
             await loadRecording()
         }
         .onReceive(timer) { _ in
-            guard let player else { return }
-            currentTime = player.currentTime
-            if !player.isPlaying, isPlaying {
-                isPlaying = false
+            guard let player = session.player else { return }
+            session.currentTime = player.currentTime
+            if !player.isPlaying, session.isPlaying {
+                session.isPlaying = false
                 if player.currentTime >= max(player.duration - 0.1, 0) {
-                    currentTime = 0
+                    session.currentTime = 0
                     player.currentTime = 0
                 }
             }
         }
         .onDisappear {
-            player?.stop()
-            player = nil
-            isPlaying = false
+            unregisterPlayer()
+            session.reset()
         }
     }
 
     private var duration: TimeInterval {
-        waveform?.duration ?? player?.duration ?? 0
+        session.waveform?.duration ?? session.player?.duration ?? 0
     }
 
     private var progress: CGFloat {
         guard duration > 0 else { return 0 }
-        return min(max(currentTime / duration, 0), 1)
+        return min(max(session.currentTime / duration, 0), 1)
     }
 
     @MainActor
     private func loadRecording() async {
-        player?.stop()
-        player = nil
-        waveform = nil
-        loadFailed = false
-        currentTime = 0
-        isPlaying = false
-
-        let url = URL(fileURLWithPath: recordingPath)
+        session.reset()
         do {
+            let url = try await coordinator.playbackURL(for: artifactID)
             let loadedWaveform = try await Task.detached(priority: .utility) {
                 try await RecordingWaveformCache.shared.waveform(for: url)
             }.value
+            guard coordinator.availability(for: artifactID) == .available else { return }
             let loadedPlayer = try AVAudioPlayer(contentsOf: url)
             loadedPlayer.prepareToPlay()
-            waveform = loadedWaveform
-            player = loadedPlayer
+            session.waveform = loadedWaveform
+            session.player = loadedPlayer
+            session.loadedURL = url
         } catch {
-            loadFailed = true
+            session.loadFailed = true
         }
     }
 
     private func togglePlayback() {
-        guard let player else { return }
+        guard let player = session.player else { return }
         if player.isPlaying {
             player.pause()
-            isPlaying = false
+            session.isPlaying = false
         } else {
             if player.currentTime >= max(player.duration - 0.1, 0) {
                 player.currentTime = 0
             }
             player.play()
-            isPlaying = true
+            session.isPlaying = true
         }
-        currentTime = player.currentTime
+        session.currentTime = player.currentTime
     }
 
     private func seek(to progress: CGFloat) {
-        guard let player else { return }
+        guard let player = session.player else { return }
         let clamped = min(max(progress, 0), 1)
         player.currentTime = player.duration * Double(clamped)
-        currentTime = player.currentTime
+        session.currentTime = player.currentTime
+    }
+
+    private func registerPlayerIfNeeded() {
+        guard registrationToken == nil else { return }
+        registrationToken = coordinator.registerPlayer(for: artifactID) {
+            if let loadedURL = session.loadedURL {
+                try? RecordingWaveformCacheFiles.removeCachedWaveform(for: loadedURL)
+                Task {
+                    try? await RecordingWaveformCache.shared.invalidate(for: loadedURL)
+                }
+            }
+            session.invalidate()
+        }
+    }
+
+    private func unregisterPlayer() {
+        guard let registrationToken else { return }
+        coordinator.unregisterPlayer(for: artifactID, token: registrationToken)
+        self.registrationToken = nil
     }
 
     private func formatTime(_ seconds: TimeInterval) -> String {

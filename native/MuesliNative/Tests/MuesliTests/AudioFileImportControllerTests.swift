@@ -96,6 +96,42 @@ struct AudioFileImportControllerTests {
         #expect(!AudioFileImportController.isSupportedFileURL(URL(fileURLWithPath: "/tmp/test.txt")))
     }
 
+    @Test("fallback summary aggregates all import fallback reasons")
+    func fallbackSummaryAggregatesReasons() {
+        var summary = AudioFileImportController.ImportFallbackSummary()
+        #expect(!summary.usedFallback)
+        #expect(!summary.usedSummaryFallback)
+
+        summary.record(.diarizationUnavailable)
+        summary.record(.titleGeneration)
+        #expect(summary.usedFallback)
+        #expect(!summary.usedSummaryFallback)
+        #expect(summary.reasons == [.diarizationUnavailable, .titleGeneration])
+
+        summary.record(.summaryGeneration)
+        summary.record(.summaryGeneration)
+        #expect(summary.usedSummaryFallback)
+        #expect(summary.reasons.count == 3)
+    }
+
+    @Test("stage timing reports milliseconds and clamps clock rollback")
+    func stageTimingContract() {
+        let start = Date(timeIntervalSince1970: 100)
+
+        #expect(
+            AudioFileImportController.ImportStageTiming.elapsedMilliseconds(
+                since: start,
+                now: start.addingTimeInterval(1.25)
+            ) == 1_250
+        )
+        #expect(
+            AudioFileImportController.ImportStageTiming.elapsedMilliseconds(
+                since: start,
+                now: start.addingTimeInterval(-1)
+            ) == 0
+        )
+    }
+
     // MARK: - Speaker Formatting Tests
 
     @Test("formatTranscriptWithSpeakers returns raw text when no segments")

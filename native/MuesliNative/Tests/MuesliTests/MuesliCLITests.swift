@@ -101,6 +101,53 @@ struct MuesliCLITests {
         #expect(detailPayload.notesSource == "cleaned")
     }
 
+    @Test("CLI envelopes and meeting payloads exclude retained recording identities")
+    func cliJSONExcludesRecordingPathsAndIdentities() throws {
+        let sentinels = [
+            "/Users/private/RECORDING_PATH_CANARY.m4a",
+            "/Users/private/MIC_PATH_CANARY.wav",
+            "/Users/private/SYSTEM_PATH_CANARY.wav",
+            "00000000-0000-0000-0000-000000000014",
+            "/Users/private/DB_PATH_CANARY.sqlite",
+        ]
+        let meeting = MeetingRecord(
+            id: 14,
+            title: "Private recording",
+            startTime: "2026-08-14T00:00:00Z",
+            durationSeconds: 30,
+            rawTranscript: "safe transcript",
+            formattedNotes: "safe notes",
+            wordCount: 2,
+            folderID: nil,
+            micAudioPath: sentinels[1],
+            systemAudioPath: sentinels[2],
+            savedRecordingPath: sentinels[0]
+        )
+        let envelope = SuccessEnvelope(
+            command: "muesli-cli meetings get",
+            data: MeetingDetailPayload(meeting),
+            meta: MetaBody(
+                schemaVersion: 1,
+                generatedAt: "2026-08-14T00:00:00Z",
+                warnings: []
+            )
+        )
+
+        let outputs = [
+            String(decoding: try encodedJSON(envelope), as: UTF8.self),
+            String(decoding: try JSONEncoder().encode(meeting), as: UTF8.self),
+        ]
+
+        for output in outputs {
+            for sentinel in sentinels {
+                #expect(!output.contains(sentinel))
+            }
+            for forbiddenKey in ["micAudioPath", "systemAudioPath", "savedRecordingPath", "artifactID", "dbPath", "playback", "cache"] {
+                #expect(!output.contains(forbiddenKey))
+            }
+        }
+    }
+
     @Test("dictation JSON projections exclude local style provenance")
     func dictationJSONExcludesStyleProvenance() throws {
         let record = DictationRecord(
@@ -436,7 +483,7 @@ struct MuesliCLITests {
         let envelope = SuccessEnvelope(
             command: "muesli-cli transcribe",
             data: payload,
-            meta: MetaBody(schemaVersion: 1, generatedAt: "2026-07-08T00:00:00Z", dbPath: "/tmp/muesli.db", warnings: ["summary warning"])
+            meta: MetaBody(schemaVersion: 1, generatedAt: "2026-07-08T00:00:00Z", warnings: ["summary warning"])
         )
         let data = try encodedJSON(envelope)
         let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -524,9 +571,16 @@ struct MuesliCLITests {
         #expect(meeting.rawTranscript == "save this imported meeting")
         #expect(meeting.formattedNotes == "## Summary\n\n- Saved")
         #expect(meeting.source == .audioImport)
-        let savedRecordingPath = try #require(meeting.savedRecordingPath)
-        #expect(FileManager.default.fileExists(atPath: savedRecordingPath))
-        #expect(URL(fileURLWithPath: savedRecordingPath).pathExtension == fixture.sourceURL.pathExtension)
+        #expect(meeting.savedRecordingPath == nil)
+        let artifactStore = try RecordingArtifactStore(
+            databaseURL: fixture.context.databaseURL,
+            recordingsRootURL: fixture.context.supportDirectory.appendingPathComponent("recordings", isDirectory: true),
+            legacyMeetingRootURL: fixture.context.supportDirectory.appendingPathComponent("meeting-recordings", isDirectory: true)
+        )
+        let reference = try #require(try artifactStore.recordingForMeeting(id: id))
+        let artifactID = try #require(reference.artifactID)
+        let savedRecordingURL = try artifactStore.playableURL(id: artifactID)
+        #expect(savedRecordingURL.pathExtension == fixture.sourceURL.pathExtension)
         #expect(posted == 1)
     }
 

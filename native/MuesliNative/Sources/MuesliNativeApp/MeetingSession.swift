@@ -91,6 +91,147 @@ final class MeetingChunkCollector {
     }
 }
 
+/// Retains only bounded recognizer text for local diagnostics. Entries are
+/// ordered by the audio timeline rather than completion order because mic and
+/// system chunk transcription can finish concurrently.
+final class MeetingRawTranscriptAccumulator {
+    enum Source: Int, Sendable {
+        case microphone
+        case system
+    }
+
+    private struct Entry {
+        let start: TimeInterval
+        let end: TimeInterval
+        let source: Source
+        let text: String
+        let isBatchRecognizerOutput: Bool
+    }
+
+    private struct State {
+        var entries: [Entry] = []
+        var remainingBytes = SessionTraceRetentionPolicy.default.maximumArtifactBytes
+    }
+
+    private let lock = OSAllocatedUnfairLock(initialState: State())
+
+    func appendBatch(
+        _ result: SpeechTranscriptionResult,
+        start: TimeInterval,
+        end: TimeInterval,
+        source: Source
+    ) {
+        append(
+            result.text,
+            start: start,
+            end: max(end, start + 0.1),
+            source: source,
+            isBatchRecognizerOutput: true
+        )
+    }
+
+    func appendStreamingSegmentsOutsideBatchEvidence(
+        _ segments: [SpeechSegment],
+        source: Source
+    ) {
+        lock.withLock { state in
+            for segment in segments {
+                let segmentEnd = max(segment.end, segment.start + 0.1)
+                let isCoveredByBatch = state.entries.contains { entry in
+                    entry.source == source
+                        && entry.isBatchRecognizerOutput
+                        && entry.start < segmentEnd
+                        && entry.end > segment.start
+                }
+                guard !isCoveredByBatch else { continue }
+                Self.append(
+                    segment.text,
+                    start: segment.start,
+                    end: segmentEnd,
+                    source: source,
+                    isBatchRecognizerOutput: false,
+                    state: &state
+                )
+            }
+        }
+    }
+
+    func transcript() -> String {
+        lock.withLock { state in
+            state.entries
+                .sorted { lhs, rhs in
+                    if lhs.start != rhs.start { return lhs.start < rhs.start }
+                    if lhs.source.rawValue != rhs.source.rawValue {
+                        return lhs.source.rawValue < rhs.source.rawValue
+                    }
+                    return lhs.text < rhs.text
+                }
+                .map(\.text)
+                .joined(separator: "\n")
+        }
+    }
+
+    private func append(
+        _ text: String,
+        start: TimeInterval,
+        end: TimeInterval,
+        source: Source,
+        isBatchRecognizerOutput: Bool
+    ) {
+        lock.withLock { state in
+            Self.append(
+                text,
+                start: start,
+                end: end,
+                source: source,
+                isBatchRecognizerOutput: isBatchRecognizerOutput,
+                state: &state
+            )
+        }
+    }
+
+    private static func append(
+        _ text: String,
+        start: TimeInterval,
+        end: TimeInterval,
+        source: Source,
+        isBatchRecognizerOutput: Bool,
+        state: inout State
+    ) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        let separatorBytes = state.entries.isEmpty ? 0 : 1
+        guard state.remainingBytes > separatorBytes else { return }
+        let bounded = utf8Prefix(
+            text,
+            maximumBytes: state.remainingBytes - separatorBytes
+        )
+        guard !bounded.isEmpty else { return }
+
+        state.entries.append(Entry(
+            start: start,
+            end: end,
+            source: source,
+            text: bounded,
+            isBatchRecognizerOutput: isBatchRecognizerOutput
+        ))
+        state.remainingBytes -= separatorBytes + bounded.utf8.count
+    }
+
+    private static func utf8Prefix(_ value: String, maximumBytes: Int) -> String {
+        guard maximumBytes > 0 else { return "" }
+        var byteCount = 0
+        var end = value.startIndex
+        for character in value {
+            let characterBytes = String(character).utf8.count
+            guard byteCount + characterBytes <= maximumBytes else { break }
+            byteCount += characterBytes
+            end = value.index(after: end)
+        }
+        return String(value[..<end])
+    }
+}
+
 enum MeetingStreamingTranscriptResolver {
     static func resolve(
         durableSegments: [SpeechSegment],
@@ -109,6 +250,13 @@ enum MeetingStreamingTranscriptResolver {
     }
 }
 
+enum MeetingSessionFallbackReason: String, Hashable, Sendable {
+    case systemSelectiveRepair = "system_selective_repair"
+    case systemFullTranscription = "system_full_transcription"
+    case titleGeneration = "title_generation"
+    case summaryGeneration = "summary_generation"
+}
+
 struct MeetingSessionResult {
     let title: String
     let originalTitle: String
@@ -122,6 +270,11 @@ struct MeetingSessionResult {
     let retainedRecordingError: Error?
     let systemRecordingURL: URL?
     let templateSnapshot: MeetingTemplateSnapshot
+    /// Recording retention is frozen with the rest of the meeting capture
+    /// configuration. Finalization must not re-read a setting that may have
+    /// changed while the meeting was running.
+    var recordingSavePolicy: MeetingRecordingSavePolicy = .never
+    var recordingFileFormat: MeetingRecordingFileFormat = .wav
     /// Screen/OCR context this summary was built from.
     ///
     /// Carried out of the session rather than discarded, so a regeneration after
@@ -131,6 +284,10 @@ struct MeetingSessionResult {
     var visualContext: String = ""
     /// Predecessor notes this summary was built from, for the same reason.
     var previousMeetingNotes: String = ""
+    var usedSummaryFallback = false
+    var fallbackReasons: Set<MeetingSessionFallbackReason> = []
+
+    var usedFallback: Bool { usedSummaryFallback || !fallbackReasons.isEmpty }
 }
 
 extension MeetingSessionResult {
@@ -158,8 +315,12 @@ extension MeetingSessionResult {
             retainedRecordingError: retainedRecordingError,
             systemRecordingURL: systemRecordingURL,
             templateSnapshot: templateSnapshot,
+            recordingSavePolicy: recordingSavePolicy,
+            recordingFileFormat: recordingFileFormat,
             visualContext: visualContext,
-            previousMeetingNotes: previousMeetingNotes
+            previousMeetingNotes: previousMeetingNotes,
+            usedSummaryFallback: usedSummaryFallback,
+            fallbackReasons: fallbackReasons
         )
     }
 }
@@ -304,6 +465,7 @@ final class MeetingSession {
     private var systemVadController: StreamingVadController?
     private let micChunkCollector = MeetingChunkCollector()
     private let systemChunkCollector = MeetingChunkCollector()
+    private let rawTranscriptAccumulator = MeetingRawTranscriptAccumulator()
     private let micChunkHealthTracker = MeetingTranscriptChunkHealthTracker()
     private let systemChunkHealthTracker = MeetingTranscriptChunkHealthTracker()
     private let micHealthTracker = MeetingMicHealthTracker()
@@ -352,6 +514,7 @@ final class MeetingSession {
     private let partialSessionsStorage = OSAllocatedUnfairLock(initialState: PartialSessionsStorage())
     private let screenContextCollector = MeetingScreenContextCollector()
     private var diagnostics: MeetingSessionDiagnostics?
+    private let sessionTrace: SessionRunTrace?
 
     /// Current mic power level for waveform visualization.
     func currentPower() -> Float {
@@ -379,7 +542,8 @@ final class MeetingSession {
         config: AppConfig,
         templateSnapshot: MeetingTemplateSnapshot,
         transcriptionCoordinator: TranscriptionCoordinator,
-        meetingMicRecorder: MeetingMicRecording = RouteAwareMeetingMicRecorder()
+        meetingMicRecorder: MeetingMicRecording = RouteAwareMeetingMicRecorder(),
+        sessionTrace: SessionRunTrace? = nil
     ) {
         self.title = title
         self.calendarEventID = calendarEventID
@@ -392,6 +556,7 @@ final class MeetingSession {
         self.templateSnapshot = templateSnapshot
         self.transcriptionCoordinator = transcriptionCoordinator
         self.meetingMicRecorder = meetingMicRecorder
+        self.sessionTrace = sessionTrace
         self.micSessionRouteState = MeetingMicSessionRouteState(
             configuredDeviceID: meetingMicRecorder.preferredInputDeviceID
         )
@@ -447,7 +612,8 @@ final class MeetingSession {
     func start() async throws {
         let vadManager = await transcriptionCoordinator.getVadManager()
         let requestedStart = Date()
-        diagnostics = MeetingSessionDiagnostics(title: title, startedAt: requestedStart)
+        await sessionTrace?.recordStageStarted("meeting_capture")
+        diagnostics = MeetingSessionDiagnostics(startedAt: requestedStart)
 
         // AEC must be loaded before audio pipeline starts (streaming mode)
         await neuralAec.preload()
@@ -472,6 +638,10 @@ final class MeetingSession {
             try await systemAudioRecorder.start()
             try meetingMicRecorder.start()
         } catch {
+            await sessionTrace?.recordStageFailed(
+                "meeting_capture",
+                elapsedMilliseconds: max(Int(Date().timeIntervalSince(requestedStart) * 1_000), 0)
+            )
             vadController?.stop()
             vadController = nil
             systemVadController?.stop()
@@ -511,6 +681,10 @@ final class MeetingSession {
         } else {
             fputs("[meeting] VAD not available, using max-duration fallback only\n", stderr)
         }
+        await sessionTrace?.recordStageCompleted(
+            "meeting_capture",
+            elapsedMilliseconds: max(Int(Date().timeIntervalSince(requestedStart) * 1_000), 0)
+        )
         if config.enableScreenContext && CGPreflightScreenCaptureAccess() {
             // OCR screenshots are safe when using CoreAudio tap (no SCStream conflict)
             await screenContextCollector.startPeriodicCapture(useOCR: config.useCoreAudioTap)
@@ -752,9 +926,13 @@ final class MeetingSession {
 
     func stop() async throws -> MeetingSessionResult {
         onProgress?(.transcribingAudio)
+        let finalizationStartedAt = Date()
+        await sessionTrace?.recordStageStarted("meeting_finalization")
+        await sessionTrace?.recordStageStarted("transcribing_audio")
         let endTime = Date()
         var micSegments: [SpeechSegment] = []
         var systemSegments: [SpeechSegment] = []
+        var fallbackReasons: Set<MeetingSessionFallbackReason> = []
         let usesUnifiedNemotronTranscript = usesLiveNemotronTranscriptAsFinal()
 
         // Stop VAD controller
@@ -849,7 +1027,7 @@ final class MeetingSession {
             if !usesUnifiedNemotronTranscript || systemSegments.isEmpty {
                 fputs("[meeting] transcribing final system chunk (offset=\(String(format: "%.0f", chunkOffset))s)\n", stderr)
                 do {
-                    let result = try await transcriptionCoordinator.transcribeMeetingChunk(
+                    let evidence = try await transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                         at: lastSystemChunkURL,
                         backend: currentBackend(),
                         cohereLanguage: config.resolvedCohereLanguage,
@@ -857,8 +1035,14 @@ final class MeetingSession {
                         whisperLanguage: config.resolvedWhisperLanguage,
                         customWords: config.customWords
                     )
+                    rawTranscriptAccumulator.appendBatch(
+                        evidence.raw,
+                        start: chunkOffset,
+                        end: chunkOffset + max(chunkDuration, 0.1),
+                        source: .system
+                    )
                     let normalizedSegments = normalizeSystemTranscription(
-                        result: result,
+                        result: evidence.cleaned,
                         startTime: chunkOffset,
                         endTime: chunkOffset + max(chunkDuration, 0.1)
                     )
@@ -915,6 +1099,7 @@ final class MeetingSession {
             case .none:
                 break
             case .append(let repairedSystemSegments):
+                fallbackReasons.insert(.systemSelectiveRepair)
                 systemSegments.append(contentsOf: repairedSystemSegments)
                 systemSegments.sort { lhs, rhs in
                     if lhs.start == rhs.start {
@@ -923,6 +1108,7 @@ final class MeetingSession {
                     return lhs.start < rhs.start
                 }
             case .replace(let fallbackSystemSegments):
+                fallbackReasons.insert(.systemFullTranscription)
                 systemSegments = fallbackSystemSegments.sorted { lhs, rhs in
                     if lhs.start == rhs.start {
                         return lhs.text < rhs.text
@@ -931,6 +1117,15 @@ final class MeetingSession {
                 }
             }
         }
+
+        rawTranscriptAccumulator.appendStreamingSegmentsOutsideBatchEvidence(
+            micSegments,
+            source: .microphone
+        )
+        rawTranscriptAccumulator.appendStreamingSegmentsOutsideBatchEvidence(
+            systemSegments,
+            source: .system
+        )
 
         fputs("[meeting] \(micSegments.count) mic chunks transcribed during meeting\n", stderr)
         fputs("[meeting] \(systemSegments.count) system chunks transcribed during meeting\n", stderr)
@@ -948,10 +1143,37 @@ final class MeetingSession {
             diarizationSegments: protectedTranscriptInputs.diarizationSegments,
             meetingStart: meetingStart
         )
+        let recognizerTranscript = rawTranscriptAccumulator.transcript()
+        let transcriptionElapsedMilliseconds = max(
+            Int(Date().timeIntervalSince(finalizationStartedAt) * 1_000),
+            0
+        )
+        for reason in fallbackReasons where
+            reason == .systemSelectiveRepair || reason == .systemFullTranscription {
+            await sessionTrace?.recordFallbackStarted(
+                "transcribing_audio",
+                metadata: ["reason": reason.rawValue]
+            )
+        }
+        await sessionTrace?.recordStageCompleted(
+            "transcribing_audio",
+            elapsedMilliseconds: transcriptionElapsedMilliseconds,
+            metadata: ["output_characters": String(rawTranscript.count)]
+        )
+        await sessionTrace?.storeArtifact(recognizerTranscript, kind: .rawASR)
+        await sessionTrace?.storeArtifact(rawTranscript, kind: .cleanupResult)
+        await sessionTrace?.storeArtifact(
+            DictationDictionaryTrace.emptyContent,
+            kind: .dictionaryChanges
+        )
+        await sessionTrace?.storeArtifact(rawTranscript, kind: .finalOutput)
 
         let titleManualNotes = await manualNotesProvider?()
         let generatedTitle: String
+        var usedTitleFallback = false
         onProgress?(.generatingTitle)
+        let titleStartedAt = Date()
+        await sessionTrace?.recordStageStarted("title_generation")
         if let liveTitle = await userEditedLiveTitle() {
             generatedTitle = liveTitle
         } else if let calendarTitle = Self.calendarTitleCandidate(
@@ -969,14 +1191,34 @@ final class MeetingSession {
             fputs("[meeting] auto-generated title: \(generatedTitle)\n", stderr)
         } else {
             generatedTitle = title
+            fallbackReasons.insert(.titleGeneration)
+            usedTitleFallback = true
         }
+        let titleElapsedMilliseconds = max(
+            Int(Date().timeIntervalSince(titleStartedAt) * 1_000),
+            0
+        )
+        if usedTitleFallback {
+            await sessionTrace?.recordFallbackStarted(
+                "title_generation",
+                metadata: ["reason": MeetingSessionFallbackReason.titleGeneration.rawValue]
+            )
+        }
+        await sessionTrace?.recordStageCompleted(
+            "title_generation",
+            elapsedMilliseconds: titleElapsedMilliseconds,
+            metadata: usedTitleFallback ? ["outcome": "fallback"] : [:]
+        )
 
         let visualContext = await screenContextCollector.stopAndDrain()
         Self.logger.info("visual context drained chars=\(visualContext.count) includedInPrompt=\(!visualContext.isEmpty) useOCR=\(self.config.useCoreAudioTap)")
         fputs("[meeting] visual context drained chars=\(visualContext.count) includedInPrompt=\(!visualContext.isEmpty) useOCR=\(config.useCoreAudioTap)\n", stderr)
         onProgress?(.summarizingNotes)
+        let summaryStartedAt = Date()
+        await sessionTrace?.recordStageStarted("summary_generation")
         let manualNotes = await manualNotesProvider?()
         let formattedNotes: String
+        let usedSummaryFallback: Bool
         do {
             formattedNotes = try await MeetingSummaryClient.summarize(
                 transcript: rawTranscript,
@@ -988,7 +1230,10 @@ final class MeetingSession {
                 visualContext: visualContext.isEmpty ? nil : visualContext,
                 previousMeetingNotes: previousMeetingNotes
             )
+            usedSummaryFallback = false
         } catch {
+            usedSummaryFallback = true
+            fallbackReasons.insert(.summaryGeneration)
             fputs("[meeting] summary generation failed: \(error.localizedDescription)\n", stderr)
             formattedNotes = MeetingSummaryClient.summaryFailureNotes(
                 transcript: rawTranscript,
@@ -997,14 +1242,30 @@ final class MeetingSession {
                 manualNotes: manualNotes
             )
         }
+        let summaryElapsedMilliseconds = max(
+            Int(Date().timeIntervalSince(summaryStartedAt) * 1_000),
+            0
+        )
+        if usedSummaryFallback {
+            await sessionTrace?.recordFallbackStarted(
+                "summary_generation",
+                metadata: ["reason": MeetingSessionFallbackReason.summaryGeneration.rawValue]
+            )
+        }
+        await sessionTrace?.recordStageCompleted(
+            "summary_generation",
+            elapsedMilliseconds: summaryElapsedMilliseconds,
+            metadata: usedSummaryFallback ? ["outcome": "fallback"] : [:]
+        )
+        await sessionTrace?.storeArtifact(visualContext, kind: .contextSources)
+        await sessionTrace?.recordStageCompleted(
+            "meeting_finalization",
+            elapsedMilliseconds: max(Int(Date().timeIntervalSince(finalizationStartedAt) * 1_000), 0)
+        )
 
         diagnostics?.writeFinalReport(
-            title: generatedTitle,
             startedAt: meetingStart,
             endedAt: endTime,
-            rawTranscript: rawTranscript,
-            rawMicURL: rawStreamingMicURL,
-            systemAudioURL: systemAudioURL,
             systemCapture: (systemAudioRecorder as? SystemAudioDiagnosticsProviding)?.diagnosticsSnapshot,
             micRecorder: meetingMicRecorder.diagnosticsSnapshot(),
             micHealth: micHealthTracker.snapshot(),
@@ -1028,8 +1289,12 @@ final class MeetingSession {
             retainedRecordingError: retainedRecordingWriterError,
             systemRecordingURL: systemAudioURL,
             templateSnapshot: templateSnapshot,
+            recordingSavePolicy: config.meetingRecordingSavePolicy,
+            recordingFileFormat: config.resolvedMeetingRecordingFileFormat,
             visualContext: visualContext,
-            previousMeetingNotes: previousMeetingNotes ?? ""
+            previousMeetingNotes: previousMeetingNotes ?? "",
+            usedSummaryFallback: usedSummaryFallback,
+            fallbackReasons: fallbackReasons
         )
     }
 
@@ -1149,7 +1414,7 @@ final class MeetingSession {
                     return []
                 }
                 let backend = self.currentBackend()
-                let result = try await self.transcriptionCoordinator.transcribeMeetingChunk(
+                let evidence = try await self.transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                     at: chunkURL,
                     backend: backend,
                     cohereLanguage: config.resolvedCohereLanguage,
@@ -1157,6 +1422,13 @@ final class MeetingSession {
                     whisperLanguage: config.resolvedWhisperLanguage,
                     customWords: config.customWords
                 )
+                self.rawTranscriptAccumulator.appendBatch(
+                    evidence.raw,
+                    start: chunkOffset,
+                    end: chunkOffset + max(chunkDuration, 0.1),
+                    source: .system
+                )
+                let result = evidence.cleaned
                 if !result.text.isEmpty {
                     fputs("[meeting] system chunk transcribed: \"\(String(result.text.prefix(60)))...\"\n", stderr)
                     let normalizedSegments = self.normalizeSystemTranscription(
@@ -1508,7 +1780,7 @@ final class MeetingSession {
     ) async -> [SpeechSegment]? {
         fputs("\(logPrefix) (offset=\(String(format: "%.0f", chunkOffset))s, source=raw)\n", stderr)
         do {
-            let result = try await transcriptionCoordinator.transcribeMeetingChunk(
+            let evidence = try await transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                 at: url,
                 backend: currentBackend(),
                 cohereLanguage: config.resolvedCohereLanguage,
@@ -1516,6 +1788,13 @@ final class MeetingSession {
                 whisperLanguage: config.resolvedWhisperLanguage,
                 customWords: config.customWords
             )
+            rawTranscriptAccumulator.appendBatch(
+                evidence.raw,
+                start: chunkOffset,
+                end: chunkOffset + max(chunkDuration, 0.1),
+                source: .microphone
+            )
+            let result = evidence.cleaned
             if !result.text.isEmpty {
                 fputs("[meeting] mic chunk transcribed (raw): \"\(String(result.text.prefix(60)))...\"\n", stderr)
                 let normalizedSegments = MicTurnNormalizer.normalize(
@@ -1617,7 +1896,7 @@ final class MeetingSession {
                     )
                     defer { try? FileManager.default.removeItem(at: segmentURL) }
 
-                    let result = try await transcriptionCoordinator.transcribeMeeting(
+                    let evidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
                         at: segmentURL,
                         backend: currentBackend(),
                         cohereLanguage: config.resolvedCohereLanguage,
@@ -1625,8 +1904,14 @@ final class MeetingSession {
                         whisperLanguage: config.resolvedWhisperLanguage,
                         customWords: config.customWords
                     )
+                    rawTranscriptAccumulator.appendBatch(
+                        evidence.raw,
+                        start: speechSegment.startTime,
+                        end: speechSegment.endTime,
+                        source: .system
+                    )
                     repairedSegments.append(contentsOf: normalizeSystemTranscription(
-                        result: result,
+                        result: evidence.cleaned,
                         startTime: speechSegment.startTime,
                         endTime: speechSegment.endTime
                     ))
@@ -1651,7 +1936,7 @@ final class MeetingSession {
     ) async -> [SpeechSegment] {
         fputs("[meeting] no system chunks survived, falling back to full-session system transcription\n", stderr)
         do {
-            let result = try await transcriptionCoordinator.transcribeMeeting(
+            let evidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
                 at: systemAudioURL,
                 backend: currentBackend(),
                 cohereLanguage: config.resolvedCohereLanguage,
@@ -1659,8 +1944,14 @@ final class MeetingSession {
                 whisperLanguage: config.resolvedWhisperLanguage,
                 customWords: config.customWords
             )
+            rawTranscriptAccumulator.appendBatch(
+                evidence.raw,
+                start: 0,
+                end: meetingDuration,
+                source: .system
+            )
             return normalizeSystemTranscription(
-                result: result,
+                result: evidence.cleaned,
                 startTime: 0,
                 endTime: meetingDuration
             )

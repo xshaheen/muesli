@@ -82,6 +82,7 @@ struct SettingsView: View {
     @State private var audioInputDevices: [AudioInputDeviceInfo] = []
     @State private var permissionPollTimer: Timer?
     @State private var isDictationStyleRulesPresented = false
+    @State private var isSessionDiagnosticsPresented = false
     @State private var dictationStyleSettingsError: String?
     @State private var micGranted = false
     @State private var accessibilityGranted = false
@@ -379,6 +380,12 @@ struct SettingsView: View {
                     onClose: { isDictationStyleRulesPresented = false }
                 )
             }
+            .sheet(isPresented: $isSessionDiagnosticsPresented) {
+                SessionDiagnosticsView(
+                    service: controller.localDiagnosticsService,
+                    onClose: { isSessionDiagnosticsPresented = false }
+                )
+            }
         }
     }
 
@@ -568,6 +575,15 @@ struct SettingsView: View {
                     }
                     .disabled(controller.isMeetingRecording())
                     .help("Stop the current meeting recording before clearing meeting history.")
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow(
+                    "Session diagnostics",
+                    description: "Inspect, export, or clear local-only, short-retention transcription traces."
+                ) {
+                    actionButton("Open Diagnostics…") {
+                        isSessionDiagnosticsPresented = true
+                    }
                 }
             }
         }
@@ -1350,6 +1366,16 @@ struct SettingsView: View {
                         }
                     )
                     .frame(height: 24)
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Save dictation recording") {
+                    settingsMenu(
+                        selection: dictationRecordingSaveLabel(for: appState.config.dictationRecordingSavePolicy),
+                        options: DictationRecordingSavePolicy.allCases.map(dictationRecordingSaveLabel(for:))
+                    ) { label in
+                        guard let policy = dictationRecordingSavePolicy(for: label) else { return }
+                        controller.updateConfig { $0.dictationRecordingSavePolicy = policy }
+                    }
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("AI transcript cleanup") {
@@ -3145,6 +3171,27 @@ struct SettingsView: View {
         case .always:
             return "Always"
         }
+    }
+
+    private func dictationRecordingSaveLabel(for policy: DictationRecordingSavePolicy) -> String {
+        switch policy {
+        case .never:
+            return "Never"
+        case .prompt:
+            return "Ask every time"
+        case .always:
+            return "Always"
+        }
+    }
+
+    private func dictationRecordingSavePolicy(for label: String) -> DictationRecordingSavePolicy? {
+        let policy = DictationRecordingSavePolicy.allCases.first {
+            dictationRecordingSaveLabel(for: $0) == label
+        }
+        if policy == nil {
+            assertionFailure("Unexpected dictation recording save label: \(label)")
+        }
+        return policy
     }
 
     private func recordingSavePolicy(for label: String) -> MeetingRecordingSavePolicy? {
