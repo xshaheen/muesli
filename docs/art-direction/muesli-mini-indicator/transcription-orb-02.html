@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muesli Mini Indicator — Transcription Orb</title>
+  <style>
+    :root { color-scheme:dark; --bg:#0b0b0a; --panel:#171716; --line:rgba(255,255,255,.1); --ink:#f3f2ef; --muted:#97968f; --orange:#ff7043; --amber:#ffb04d; --green:#62d691; }
+    * { box-sizing:border-box; }
+    html,body { margin:0; min-height:100%; background:var(--bg); color:var(--ink); }
+    body { font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif; background:radial-gradient(800px 520px at 86% 0,rgba(255,112,67,.13),transparent 60%),linear-gradient(#0b0b0a,#11110f); }
+    main { width:min(1240px,calc(100% - 64px)); margin:auto; padding:58px 0 80px; }
+    .eyebrow,.label,.num { font:650 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.13em; text-transform:uppercase; }
+    .eyebrow { color:var(--orange); margin-bottom:17px; }
+    header { display:grid; grid-template-columns:1.2fr .8fr; gap:50px; align-items:end; padding-bottom:34px; border-bottom:1px solid var(--line); }
+    h1 { margin:0; font-size:clamp(46px,6vw,76px); line-height:.95; letter-spacing:-.055em; font-weight:650; }
+    header p { margin:0 0 3px; color:#b7b6b0; font-size:17px; line-height:1.55; max-width:440px; }
+    .hero { margin-top:34px; display:grid; grid-template-columns:1.25fr .75fr; gap:18px; }
+    .context,.anatomy,.strip,.compare { border:1px solid var(--line); border-radius:26px; background:linear-gradient(145deg,rgba(255,255,255,.045),rgba(255,255,255,.015)); box-shadow:inset 0 1px rgba(255,255,255,.04),0 30px 80px rgba(0,0,0,.25); }
+    .context { min-height:520px; padding:28px; position:relative; overflow:hidden; }
+    .window { position:absolute; inset:28px; border:1px solid rgba(255,255,255,.12); border-radius:18px; overflow:hidden; background:#0d0e0f; }
+    .chrome { height:44px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:7px; padding:0 14px; }
+    .chrome i { width:8px; height:8px; border-radius:50%; background:#484843; }
+    .copy { padding:72px 62px; width:78%; }
+    .copy .label { color:#686862; margin-bottom:21px; }
+    .copy h2 { margin:0 0 18px; font-size:30px; letter-spacing:-.035em; }
+    .copy p { margin:0; color:#9f9e98; font-size:18px; line-height:1.64; }
+    .caret { display:inline-block; width:2px; height:1.14em; background:#deded9; vertical-align:-.16em; margin-left:2px; animation:blink 1s step-end infinite; }
+    @keyframes blink { 50% { opacity:0; } }
+    .orb-wrap { position:absolute; left:50%; top:62%; display:flex; align-items:center; gap:16px; }
+    .orb-note { color:#72726c; font:600 10px/1.5 ui-monospace,monospace; letter-spacing:.06em; text-transform:uppercase; }
+    .orb {
+      width:38px; height:38px; border-radius:50%; position:relative; display:grid; place-items:center;
+      background:linear-gradient(145deg,rgba(39,39,37,.98),rgba(14,14,13,.99));
+      border:1px solid rgba(255,255,255,.14);
+      box-shadow:0 10px 25px rgba(0,0,0,.55),inset 0 1px rgba(255,255,255,.1),0 0 0 1px rgba(255,112,67,.06);
+    }
+    .orb::before { content:""; position:absolute; inset:-9px; border-radius:50%; background:radial-gradient(circle,rgba(255,112,67,.13),transparent 67%); animation:aura 1.8s ease-in-out infinite; z-index:-1; }
+    @keyframes aura { 50% { opacity:.45; transform:scale(.82); } }
+    .matrix { width:23px; height:23px; display:grid; grid-template-columns:repeat(7,1fr); gap:1px; transform:rotate(45deg); }
+    .matrix i { width:2px; height:2px; align-self:center; justify-self:center; border-radius:50%; background:linear-gradient(135deg,var(--amber),var(--orange)); box-shadow:0 0 4px rgba(255,112,67,.7); animation:compute 1.25s ease-in-out infinite; opacity:.2; }
+    .matrix i:nth-child(3n) { animation-delay:-.18s; } .matrix i:nth-child(4n) { animation-delay:-.46s; } .matrix i:nth-child(5n) { animation-delay:-.77s; } .matrix i:nth-child(7n) { animation-delay:-1.03s; }
+    .matrix i:nth-child(2),.matrix i:nth-child(6),.matrix i:nth-child(8),.matrix i:nth-child(14),.matrix i:nth-child(36),.matrix i:nth-child(42),.matrix i:nth-child(44),.matrix i:nth-child(48) { visibility:hidden; }
+    @keyframes compute { 0%,100% { opacity:.14; transform:scale(.62); } 38% { opacity:1; transform:scale(1.35); } 72% { opacity:.45; transform:scale(.9); } }
+    .anatomy { padding:30px; display:flex; flex-direction:column; justify-content:space-between; }
+    .anatomy h3 { margin:8px 0 0; font-size:24px; letter-spacing:-.03em; }
+    .facts { margin:32px 0; }
+    .fact { display:grid; grid-template-columns:90px 1fr; gap:13px; padding:15px 0; border-top:1px solid var(--line); }
+    .fact:last-child { border-bottom:1px solid var(--line); }
+    .fact .label { color:#666660; }
+    .fact div:last-child { color:#b8b7b1; font-size:14px; line-height:1.45; }
+    blockquote { margin:0; padding:0 0 0 18px; border-left:2px solid var(--orange); color:#d5d4ce; font-size:16px; line-height:1.5; }
+    section { margin-top:48px; }
+    .section-head { display:flex; justify-content:space-between; align-items:end; margin-bottom:17px; }
+    .section-head h3 { margin:0; font-size:21px; letter-spacing:-.025em; }
+    .section-head p { margin:0; color:var(--muted); font-size:14px; }
+    .strip { padding:22px; display:grid; grid-template-columns:repeat(5,1fr); gap:12px; }
+    .state { min-height:170px; padding:18px; border:1px solid var(--line); border-radius:18px; display:flex; flex-direction:column; justify-content:space-between; background:rgba(0,0,0,.18); }
+    .state .num { color:#666660; } .state h4 { margin:5px 0 0; font-size:14px; }
+    .stage { height:65px; display:grid; place-items:center; }
+    .stage small { color:#73736d; font:500 11px/1.4 ui-monospace,monospace; }
+    .seed { width:14px; height:14px; border-radius:50%; background:var(--orange); box-shadow:0 0 0 4px rgba(255,112,67,.12),0 0 14px rgba(255,112,67,.44); }
+    .pill { height:22px; border-radius:99px; background:linear-gradient(#32312f,#181817); border:1px solid rgba(255,255,255,.14); box-shadow:0 7px 18px rgba(0,0,0,.5),inset 0 1px rgba(255,255,255,.1); }
+    .listen { width:58px; display:flex; align-items:center; justify-content:center; gap:3px; }
+    .listen i { width:2px; height:10px; border-radius:3px; background:var(--orange); }
+    .mini-orb { transform:scale(.78); }
+    .success { width:12px; height:12px; border-radius:50%; background:var(--green); box-shadow:0 0 14px rgba(98,214,145,.5); }
+    .compare { display:grid; grid-template-columns:1fr 1fr; gap:18px; padding:24px; }
+    .compare article { min-height:160px; border:1px solid var(--line); border-radius:18px; padding:20px; background:rgba(0,0,0,.18); }
+    .compare h4 { margin:0 0 10px; font-size:15px; } .compare p { margin:0; color:#8f8e88; font-size:14px; line-height:1.55; max-width:460px; }
+    .old { float:right; width:34px; height:22px; border-radius:99px; margin-left:18px; background:#242422; border:1px solid #454540; display:flex; align-items:center; justify-content:center; gap:3px; }
+    .old i { width:3px; height:3px; border-radius:50%; background:#b9b8b2; }
+    .new { float:right; margin:-8px -3px 0 18px; transform:scale(.75); }
+    footer { margin-top:24px; display:flex; justify-content:space-between; color:#62625d; font:500 11px/1.4 ui-monospace,monospace; }
+    @media (max-width:900px) { main{width:min(100% - 30px,720px);padding-top:36px} header,.hero,.compare{grid-template-columns:1fr}.strip{grid-template-columns:repeat(2,1fr)}.copy{width:92%;padding:54px 38px}.orb-wrap{left:46%} }
+    @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow">Muesli / Indicator direction 02</div><h1>Transcription orb.</h1></div>
+    <p>When speech becomes text, the indicator condenses into an active field of points: visibly working, unmistakably different from listening.</p>
+  </header>
+
+  <div class="hero">
+    <div class="context">
+      <div class="window">
+        <div class="chrome"><i></i><i></i><i></i></div>
+        <div class="copy">
+          <div class="label">Active text context</div>
+          <h2>Your voice is becoming text.</h2>
+          <p>The recording has stopped. Muesli is cleaning and generating the final dictation<span class="caret"></span></p>
+        </div>
+      </div>
+      <div class="orb-wrap">
+        <div class="orb" aria-label="Generating transcription">
+          <div class="matrix" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          </div>
+        </div>
+        <div class="orb-note">Generating<br>final text</div>
+      </div>
+    </div>
+
+    <aside class="anatomy">
+      <div>
+        <div class="eyebrow">Processing delta</div>
+        <h3>Computation has its own silhouette.</h3>
+        <div class="facts">
+          <div class="fact"><div class="label">Shape</div><div>38 pt circular glass surface; more presence than the idle point, less width than recording.</div></div>
+          <div class="fact"><div class="label">Signal</div><div>Forty-one visible points animate in staggered waves to suggest refinement rather than audio level.</div></div>
+          <div class="fact"><div class="label">Color</div><div>Muesli's configurable warm recording accent, not Monologue cyan.</div></div>
+          <div class="fact"><div class="label">Motion</div><div>Continuous while generating; static high-contrast matrix with Reduce Motion.</div></div>
+        </div>
+      </div>
+      <blockquote>The waveform means “I hear you.” The point field means “I’m turning that speech into finished text.”</blockquote>
+    </aside>
+  </div>
+
+  <section>
+    <div class="section-head"><h3>Updated state transition</h3><p>The active shape changes when the work changes.</p></div>
+    <div class="strip">
+      <article class="state"><div><div class="num">00</div><h4>Idle</h4></div><div class="stage"><small>hidden</small></div><small>no window</small></article>
+      <article class="state"><div><div class="num">01</div><h4>Preparing</h4></div><div class="stage"><div class="seed"></div></div><small>accent seed</small></article>
+      <article class="state"><div><div class="num">02</div><h4>Listening</h4></div><div class="stage"><div class="pill listen"><i></i><i></i><i></i><i></i><i></i></div></div><small>audio waveform</small></article>
+      <article class="state"><div><div class="num">03</div><h4>Generating</h4></div><div class="stage"><div class="orb mini-orb"><div class="matrix"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div></div><small>transcription field</small></article>
+      <article class="state"><div><div class="num">04</div><h4>Complete</h4></div><div class="stage"><div class="success"></div></div><small>confirmation fade</small></article>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><h3>What changed</h3><p>A focused child of Contextual Spark 01.</p></div>
+    <div class="compare">
+      <article><div class="old"><i></i><i></i><i></i></div><h4>Previous · generic processing</h4><p>A three-dot capsule reads as waiting, but not specifically as Muesli generating and refining the final transcript.</p></article>
+      <article><div class="orb new"><div class="matrix"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div><h4>Refined · transcription orb</h4><p>A distinct circular point field communicates active computation while keeping the indicator compact and contextual.</p></article>
+    </div>
+  </section>
+
+  <footer><span>Exploratory child direction — awaiting selection</span><span>No external generation service used</span></footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muesli Mini Indicator — Lifecycle Cues</title>
+  <style>
+    :root { color-scheme:dark; --bg:#0b0b0a; --panel:#171716; --line:rgba(255,255,255,.1); --ink:#f3f2ef; --muted:#97968f; --orange:#ff7043; --amber:#ffb04d; --green:#62d691; --blue:#74b9ff; }
+    * { box-sizing:border-box; }
+    html,body { margin:0; min-height:100%; background:var(--bg); color:var(--ink); }
+    body { font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif; background:radial-gradient(850px 520px at 88% -2%,rgba(255,112,67,.13),transparent 60%),linear-gradient(#0b0b0a,#11110f); }
+    main { width:min(1200px,calc(100% - 64px)); margin:auto; padding:58px 0 78px; }
+    .eyebrow,.label,.index { font:650 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.13em; text-transform:uppercase; }
+    .eyebrow { color:var(--orange); margin-bottom:18px; }
+    header { display:grid; grid-template-columns:1.2fr .8fr; gap:54px; align-items:end; padding-bottom:34px; border-bottom:1px solid var(--line); }
+    h1 { margin:0; font-size:clamp(46px,6vw,78px); line-height:.94; letter-spacing:-.055em; font-weight:650; }
+    header p { margin:0 0 3px; color:#b7b6b0; font-size:17px; line-height:1.55; max-width:450px; }
+    .timeline { margin-top:36px; padding:34px; border:1px solid var(--line); border-radius:26px; background:linear-gradient(145deg,rgba(255,255,255,.045),rgba(255,255,255,.015)); box-shadow:inset 0 1px rgba(255,255,255,.04),0 30px 80px rgba(0,0,0,.26); }
+    .track { position:relative; display:grid; grid-template-columns:repeat(5,1fr); gap:14px; padding-top:35px; }
+    .track::before { content:""; position:absolute; left:9%; right:9%; top:70px; height:1px; background:linear-gradient(90deg,var(--orange),var(--amber),#6e6e68,var(--green)); opacity:.55; }
+    .step { min-height:175px; position:relative; text-align:center; padding:0 9px; }
+    .index { color:#65655f; margin-bottom:19px; }
+    .signal { width:42px; height:42px; margin:0 auto 18px; border-radius:50%; position:relative; display:grid; place-items:center; background:linear-gradient(145deg,#343330,#151514); border:1px solid rgba(255,255,255,.14); box-shadow:0 9px 22px rgba(0,0,0,.5),inset 0 1px rgba(255,255,255,.1); z-index:1; }
+    .signal i { width:10px; height:10px; border-radius:50%; background:#777; }
+    .step.start .signal i { background:var(--orange); box-shadow:0 0 14px rgba(255,112,67,.6); }
+    .step.stop .signal i { background:var(--amber); box-shadow:0 0 14px rgba(255,176,77,.55); }
+    .step.success .signal i { background:var(--green); box-shadow:0 0 14px rgba(98,214,145,.55); }
+    .step h3 { margin:0 0 7px; font-size:15px; } .step p { margin:0; color:#85857f; font-size:13px; line-height:1.45; }
+    .wave { display:flex; align-items:center; justify-content:center; gap:2px; height:17px; }
+    .wave b { display:block; width:2px; height:9px; border-radius:2px; background:var(--orange); }
+    .orb-grid { width:18px; height:18px; display:grid; grid-template-columns:repeat(5,1fr); gap:1px; transform:rotate(45deg); }
+    .orb-grid b { width:2px; height:2px; border-radius:50%; background:var(--orange); animation:pulse 1.2s ease-in-out infinite; }
+    .orb-grid b:nth-child(3n){animation-delay:-.45s}.orb-grid b:nth-child(4n){animation-delay:-.8s}
+    @keyframes pulse { 50% { opacity:.25; transform:scale(.6); } }
+    .cues { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:48px; }
+    .cue { border:1px solid var(--line); border-radius:24px; padding:26px; background:linear-gradient(145deg,rgba(255,255,255,.04),rgba(255,255,255,.014)); }
+    .cue-head { display:flex; justify-content:space-between; gap:18px; align-items:start; }
+    .cue h2 { margin:7px 0 0; font-size:25px; letter-spacing:-.035em; }
+    .tone { width:46px; height:46px; flex:0 0 auto; border-radius:50%; display:grid; place-items:center; color:#fff; background:#262625; border:1px solid var(--line); }
+    .tone svg { width:20px; height:20px; }
+    .cue dl { margin:26px 0 20px; }
+    .cue dl div { display:grid; grid-template-columns:82px 1fr; gap:12px; padding:13px 0; border-top:1px solid var(--line); }
+    .cue dt { color:#686862; font:650 10px/1.5 ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase; }
+    .cue dd { margin:0; color:#b4b3ad; font-size:13px; line-height:1.45; }
+    button { width:100%; min-height:42px; border-radius:12px; border:1px solid rgba(255,255,255,.14); background:linear-gradient(#31312f,#20201f); color:#eee; font:650 13px/1 -apple-system,sans-serif; cursor:pointer; box-shadow:inset 0 1px rgba(255,255,255,.08); }
+    button:hover { border-color:rgba(255,112,67,.5); } button:active { transform:translateY(1px); }
+    .contract { margin-top:48px; display:grid; grid-template-columns:.8fr 1.2fr; gap:18px; }
+    .contract article { border:1px solid var(--line); border-radius:24px; padding:27px; background:rgba(255,255,255,.025); }
+    .contract h3 { margin:7px 0 18px; font-size:21px; letter-spacing:-.025em; }
+    .contract ul { list-style:none; padding:0; margin:0; }
+    .contract li { padding:13px 0; border-top:1px solid var(--line); color:#aaa9a3; font-size:14px; line-height:1.45; display:grid; grid-template-columns:20px 1fr; gap:10px; }
+    .yes { color:var(--green); } .no { color:#ff7670; }
+    .source-note { border-left:2px solid var(--orange); padding-left:17px; color:#c9c8c2; font-size:15px; line-height:1.55; }
+    footer { margin-top:25px; display:flex; justify-content:space-between; color:#62625d; font:500 11px/1.4 ui-monospace,monospace; }
+    @media(max-width:900px){main{width:min(100% - 30px,720px);padding-top:36px}header,.contract{grid-template-columns:1fr}.track{grid-template-columns:1fr}.track::before{display:none}.cues{grid-template-columns:1fr}}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow">Muesli / Indicator direction 03</div><h1>Hear the state.</h1></div>
+    <p>Three compact sounds make the lifecycle legible without looking: recording began, capture ended, and finished text arrived.</p>
+  </header>
+
+  <section class="timeline">
+    <div class="label">Dictation lifecycle</div>
+    <div class="track">
+      <article class="step"><div class="index">00 · armed</div><div class="signal"><i></i></div><h3>Preparing</h3><p>Silent until the microphone is truly active.</p></article>
+      <article class="step start"><div class="index">01 · start cue</div><div class="signal"><div class="wave"><b></b><b></b><b></b><b></b><b></b></div></div><h3>Listening</h3><p>Short rising click confirms capture.</p></article>
+      <article class="step stop"><div class="index">02 · stop cue</div><div class="signal"><i></i></div><h3>Capture ended</h3><p>Short falling tap marks the handoff.</p></article>
+      <article class="step"><div class="index">03 · generating</div><div class="signal"><div class="orb-grid"><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b></div></div><h3>Transcribing</h3><p>Orb animates; no repeating sound.</p></article>
+      <article class="step success"><div class="index">04 · success cue</div><div class="signal"><i></i></div><h3>Text delivered</h3><p>Distinct resolved note confirms success.</p></article>
+    </div>
+  </section>
+
+  <section class="cues">
+    <article class="cue">
+      <div class="cue-head"><div><div class="label">Cue 01</div><h2>Start</h2></div><div class="tone"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h2l2-5 4 10 2-5h4"/></svg></div></div>
+      <dl><div><dt>Trigger</dt><dd>Audio stream becomes active.</dd></div><div><dt>Character</dt><dd>Short, bright, slightly rising.</dd></div><div><dt>Prototype</dt><dd>Existing macOS `Tink`.</dd></div></dl>
+      <button data-cue="start">Preview direction</button>
+    </article>
+    <article class="cue">
+      <div class="cue-head"><div><div class="label">Cue 02</div><h2>Stop</h2></div><div class="tone"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 7h12v10H6z"/></svg></div></div>
+      <dl><div><dt>Trigger</dt><dd>Capture ends and processing begins.</dd></div><div><dt>Character</dt><dd>Short, soft, slightly falling.</dd></div><div><dt>Prototype</dt><dd>Existing macOS `Purr`.</dd></div></dl>
+      <button data-cue="stop">Preview direction</button>
+    </article>
+    <article class="cue">
+      <div class="cue-head"><div><div class="label">Cue 03</div><h2>Success</h2></div><div class="tone"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 4 4L19 6"/></svg></div></div>
+      <dl><div><dt>Trigger</dt><dd>Non-empty text is successfully delivered.</dd></div><div><dt>Character</dt><dd>Distinct, resolved, never alarm-like.</dd></div><div><dt>Prototype</dt><dd>Proposed macOS `Pop`.</dd></div></dl>
+      <button data-cue="success">Preview direction</button>
+    </article>
+  </section>
+
+  <section class="contract">
+    <article><div class="label">Success gate</div><h3>Play only for real delivery.</h3><ul><li><span class="yes">✓</span><span>Non-empty transcript pasted into the intended app.</span></li><li><span class="yes">✓</span><span>Voice-note output successfully saved.</span></li><li><span class="no">×</span><span>Empty, cancelled, failed, stale, or target-changed output.</span></li></ul></article>
+    <article><div class="label">Current-source finding</div><h3>Two cues already exist.</h3><p class="source-note">Muesli already plays `Tink` at stream activation and `Purr` after capture/audio restoration. The implementation delta is to rename the stop semantic clearly, add a deduplicated success event after delivery, and prewarm its distinct sound.</p></article>
+  </section>
+
+  <footer><span>Conceptual Web Audio previews — production mapping remains native</span><span>No external generation service used</span></footer>
+</main>
+<script>
+  const context = () => new (window.AudioContext || window.webkitAudioContext)();
+  function tone(ctx, start, duration, from, to, gain, type="sine") {
+    const osc=ctx.createOscillator(), amp=ctx.createGain();
+    osc.type=type; osc.frequency.setValueAtTime(from,start); osc.frequency.exponentialRampToValueAtTime(to,start+duration);
+    amp.gain.setValueAtTime(.0001,start); amp.gain.exponentialRampToValueAtTime(gain,start+.012); amp.gain.exponentialRampToValueAtTime(.0001,start+duration);
+    osc.connect(amp).connect(ctx.destination); osc.start(start); osc.stop(start+duration+.02);
+  }
+  document.querySelectorAll("button[data-cue]").forEach(button => button.addEventListener("click", () => {
+    const ctx=context(), now=ctx.currentTime+.015, cue=button.dataset.cue;
+    if(cue==="start") tone(ctx,now,.10,620,900,.09,"triangle");
+    if(cue==="stop") tone(ctx,now,.12,480,300,.075,"sine");
+    if(cue==="success") { tone(ctx,now,.11,620,700,.075,"sine"); tone(ctx,now+.09,.16,880,1040,.07,"triangle"); }
+    setTimeout(()=>ctx.close(),420);
+  }));
+</script>
+</body>
+</html>

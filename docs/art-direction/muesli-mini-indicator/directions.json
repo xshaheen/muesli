@@ -1,0 +1,212 @@
+{
+  "nodes": [
+    {
+      "id": "current-fixed-pill",
+      "parents": [],
+      "round": 0,
+      "mode": "iterate",
+      "thesis": "A persistent screen-anchored control is always available but detached from the user's active context.",
+      "anchors": [
+        "current Muesli FloatingIndicatorController",
+        "44 by 22 point idle pill",
+        "screen preset or custom drag anchor"
+      ],
+      "artifact": "native/MuesliNative/Sources/MuesliNativeApp/FloatingIndicatorController.swift",
+      "status": "parent",
+      "created_at_utc": "unknown",
+      "generation": {
+        "capability": "existing-product",
+        "provider": "Muesli",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "unknown",
+        "seed": "unknown",
+        "generated_at_utc": "unknown",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "contextual-spark-01",
+      "parents": [
+        "current-fixed-pill"
+      ],
+      "round": 1,
+      "mode": "iterate",
+      "thesis": "Dictation feedback should materialize beside the pointer only when it has information to convey, then disappear completely.",
+      "anchors": [
+        "user-corrected near-pointer behavior",
+        "hidden idle default",
+        "Muesli waveform language",
+        "22 point active capsule height"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/contextual-spark-01.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-18T18:59:21Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-18T18:59:21Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "transcription-orb-02",
+      "parents": [
+        "contextual-spark-01"
+      ],
+      "round": 2,
+      "mode": "iterate",
+      "thesis": "Processing should visibly communicate active transcription generation through a compact animated point field, not reuse the recording capsule or a generic ellipsis.",
+      "anchors": [
+        "user-annotated processing screenshot",
+        "animated circular point field",
+        "distinct recording and processing silhouettes",
+        "Muesli warm accent"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/transcription-orb-02.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-18T19:23:46Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-18T19:23:46Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "lifecycle-cues-03",
+      "parents": [
+        "transcription-orb-02"
+      ],
+      "round": 3,
+      "mode": "iterate",
+      "thesis": "Visual state changes should be paired with three semantically distinct audio cues so dictation remains understandable without looking at the indicator.",
+      "anchors": [
+        "existing Tink recording-start cue",
+        "existing Purr capture-stop cue",
+        "new distinct successful-delivery cue",
+        "global sound-effects preference"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/lifecycle-cues-03.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-18T19:25:58Z",
+      "generation": {
+        "capability": "manual-html-css-web-audio",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML with conceptual Web Audio previews",
+        "seed": "none",
+        "generated_at_utc": "2026-08-18T19:25:58Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "failure-cue-04",
+      "parents": [
+        "lifecycle-cues-03"
+      ],
+      "round": 4,
+      "mode": "iterate",
+      "thesis": "Terminal failure needs its own restrained low cue, distinct from cancellation and deduplicated by the session's terminal outcome.",
+      "anchors": [
+        "user-requested failure sound",
+        "terminal session outcome",
+        "silent user cancellation",
+        "existing macOS system sound inventory"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/failure-cue-04.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-18T19:28:55Z",
+      "generation": {
+        "capability": "manual-html-css-web-audio",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML with conceptual Web Audio preview",
+        "seed": "none",
+        "generated_at_utc": "2026-08-18T19:28:55Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "split-surfaces-05",
+      "parents": [
+        "failure-cue-04"
+      ],
+      "round": 5,
+      "mode": "iterate",
+      "thesis": "Short dictation feedback and long-running meeting controls are different products and should have independent controllers, geometry, visibility, and interaction lifecycles.",
+      "anchors": [
+        "user-set separate-concepts boundary",
+        "dictation Mini replaces current generic pill",
+        "meeting panel visible only during meeting recording",
+        "stable interactive meeting controls"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/split-surfaces-05.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-18T19:31:12Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-18T19:31:12Z",
+        "remote_service_disclosure": "none"
+      }
+    }
+  ],
+  "decisions": [
+    {
+      "from": "current-fixed-pill",
+      "to": "contextual-spark-01",
+      "operation": "keep waveform and glass; drop fixed persistent idle; intensify contextual pointer placement",
+      "feedback_ref": "feedback.md#18-08-2026-1859-utc--contextual-placement-correction",
+      "decided_at_utc": "2026-08-18T18:59:21Z"
+    },
+    {
+      "from": "contextual-spark-01",
+      "to": "transcription-orb-02",
+      "operation": "replace generic processing ellipsis with animated transcription point field; preserve contextual placement and Muesli color identity",
+      "feedback_ref": "feedback.md#18-08-2026-1923-utc--processing-is-an-animated-transcription-orb",
+      "decided_at_utc": "2026-08-18T19:23:46Z"
+    },
+    {
+      "from": "transcription-orb-02",
+      "to": "lifecycle-cues-03",
+      "operation": "pair recording start, capture stop, and successful text delivery with three distinct sound cues",
+      "feedback_ref": "feedback.md#18-08-2026-1925-utc--distinct-lifecycle-sounds",
+      "decided_at_utc": "2026-08-18T19:25:58Z"
+    },
+    {
+      "from": "lifecycle-cues-03",
+      "to": "failure-cue-04",
+      "operation": "add a distinct terminal failure cue while preserving silent cancellation and once-per-session delivery",
+      "feedback_ref": "feedback.md#18-08-2026-1928-utc--terminal-failure-cue",
+      "decided_at_utc": "2026-08-18T19:28:55Z"
+    },
+    {
+      "from": "failure-cue-04",
+      "to": "split-surfaces-05",
+      "operation": "replace shared floating-indicator concept with independent dictation Mini and meeting-recording panel lifecycles",
+      "feedback_ref": "feedback.md#18-08-2026-1931-utc--split-dictation-mini-from-meeting-panel",
+      "decided_at_utc": "2026-08-18T19:31:12Z"
+    }
+  ]
+}
