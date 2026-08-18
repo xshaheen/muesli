@@ -411,6 +411,13 @@ final class MuesliController: NSObject {
             self?.dictationTestJobIDs.remove(job.id)
             self?.dictationSessionTraces.removeValue(forKey: job.id)
             let didWin = await job.sessionTrace.cancel(stage: "dictation_queue")
+            if didWin, let self {
+                self.applyDictationLifecycleActions(self.dictationLifecycleFeedback.finish(
+                    sessionID: job.id,
+                    outcome: .neutral,
+                    soundAllowed: self.shouldPlayDictationLifecycleSounds
+                ))
+            }
             if didWin, job.recordingSavePolicy != .never, let self {
                 await self.persistAudioOnlyDictationRecording(
                     capture: DictationAudioTerminalCapture(
@@ -515,8 +522,9 @@ final class MuesliController: NSObject {
     private var frozenDictationTranscriptionSelections: [UUID: FrozenDictationTranscriptionSelection] = [:]
     private var completedStandardDictationStops = OrderedCompletionBuffer<CompletedStandardDictationStop>()
     private var nextStandardDictationStopSequence: UInt64 = 0
-    private var pendingReleaseSoundSessionIDs: Set<UUID> = []
+    private var dictationLifecycleFeedback = DictationLifecycleFeedback()
     private var dictationMiniGeneration: DictationMiniIndicatorController.Generation?
+    private var dictationMiniSessionID: UUID?
     private var activeComputerUseAudioSessionID: UUID?
     private var computerUseCommandStartedAt: Date?
     private var pendingComputerUseStopStartedAt: Date?
@@ -1161,7 +1169,8 @@ final class MuesliController: NSObject {
         dictationStartedAt = nil
         pendingStandardDictationStops.removeAll()
         frozenDictationTranscriptionSelections.removeAll()
-        pendingReleaseSoundSessionIDs.removeAll()
+        dictationMiniSessionID = nil
+        dictationMiniGeneration = nil
         clearCapturedDictationSessionContext()
         resetDictationOutputMode()
         setState(.idle)
@@ -4250,7 +4259,6 @@ final class MuesliController: NSObject {
         let pendingTestStops = pendingStandardDictationStops.values.filter(\.isTestMode)
         for pendingStop in pendingTestStops {
             pendingStandardDictationStops.removeValue(forKey: pendingStop.id)
-            pendingReleaseSoundSessionIDs.remove(pendingStop.id)
             dictationSessionTraces.removeValue(forKey: pendingStop.id)
             if let trace = pendingStop.latencyTrace {
                 markDictationLatency("pipeline_cancelled", trace: trace)
@@ -8272,7 +8280,6 @@ final class MuesliController: NSObject {
     }
 
     private func setState(_ state: DictationState) {
-        let previousState = dictationState
         dictationState = state
         appState.dictationState = state
         let status: String
@@ -8283,28 +8290,55 @@ final class MuesliController: NSObject {
         case .transcribing: status = "Transcribing"
         }
         statusBarController?.setStatus(status)
-        guard !isDictationTestMode else { return }
+    }
 
-        switch state {
-        case .idle:
-            if let dictationMiniGeneration {
-                dictationMiniIndicator.dismiss(generation: dictationMiniGeneration)
-                self.dictationMiniGeneration = nil
+    private func applyDictationLifecycleActions(_ actions: [DictationLifecycleFeedback.Action]) {
+        for action in actions {
+            switch action {
+            case let .cue(cue):
+                switch cue {
+                case .start: SoundController.playDictationStart(enabled: true)
+                case .stop: SoundController.playDictationStop(enabled: true)
+                case .success: SoundController.playDictationSuccess(enabled: true)
+                case .failure: SoundController.playDictationFailure(enabled: true)
+                }
+            case let .mini(sessionID, presentation):
+                switch presentation {
+                case .preparing:
+                    dictationMiniSessionID = sessionID
+                    dictationMiniGeneration = dictationMiniIndicator.beginPreparing()
+                case .recording:
+                    guard dictationMiniSessionID == sessionID,
+                          let generation = dictationMiniGeneration else { continue }
+                    dictationMiniIndicator.showRecording(generation: generation) { [weak self] in
+                        self?.dictationAudioSessionManager.currentPower() ?? -160
+                    }
+                case .processing:
+                    guard dictationMiniSessionID == sessionID,
+                          let generation = dictationMiniGeneration else { continue }
+                    dictationMiniIndicator.showProcessing(generation: generation)
+                case .success:
+                    guard dictationMiniSessionID == sessionID,
+                          let generation = dictationMiniGeneration else { continue }
+                    dictationMiniIndicator.showSuccess(generation: generation)
+                    dictationMiniSessionID = nil
+                    dictationMiniGeneration = nil
+                case .failure:
+                    guard dictationMiniSessionID == sessionID,
+                          let generation = dictationMiniGeneration else { continue }
+                    dictationMiniIndicator.showFailure(generation: generation)
+                    dictationMiniSessionID = nil
+                    dictationMiniGeneration = nil
+                case .hidden:
+                    guard dictationMiniSessionID == sessionID,
+                          let generation = dictationMiniGeneration else { continue }
+                    dictationMiniIndicator.dismiss(generation: generation)
+                    dictationMiniSessionID = nil
+                    dictationMiniGeneration = nil
+                }
+            case .showRetainedHistoryRecovery:
+                statusBarController?.setStatus("Dictation saved — target app changed")
             }
-        case .preparing:
-            if previousState != .preparing || dictationMiniGeneration == nil {
-                dictationMiniGeneration = dictationMiniIndicator.beginPreparing()
-            }
-        case .recording:
-            let token = dictationMiniGeneration ?? dictationMiniIndicator.beginPreparing()
-            dictationMiniGeneration = token
-            dictationMiniIndicator.showRecording(generation: token) { [weak self] in
-                self?.dictationAudioSessionManager.currentPower() ?? -160
-            }
-        case .transcribing:
-            let token = dictationMiniGeneration ?? dictationMiniIndicator.beginPreparing()
-            dictationMiniGeneration = token
-            dictationMiniIndicator.showProcessing(generation: token)
         }
     }
 
@@ -9455,6 +9489,10 @@ final class MuesliController: NSObject {
     private func handleDictationAudioSessionEvent(_ event: DictationAudioSessionEvent) {
         switch event {
         case .armed(let sessionID, _):
+            applyDictationLifecycleActions(dictationLifecycleFeedback.begin(
+                sessionID: sessionID,
+                isTestMode: isDictationTestMode
+            ))
             let sessionConfig = activeDictationStyleSession?.config ?? config
             let selection = frozenDictationTranscriptionSelection(sessionConfig: sessionConfig)
             frozenDictationTranscriptionSelections[sessionID] = selection
@@ -9468,6 +9506,12 @@ final class MuesliController: NSObject {
                 contextSources: ""
             )
         case .acquiringAudio(let sessionID):
+            if dictationLifecycleFeedback.foregroundSessionID != sessionID {
+                applyDictationLifecycleActions(dictationLifecycleFeedback.begin(
+                    sessionID: sessionID,
+                    isTestMode: isDictationTestMode
+                ))
+            }
             let sessionConfig = activeDictationStyleSession?.config ?? config
             let selection = frozenDictationTranscriptionSelections[sessionID]
                 ?? frozenDictationTranscriptionSelection(sessionConfig: sessionConfig)
@@ -9485,8 +9529,8 @@ final class MuesliController: NSObject {
             )
             markDictationLatency("acquiring_audio")
             activateDictationPreparingIndicator()
-        case .streamActive(_, let capturedAt):
-            handleDictationStreamActive(capturedAt: capturedAt)
+        case .streamActive(let sessionID, let capturedAt):
+            handleDictationStreamActive(sessionID: sessionID, capturedAt: capturedAt)
         case .speechDetected(_, let capturedAt):
             handleDictationSpeechDetected(capturedAt: capturedAt)
         case .noAudioTimeout:
@@ -9502,13 +9546,8 @@ final class MuesliController: NSObject {
             }
             finishStandardDictationStop(wavURL: wavURL, pendingStop: pendingStop)
             dictationAudioSessionManager.acknowledgeTerminalCapture(sessionID: eventSessionID)
-        case .audioRestored(let eventSessionID):
-            guard let eventSessionID,
-                  pendingReleaseSoundSessionIDs.remove(eventSessionID) != nil else { break }
-            guard dictationAudioSessionManager.currentSessionID == nil else { break }
-            // Reuse the insert cue as the hotkey-release cue once ducked audio has
-            // been restored; waiting for transcription would make release feedback lag.
-            SoundController.playDictationInsert(enabled: shouldPlayDictationLifecycleSounds)
+        case .audioRestored:
+            break
         case .cancelled(let sessionID, let reason, let terminalCapture):
             guard let sessionID else { break }
             frozenDictationTranscriptionSelections.removeValue(forKey: sessionID)
@@ -9523,12 +9562,18 @@ final class MuesliController: NSObject {
                     stage: "dictation_audio_session",
                     metadata: ["reason": reason]
                 )
-                guard didWin, let self, let terminalCapture else {
+                guard didWin, let self else {
                     if let wavURL = terminalCapture?.wavURL {
                         try? FileManager.default.removeItem(at: wavURL)
                     }
                     return
                 }
+                self.applyDictationLifecycleActions(self.dictationLifecycleFeedback.finish(
+                    sessionID: sessionID,
+                    outcome: .neutral,
+                    soundAllowed: self.shouldPlayDictationLifecycleSounds
+                ))
+                guard let terminalCapture else { return }
                 await self.persistAudioOnlyDictationRecording(
                     capture: terminalCapture,
                     startedAt: startedAt,
@@ -9555,12 +9600,18 @@ final class MuesliController: NSObject {
                     } else {
                         didWin = await trace.fail(stage: "dictation_audio_session")
                     }
-                    guard didWin, let self, let terminalCapture else {
+                    guard didWin, let self else {
                         if let wavURL = terminalCapture?.wavURL {
                             try? FileManager.default.removeItem(at: wavURL)
                         }
                         return
                     }
+                    self.applyDictationLifecycleActions(self.dictationLifecycleFeedback.finish(
+                        sessionID: sessionID,
+                        outcome: .failure(recovery: .unavailable),
+                        soundAllowed: self.shouldPlayDictationLifecycleSounds
+                    ))
+                    guard let terminalCapture else { return }
                     await self.persistAudioOnlyDictationRecording(
                         capture: terminalCapture,
                         startedAt: terminalStartedAt,
@@ -9581,7 +9632,6 @@ final class MuesliController: NSObject {
                 if let trace = pendingStop.latencyTrace {
                     markDictationLatency("audio_session_failed", trace: trace)
                 }
-                pendingReleaseSoundSessionIDs.remove(sessionID)
                 completeStandardDictationStop(.discarded, sequence: pendingStop.sequence)
                 break
             }
@@ -9595,9 +9645,6 @@ final class MuesliController: NSObject {
             }
             resetDictationOutputMode()
             dictationStartedAt = nil
-            if let sessionID {
-                pendingReleaseSoundSessionIDs.remove(sessionID)
-            }
             clearCapturedDictationSessionContext()
             finishDictationLatencyTrace("audio_session_failed")
             standardDictationWorkChanged()
@@ -9619,7 +9666,7 @@ final class MuesliController: NSObject {
         setState(.recording)
     }
 
-    private func handleDictationStreamActive(capturedAt: Date) {
+    private func handleDictationStreamActive(sessionID: UUID, capturedAt: Date) {
         markDictationLatency("ui_stream_active_handling_begin")
         markDictationLatency("ui_stream_active_received", at: capturedAt)
         if dictationStartedAt == nil {
@@ -9627,7 +9674,10 @@ final class MuesliController: NSObject {
         }
         activateDictationRecordingIndicator()
         markDictationLatency("sound_start_requested:stream-active")
-        SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
+        applyDictationLifecycleActions(dictationLifecycleFeedback.streamActive(
+            sessionID: sessionID,
+            soundAllowed: shouldPlayDictationLifecycleSounds
+        ))
         markDictationLatency("ui_stream_active")
         logDictationPowerSample(label: "ui_power_sample_350ms", delay: 0.35)
         logDictationPowerSample(label: "ui_power_sample_1000ms", delay: 1.0)
@@ -9882,6 +9932,10 @@ final class MuesliController: NSObject {
                         controller?.currentPower() ?? -160
                     }
                 }
+                self.applyDictationLifecycleActions(self.dictationLifecycleFeedback.streamActive(
+                    sessionID: sessionID,
+                    soundAllowed: self.shouldPlayDictationLifecycleSounds
+                ))
                 fputs("[muesli-native] Nemotron streaming controller started\n", stderr)
             }
         }
@@ -9908,7 +9962,16 @@ final class MuesliController: NSObject {
         let trace = dictationSessionTraces.removeValue(forKey: sessionID)
         Task { @MainActor [weak self] in
             let didWin = await trace?.fail(stage: "nemotron_streaming_start") ?? true
-            guard didWin, let self, recordingSavePolicy != .never else {
+            guard didWin, let self else {
+                if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
+                return
+            }
+            self.applyDictationLifecycleActions(self.dictationLifecycleFeedback.finish(
+                sessionID: sessionID,
+                outcome: .failure(recovery: .unavailable),
+                soundAllowed: self.shouldPlayDictationLifecycleSounds
+            ))
+            guard recordingSavePolicy != .never else {
                 if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
                 return
             }
@@ -9960,7 +10023,16 @@ final class MuesliController: NSObject {
         let trace = dictationSessionTraces.removeValue(forKey: sessionID)
         Task { @MainActor [weak self] in
             let didWin = await trace?.fail(stage: "nemotron_streaming_runtime") ?? true
-            guard didWin, let self, recordingSavePolicy != .never else {
+            guard didWin, let self else {
+                if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
+                return
+            }
+            self.applyDictationLifecycleActions(self.dictationLifecycleFeedback.finish(
+                sessionID: sessionID,
+                outcome: .failure(recovery: .unavailable),
+                soundAllowed: self.shouldPlayDictationLifecycleSounds
+            ))
+            guard recordingSavePolicy != .never else {
                 if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
                 return
             }
@@ -10016,7 +10088,16 @@ final class MuesliController: NSObject {
                 let trace = dictationSessionTraces.removeValue(forKey: sessionID)
                 Task { @MainActor [weak self] in
                     let didWin = await trace?.cancel(stage: "nemotron_streaming") ?? true
-                    guard didWin, let self, recordingSavePolicy != .never else {
+                    guard didWin, let self else {
+                        if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
+                        return
+                    }
+                    self.applyDictationLifecycleActions(self.dictationLifecycleFeedback.finish(
+                        sessionID: sessionID,
+                        outcome: .neutral,
+                        soundAllowed: self.shouldPlayDictationLifecycleSounds
+                    ))
+                    guard recordingSavePolicy != .never else {
                         if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
                         return
                     }
@@ -10071,6 +10152,10 @@ final class MuesliController: NSObject {
                 isNemotron35Streaming = true
                 nemotron35StreamingSessionID = sessionID
                 nemotron35StreamingRecordingSavePolicy = recordingSavePolicy
+                applyDictationLifecycleActions(dictationLifecycleFeedback.begin(
+                    sessionID: sessionID,
+                    isTestMode: isDictationTestMode
+                ))
                 let sessionTrace = ensureDictationSessionTrace(
                     id: sessionID,
                     backend: selectedBackend,
@@ -10084,8 +10169,6 @@ final class MuesliController: NSObject {
                 }
                 previousStreamText = ""
                 dictationStartedAt = Date()
-                markDictationLatency("sound_start_requested:nemotron-toggle")
-                SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
                 dictationAudioSessionManager.beginExternalSession(
                     source: "nemotron-toggle",
                     duckingEnabled: config.muteSystemAudioDuringDictation,
@@ -10138,7 +10221,7 @@ final class MuesliController: NSObject {
             let sessionID = nemotron35StreamingSessionID
             let recordingSavePolicy = nemotron35StreamingRecordingSavePolicy
             if #available(macOS 15, *), let controller = _streamingDictationController as? StreamingDictationController {
-                controller.stopWithCapture { [weak self] result in
+                let acceptedCapture = controller.stopWithCapture { [weak self] result in
                     DispatchQueue.main.async {
                         self?.finishNemotronStreamingStop(
                             finalText: result.transcript,
@@ -10148,6 +10231,12 @@ final class MuesliController: NSObject {
                             sessionID: sessionID
                         )
                     }
+                }
+                if acceptedCapture, let sessionID {
+                    applyDictationLifecycleActions(dictationLifecycleFeedback.captureAccepted(
+                        sessionID: sessionID,
+                        soundAllowed: shouldPlayDictationLifecycleSounds
+                    ))
                 }
                 dictationAudioSessionManager.endExternalSession(reason: "nemotron-stop")
                 setState(.transcribing)
@@ -10181,9 +10270,6 @@ final class MuesliController: NSObject {
             id: sessionID,
             startedAt: startedAt
         )
-        if shouldPlayDictationLifecycleSounds && !isDictationTestMode {
-            pendingReleaseSoundSessionIDs.insert(sessionID)
-        }
         clearCapturedDictationSessionContext()
         resetDictationOutputMode()
         dictationAudioSessionManager.stop()
@@ -10435,7 +10521,16 @@ final class MuesliController: NSObject {
                 let trace = dictationSessionTraces.removeValue(forKey: streamingSessionID)
                 Task { @MainActor [weak self] in
                     let didWin = await trace?.cancel(stage: "meeting_started") ?? true
-                    guard didWin, let self, recordingSavePolicy != .never else {
+                    guard didWin, let self else {
+                        if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
+                        return
+                    }
+                    self.applyDictationLifecycleActions(self.dictationLifecycleFeedback.finish(
+                        sessionID: streamingSessionID,
+                        outcome: .neutral,
+                        soundAllowed: self.shouldPlayDictationLifecycleSounds
+                    ))
+                    guard recordingSavePolicy != .never else {
                         if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
                         return
                     }
@@ -10485,6 +10580,8 @@ final class MuesliController: NSObject {
         _streamingDictationController = nil
         nemotron35StreamingSessionID = nil
         nemotron35StreamingRecordingSavePolicy = .never
+        let deliveredStreamingPrefix = previousStreamText
+        let streamingOutputMode = currentDictationOutputMode
         previousStreamText = ""
         let duration = max(Date().timeIntervalSince(startedAt), 0)
         fputs("[muesli-native] Nemotron streaming stop, got \(finalText.count) chars\n", stderr)
@@ -10573,6 +10670,30 @@ final class MuesliController: NSObject {
                     )
                 }
                 return
+            }
+            if let sessionID {
+                let feedbackOutcome: DictationLifecycleFeedback.Outcome
+                if cleaned.isEmpty {
+                    feedbackOutcome = .neutral
+                } else if streamingOutputMode == .voiceNote {
+                    feedbackOutcome = dictationID == nil
+                        ? .failure(recovery: .unavailable)
+                        : .success
+                } else {
+                    let deliveredCount = min(deliveredStreamingPrefix.count, finalText.count)
+                    let remainder = String(finalText.dropFirst(deliveredCount))
+                    if !remainder.isEmpty {
+                        PasteController.typeText(remainder)
+                    }
+                    feedbackOutcome = deliveredStreamingPrefix.isEmpty && remainder.isEmpty
+                        ? .neutral
+                        : .success
+                }
+                self.applyDictationLifecycleActions(self.dictationLifecycleFeedback.finish(
+                    sessionID: sessionID,
+                    outcome: feedbackOutcome,
+                    soundAllowed: self.shouldPlayDictationLifecycleSounds
+                ))
             }
             if recordingSavePolicy == .prompt, let recordingArtifact {
                 self.presentDictationRecordingDecision(for: recordingArtifact.id)
@@ -10835,7 +10956,13 @@ final class MuesliController: NSObject {
                     stage: "dictation_stop",
                     metadata: ["reason": "missing_wav"]
                 )
-                guard didWin, let self, pendingStop.recordingSavePolicy != .never else { return }
+                guard didWin, let self else { return }
+                self.applyDictationLifecycleActions(self.dictationLifecycleFeedback.finish(
+                    sessionID: pendingStop.id,
+                    outcome: .neutral,
+                    soundAllowed: self.shouldPlayDictationLifecycleSounds
+                ))
+                guard pendingStop.recordingSavePolicy != .never else { return }
                 await self.persistAudioOnlyDictationRecording(
                     capture: DictationAudioTerminalCapture(
                         sessionID: pendingStop.id,
@@ -10868,12 +10995,18 @@ final class MuesliController: NSObject {
                     stage: "dictation_stop",
                     metadata: ["reason": "short_recording"]
                 )
-                guard didWin, let self, pendingStop.recordingSavePolicy != .never else {
+                guard didWin, let self else {
                     if pendingStop.recordingSavePolicy != .never {
                         try? FileManager.default.removeItem(at: wavURL)
                     }
                     return
                 }
+                self.applyDictationLifecycleActions(self.dictationLifecycleFeedback.finish(
+                    sessionID: pendingStop.id,
+                    outcome: .neutral,
+                    soundAllowed: self.shouldPlayDictationLifecycleSounds
+                ))
+                guard pendingStop.recordingSavePolicy != .never else { return }
                 await self.persistAudioOnlyDictationRecording(
                     capture: DictationAudioTerminalCapture(
                         sessionID: pendingStop.id,
@@ -10918,6 +11051,10 @@ final class MuesliController: NSObject {
         for next in completedStandardDictationStops.insert(completion, sequence: sequence) {
             if case .job(let job) = next {
                 if job.isTestMode { dictationTestJobIDs.insert(job.id) }
+                applyDictationLifecycleActions(dictationLifecycleFeedback.captureAccepted(
+                    sessionID: job.id,
+                    soundAllowed: shouldPlayDictationLifecycleSounds
+                ))
                 standardDictationJobQueue.enqueue(job)
             }
         }
@@ -11046,6 +11183,13 @@ final class MuesliController: NSObject {
                         "output_characters": "0",
                     ]
                 )
+                if didWin {
+                    applyDictationLifecycleActions(dictationLifecycleFeedback.finish(
+                        sessionID: job.id,
+                        outcome: .neutral,
+                        soundAllowed: shouldPlayDictationLifecycleSounds
+                    ))
+                }
                 if didWin, job.recordingSavePolicy == .prompt, let recordingArtifact {
                     presentDictationRecordingDecision(for: recordingArtifact.id)
                 } else if !didWin {
@@ -11137,10 +11281,23 @@ final class MuesliController: NSObject {
             statusBarController?.refresh()
             historyWindowController?.reload()
             syncAppState()
-            if job.outputMode != .voiceNote {
+            if job.outputMode == .voiceNote {
+                applyDictationLifecycleActions(dictationLifecycleFeedback.finish(
+                    sessionID: job.id,
+                    outcome: dictationID == nil
+                        ? .failure(recovery: .unavailable)
+                        : .success,
+                    soundAllowed: shouldPlayDictationLifecycleSounds
+                ))
+            } else {
                 try await waitForDictationDeliveryWindow()
                 if canPasteDictation(to: job.correctionTargetApp) {
                     await PasteController.pasteAndWait(text: text)
+                    applyDictationLifecycleActions(dictationLifecycleFeedback.finish(
+                        sessionID: job.id,
+                        outcome: .success,
+                        soundAllowed: shouldPlayDictationLifecycleSounds
+                    ))
                     if cleanupRuntime.config.enableDictionaryCorrectionPrompts {
                         dictationCorrectionMonitor.start(
                             originalText: text,
@@ -11152,7 +11309,13 @@ final class MuesliController: NSObject {
                     }
                 } else {
                     fputs("[muesli-native] dictation saved without paste because the target app changed\n", stderr)
-                    statusBarController?.setStatus("Dictation saved — target app changed")
+                    applyDictationLifecycleActions(dictationLifecycleFeedback.finish(
+                        sessionID: job.id,
+                        outcome: .failure(
+                            recovery: dictationID == nil ? .unavailable : .retainedHistory
+                        ),
+                        soundAllowed: shouldPlayDictationLifecycleSounds
+                    ))
                 }
             }
             if let trace = job.latencyTrace {
@@ -11171,6 +11334,11 @@ final class MuesliController: NSObject {
             TelemetryDeck.signal("dictation.completed", parameters: telemetryParameters)
         } catch is CancellationError {
             let didWin = await job.sessionTrace.cancel(stage: "dictation_pipeline")
+            applyDictationLifecycleActions(dictationLifecycleFeedback.finish(
+                sessionID: job.id,
+                outcome: .neutral,
+                soundAllowed: shouldPlayDictationLifecycleSounds
+            ))
             if didWin, job.recordingSavePolicy != .never {
                 await persistAudioOnlyDictationRecording(
                     capture: DictationAudioTerminalCapture(
@@ -11189,6 +11357,13 @@ final class MuesliController: NSObject {
             }
         } catch {
             let didWin = await job.sessionTrace.fail(stage: "dictation_pipeline")
+            if didWin {
+                applyDictationLifecycleActions(dictationLifecycleFeedback.finish(
+                    sessionID: job.id,
+                    outcome: .failure(recovery: .unavailable),
+                    soundAllowed: shouldPlayDictationLifecycleSounds
+                ))
+            }
             if didWin, job.recordingSavePolicy != .never {
                 await persistAudioOnlyDictationRecording(
                     capture: DictationAudioTerminalCapture(

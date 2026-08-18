@@ -23,6 +23,23 @@ struct StreamingDictationControllerTests {
     }
 
     @available(macOS 15, *)
+    @Test("stop acceptance is false before capture starts and true while active")
+    func stopAcceptanceTracksActiveCapture() async {
+        let transcriber = ImmediateStreamingTranscriber()
+        let controller = StreamingDictationController(transcriber: transcriber)
+        var immediateResult: StreamingDictationTerminalResult?
+
+        let inactiveAccepted = controller.stopWithCapture { immediateResult = $0 }
+        #expect(!inactiveAccepted)
+        #expect(immediateResult?.transcript.isEmpty == true)
+
+        #expect(controller.start())
+        let activeAccepted = controller.stopWithCapture { _ in }
+        #expect(activeAccepted)
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+
+    @available(macOS 15, *)
     @Test("failed mic start resets active state")
     func failedMicStartResetsActiveState() {
         let transcriber = ImmediateStreamingTranscriber()
