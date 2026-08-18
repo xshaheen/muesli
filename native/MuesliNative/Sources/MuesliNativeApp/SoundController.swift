@@ -6,7 +6,7 @@ import AudioToolbox
 @MainActor
 enum SoundController {
     static func prewarmLifecycleSounds() {
-        SystemSoundPlayer.prewarm(names: ["Tink", "Purr", "Glass"])
+        SystemSoundPlayer.prewarm(names: ["Tink", "Purr", "Pop", "Funk", "Glass"])
     }
 
     static func playDictationStart(enabled: Bool) {
@@ -14,9 +14,24 @@ enum SoundController {
         SystemSoundPlayer.play(named: "Tink")
     }
 
-    static func playDictationInsert(enabled: Bool) {
+    static func playDictationStop(enabled: Bool) {
         guard enabled else { return }
         SystemSoundPlayer.play(named: "Purr")
+    }
+
+    static func playDictationSuccess(enabled: Bool) {
+        guard enabled else { return }
+        SystemSoundPlayer.play(named: "Pop")
+    }
+
+    static func playDictationFailure(enabled: Bool) {
+        guard enabled else { return }
+        SystemSoundPlayer.play(named: "Funk")
+    }
+
+    /// Compatibility while lifecycle call sites move to the explicit Stop event.
+    static func playDictationInsert(enabled: Bool) {
+        playDictationStop(enabled: enabled)
     }
 
     static func playModelReady(enabled: Bool) {
@@ -121,6 +136,8 @@ enum SoundController {
 private enum SystemSoundPlayer {
     private static let queue = DispatchQueue(label: "com.muesli.system-sound-player", qos: .userInitiated)
     private static var soundIDs: [String: SystemSoundID] = [:]
+    private static var pendingSoundIDs: [SystemSoundID] = []
+    private static var isPlaying = false
     private static var cleanupRegistered = false
 
     static func prewarm(names: [String]) {
@@ -136,7 +153,20 @@ private enum SystemSoundPlayer {
         queue.async {
             registerCleanupIfNeeded()
             guard let soundID = loadSoundID(named: name) else { return }
-            AudioServicesPlaySystemSound(soundID)
+            pendingSoundIDs.append(soundID)
+            playNextIfNeeded()
+        }
+    }
+
+    private static func playNextIfNeeded() {
+        guard !isPlaying, !pendingSoundIDs.isEmpty else { return }
+        isPlaying = true
+        let soundID = pendingSoundIDs.removeFirst()
+        AudioServicesPlaySystemSoundWithCompletion(soundID) {
+            queue.async {
+                isPlaying = false
+                playNextIfNeeded()
+            }
         }
     }
 
@@ -150,6 +180,7 @@ private enum SystemSoundPlayer {
 
     private static func disposeCachedSoundsBestEffort() {
         queue.sync {
+            pendingSoundIDs.removeAll()
             for soundID in soundIDs.values {
                 AudioServicesDisposeSystemSoundID(soundID)
             }
