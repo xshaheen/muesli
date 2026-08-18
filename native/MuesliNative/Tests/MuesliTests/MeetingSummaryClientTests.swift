@@ -123,6 +123,58 @@ struct MeetingSummaryClientTests {
         #expect(!titleInstructions.contains("Return the title in Arabic"))
     }
 
+    @Test("dominant Arabic policy overrides English transcript detection")
+    func dominantArabicPolicyControlsMeetingOutput() throws {
+        let profile = try LanguageProfile(
+            selectedLanguages: [.english, .arabic],
+            dominantLanguage: .arabic,
+            meetingOutputPolicy: .dominantLanguage
+        )
+        let transcript = "We reviewed the API rollout and assigned next steps."
+        let summaryInstructions = MeetingSummaryClient.summaryInstructions(
+            for: MeetingTemplates.auto.snapshot,
+            transcript: transcript,
+            languageProfile: profile
+        )
+        let titleInstructions = MeetingSummaryClient.titleInstructions(
+            transcript: transcript,
+            manualNotes: nil,
+            languageProfile: profile
+        )
+        let fallback = MeetingSummaryClient.summaryFailureNotes(
+            transcript: transcript,
+            meetingTitle: "API rollout",
+            error: MeetingSummaryError.emptyResponse(backend: "Test"),
+            languageProfile: profile
+        )
+
+        #expect(summaryInstructions.contains("Write the entire output in Arabic"))
+        #expect(titleInstructions.contains("Return the title in Arabic"))
+        #expect(fallback.contains("## تعذر إنشاء الملخص"))
+        #expect(fallback.contains("## النص الخام"))
+    }
+
+    @Test("dominant English policy overrides Arabic transcript detection")
+    func dominantEnglishPolicyControlsMeetingOutput() throws {
+        let profile = try LanguageProfile(
+            selectedLanguages: [.english, .arabic],
+            dominantLanguage: .english,
+            meetingOutputPolicy: .dominantLanguage
+        )
+        let transcript = "ناقشنا خطة إطلاق المنتج ومهام الفريق القادمة"
+
+        #expect(!MeetingSummaryClient.summaryInstructions(
+            for: MeetingTemplates.auto.snapshot,
+            transcript: transcript,
+            languageProfile: profile
+        ).contains("Write the entire output in Arabic"))
+        #expect(!MeetingSummaryClient.titleInstructions(
+            transcript: transcript,
+            manualNotes: nil,
+            languageProfile: profile
+        ).contains("Return the title in Arabic"))
+    }
+
     @Test("summary instructions mention preserving current notes when provided")
     func promptMentionsPreservingCurrentNotes() {
         let instructions = MeetingSummaryClient.summaryInstructions(

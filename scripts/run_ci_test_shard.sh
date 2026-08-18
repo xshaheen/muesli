@@ -18,6 +18,8 @@ case "${shard}" in
   core)
     filters=(
       ConfigStoreTests
+      LanguageProfileSettingsModelTests
+      LanguageProfileTests
       DictationStoreTests
       SessionTraceStoreTests
       RecordingArtifactStoreTests
@@ -124,6 +126,7 @@ case "${shard}" in
       MeetingSummaryClientTests
       MeetingsNavigationTests
       MeetingDetailResponsiveLayoutTests
+      MeetingDurationLimitTests
       MeetingFallbackClassificationTests
       MeetingFinalizationRollbackTests
       MeetingRawTranscriptAccumulatorTests

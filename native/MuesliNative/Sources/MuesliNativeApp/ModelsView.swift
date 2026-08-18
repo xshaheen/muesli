@@ -544,36 +544,6 @@ struct ModelsView: View {
         .id(FeatureTourTarget.experimentalModels.rawValue)
     }
 
-    private var cohereLanguageSelection: Binding<CohereTranscribeLanguage> {
-        Binding(
-            get: { appState.config.resolvedCohereLanguage },
-            set: { controller.selectCohereLanguage($0) }
-        )
-    }
-
-    private var indicASRLanguageSelection: Binding<IndicASRLanguage> {
-        Binding(
-            get: { appState.config.resolvedIndicASRLanguage },
-            set: { controller.selectIndicASRLanguage($0) }
-        )
-    }
-
-    private var nemotron35LanguageSelection: Binding<Nemotron35Language> {
-        Binding(
-            get: { appState.config.resolvedNemotron35Language },
-            set: { language in
-                Task { await controller.setNemotron35Language(language) }
-            }
-        )
-    }
-
-    private var whisperLanguageSelection: Binding<WhisperKitLanguage> {
-        Binding(
-            get: { appState.config.resolvedWhisperLanguage },
-            set: { controller.selectWhisperLanguage($0) }
-        )
-    }
-
     private var postProcessorSection: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
@@ -803,22 +773,16 @@ struct ModelsView: View {
                 .font(MuesliTheme.caption())
                 .foregroundStyle(MuesliTheme.textSecondary)
 
-            if selectedOption.supportsWhisperLanguageSelection {
-                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
-                    Text("Language")
-                        .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                        .frame(width: 64, alignment: .leading)
+            HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                Text("Language")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .frame(width: 64, alignment: .leading)
 
-                    Picker("", selection: whisperLanguageSelection) {
-                        ForEach(WhisperKitLanguage.allCases, id: \.self) { language in
-                            Text(language.label).tag(language)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: 220, alignment: .leading)
-                }
+                Text(appState.config.languageProfile.effectiveBehavior(for: selectedOption).explanation)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .frame(maxWidth: 300, alignment: .leading)
             }
 
             if showsDownloadStatus {
@@ -1119,77 +1083,19 @@ struct ModelsView: View {
                 }
             }
 
-            if option.backend == BackendOption.cohereTranscribe.backend {
-                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
-                    Text("Language")
-                        .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                        .frame(width: 64, alignment: .leading)
+            HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                Text("Language")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .frame(width: 64, alignment: .leading)
 
-                    Picker("", selection: cohereLanguageSelection) {
-                        ForEach(CohereTranscribeLanguage.allCases, id: \.self) { language in
-                            Text(language.label).tag(language)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: 220, alignment: .leading)
-                }
-            }
-
-            if option.backend == BackendOption.indicASR.backend {
-                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
-                    Text("Language")
-                        .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                        .frame(width: 64, alignment: .leading)
-
-                    Picker("", selection: indicASRLanguageSelection) {
-                        ForEach(IndicASRLanguage.allCases, id: \.self) { language in
-                            Text(language.label).tag(language)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: 220, alignment: .leading)
-                }
-            }
-
-            if option.supportsWhisperLanguageSelection {
-                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
-                    Text("Language")
-                        .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                        .frame(width: 64, alignment: .leading)
-
-                    Picker("", selection: whisperLanguageSelection) {
-                        ForEach(WhisperKitLanguage.allCases, id: \.self) { language in
-                            Text(language.label).tag(language)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: 220, alignment: .leading)
-                }
+                Text(appState.config.languageProfile.effectiveBehavior(for: option).explanation)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .frame(maxWidth: 300, alignment: .leading)
             }
 
             if option.backend == BackendOption.nemotron35Multilingual.backend {
-                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
-                    Text("Language")
-                        .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                        .frame(width: 64, alignment: .leading)
-
-                    Picker("", selection: nemotron35LanguageSelection) {
-                        ForEach(Nemotron35Language.allCases, id: \.self) { language in
-                            Text(language.label).tag(language)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: 220, alignment: .leading)
-                }
-
                 if isDownloaded && nemotron35UpdateAvailable && !isDownloading {
                     HStack(spacing: MuesliTheme.spacing8) {
                         Image(systemName: "arrow.triangle.2.circlepath")

@@ -387,6 +387,302 @@ enum WhisperKitLanguage: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// A provider-neutral language identifier used by every transcription surface.
+/// Provider-specific enums remain as compatibility adapters at the model edge.
+enum TranscriptionLanguage: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
+    case arabic = "ar"
+    case bengali = "bn"
+    case chinese = "zh"
+    case dutch = "nl"
+    case english = "en"
+    case french = "fr"
+    case german = "de"
+    case greek = "el"
+    case hindi = "hi"
+    case italian = "it"
+    case japanese = "ja"
+    case kannada = "kn"
+    case korean = "ko"
+    case malayalam = "ml"
+    case marathi = "mr"
+    case polish = "pl"
+    case portuguese = "pt"
+    case russian = "ru"
+    case spanish = "es"
+    case tamil = "ta"
+    case telugu = "te"
+    case vietnamese = "vi"
+
+    var id: String { rawValue }
+
+    var label: String {
+        Locale.current.localizedString(forLanguageCode: rawValue)?.capitalized ?? rawValue.uppercased()
+    }
+
+    var supportsMeetingOutputLanguage: Bool {
+        self == .english || self == .arabic
+    }
+
+    static func resolve(_ rawValue: String?) -> Self? {
+        guard let normalized = rawValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+            normalized != "auto"
+        else { return nil }
+        return Self(rawValue: normalized)
+    }
+}
+
+enum MeetingOutputLanguagePolicy: String, CaseIterable, Codable, Sendable {
+    case automatic
+    case dominantLanguage = "dominant_language"
+
+    var label: String {
+        switch self {
+        case .automatic: "Automatic from the meeting"
+        case .dominantLanguage: "Use dominant Arabic or English"
+        }
+    }
+}
+
+struct LanguageProfileEffectiveBehavior: Equatable, Sendable {
+    enum Kind: String, Equatable, Sendable {
+        case automaticDetection = "automatic_detection"
+        case pinned
+        case providerFallback = "provider_fallback"
+        case englishOnlyFallback = "english_only_fallback"
+    }
+
+    let kind: Kind
+    let effectiveLanguage: TranscriptionLanguage?
+    let explanation: String
+}
+
+/// The single persisted language authority for dictation and meetings.
+/// An empty selection means automatic detection; a dominant language is only
+/// valid when it is part of the selected set.
+struct LanguageProfile: Codable, Equatable, Sendable {
+    enum ValidationError: Error, LocalizedError {
+        case dominantLanguageNotSelected
+        case dominantOutputRequiresDominantLanguage
+        case unsupportedDominantOutputLanguage
+
+        var errorDescription: String? {
+            switch self {
+            case .dominantLanguageNotSelected:
+                "The dominant language must also be selected."
+            case .dominantOutputRequiresDominantLanguage:
+                "Choose a dominant language before using it for meeting output."
+            case .unsupportedDominantOutputLanguage:
+                "Dominant meeting output currently supports Arabic and English."
+            }
+        }
+    }
+
+    let selectedLanguages: [TranscriptionLanguage]
+    let dominantLanguage: TranscriptionLanguage?
+    let meetingOutputPolicy: MeetingOutputLanguagePolicy
+
+    static let automatic = LanguageProfile(
+        normalizedLanguages: [],
+        dominantLanguage: nil,
+        meetingOutputPolicy: .automatic
+    )
+
+    init(
+        selectedLanguages: [TranscriptionLanguage],
+        dominantLanguage: TranscriptionLanguage? = nil,
+        meetingOutputPolicy: MeetingOutputLanguagePolicy = .automatic
+    ) throws {
+        let normalized = Array(Set(selectedLanguages)).sorted { $0.rawValue < $1.rawValue }
+        if let dominantLanguage, !normalized.contains(dominantLanguage) {
+            throw ValidationError.dominantLanguageNotSelected
+        }
+        if meetingOutputPolicy == .dominantLanguage, dominantLanguage == nil {
+            throw ValidationError.dominantOutputRequiresDominantLanguage
+        }
+        if meetingOutputPolicy == .dominantLanguage,
+           dominantLanguage?.supportsMeetingOutputLanguage != true {
+            throw ValidationError.unsupportedDominantOutputLanguage
+        }
+        self.init(
+            normalizedLanguages: normalized,
+            dominantLanguage: dominantLanguage,
+            meetingOutputPolicy: meetingOutputPolicy
+        )
+    }
+
+    private init(
+        normalizedLanguages: [TranscriptionLanguage],
+        dominantLanguage: TranscriptionLanguage?,
+        meetingOutputPolicy: MeetingOutputLanguagePolicy
+    ) {
+        selectedLanguages = normalizedLanguages
+        self.dominantLanguage = dominantLanguage
+        self.meetingOutputPolicy = meetingOutputPolicy
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            selectedLanguages: container.decodeIfPresent(
+                [TranscriptionLanguage].self,
+                forKey: .selectedLanguages
+            ) ?? [],
+            dominantLanguage: container.decodeIfPresent(
+                TranscriptionLanguage.self,
+                forKey: .dominantLanguage
+            ),
+            meetingOutputPolicy: container.decodeIfPresent(
+                MeetingOutputLanguagePolicy.self,
+                forKey: .meetingOutputPolicy
+            ) ?? .automatic
+        )
+    }
+
+    var authoritativeLanguage: TranscriptionLanguage? {
+        dominantLanguage ?? (selectedLanguages.count == 1 ? selectedLanguages[0] : nil)
+    }
+
+    static func migratingLegacyPins(
+        cohere: String?,
+        indicASR: String?,
+        nemotron35: String?,
+        whisper: String?
+    ) -> (profile: LanguageProfile, needsConfirmation: Bool) {
+        let selected = Set([cohere, indicASR, nemotron35, whisper].compactMap(TranscriptionLanguage.resolve))
+        guard !selected.isEmpty else { return (.automatic, false) }
+
+        let normalized = selected.sorted { $0.rawValue < $1.rawValue }
+        let dominant = normalized.count == 1 ? normalized[0] : nil
+        return (
+            LanguageProfile(
+                normalizedLanguages: normalized,
+                dominantLanguage: dominant,
+                meetingOutputPolicy: .automatic
+            ),
+            normalized.count > 1
+        )
+    }
+
+    static func onboarding(
+        backend: BackendOption,
+        cohereLanguage: CohereTranscribeLanguage
+    ) -> LanguageProfile {
+        guard backend.backend == "cohere",
+              let language = TranscriptionLanguage(rawValue: cohereLanguage.rawValue) else {
+            return .automatic
+        }
+        return (try? LanguageProfile(
+            selectedLanguages: [language],
+            dominantLanguage: language
+        )) ?? .automatic
+    }
+
+    var resolvedWhisperLanguage: WhisperKitLanguage {
+        authoritativeLanguage.flatMap { WhisperKitLanguage(rawValue: $0.rawValue) } ?? .auto
+    }
+
+    var resolvedNemotron35Language: Nemotron35Language {
+        authoritativeLanguage.flatMap { Nemotron35Language(rawValue: $0.rawValue) } ?? .auto
+    }
+
+    var resolvedCohereLanguage: CohereTranscribeLanguage {
+        authoritativeLanguage.flatMap { CohereTranscribeLanguage(rawValue: $0.rawValue) }
+            ?? .defaultLanguage
+    }
+
+    var resolvedIndicASRLanguage: IndicASRLanguage {
+        authoritativeLanguage.flatMap { IndicASRLanguage(rawValue: $0.rawValue) }
+            ?? .defaultLanguage
+    }
+
+    func effectiveBehavior(for backend: BackendOption) -> LanguageProfileEffectiveBehavior {
+        if backend == .parakeetEnglish || (backend.backend == "whisper" && WhisperKitLanguage.isEnglishOnlyModel(backend.model)) {
+            let incompatible = selectedLanguages.contains { $0 != .english }
+            return LanguageProfileEffectiveBehavior(
+                kind: incompatible ? .englishOnlyFallback : .pinned,
+                effectiveLanguage: .english,
+                explanation: incompatible
+                    ? "This model is English-only, so it cannot honor the selected multilingual profile."
+                    : "This model always transcribes in English."
+            )
+        }
+
+        if let language = authoritativeLanguage {
+            switch backend.backend {
+            case "whisper" where WhisperKitLanguage(rawValue: language.rawValue) != nil:
+                return .init(
+                    kind: .pinned,
+                    effectiveLanguage: language,
+                    explanation: "Transcription is pinned to \(language.label)."
+                )
+            case "nemotron35" where Nemotron35Language(rawValue: language.rawValue) != nil:
+                return .init(
+                    kind: .pinned,
+                    effectiveLanguage: language,
+                    explanation: "Transcription is pinned to \(language.label)."
+                )
+            case "whisper", "nemotron35":
+                return .init(
+                    kind: .providerFallback,
+                    effectiveLanguage: nil,
+                    explanation: "This model cannot pin \(language.label), so it will detect the language automatically."
+                )
+            case "cohere" where CohereTranscribeLanguage(rawValue: language.rawValue) != nil:
+                return .init(
+                    kind: .pinned,
+                    effectiveLanguage: language,
+                    explanation: "Transcription is pinned to \(language.label)."
+                )
+            case "indicasr" where IndicASRLanguage(rawValue: language.rawValue) != nil:
+                return .init(
+                    kind: .pinned,
+                    effectiveLanguage: language,
+                    explanation: "Transcription is pinned to \(language.label)."
+                )
+            case "cohere":
+                return .init(
+                    kind: .providerFallback,
+                    effectiveLanguage: .english,
+                    explanation: "Cohere does not support \(language.label); it will use English."
+                )
+            case "indicasr":
+                return .init(
+                    kind: .providerFallback,
+                    effectiveLanguage: .hindi,
+                    explanation: "Indic ASR does not support \(language.label); it will use Hindi."
+                )
+            default:
+                break
+            }
+        }
+
+        if backend.backend == "cohere" {
+            return .init(
+                kind: .providerFallback,
+                effectiveLanguage: .english,
+                explanation: "Cohere cannot auto-detect this profile, so it will use English."
+            )
+        }
+        if backend.backend == "indicasr" {
+            return .init(
+                kind: .providerFallback,
+                effectiveLanguage: .hindi,
+                explanation: "Indic ASR cannot auto-detect this profile, so it will use Hindi."
+            )
+        }
+
+        return .init(
+            kind: .automaticDetection,
+            effectiveLanguage: nil,
+            explanation: selectedLanguages.isEmpty
+                ? "The model will detect the spoken language automatically."
+                : "The model will detect between the selected languages automatically."
+        )
+    }
+}
+
 enum MeetingLiveCaptionBackend: String, CaseIterable, Codable, Sendable {
     case parakeetRealtimeEOU = "parakeet_realtime_eou"
     case nemotron35 = "nemotron35"
@@ -1421,6 +1717,8 @@ struct AppConfig: Codable {
     var indicASRLanguage: String = IndicASRLanguage.defaultLanguage.rawValue
     var nemotron35Language: String = Nemotron35Language.defaultLanguage.rawValue
     var whisperLanguage: String = WhisperKitLanguage.defaultLanguage.rawValue
+    var languageProfile: LanguageProfile = .automatic
+    var languageProfileNeedsConfirmation: Bool = false
     var meetingTranscriptionBackend: String = BackendOption.whisper.backend
     var meetingTranscriptionModel: String = BackendOption.whisper.model
     var meetingSummaryBackend: String = MeetingSummaryBackendOption.chatGPT.backend
@@ -1574,6 +1872,8 @@ struct AppConfig: Codable {
         case indicASRLanguage = "indic_asr_language"
         case nemotron35Language = "nemotron35_language"
         case whisperLanguage = "whisper_language"
+        case languageProfile = "language_profile"
+        case languageProfileNeedsConfirmation = "language_profile_needs_confirmation"
         case meetingTranscriptionBackend = "meeting_transcription_backend"
         case meetingTranscriptionModel = "meeting_transcription_model"
         case meetingSummaryBackend = "meeting_summary_backend"
@@ -1716,10 +2016,28 @@ struct AppConfig: Codable {
         sttModel = (try? c.decode(String.self, forKey: .sttModel)) ?? defaults.sttModel
         dictationInputDeviceUID = try? c.decode(String.self, forKey: .dictationInputDeviceUID)
         meetingInputDeviceUID = try? c.decode(String.self, forKey: .meetingInputDeviceUID)
-        cohereLanguage = CohereTranscribeLanguage.resolvedCode(try? c.decode(String.self, forKey: .cohereLanguage))
-        indicASRLanguage = IndicASRLanguage.resolvedCode(try? c.decode(String.self, forKey: .indicASRLanguage))
-        nemotron35Language = Nemotron35Language.resolvedCode(try? c.decode(String.self, forKey: .nemotron35Language))
-        whisperLanguage = WhisperKitLanguage.resolvedCode(try? c.decode(String.self, forKey: .whisperLanguage))
+        let legacyCohereLanguage = try? c.decode(String.self, forKey: .cohereLanguage)
+        let legacyIndicASRLanguage = try? c.decode(String.self, forKey: .indicASRLanguage)
+        let legacyNemotron35Language = try? c.decode(String.self, forKey: .nemotron35Language)
+        let legacyWhisperLanguage = try? c.decode(String.self, forKey: .whisperLanguage)
+        cohereLanguage = CohereTranscribeLanguage.resolvedCode(legacyCohereLanguage)
+        indicASRLanguage = IndicASRLanguage.resolvedCode(legacyIndicASRLanguage)
+        nemotron35Language = Nemotron35Language.resolvedCode(legacyNemotron35Language)
+        whisperLanguage = WhisperKitLanguage.resolvedCode(legacyWhisperLanguage)
+        if let decodedProfile = try? c.decode(LanguageProfile.self, forKey: .languageProfile) {
+            languageProfile = decodedProfile
+            languageProfileNeedsConfirmation =
+                (try? c.decode(Bool.self, forKey: .languageProfileNeedsConfirmation)) ?? false
+        } else {
+            let migration = LanguageProfile.migratingLegacyPins(
+                cohere: legacyCohereLanguage,
+                indicASR: legacyIndicASRLanguage,
+                nemotron35: legacyNemotron35Language,
+                whisper: legacyWhisperLanguage
+            )
+            languageProfile = migration.profile
+            languageProfileNeedsConfirmation = migration.needsConfirmation
+        }
         meetingTranscriptionBackend = (try? c.decode(String.self, forKey: .meetingTranscriptionBackend)) ?? sttBackend
         meetingTranscriptionModel = (try? c.decode(String.self, forKey: .meetingTranscriptionModel)) ?? sttModel
         meetingSummaryBackend = (try? c.decode(String.self, forKey: .meetingSummaryBackend)) ?? defaults.meetingSummaryBackend
@@ -1932,19 +2250,26 @@ struct AppConfig: Codable {
     }
 
     var resolvedCohereLanguage: CohereTranscribeLanguage {
-        CohereTranscribeLanguage.resolved(cohereLanguage)
+        languageProfile.resolvedCohereLanguage
     }
 
     var resolvedIndicASRLanguage: IndicASRLanguage {
-        IndicASRLanguage.resolved(indicASRLanguage)
+        languageProfile.resolvedIndicASRLanguage
     }
 
     var resolvedNemotron35Language: Nemotron35Language {
-        Nemotron35Language.resolved(nemotron35Language)
+        languageProfile.resolvedNemotron35Language
     }
 
     var resolvedWhisperLanguage: WhisperKitLanguage {
-        WhisperKitLanguage.resolved(whisperLanguage)
+        languageProfile.resolvedWhisperLanguage
+    }
+
+    mutating func mirrorLanguageProfileToLegacyPins() {
+        cohereLanguage = resolvedCohereLanguage.rawValue
+        indicASRLanguage = resolvedIndicASRLanguage.rawValue
+        nemotron35Language = resolvedNemotron35Language.rawValue
+        whisperLanguage = resolvedWhisperLanguage.rawValue
     }
 
     var resolvedMeetingLiveCaptionBackend: MeetingLiveCaptionBackend {

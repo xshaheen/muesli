@@ -34,6 +34,10 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
     /// Geometry: chunk_mel_frames 224 + pre_encode_cache 9 = total 233; 8× subsampling
     /// → 28 encoder frames/chunk; chunkSamples = 2240ms · 16kHz = 35840.
     private var config: NemotronRNNTConfig {
+        config(promptId: promptId)
+    }
+
+    private func config(promptId: Int32) -> NemotronRNNTConfig {
         NemotronRNNTConfig(
             chunkSamples: 35840,
             cacheChannelFrames: 42,      // att_context left
@@ -163,6 +167,10 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
         try nemotronMakeStreamState(config: config)
     }
 
+    func makeStreamState(promptId: Int32) throws -> StreamState {
+        try nemotronMakeStreamState(config: config(promptId: promptId))
+    }
+
     /// Process one 2240ms audio chunk (35840 samples) and return newly decoded text.
     func transcribeChunk(samples: [Float], state: inout StreamState) async throws -> String {
         guard loaded, let preprocessor, let encoder, let decoder, let joint else {
@@ -173,12 +181,13 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
         try await inferenceGate.acquire()
         do {
             try Task.checkCancellation()
+            let frozenConfig = config(promptId: state.promptId ?? promptId)
             let newTokens = try await nemotronTranscribeChunk(
                 preprocessor: preprocessor, encoder: encoder, decoder: decoder, joint: joint,
-                config: config, samples: samples, state: &state)
+                config: frozenConfig, samples: samples, state: &state)
             let text = nemotronDecodeTokens(
                 newTokens, tokenizer: tokenizer,
-                stripAngleBracketTags: config.stripAngleBracketTags, trim: false)
+                stripAngleBracketTags: frozenConfig.stripAngleBracketTags, trim: false)
             await inferenceGate.release()
             return text
         } catch {
@@ -190,24 +199,29 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
     // MARK: - Convenience (full-file transcription)
 
     func transcribe(wavURL: URL) async throws -> (text: String, processingTime: Double) {
+        try await transcribe(wavURL: wavURL, promptId: promptId)
+    }
+
+    func transcribe(wavURL: URL, promptId: Int32) async throws -> (text: String, processingTime: Double) {
         guard loaded else { throw TranscriberError.notLoaded }
 
         let samples = try nemotronLoadWavAsFloats(url: wavURL)
         let start = CFAbsoluteTimeGetCurrent()
+        let frozenConfig = config(promptId: promptId)
 
-        var state = try makeStreamState()
+        var state = try nemotronMakeStreamState(config: frozenConfig)
         var sampleOffset = 0
 
         while sampleOffset < samples.count {
-            let chunkEnd = min(sampleOffset + config.chunkSamples, samples.count)
+            let chunkEnd = min(sampleOffset + frozenConfig.chunkSamples, samples.count)
             let chunk = Array(samples[sampleOffset..<chunkEnd])
             _ = try await transcribeChunk(samples: chunk, state: &state)
-            sampleOffset += config.chunkSamples
+            sampleOffset += frozenConfig.chunkSamples
         }
 
         let text = nemotronDecodeTokens(
             state.allTokens, tokenizer: tokenizer,
-            stripAngleBracketTags: config.stripAngleBracketTags, trim: true)
+            stripAngleBracketTags: frozenConfig.stripAngleBracketTags, trim: true)
         let elapsed = CFAbsoluteTimeGetCurrent() - start
         return (text: text, processingTime: elapsed)
     }

@@ -150,4 +150,29 @@ struct ConfigStoreTests {
         let replacementReload = ConfigStore(supportDirectory: directory).load()
         #expect(try DictationStyleRulesetCodec.ruleset(from: replacementReload) == replacementRuleset)
     }
+
+    @Test("language profile persists before becoming authoritative")
+    func languageProfilePersistsAtomically() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConfigStore(supportDirectory: directory)
+        var candidate = AppConfig()
+        candidate.languageProfile = try LanguageProfile(
+            selectedLanguages: [.english, .arabic],
+            dominantLanguage: .arabic,
+            meetingOutputPolicy: .dominantLanguage
+        )
+        candidate.languageProfileNeedsConfirmation = true
+
+        let persisted = try store.saveLanguageProfileConfiguration(candidate)
+        let reloaded = store.load()
+
+        #expect(persisted.languageProfile == candidate.languageProfile)
+        #expect(reloaded.languageProfile == candidate.languageProfile)
+        #expect(!reloaded.languageProfileNeedsConfirmation)
+        #expect(reloaded.cohereLanguage == CohereTranscribeLanguage.arabic.rawValue)
+        #expect(reloaded.nemotron35Language == Nemotron35Language.arabic.rawValue)
+        #expect(reloaded.whisperLanguage == WhisperKitLanguage.arabic.rawValue)
+        #expect(reloaded.indicASRLanguage == IndicASRLanguage.defaultLanguage.rawValue)
+    }
 }

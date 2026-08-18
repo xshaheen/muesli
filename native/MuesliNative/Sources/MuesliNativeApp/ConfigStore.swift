@@ -78,6 +78,10 @@ final class ConfigStore {
     /// Persists a sanitized whole-config candidate before callers publish it as
     /// live style state. A thrown error leaves the caller's prior value intact.
     func saveDictationStyleConfiguration(_ config: AppConfig) throws -> AppConfig {
+        try saveCanonicalConfiguration(config)
+    }
+
+    private func saveCanonicalConfiguration(_ config: AppConfig) throws -> AppConfig {
         if let reason = dictationStyleQuarantineReason {
             throw DictationStylePersistenceError.quarantined(reason)
         }
@@ -108,6 +112,16 @@ final class ConfigStore {
             try FileManager.default.moveItem(at: stagedURL, to: configURL)
         }
         return candidate
+    }
+
+    /// Persists a validated language profile before callers publish it as the
+    /// live runtime authority. Legacy provider pins are mirrored only so an
+    /// older build can read a deterministic rollback value.
+    func saveLanguageProfileConfiguration(_ config: AppConfig) throws -> AppConfig {
+        var candidate = config
+        candidate.languageProfileNeedsConfirmation = false
+        candidate.mirrorLanguageProfileToLegacyPins()
+        return try saveCanonicalConfiguration(candidate)
     }
 
     /// Import uses this seam to prove that the exact portable projection it

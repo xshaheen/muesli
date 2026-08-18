@@ -9,6 +9,29 @@ import MuesliCore
 @Suite("BackendOption")
 struct BackendOptionTests {
 
+    @Test("dictation tests freeze their backend override and Cohere language together")
+    func dictationTestSelectionUsesEffectiveBackend() throws {
+        var config = AppConfig()
+        config.sttBackend = BackendOption.parakeetMultilingual.backend
+        config.sttModel = BackendOption.parakeetMultilingual.model
+        config.languageProfile = try LanguageProfile(
+            selectedLanguages: [.english, .arabic],
+            dominantLanguage: nil
+        )
+
+        let selection = MuesliController.frozenDictationTranscriptionSelection(
+            sessionConfig: config,
+            defaultBackend: .parakeetMultilingual,
+            isTestMode: true,
+            testBackend: .cohereTranscribe,
+            testCohereLanguage: .arabic
+        )
+
+        #expect(selection.backend == .cohereTranscribe)
+        #expect(selection.languageProfile.selectedLanguages == [.arabic])
+        #expect(selection.languageProfile.dominantLanguage == .arabic)
+    }
+
     @Test("all options have unique models")
     func uniqueModels() {
         let models = BackendOption.all.map(\.model)
@@ -414,6 +437,167 @@ struct BackendOptionTests {
         )
 
         #expect(resolved == .whisperSmall)
+    }
+}
+
+@Suite("Language profile")
+struct LanguageProfileTests {
+    @Test("onboarding only applies the Cohere language to Cohere")
+    func onboardingLanguageIsBackendScoped() {
+        #expect(LanguageProfile.onboarding(
+            backend: .parakeetEnglish,
+            cohereLanguage: .english
+        ) == .automatic)
+
+        let cohere = LanguageProfile.onboarding(
+            backend: .cohereTranscribe,
+            cohereLanguage: .arabic
+        )
+        #expect(cohere.selectedLanguages == [.arabic])
+        #expect(cohere.dominantLanguage == .arabic)
+    }
+
+    @Test("dominant meeting output is limited to validated Arabic and English flows")
+    func dominantMeetingOutputRejectsUnsupportedLanguage() {
+        #expect(throws: LanguageProfile.ValidationError.unsupportedDominantOutputLanguage) {
+            try LanguageProfile(
+                selectedLanguages: [.french],
+                dominantLanguage: .french,
+                meetingOutputPolicy: .dominantLanguage
+            )
+        }
+    }
+
+    @Test("empty profile preserves automatic detection")
+    func emptyProfilePreservesAutomaticDetection() {
+        let profile = LanguageProfile.automatic
+
+        #expect(profile.selectedLanguages.isEmpty)
+        #expect(profile.dominantLanguage == nil)
+        #expect(profile.meetingOutputPolicy == .automatic)
+        #expect(profile.authoritativeLanguage == nil)
+    }
+
+    @Test("selected languages are normalized and dominance must be selected")
+    func selectedLanguagesAreNormalized() throws {
+        let profile = try LanguageProfile(
+            selectedLanguages: [.arabic, .english, .arabic],
+            dominantLanguage: .arabic,
+            meetingOutputPolicy: .dominantLanguage
+        )
+
+        #expect(profile.selectedLanguages == [.arabic, .english])
+        #expect(profile.authoritativeLanguage == .arabic)
+        #expect(throws: LanguageProfile.ValidationError.self) {
+            _ = try LanguageProfile(
+                selectedLanguages: [.english],
+                dominantLanguage: .arabic
+            )
+        }
+        #expect(throws: LanguageProfile.ValidationError.self) {
+            _ = try LanguageProfile(
+                selectedLanguages: [.english, .arabic],
+                meetingOutputPolicy: .dominantLanguage
+            )
+        }
+    }
+
+    @Test("legacy pins migrate deterministically")
+    func legacyPinsMigrateDeterministically() {
+        let empty = LanguageProfile.migratingLegacyPins(
+            cohere: nil,
+            indicASR: nil,
+            nemotron35: nil,
+            whisper: nil
+        )
+        #expect(empty.profile == .automatic)
+        #expect(!empty.needsConfirmation)
+
+        let one = LanguageProfile.migratingLegacyPins(
+            cohere: " ar ",
+            indicASR: nil,
+            nemotron35: "ar",
+            whisper: "auto"
+        )
+        #expect(one.profile.selectedLanguages == [.arabic])
+        #expect(one.profile.dominantLanguage == .arabic)
+        #expect(!one.needsConfirmation)
+
+        let conflicting = LanguageProfile.migratingLegacyPins(
+            cohere: "en",
+            indicASR: "hi",
+            nemotron35: "ar",
+            whisper: "auto"
+        )
+        #expect(conflicting.profile.selectedLanguages == [.arabic, .english, .hindi])
+        #expect(conflicting.profile.dominantLanguage == nil)
+        #expect(conflicting.needsConfirmation)
+    }
+
+    @Test("provider resolution preserves mixed automatic detection")
+    func providerResolutionPreservesMixedAutomaticDetection() throws {
+        let mixed = try LanguageProfile(
+            selectedLanguages: [.english, .arabic],
+            dominantLanguage: nil
+        )
+        #expect(mixed.resolvedWhisperLanguage == .auto)
+        #expect(mixed.resolvedNemotron35Language == .auto)
+        #expect(mixed.effectiveBehavior(for: .cohereTranscribe).kind == .providerFallback)
+        #expect(mixed.effectiveBehavior(for: .indicASR).kind == .providerFallback)
+
+        let arabicDominant = try LanguageProfile(
+            selectedLanguages: [.english, .arabic],
+            dominantLanguage: .arabic
+        )
+        #expect(arabicDominant.resolvedWhisperLanguage == .arabic)
+        #expect(arabicDominant.resolvedNemotron35Language == .arabic)
+        #expect(arabicDominant.resolvedCohereLanguage == .arabic)
+
+        let dutch = try LanguageProfile(
+            selectedLanguages: [.dutch],
+            dominantLanguage: .dutch
+        )
+        #expect(dutch.resolvedWhisperLanguage == .auto)
+        #expect(dutch.effectiveBehavior(for: .whisperSmall).kind == .providerFallback)
+    }
+
+    @Test("English-only backend reports incompatible profiles")
+    func englishOnlyBackendReportsIncompatibleProfiles() throws {
+        let profile = try LanguageProfile(
+            selectedLanguages: [.english, .arabic],
+            dominantLanguage: .arabic
+        )
+        let behavior = profile.effectiveBehavior(for: .whisperTinyEnglish)
+
+        #expect(behavior.kind == .englishOnlyFallback)
+        #expect(behavior.effectiveLanguage == .english)
+        #expect(behavior.explanation.contains("English-only"))
+    }
+
+    @Test("AppConfig migrates legacy pins once and encodes the profile")
+    func appConfigMigratesLegacyPinsOnce() throws {
+        let empty = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        #expect(empty.languageProfile == .automatic)
+        #expect(!empty.languageProfileNeedsConfirmation)
+
+        let legacy = Data("""
+        {
+          "cohere_language": "en",
+          "indic_asr_language": "hi",
+          "nemotron35_language": "ar",
+          "whisper_language": "auto"
+        }
+        """.utf8)
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: legacy)
+        #expect(decoded.languageProfile.selectedLanguages == [.arabic, .english, .hindi])
+        #expect(decoded.languageProfile.dominantLanguage == nil)
+        #expect(decoded.languageProfileNeedsConfirmation)
+
+        let reencoded = try JSONEncoder().encode(decoded)
+        let roundTrip = try JSONDecoder().decode(AppConfig.self, from: reencoded)
+        #expect(roundTrip.languageProfile == decoded.languageProfile)
+        #expect(roundTrip.languageProfileNeedsConfirmation)
     }
 }
 

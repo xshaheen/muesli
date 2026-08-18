@@ -171,6 +171,7 @@ enum AudioFileImportController {
         sourceURL: URL,
         title: String,
         controller: MuesliController,
+        context: ImportContext,
         sessionTrace: SessionRunTrace? = nil,
         progress: @escaping (String) -> Void
     ) async throws -> ImportResult {
@@ -198,7 +199,6 @@ enum AudioFileImportController {
 
         try Task.checkCancellation()
 
-        let context = await controller.audioFileImportContext()
         let config = context.config
         let backend = context.backend
         let transcriptionCoordinator = context.transcriptionCoordinator
@@ -254,9 +254,7 @@ enum AudioFileImportController {
             transcriptionEvidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
                 at: wavURL,
                 backend: backend,
-                cohereLanguage: config.resolvedCohereLanguage,
-                indicASRLanguage: config.resolvedIndicASRLanguage,
-                whisperLanguage: config.resolvedWhisperLanguage,
+                profile: config.languageProfile,
                 customWords: config.customWords
             )
         } catch {
@@ -410,7 +408,8 @@ enum AudioFileImportController {
                 transcript: diarizedTranscript,
                 meetingTitle: generatedTitle,
                 error: error,
-                manualNotes: ""
+                manualNotes: "",
+                languageProfile: config.languageProfile
             )
         }
         let summaryElapsedMilliseconds = stageElapsedMilliseconds(since: summaryStartedAt)
