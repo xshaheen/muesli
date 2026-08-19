@@ -228,6 +228,63 @@
         "generated_at_utc": "2026-08-19T08:01:37Z",
         "remote_service_disclosure": "none"
       }
+    },
+    {
+      "id": "signal-pair-08",
+      "parents": [
+        "original-glass-vector-07"
+      ],
+      "round": 8,
+      "mode": "iterate",
+      "thesis": "Preparing and completion should read as one circular signal language: a 14-point coral seed followed by a compact green checked disk.",
+      "anchors": [
+        "user-provided 14-point Preparing reference",
+        "user-requested circular completion state",
+        "approved Contextual Spark coral and semantic green",
+        "Core Animation vector geometry with unclipped compositor glow"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/signal-pair-08.html",
+      "status": "rejected",
+      "created_at_utc": "2026-08-19T08:08:09Z",
+      "generation": {
+        "capability": "manual-html-css-svg",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML with inline SVG",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T08:08:09Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "signal-pair-09",
+      "parents": [
+        "signal-pair-08"
+      ],
+      "round": 9,
+      "mode": "iterate",
+      "thesis": "The approved circular signal pair should be previewed in the browser with the completion check oriented correctly for SVG's top-left coordinate system.",
+      "anchors": [
+        "signal-pair-08 geometry and palette",
+        "Quick Look visual QA",
+        "correct descending-then-rising check silhouette"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/signal-pair-09.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T08:11:17Z",
+      "generation": {
+        "capability": "manual-html-css-svg",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML with inline SVG",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T08:11:17Z",
+        "remote_service_disclosure": "none"
+      }
     }
   ],
   "decisions": [
@@ -279,6 +336,20 @@
       "operation": "reuse the original floating button material stack; reduce the warm tint to 44 percent; replace tiny path painting with backing-scale-aware vector layers",
       "feedback_ref": "feedback.md#19-08-2026-0801-utc--original-glass-and-vector-rendering",
       "decided_at_utc": "2026-08-19T08:01:37Z"
+    },
+    {
+      "from": "original-glass-vector-07",
+      "to": "signal-pair-08",
+      "operation": "match Preparing to the 14-point coral reference and replace the standalone completion check with a checked green circle",
+      "feedback_ref": "feedback.md#19-08-2026-0808-utc--paired-circular-preparing-and-completion-signals",
+      "decided_at_utc": "2026-08-19T08:08:09Z"
+    },
+    {
+      "from": "signal-pair-08",
+      "to": "signal-pair-09",
+      "operation": "preserve the approved signal pair and correct only the HTML preview check orientation",
+      "feedback_ref": "feedback.md#19-08-2026-0811-utc--preview-coordinate-correction",
+      "decided_at_utc": "2026-08-19T08:11:17Z"
     }
   ]
 }

@@ -218,10 +218,10 @@ final class DictationMiniIndicatorController: NSObject {
     static func surfaceSize(for presentation: Presentation) -> CGSize {
         switch presentation {
         case .hidden: return .zero
-        case .preparing: return CGSize(width: 14, height: 14)
+        case .preparing: return CGSize(width: 24, height: 24)
         case .recording: return CGSize(width: 58, height: 22)
         case .processing: return CGSize(width: 28, height: 28)
-        case .success: return CGSize(width: 18, height: 14)
+        case .success: return CGSize(width: 24, height: 24)
         case .failure: return CGSize(width: 22, height: 22)
         case .warning(let text):
             return CGSize(width: min(max(CGFloat(text.count) * 6.4 + 34, 96), 320), height: 26)
@@ -522,6 +522,8 @@ enum DictationMiniPalette {
 
 enum DictationMiniRendering {
     static let glassTintAlpha: CGFloat = 0.44
+    static let preparingDotDiameter: CGFloat = 14
+    static let completionDiameter: CGFloat = 20
 
     static func pixelAligned(_ value: CGFloat, scale: CGFloat) -> CGFloat {
         guard scale > 0 else { return value }
@@ -534,11 +536,13 @@ private final class DictationMiniView: NSView {
     private let tintView = NSView()
     private let waveformView = DictationMiniWaveformView()
     private let pointFieldView = DictationMiniPointFieldView()
+    private let cueView = DictationMiniCueView()
     private let artworkView = DictationMiniArtworkView()
 
     var presentation: DictationMiniIndicatorController.Presentation = .hidden {
         didSet {
             artworkView.presentation = presentation
+            cueView.presentation = presentation
             waveformView.isHidden = presentation != .recording
             pointFieldView.isHidden = presentation != .processing
             updateSurface()
@@ -571,6 +575,7 @@ private final class DictationMiniView: NSView {
         addSubview(tintView)
         addSubview(waveformView)
         addSubview(pointFieldView)
+        addSubview(cueView)
         addSubview(artworkView)
         waveformView.isHidden = true
         pointFieldView.isHidden = true
@@ -589,6 +594,7 @@ private final class DictationMiniView: NSView {
         updateSurface()
         waveformView.refreshAccessibilityPresentation()
         pointFieldView.refreshAccessibilityPresentation()
+        cueView.refreshAccessibilityPresentation()
         artworkView.needsDisplay = true
     }
 
@@ -598,6 +604,7 @@ private final class DictationMiniView: NSView {
         tintView.frame = bounds
         waveformView.frame = bounds
         pointFieldView.frame = bounds
+        cueView.frame = bounds
         artworkView.frame = bounds
         updateSurface()
     }
@@ -610,6 +617,7 @@ private final class DictationMiniView: NSView {
         tintView.layer?.contentsScale = scale
         waveformView.updateBackingScale(scale)
         pointFieldView.updateBackingScale(scale)
+        cueView.updateBackingScale(scale)
         artworkView.layer?.contentsScale = scale
     }
 
@@ -653,6 +661,95 @@ private final class DictationMiniView: NSView {
             hex: DictationMiniPalette.glassTintHex,
             alpha: reduceTransparency ? 1 : DictationMiniRendering.glassTintAlpha
         ).cgColor
+    }
+}
+
+private final class DictationMiniCueView: NSView {
+    private let diskLayer = CAShapeLayer()
+    private let checkLayer = CAShapeLayer()
+    private var backingScale: CGFloat = 2
+
+    var presentation: DictationMiniIndicatorController.Presentation = .hidden {
+        didSet { updateCue() }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        diskLayer.shadowOffset = .zero
+        checkLayer.fillColor = nil
+        checkLayer.lineCap = .round
+        checkLayer.lineJoin = .round
+        layer?.addSublayer(diskLayer)
+        layer?.addSublayer(checkLayer)
+        updateCue()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        updateCue()
+    }
+
+    func updateBackingScale(_ scale: CGFloat) {
+        backingScale = max(scale, 1)
+        diskLayer.contentsScale = backingScale
+        checkLayer.contentsScale = backingScale
+        updateCue()
+    }
+
+    func refreshAccessibilityPresentation() {
+        updateCue()
+    }
+
+    private func updateCue() {
+        let diameter: CGFloat
+        let fillColor: NSColor
+        switch presentation {
+        case .preparing:
+            diameter = DictationMiniRendering.preparingDotDiameter
+            fillColor = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
+        case .success:
+            diameter = DictationMiniRendering.completionDiameter
+            fillColor = NSColor.colorWith(hex: DictationMiniPalette.successHex, alpha: 1)
+        default:
+            isHidden = true
+            return
+        }
+
+        isHidden = false
+        let origin = CGPoint(
+            x: DictationMiniRendering.pixelAligned(bounds.midX - diameter / 2, scale: backingScale),
+            y: DictationMiniRendering.pixelAligned(bounds.midY - diameter / 2, scale: backingScale)
+        )
+        let diskRect = CGRect(origin: origin, size: CGSize(width: diameter, height: diameter))
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        diskLayer.path = CGPath(ellipseIn: diskRect, transform: nil)
+        diskLayer.fillColor = fillColor.cgColor
+        diskLayer.shadowColor = fillColor.withAlphaComponent(0.52).cgColor
+        diskLayer.shadowOpacity = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0.3 : 1
+        diskLayer.shadowRadius = presentation == .preparing ? 5 : 4
+
+        if presentation == .success {
+            let check = CGMutablePath()
+            check.move(to: CGPoint(x: diskRect.minX + 5.1, y: diskRect.midY + 0.1))
+            check.addLine(to: CGPoint(x: diskRect.minX + 8.7, y: diskRect.minY + 6.4))
+            check.addLine(to: CGPoint(x: diskRect.minX + 15.3, y: diskRect.minY + 13.3))
+            checkLayer.path = check
+            checkLayer.strokeColor = NSColor.colorWith(
+                hex: DictationMiniPalette.orbBottomHex,
+                alpha: 0.92
+            ).cgColor
+            checkLayer.lineWidth = 2.2
+            checkLayer.isHidden = false
+        } else {
+            checkLayer.isHidden = true
+        }
+        CATransaction.commit()
     }
 }
 
@@ -851,13 +948,13 @@ private final class DictationMiniArtworkView: NSView {
         }
         switch presentation {
         case .preparing:
-            drawPreparing()
+            break
         case .recording:
             break
         case .processing:
             break
         case .success:
-            drawSuccess()
+            break
         case .failure:
             drawFailure()
         case .warning(let message):
@@ -865,34 +962,6 @@ private final class DictationMiniArtworkView: NSView {
         case .hidden:
             break
         }
-    }
-
-    private func drawPreparing() {
-        let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
-        accent.withAlphaComponent(0.18).setFill()
-        NSBezierPath(ovalIn: bounds).fill()
-        accent.setFill()
-        NSBezierPath(ovalIn: bounds.insetBy(dx: 4, dy: 4)).fill()
-    }
-
-    private func drawSuccess() {
-        let color = NSColor.colorWith(hex: DictationMiniPalette.successHex, alpha: 1)
-        let check = NSBezierPath()
-        check.move(to: CGPoint(x: 1.5, y: 7))
-        check.line(to: CGPoint(x: 6.2, y: 2.8))
-        check.line(to: CGPoint(x: 16.5, y: 12))
-        check.lineWidth = 2.4
-        check.lineCapStyle = .round
-        check.lineJoinStyle = .round
-        NSGraphicsContext.saveGraphicsState()
-        let shadow = NSShadow()
-        shadow.shadowColor = color.withAlphaComponent(0.42)
-        shadow.shadowBlurRadius = 4
-        shadow.shadowOffset = .zero
-        shadow.set()
-        color.setStroke()
-        check.stroke()
-        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func drawFailure() {

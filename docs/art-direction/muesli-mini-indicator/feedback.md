@@ -84,3 +84,17 @@
 - Replace: per-frame `NSBezierPath` waveform bars and processing dots with scale-aware Core Animation gradient and shape layers.
 - Align: vector layer positions to the active window backing scale for clean 1× and 2× edges.
 - Resulting node: `original-glass-vector-07`.
+
+## 19-08-2026 08:08 UTC — paired circular preparing and completion signals
+
+- Keep: Preparing as a surface-free coral signal beside the insertion caret.
+- Match: the reference's 14-point solid coral dot with a restrained warm halo.
+- Replace: the standalone success check with a compact semantic-green circle containing the check.
+- Preserve: backing-scale-aware Core Animation vector geometry and transparent glow-safe window bounds.
+- Resulting node: `signal-pair-08`.
+
+## 19-08-2026 08:11 UTC — preview coordinate correction
+
+- Keep: the sizes, colors, glow bounds, and native implementation from `signal-pair-08`.
+- Correct: the HTML preview's top-left SVG coordinate system so the completion glyph reads as a check rather than a caret.
+- Resulting node: `signal-pair-09`.

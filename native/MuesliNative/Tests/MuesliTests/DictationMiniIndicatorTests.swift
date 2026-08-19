@@ -10,13 +10,13 @@ struct DictationMiniIndicatorTests {
         visibleFrame: CGRect(x: 0, y: 24, width: 800, height: 576)
     )
 
-    @Test("idle owns no visible surface and every state has a distinct silhouette")
+    @Test("idle owns no visible surface and states use the approved footprints")
     func stateVocabulary() {
         #expect(DictationMiniIndicatorController.surfaceSize(for: .hidden) == .zero)
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .preparing) == CGSize(width: 14, height: 14))
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .preparing) == CGSize(width: 24, height: 24))
         #expect(DictationMiniIndicatorController.surfaceSize(for: .recording) == CGSize(width: 58, height: 22))
         #expect(DictationMiniIndicatorController.surfaceSize(for: .processing) == CGSize(width: 28, height: 28))
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .success) == CGSize(width: 18, height: 14))
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .success) == CGSize(width: 24, height: 24))
         #expect(DictationMiniIndicatorController.surfaceSize(for: .failure) == CGSize(width: 22, height: 22))
         #expect(DictationMiniIndicatorController.accessibilityLabel(for: .recording) == "Recording dictation")
         #expect(DictationMiniIndicatorController.accessibilityLabel(for: .processing) == "Generating transcription")
@@ -36,6 +36,8 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniPalette.successHex == 0x62D691)
         #expect(DictationMiniPalette.failureHex == 0xFF6961)
         #expect(DictationMiniRendering.glassTintAlpha == 0.44)
+        #expect(DictationMiniRendering.preparingDotDiameter == 14)
+        #expect(DictationMiniRendering.completionDiameter == 20)
     }
 
     @Test("vector geometry aligns to the active backing scale")
