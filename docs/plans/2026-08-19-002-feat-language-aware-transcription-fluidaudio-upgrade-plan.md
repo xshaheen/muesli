@@ -14,11 +14,11 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** Upgrade FluidAudio from 0.15.1 to 0.15.5 without losing Qwen3 ASR, make language intent truthful at every model boundary, fix long Qwen dictations, and give meetings an independent Auto-or-one-language selector.
-- **Product authority:** This plan is the single active authority for local transcription language routing, the FluidAudio upgrade, Qwen ownership, and Qwen long-audio behavior. It supersedes the overlapping local-ASR portions of the earlier multilingual, Qwen, and hosted-ASR drafts.
+- **Objective:** Upgrade FluidAudio from 0.15.1 to 0.15.5 without losing Qwen3 ASR, make language intent truthful at every model boundary, fix long Qwen dictations, give meetings an independent Auto-or-one-language selector, remove evidence-backed whole-segment speaker-playback duplicates across `You` and remote speakers, and keep Arabic meeting speech Arabic through finalization.
+- **Product authority:** This plan is the single active authority for local transcription language routing, meeting final-transcript integrity, the FluidAudio upgrade, Qwen ownership, and Qwen long-audio behavior. It supersedes the overlapping local-ASR portions of the earlier multilingual, Qwen, and hosted-ASR drafts.
 - **Execution profile:** Deep native macOS migration delivered as six dependency-ordered units. Each unit must leave the app buildable and preserve the selected model.
 - **Authority order:** Product Contract; Planning Contract; Implementation Units; repository instructions and current source patterns; exact upstream source and license.
-- **Stop conditions:** Stop if an implementation silently changes models, converts an explicit language selection to unrestricted Auto, advertises constrained candidates without passing within-backend confidence conformance, publishes a partial long-form transcript, duplicates the Qwen model cache, removes retained-audio recovery, or copies third-party source without attribution.
+- **Stop conditions:** Stop if an implementation silently changes models, converts an explicit language selection to unrestricted Auto, translates trusted Arabic meeting evidence into English, publishes an evidence-backed whole-segment playback duplicate as both `You` and a remote speaker, deletes ambiguous or mixed local speech to force deduplication, advertises constrained candidates without passing within-backend confidence conformance, publishes a partial long-form transcript, duplicates the Qwen model cache, removes retained-audio recovery, or copies third-party source without attribution.
 - **Tail ownership:** The executor owns implementation, migration, tests, signed-app and CLI acceptance, documentation, review, and delivery. The plan itself is not an execution tracker.
 - **Open blockers:** None.
 
@@ -28,7 +28,7 @@ execution: code
 
 ### Summary
 
-Muesli will treat spoken-language intent as a typed input to transcription instead of translating one profile into unrelated provider defaults. Dictation may use Auto, one language, or a constrained set. Meetings use an independent Auto-or-one-language selection. Meeting transcript language stays separate from the language used for titles, summaries, and notes.
+Muesli will treat spoken-language intent as a typed input to transcription instead of translating one profile into unrelated provider defaults. Dictation may use Auto, one language, or a constrained set. Meetings use an independent Auto-or-one-language selection. Meeting transcript language stays separate from the language used for titles, summaries, and notes. Finalization removes evidence-backed speaker-playback duplicates and rejects downstream processing that translates trusted Arabic transcript evidence into English.
 
 Muesli will upgrade maintained FluidAudio consumers to 0.15.5. Qwen remains available through an Apache-attributed Muesli-owned Core ML target because FluidAudio removed that backend after 0.15.2. Qwen app and CLI calls will use the same bounded long-audio runner.
 
@@ -38,17 +38,23 @@ The current `LanguageProfile` stores selected languages, an optional dominant la
 
 Meetings reuse the dictation profile even though meeting recognition and meeting artifact language are separate user decisions. The setting does not provide the requested direct choice between Auto and one spoken language.
 
+Meeting capture records microphone and system audio as separate tracks. Although microphone VAD already consumes the echo-cancelled stream, speaker playback can still leak into both tracks. `TranscriptReconciler` deliberately preserves every non-empty overlapping microphone turn, so the same remote utterance can appear once as `You` and once as `Others` or a diarized speaker.
+
+Meeting chunks and repair paths also publish cleaned recognizer output without validating that it still matches the frozen spoken-language authority. Arabic can therefore be present in live or earlier transcript evidence and then be replaced by an English translation from the final recognizer or repair pass. Prompting the model to preserve language is necessary but is not a sufficient finalization contract.
+
 Qwen currently resamples the entire WAV and calls FluidAudio once. FluidAudio 0.15.1 documents a 30-second Core ML limit and a 512-token decoder cache, both consistent with the observed long-input failures. FluidAudio 0.15.5 is the current upstream release and carries maintained Parakeet long-transcription seam fixes plus VAD and diarization improvements needed by Muesli's other FluidAudio consumers. Qwen was removed in 0.15.3, so a direct version bump would make Muesli fail to compile and remove a selected model.
 
 ### Definitions
 
 - **Dictation language selection:** Auto, one explicit language, or a selected language set with an optional dominant-language tie-breaker.
 - **Meeting spoken language:** Auto or one explicit language. The value is frozen when recording starts.
-- **Meeting artifact language:** The independently resolved language for the title, summary, notes, headings, regeneration, and fallback prose.
+- **Meeting artifact language:** The independently resolved language for the title, summary, notes, headings, regeneration, and artifact fallback prose.
 - **Backend capabilities:** The supported languages, routing modes, confidence support, safe duration, streaming behavior, and workload eligibility declared for one recognizer.
 - **Routing decision:** A typed result of resolving user intent against backend capabilities. It is Auto, pinned, constrained candidates, fixed language, or incompatible.
 - **Constrained candidates:** One complete request-level decode per allowed language, followed by deterministic selection of one complete transcript using comparable within-backend confidence and safety checks.
 - **Complete publication:** A transcript becomes visible, persisted, pasted, or printed only after every required inference succeeds.
+- **Cross-track playback duplicate:** A whole atomic microphone segment whose time materially overlaps and whose text is equivalent to a system-audio utterance caused by speaker bleed.
+- **Language-valid Arabic meeting transcript:** A transcript candidate that preserves Arabic wording and any embedded English technical terms instead of translating the speech into English.
 
 ### Actors and Flows
 
@@ -72,12 +78,16 @@ Qwen currently resamples the entire WAV and calls FluidAudio once. FluidAudio 0.
   - **Actors:** Muesli runtime and package maintainer.
   - **Steps:** Muesli first replaces FluidAudio Qwen APIs with its owned target, then upgrades FluidAudio and repairs maintained consumers.
   - **Outcome:** Qwen remains selectable while other FluidAudio models use 0.15.5.
+- F6. Meeting transcript finalization
+  - **Actors:** Meeting participant and Muesli finalization pipeline.
+  - **Steps:** Muesli reconciles microphone and system tracks, removes only evidence-backed playback duplicates, validates repaired or final transcript candidates against the frozen spoken language, and retains the trusted candidate for the same source and interval when final processing translates the speech.
+  - **Outcome:** Each evidence-backed whole-segment playback duplicate has one remote-speaker attribution, ambiguous or mixed local speech remains preserved, and trusted Arabic evidence remains Arabic in the persisted final transcript.
 
 ### Key Decisions
 
-- KD1. Use one consolidated implementation plan for the upgrade, Qwen reliability, and language enhancement. (session-settled: user-directed — chosen over separate upgrade, Qwen, and language plans because the dependency and routing changes must land in one coherent sequence.) Governs R1-R20.
-- KD2. An explicit language selection is authoritative. (session-settled: user-directed — chosen over unrestricted multilingual auto-detection because the user already knows the allowed languages and current Auto quality is poor.) Governs R1-R5, R8, R9.
-- KD3. Meetings expose Auto or one spoken language independently from dictation and artifact output. (session-settled: user-directed — chosen over reusing the multi-language dictation profile because meeting recognition needs a simpler explicit control.) Governs R6-R9, R20.
+- KD1. Use one consolidated implementation plan for the upgrade, Qwen reliability, and language enhancement. (session-settled: user-directed — chosen over separate upgrade, Qwen, and language plans because the dependency and routing changes must land in one coherent sequence.) Governs R1-R22.
+- KD2. An explicit language selection is authoritative. (session-settled: user-directed — chosen over unrestricted multilingual auto-detection because the user already knows the allowed languages and current Auto quality is poor.) Governs R1-R5, R8, R9, R21.
+- KD3. Meetings expose Auto or one spoken language independently from dictation and artifact output. (session-settled: user-directed — chosen over reusing the multi-language dictation profile because meeting recognition needs a simpler explicit control.) Governs R6-R9, R20-R22.
 - KD4. Upgrade FluidAudio without a comparative model benchmark. (session-settled: user-directed — chosen over a benchmark-gated model bake-off because the upgrade and behavior contract are already decided.) Governs R14-R16, R18.
 - KD5. Preserve Qwen and the selected-model contract. (session-settled: user-approved — chosen over removing Qwen or silently substituting another recognizer because model changes alter language and accuracy semantics.) Governs R10-R17, R19.
 
@@ -97,6 +107,8 @@ Qwen currently resamples the entire WAV and calls FluidAudio once. FluidAudio 0.
 - R7. Muesli MUST freeze meeting spoken language together with live and final model authorities at recording start and use those values through capture, repair, fallback, and finalization.
 - R8. Meeting model or language settings changed during recording MUST apply to the next meeting and MUST NOT mutate the active session.
 - R9. Meeting artifact language MUST remain independent from spoken-language selection and MUST be stored with the meeting so regeneration does not adopt later settings.
+- R21. In this release, when Arabic is the frozen explicit meeting language and trusted pre-final transcript evidence contains Arabic, every final recognizer, selective-repair, full-session transcription fallback, and cleanup candidate that would replace that evidence MUST preserve its Arabic wording. A candidate that converts the Arabic speech into English prose MUST be rejected, the trusted Arabic evidence MUST remain authoritative, and conventional English technical terms spoken within Arabic MUST remain unchanged. Rejecting optional post-persistence cleanup MUST keep the already-durable transcript and MUST NOT change the meeting's terminal outcome.
+- R22. When temporal and semantic evidence identifies a whole atomic microphone segment as the same speaker-playback utterance in the system track, final reconciliation MUST publish it once under the system or diarized remote-speaker identity. Reconciliation MUST run before adjacent microphone segments are merged, preserve any mixed or semantically distinct local speech, and MUST NOT globally suppress a legitimately repeated phrase.
 
 #### Qwen ownership and long audio
 
@@ -111,7 +123,7 @@ Qwen currently resamples the entire WAV and calls FluidAudio once. FluidAudio 0.
 - R15. All maintained FluidAudio consumers MUST preserve their current model identity, cache, download, preload, transcription, VAD, diarization, and meeting behavior after API migration.
 - R16. Existing language-profile configuration MUST migrate deterministically: dictation keeps its selected set and dominant tie-breaker; meeting spoken language becomes the sole selected language when exactly one existed, otherwise the legacy dominant language when one was set, and Auto only when neither authority existed; old dominant-output Arabic or English becomes the corresponding explicit artifact language and every other old output policy becomes Automatic.
 - R17. App and CLI MUST share Qwen inference, language routing, long-audio geometry, merge, cancellation, and typed failure semantics; CLI MUST accept Auto, one language, or a comma-separated language set.
-- R18. Traces and diagnostics MUST record the content-free frozen selection, capabilities, routing result, candidate count, window count, failing window, timings, backend identity, and terminal outcome without audio, transcript fragments, paths, or model confidence values. The local-only trace MAY additionally record the score-normalization version, per-candidate validity, a nonnumeric margin class (`clear`, `near_tie`, `exact_tie`, or `invalid`), and the backend-selected candidate or auto-detected language. Those language values are content-derived. All of these local-only fields are excluded from telemetry, CLI envelopes, incidents, text exports, and CloudKit.
+- R18. Traces and diagnostics MUST record the content-free frozen selection, capabilities, routing result, candidate count, window count, failing window, timings, backend identity, cross-track suppression count, language-preservation outcome, and terminal outcome without audio, transcript fragments, paths, or model confidence values. The local-only trace MAY additionally record the score-normalization version, per-candidate validity, a nonnumeric margin class (`clear`, `near_tie`, `exact_tie`, or `invalid`), the backend-selected candidate or auto-detected language, and typed reasons for duplicate suppression or translated-candidate rejection. Those language values are content-derived. All of these local-only fields are excluded from telemetry, CLI envelopes, incidents, text exports, and CloudKit.
 - R19. Missing, deleted, or incompatible selected models MUST remain selected and visibly unavailable; Muesli MUST NOT rewrite persisted selection to another downloaded model.
 - R20. Meeting imports and retranscription MUST freeze the current meeting spoken-language selection and apply the same capability validation as live meetings.
 
@@ -137,12 +149,16 @@ Qwen currently resamples the entire WAV and calls FluidAudio once. FluidAudio 0.
 - AE18. Given meeting audio is imported or retranscribed with Arabic selected, when the operation starts, then it freezes Arabic, validates the requested backend, and passes Arabic through every transcription call.
 - AE19. Given a migrated dictation profile selects a set other than exactly English and Arabic, when configuration loads or transcription starts, then the set remains selected, the UI reports that constrained recognition is unavailable in this release, and transcription is blocked without pinning one language or using Auto.
 - AE20. Given Qwen input exceeds 20 minutes or its requested candidate set would exceed 134 window-candidate calls, when app or CLI preflight runs, then inference does not start and a typed duration-limit error is returned without transcript output.
+- AE21. Given speaker output creates one atomic microphone segment equivalent to a temporally overlapping system segment and a separate atomic microphone segment containing a local interruption in the same interval, when the meeting is finalized, then the playback segment appears once as `Others` or its diarized remote speaker and the distinct interruption remains as `You`. A single mixed mic segment containing both playback and local speech is preserved whole rather than partially rewritten.
+- AE22. Given an explicit Arabic meeting whose trusted pre-final transcript contains Arabic wording and conventional English technical terms, when a final recognizer, repair, or synchronous cleanup candidate returns an English translation, then Muesli rejects that candidate, persists the trusted Arabic transcript with the English terms unchanged, and records the content-free rejection reason.
+- AE23. Given a completed explicit Arabic meeting whose durable raw transcript contains Arabic wording, when optional post-persistence cleanup returns an English translation, then Muesli discards the cleanup result, keeps the durable Arabic transcript unchanged, and leaves the meeting completed.
 
 ### Success Criteria
 
 - Qwen completes 45-second and 100-105-second app and CLI fixtures with beginning, middle, and ending markers present.
 - English, Arabic, and Arabic-English fixtures prove pinned and constrained routing without unrestricted Auto fallback.
-- Meeting tests prove Auto and explicit language behavior across start, live chunks, final repair, backend changes, save, sync, and regeneration.
+- Meeting tests prove Auto and explicit language behavior across start, live chunks, final repair, backend changes, save, sync, and regeneration; explicit Arabic never becomes an English translation during finalization.
+- Speaker-route fixtures prove an evidence-backed whole-segment remote playback duplicate cannot be published under both `You` and a remote speaker, while ambiguous, mixed, and genuinely overlapping local speech survives.
 - FluidAudio resolves to 0.15.5 and all direct FluidAudio consumers compile and pass their focused tests.
 - Existing Qwen users reuse their model files and keep download, delete, warmup, and memory-pressure behavior.
 - Verification uses deterministic behavior and fixture acceptance only. It does not introduce WER/CER comparison, model ranking, or a benchmark gate.
@@ -151,8 +167,9 @@ Qwen currently resamples the entire WAV and calls FluidAudio once. FluidAudio 0.
 
 **In scope**
 
-- Local dictation and meeting language intent, capability validation, routing, and diagnostics.
+- Local dictation and meeting language intent, capability validation, routing, final-language validation, and diagnostics.
 - An independent meeting Auto-or-one-language selector and persisted artifact-language snapshot.
+- Evidence-backed microphone/system playback deduplication during meeting finalization.
 - Qwen non-streaming Core ML ownership, language hints, bounded long audio, app and CLI parity.
 - FluidAudio 0.15.5 migration for every current direct consumer.
 - Configuration, SQLite, CloudKit, CLI, documentation, and attribution changes required by this scope.
@@ -164,7 +181,7 @@ Qwen currently resamples the entire WAV and calls FluidAudio once. FluidAudio 0.
 - Comparative model evaluation, WER/CER scoring, or a model-selection benchmark.
 - Live Qwen streaming, timestamps, diarization, or meeting-preview support.
 - Equal quality claims for all listed languages; the constrained multilingual release matrix is English and Arabic.
-- Cleanup prompts, dictionary redesign, OCR context, meeting lifecycle detection, and lifecycle sounds except for regression protection at their existing seams.
+- General cleanup-prompt redesign, dictionary redesign, OCR context, meeting lifecycle detection, and lifecycle sounds except for the meeting language-preservation guard and regression protection at their existing seams.
 
 ### Dependencies and Sources
 
@@ -189,6 +206,8 @@ Qwen currently resamples the entire WAV and calls FluidAudio once. FluidAudio 0.
 - KTD8. **Upgrade FluidAudio only after Qwen callers have switched owners.** (session-settled: user-directed — chosen over staying pinned or attempting a direct bump because the upgrade is required and current FluidAudio no longer contains Qwen.) Update the package pin, resolution, duplicated telemetry version, and all changed public APIs in one compile-clean unit. Covers R10, R14, R15.
 - KTD9. **Keep confidence and content private.** Routing traces record decisions, counts, durations, and typed reasons. They do not store candidate text, scores, audio, paths, or model logits. Raw ASR, cleanup, and final output remain separate local diagnostic artifacts under their existing privacy contract. Covers R18.
 - KTD10. **Preserve unavailable model identity.** Availability validation becomes non-mutating. The UI reports unavailable or incompatible selections and runtime preflight blocks them. Only explicit user selection changes persisted model identity. Covers R19.
+- KTD11. **Reconcile speaker playback on atomic segments before readable-turn merging.** (session-settled: user-directed — chosen over trusting echo cancellation alone because speaker-route bleed still reaches both recognized tracks.) `TranscriptReconciler` uses temporal overlap plus multilingual-normalized whole-segment text equivalence as evidence of a cross-track duplicate and keeps the system or diarized remote segment. It never removes part of a mic segment: mixed segments, ambiguous overlap, and semantically distinct simultaneous local speech are preserved whole. Covers R22.
+- KTD12. **Treat Arabic preservation as a validation and rollback gate, not only a prompt.** (session-settled: user-directed — chosen over accepting the final model unconditionally because Arabic meeting speech is currently translated into English.) For explicit Arabic, raw batch evidence or finalized streaming output selected as the durable transcript authority is trusted evidence when it contains Arabic; display-only partials, provisional UI captions, and generated cleanup results are not. A typed per-source, per-interval gate classifies replacement candidates as accepted, rejected-keep-prior, no-speech, or failed before collectors publish them; completion order never defines authority. A candidate that materially removes Arabic script while replacing it with English prose is rejected, while ordinary English technical terms and genuine Arabic-English code-switching remain valid. Invalid repair preserves the trusted candidate for the same source and interval, and optional post-persistence cleanup simply keeps the already-durable transcript when rejected. Auto and other explicitly selected languages do not infer a rejection authority from this first-release rule. Covers R7, R21.
 
 ### High-Level Technical Design
 
@@ -245,6 +264,26 @@ stateDiagram-v2
   Blocked --> Configured: user changes language or backend
 ```
 
+Meeting finalization applies conservative evidence gates before the transcript is formatted or persisted.
+
+```mermaid
+flowchart LR
+  A["Recognized microphone turns"] --> C["Cross-track reconciliation"]
+  B["Recognized system turns"] --> C
+  C -->|"evidence-backed playback duplicate"| D["Keep remote-system attribution once"]
+  C -->|"distinct or ambiguous overlap"| E["Preserve both turns"]
+  D --> F["Final or repair candidate"]
+  E --> F
+  F --> G{"Matches frozen spoken language?"}
+  G -->|"yes"| H["Format and persist"]
+  G -->|"translated"| I["Retain trusted same-source interval candidate"]
+  I --> H
+  H --> J["Optional post-persistence cleanup"]
+  J --> K{"Preserves trusted Arabic evidence?"}
+  K -->|"yes"| L["Update durable transcript"]
+  K -->|"translated"| M["Discard cleanup; keep durable transcript"]
+```
+
 ### Migration and Compatibility
 
 - Decode the existing `LanguageProfile` before removing its serialized shape. U1 keeps a deprecated read-only compatibility projection so unchanged callers compile; U3 switches dictation and CLI callers, U4 switches meeting, UI, import, summary, storage, and sync callers, then removes the projection.
@@ -260,6 +299,7 @@ stateDiagram-v2
 
 - **Configuration:** One combined structure becomes three authorities with deterministic decoding and atomic save behavior.
 - **Runtime:** Four provider-specific language parameters collapse into one typed routing decision at `TranscriptionRuntime` and meeting entry points.
+- **Meeting finalization:** Atomic mic/system reconciliation precedes readable-turn merging, and typed Arabic-preservation decisions protect trusted evidence at synchronous and post-persistence replacement seams.
 - **Storage and sync:** Meetings persist spoken-selection and artifact-language snapshots for reproducible regeneration.
 - **Dependency surface:** The upgrade affects every direct FluidAudio import, not only Qwen.
 - **Resources:** Constrained English-Arabic dictation performs two sequential decodes on supported models. Capability limits prevent unbounded fan-out and concurrent Core ML memory spikes.
@@ -275,6 +315,8 @@ stateDiagram-v2
 - **Boundary deletion:** Use minimum word/grapheme anchors and prefer duplicated text over lost speech when overlap is uncertain.
 - **Silent empty windows:** Inspect only the non-overlap center so repeated overlap energy does not hide an omitted speech region.
 - **Meeting setting drift:** Freeze language and model authorities together. Defer every later settings change to the next meeting.
+- **Playback-dedup false positives:** Require both temporal and semantic evidence, prefer preserving ambiguous turns, and test genuine interruptions and repeated phrases separately from speaker bleed.
+- **Language-gate false positives:** Apply the rejection gate only to explicit spoken-language selections, compare against accepted source evidence, and permit English technical terms and genuine code-switching inside Arabic.
 - **Unavailable model normalization:** Replace selection-rewriting helpers with read-only availability results and tests that preserve identifiers through deletion and relaunch.
 - **Cache duplication:** Adopt the current Qwen directory in place and test legacy markerless, managed-complete, partial, deleted, and interrupted states.
 
@@ -283,7 +325,7 @@ stateDiagram-v2
 1. Land the shared capability contract and configuration migration without changing backend calls.
 2. Extract Qwen and switch app and CLI to `MuesliQwenCoreML` while FluidAudio remains at 0.15.1.
 3. Route dictation and CLI language intent through the shared resolver and add bounded Qwen audio.
-4. Add and persist the meeting selector and artifact-language snapshot.
+4. Add and persist the meeting selector and artifact-language snapshot, then enforce meeting language preservation and cross-track playback reconciliation.
 5. Upgrade FluidAudio to 0.15.5 and repair all remaining consumers.
 6. Complete integrated diagnostics, attribution, documentation, and signed-app acceptance.
 
@@ -343,16 +385,20 @@ stateDiagram-v2
 - **Verification:** Run Qwen long-audio, transcription runtime, Whisper, diagnostic, retained-audio, and CLI suites; then transcribe 45-second and 100-105-second fixtures through injected and real-model paths.
 - **Dependencies:** U1, U2.
 
-### U4. Add the independent meeting spoken-language selector
+### U4. Add meeting language authority and final-transcript integrity
 
-- **Goal:** Let users select Auto or one explicit meeting language while preserving independent artifact-output behavior and reproducible regeneration.
-- **Requirement slice:** R5-R9, R15, R16, R18-R20; KTD2, KTD4, KTD9, KTD10.
-- **Files:** `native/MuesliNative/Sources/MuesliNativeApp/SettingsView.swift`; `native/MuesliNative/Sources/MuesliNativeApp/Models.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MuesliController.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MeetingSession.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MeetingStreamingPartialSession.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MeetingOutputLanguage.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MeetingSummaryClient.swift`; `native/MuesliNative/Sources/MuesliNativeApp/AudioFileImportController.swift`; `native/MuesliNative/Sources/MuesliCore/StorageModels.swift`; `native/MuesliNative/Sources/MuesliCore/DictationStore.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MuesliICloudSyncEngine.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MuesliCKSyncEngine.swift`; `native/MuesliNative/Tests/MuesliTests/MeetingLanguageSelectionTests.swift` (new); `native/MuesliNative/Tests/MuesliTests/MeetingSessionTests.swift`; `native/MuesliNative/Tests/MuesliTests/MeetingOutputLanguageTests.swift`; `native/MuesliNative/Tests/MuesliTests/MeetingSummaryClientTests.swift`; `native/MuesliNative/Tests/MuesliTests/AudioFileImportControllerTests.swift`; `native/MuesliNative/Tests/MuesliTests/ICloudSyncTests.swift`.
-- **Approach:** Add the selector to meeting speech-recognition settings, filtered and explained by the combined live/final capability intersection. Snapshot language and model authorities at start. Remove active-session authority mutation from settings changes. Resolve the snapshot for every batch, streaming, tail, selective-repair, full-session-fallback, import, and retranscription call. Summary, title, fallback, import, and regeneration APIs accept the frozen spoken-language decision and persisted artifact language explicitly instead of reading `AppConfig.languageProfile`. Persist both with the meeting, sync them as optional fields, then remove U1's compatibility projection.
+- **Goal:** Let users select Auto or one explicit meeting language, preserve it through finalization, remove evidence-backed speaker-playback duplicates, and keep artifact-output behavior independently reproducible.
+- **Requirement slice:** R5-R9, R15, R16, R18-R22; KTD2, KTD4, KTD9-KTD12.
+- **Files:** `native/MuesliNative/Sources/MuesliNativeApp/SettingsView.swift`; `native/MuesliNative/Sources/MuesliNativeApp/Models.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MuesliController.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MeetingSession.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MeetingStreamingPartialSession.swift`; `native/MuesliNative/Sources/MuesliNativeApp/TranscriptReconciler.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MeetingTranscriptLanguageValidator.swift` (new); `native/MuesliNative/Sources/MuesliNativeApp/MeetingTranscriptCleanup.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MeetingTranscriptCleanupValidator.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MeetingOutputLanguage.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MeetingSummaryClient.swift`; `native/MuesliNative/Sources/MuesliNativeApp/AudioFileImportController.swift`; `native/MuesliNative/Sources/MuesliCore/StorageModels.swift`; `native/MuesliNative/Sources/MuesliCore/DictationStore.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MuesliICloudSyncEngine.swift`; `native/MuesliNative/Sources/MuesliNativeApp/MuesliCKSyncEngine.swift`; `native/MuesliNative/Tests/MuesliTests/MeetingLanguageSelectionTests.swift` (new); `native/MuesliNative/Tests/MuesliTests/MeetingSessionTests.swift`; `native/MuesliNative/Tests/MuesliTests/TranscriptReconcilerTests.swift`; `native/MuesliNative/Tests/MuesliTests/MeetingTranscriptLanguageValidatorTests.swift` (new); `native/MuesliNative/Tests/MuesliTests/MeetingTranscriptCleanupTests.swift`; `native/MuesliNative/Tests/MuesliTests/MeetingOutputLanguageTests.swift`; `native/MuesliNative/Tests/MuesliTests/MeetingSummaryClientTests.swift`; `native/MuesliNative/Tests/MuesliTests/AudioFileImportControllerTests.swift`; `native/MuesliNative/Tests/MuesliTests/ICloudSyncTests.swift`.
+- **Approach:** Add the selector to meeting speech-recognition settings, filtered and explained by the combined live/final capability intersection. Snapshot language and model authorities at start. Remove active-session authority mutation from settings changes. Resolve the snapshot for every batch, streaming, tail, selective-repair, full-session transcription fallback, import, and retranscription call. At the existing `TranscriptReconciler` seam, evaluate atomic segments before readable-turn merging; suppress a microphone segment only when KTD11 proves it is the system track's playback duplicate, and preserve ambiguous or mixed overlap. Under KTD12, apply a typed per-source, per-interval decision before raw and cleaned evidence enters collectors, with no-speech and failed outcomes kept distinct from translated-candidate rejection; separately extend the existing post-persistence cleanup validator so a translated optional cleanup result is discarded while the durable transcript and terminal outcome remain unchanged. Summary, title, artifact fallback prose, import, and regeneration APIs accept the frozen spoken-language decision and persisted artifact language explicitly instead of reading `AppConfig.languageProfile`. Persist both with the meeting, sync them as optional fields, then remove U1's compatibility projection.
 - **Test scenarios:**
   - Auto and each supported explicit language save, reload, migrate, and freeze independently from dictation settings.
   - Start preflight accepts compatible live/final pairs and blocks explicit or Auto mismatches without creating a live meeting row.
-  - Mic, system, tail, selective repair, full fallback, and unified Nemotron paths receive the frozen selection.
+  - Mic, system, tail, selective repair, full-session transcription fallback, and unified Nemotron paths receive the frozen selection.
+  - Speaker-route playback with an equivalent atomic mic/system pair keeps one remote-system turn; a separate local interruption during the same interval remains attributed to `You`, a mixed mic segment is preserved whole, and a legitimately repeated phrase outside the overlap remains present.
+  - Explicit Arabic raw batch evidence or finalized durable streaming output followed by an English-translated final, repair, full-session transcription fallback, or synchronous cleanup candidate rejects the translated candidate and retains Arabic wording plus embedded English technical terms; display-only partials never become rollback authority, and Auto, other explicit languages, and genuine Arabic-English code-switching are not falsely rejected.
+  - Per-source and per-interval language decisions distinguish accepted, rejected-keep-prior, no-speech, and failed candidates independent of task completion order; rejected repair preserves existing segments.
+  - Optional post-persistence cleanup that translates a durable Arabic transcript is discarded without changing the transcript or the meeting's completed terminal state.
   - Backend and language settings changed during recording leave the active session unchanged and apply to the next meeting.
   - Import and retranscription freeze and validate the current meeting spoken-language selection.
   - Artifact language remains stable through save, app relaunch, sync round-trip, regeneration, resume recording, and follow-up meeting flows.
@@ -381,13 +427,13 @@ stateDiagram-v2
 ### U6. Finish integrated diagnostics, documentation, and acceptance
 
 - **Goal:** Prove the consolidated behavior on the shipped surfaces and document the new ownership and language semantics.
-- **Requirement slice:** Integrated acceptance for R1-R20 and all KTDs.
+- **Requirement slice:** Integrated acceptance for R1-R22 and all KTDs.
 - **Files:** `README.md`; `native/MuesliNative/Sources/MuesliNativeApp/AboutView.swift`; `native/MuesliNative/Sources/MuesliNativeApp/Models.swift`; `native/MuesliNative/Sources/MuesliNativeApp/SessionTraceRuntime.swift`; `native/MuesliNative/Sources/MuesliNativeApp/DiagnosticErrorCatalog.swift`; `native/MuesliNative/Tests/MuesliTests/SessionTraceRuntimeTests.swift`; `native/MuesliNative/Tests/MuesliTests/DiagnosticIncidentTests.swift`; focused acceptance fixtures and provenance under `native/MuesliNative/Tests/MuesliTests/Fixtures/`.
 - **Approach:** Update model support, ownership, language behavior, CLI syntax, attribution, and troubleshooting documentation. Add end-to-end trace assertions and real-model smoke instructions without introducing comparative scoring or a model-selection gate.
 - **Test scenarios:**
-  - Diagnostics distinguish Auto, pinned, constrained, fixed, incompatible, duration-limit, cache-capacity, empty-window, failed-window, and cancellation outcomes. Local-only tests cover normalization version, validity, margin class, and detected language while proving those content-derived fields do not cross export boundaries.
+  - Diagnostics distinguish Auto, pinned, constrained, fixed, incompatible, duration-limit, cache-capacity, empty-window, failed-window, cancellation, translated-candidate rejection, and cross-track duplicate suppression outcomes. Local-only tests cover normalization version, validity, margin class, detected language, and typed meeting-integrity reasons while proving those content-derived fields do not cross export boundaries.
   - README, About, model descriptions, and CLI help identify FluidAudio 0.15.5 for maintained models and Muesli-owned Apache-derived Qwen code.
-  - English, Arabic, Arabic-English, short Qwen, long Qwen, meeting Auto, and meeting explicit-language acceptance flows reach one terminal outcome.
+  - English, Arabic, Arabic-English, short Qwen, long Qwen, meeting Auto, meeting explicit-language, speaker-route deduplication, and translated-final rejection acceptance flows reach one terminal outcome.
   - Local-only traces remain excluded from CloudKit, telemetry, CLI envelopes, incidents, and text exports; retained audio remains independently governed.
 - **Verification:** Run full native tests, helper checks, signed-app smoke, CLI smoke, `git diff --check`, and attribution review.
 - **Dependencies:** U1-U5.
@@ -407,6 +453,7 @@ stateDiagram-v2
 | Candidate conformance | Run fixed same-backend English, Arabic, and same-window Arabic-English correctness fixtures with sentinel phrases, language-order changes, and gain changes. | U2, U3 | KTD3 score construction is finite and deterministic, the winning candidate preserves both mixed-language sentinels without translation or omission, and both required backends enable only the English-Arabic pair. This is not a comparative model benchmark. |
 | Qwen real-model acceptance | Run short English and Arabic pinned checks, one 45-second Arabic-English app check, and one 100-105-second Arabic-English CLI check with consented scripted fixtures. | U2, U3, U6 | Expected markers are present, each scripted phrase spanning a window boundary appears exactly once, and automated injected tests retain the full duration/language matrix and prove no partial publication on failure or cancellation. |
 | Meeting acceptance | Record short Auto, Arabic, and English meetings with compatible live/final pairs; change model and language settings during recording; then attempt to start the next meeting with an incompatible pair and regenerate the saved meeting after changing global settings. | U4, U6 | Hints reach every transcription path, the active meeting keeps its frozen authorities, the next incompatible start is blocked, and stored artifact language remains stable. |
+| Meeting transcript integrity | Record an explicit Arabic meeting containing conventional English technical terms over speaker output; inject one equivalent atomic mic/system playback pair, one separate simultaneous local interruption, one mixed mic segment, an English-translated final candidate, and an English-translated optional cleanup result. | U4, U6 | The equivalent playback segment appears once under the remote speaker, the separate interruption and mixed segment remain under `You`, both translated replacements are rejected, and the persisted transcript retains Arabic wording plus the English technical terms without changing its completed terminal state. |
 | Qwen ownership audit | Inspect compiled imports, the pinned model revision and digest manifest, model cache paths, and lifecycle tests. | U2 | Qwen has no FluidAudio Qwen dependency, legacy and downloaded artifacts are digest-verified, and no duplicate cache exists. |
 | FluidAudio package audit | Inspect `Package.swift`, `Package.resolved`, the direct-import inventory, model repository/revision identities, and runtime telemetry. | U5 | FluidAudio is exactly 0.15.5, every direct consumer was compiled and reviewed, non-Qwen model identities match the recorded 0.15.1 baseline, and telemetry reports the same version. |
 | License audit | Inspect derived-file headers, `THIRD_PARTY_NOTICES.md`, About, and README. | U2, U6 | Apache attribution names FluidAudio v0.15.1 and the exact source revision. |
@@ -422,11 +469,12 @@ No verification gate compares models, calculates WER/CER, ranks providers, or ca
 - U1 is done when app and CLI share one capability resolver, legacy configuration migrates deterministically, and explicit unsupported selections cannot become Auto.
 - U2 is done when app and CLI use the attributed Muesli-owned Qwen target under FluidAudio 0.15.1 and all existing Qwen caches and lifecycle actions remain valid.
 - U3 is done when Qwen long inputs, language hints, conservative merge, cancellation, empty-window behavior, and app/CLI parity pass deterministic and real-model acceptance, and both Qwen and multilingual Whisper have enabled the English-Arabic constrained capability by passing KTD3. Failure of either gate blocks this enhancement release; it does not ship a degraded fallback.
-- U4 is done when meetings expose Auto or one spoken language, freeze compatible language and model authorities together, cover import and retranscription, and persist independent artifact language through storage, sync, and regeneration.
+- U4 is done when meetings expose Auto or one spoken language, freeze compatible language and model authorities together, cover import and retranscription, reject final processing that translates explicit Arabic speech, remove evidence-backed cross-track playback duplicates without losing genuine local speech, and persist independent artifact language through storage, sync, and regeneration.
 - U5 is done when FluidAudio 0.15.5 is resolved and every maintained consumer passes focused and full native verification without Qwen regression.
 - U6 is done when diagnostics, privacy boundaries, documentation, attribution, signed-app acceptance, and CLI acceptance are complete.
-- The complete change keeps one accepted Raw ASR result, one downstream cleanup pass, and one terminal outcome per dictation or meeting transcription request.
+- Every successful request keeps one accepted Raw ASR result and no translated replacement; every request, including no-speech and failed paths, keeps exactly one terminal outcome.
 - No explicit language selection is ignored, no model is silently substituted, and no partial long-form transcript is represented as complete.
+- No trusted Arabic meeting evidence is replaced by an English translation, no evidence-backed whole-segment playback duplicate is published under both `You` and a remote speaker, and ambiguous or mixed local speech is never deleted to force deduplication.
 - Missing or deleted model selections remain intact and visible until the user explicitly changes them.
 - No duplicate Qwen model download or cache migration occurs.
 - No benchmark, temporary experiment, abandoned adapter, obsolete provider-specific routing path, or dead compatibility code remains in the final diff.
