@@ -69,7 +69,7 @@ struct MeetingRecordingPanelLifecycleTests {
             ownerID: firstOwner,
             startedAt: currentTime,
             powerProvider: { -30 },
-            showTranscript: false
+            presentation: .backgroundPill
         )
         currentTime.addTimeInterval(5)
         controller.beginFinalizing(ownerID: firstOwner)
@@ -77,7 +77,7 @@ struct MeetingRecordingPanelLifecycleTests {
             ownerID: secondOwner,
             startedAt: currentTime,
             powerProvider: { -40 },
-            showTranscript: false
+            presentation: .backgroundPill
         )
 
         controller.close(ownerID: firstOwner)
@@ -97,7 +97,7 @@ struct MeetingRecordingPanelLifecycleTests {
             ownerID: owner,
             startedAt: currentTime,
             powerProvider: { -25 },
-            showTranscript: false
+            presentation: .backgroundPill
         )
 
         currentTime.addTimeInterval(8)
@@ -124,7 +124,7 @@ struct MeetingRecordingPanelLifecycleTests {
             ownerID: UUID(),
             startedAt: now,
             powerProvider: { -160 },
-            showTranscript: false
+            presentation: .backgroundPill
         )
 
         #expect(controller.controlAccessibilityLabelsForTesting == [
@@ -153,7 +153,7 @@ struct MeetingRecordingPanelLifecycleTests {
             startedAt: now,
             powerProvider: { -160 },
             chatContext: context,
-            showTranscript: false
+            presentation: .backgroundPill
         )
 
         #expect(controller.hasMeetingContextForTesting)
@@ -181,7 +181,7 @@ struct MeetingRecordingPanelLifecycleTests {
             ownerID: owner,
             startedAt: now,
             powerProvider: { -35 },
-            showTranscript: false
+            presentation: .backgroundPill
         )
 
         let generation = indicator.beginPreparing()
@@ -198,11 +198,137 @@ struct MeetingRecordingPanelLifecycleTests {
         controller.close()
     }
 
-    private func makeController(now: @escaping () -> Date) -> MeetingRecordingPanelController {
+    @Test("an absent choice defers to the start entry point, a remembered one overrides it")
+    func rememberedChoiceResolution() {
+        // Absent: the entry point decides.
+        #expect(MeetingRecordingPanelController.resolvesPanelOpen(
+            preferred: nil,
+            presentation: .floatingPanel
+        ))
+        #expect(!MeetingRecordingPanelController.resolvesPanelOpen(
+            preferred: nil,
+            presentation: .backgroundPill
+        ))
+        #expect(!MeetingRecordingPanelController.resolvesPanelOpen(
+            preferred: nil,
+            presentation: .foregroundNotes
+        ))
+
+        // Remembered: the last user choice wins for every floating start.
+        #expect(!MeetingRecordingPanelController.resolvesPanelOpen(
+            preferred: false,
+            presentation: .floatingPanel
+        ))
+        #expect(MeetingRecordingPanelController.resolvesPanelOpen(
+            preferred: true,
+            presentation: .backgroundPill
+        ))
+
+        // A start that opens the meeting document always rests as the pill.
+        #expect(!MeetingRecordingPanelController.resolvesPanelOpen(
+            preferred: true,
+            presentation: .foregroundNotes
+        ))
+    }
+
+    @Test("a start never writes the remembered panel choice")
+    func startDoesNotRememberResolvedChoice() {
+        let now = Date(timeIntervalSinceReferenceDate: 45_000)
+        let controller = makeController(now: { now })
+        let owner = UUID()
+
+        controller.showRecording(
+            ownerID: owner,
+            startedAt: now,
+            powerProvider: { -160 },
+            presentation: .floatingPanel
+        )
+
+        #expect(controller.resolvedPanelOpenForTesting)
+        #expect(controller.preferredPanelOpenForTesting == nil)
+        #expect(controller.panelOpenSaveCountForTesting == 0)
+        controller.close()
+    }
+
+    @Test("a remembered minimize survives a config re-apply and the next start")
+    func rememberedMinimizeSurvivesConfigReapply() {
+        let now = Date(timeIntervalSinceReferenceDate: 50_000)
+        var saved: [Bool] = []
+        let controller = makeController(now: { now })
+        controller.onPanelOpenSaved = { saved.append($0) }
+
+        controller.showRecording(
+            ownerID: UUID(),
+            startedAt: now,
+            powerProvider: { -160 },
+            presentation: .floatingPanel
+        )
+        controller.toggleTranscriptPanel()
+
+        #expect(saved == [false])
+        #expect(controller.lastSavedPanelOpenForTesting == false)
+        #expect(controller.preferredPanelOpenForTesting == false)
+
+        // A config apply that has not yet observed the write must not resurrect
+        // the old preference for the running meeting.
+        controller.applyConfiguration(AppConfig())
+        var persisted = AppConfig()
+        persisted.meetingPanelOpen = false
+        controller.applyConfiguration(persisted)
+        controller.close()
+
+        controller.showRecording(
+            ownerID: UUID(),
+            startedAt: now,
+            powerProvider: { -160 },
+            presentation: .floatingPanel
+        )
+
+        #expect(!controller.resolvedPanelOpenForTesting)
+        #expect(saved == [false])
+        controller.close()
+    }
+
+    @Test("finalizing, discard and close never write the remembered panel choice")
+    func terminalTransitionsDoNotRememberPanelChoice() {
+        let now = Date(timeIntervalSinceReferenceDate: 55_000)
+        var config = AppConfig()
+        config.meetingPanelOpen = true
+        var saved: [Bool] = []
+        var discardCount = 0
+        let controller = makeController(now: { now }, configuration: config)
+        controller.onPanelOpenSaved = { saved.append($0) }
+        controller.onDiscard = { discardCount += 1 }
+        let owner = UUID()
+
+        controller.showRecording(
+            ownerID: owner,
+            startedAt: now,
+            powerProvider: { -160 },
+            presentation: .backgroundPill
+        )
+
+        #expect(controller.resolvedPanelOpenForTesting)
+
+        controller.discardRequested()
+        controller.beginFinalizing(ownerID: owner)
+        controller.close(ownerID: owner)
+
+        #expect(discardCount == 1)
+        #expect(saved.isEmpty)
+        #expect(controller.panelOpenSaveCountForTesting == 0)
+        #expect(controller.preferredPanelOpenForTesting == true)
+    }
+
+    private func makeController(
+        now: @escaping () -> Date,
+        configuration: AppConfig? = nil
+    ) -> MeetingRecordingPanelController {
         let supportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("meeting-recording-panel-\(UUID().uuidString)", isDirectory: true)
         return MeetingRecordingPanelController(
             configStore: ConfigStore(supportDirectory: supportDirectory),
+            configuration: configuration,
             now: now
         )
     }

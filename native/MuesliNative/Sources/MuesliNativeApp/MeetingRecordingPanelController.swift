@@ -123,16 +123,17 @@ final class MeetingRecordingPanelController: NSObject {
     var onTogglePause: (() -> Void)?
     var onOpenNotes: (() -> Void)?
     var onControlCenterSaved: ((CGPoint) -> Void)?
-
-    var onTranscriptPanelOriginSaved: ((CGPoint) -> Void)? {
-        get { transcriptPanel.onUserMovedPanel }
-        set { transcriptPanel.onUserMovedPanel = newValue }
-    }
+    /// Fires only for a user-initiated open or minimize. The start-time
+    /// resolution, the finalizing fold, discard and close must never write the
+    /// remembered choice, otherwise an automatic transition would masquerade as intent.
+    var onPanelOpenSaved: ((Bool) -> Void)?
 
     private let now: () -> Date
     private var savedControlCenter: CGPoint?
-    private var savedTranscriptOrigin: CGPoint?
-    private var showsTranscriptOnHover: Bool
+    private var preferredPanelOpen: Bool?
+    private var resolvedPanelOpen = false
+    private var panelOpenSaveCount = 0
+    private var lastSavedPanelOpen: Bool?
     private var state: MeetingRecordingPanelState = .hidden
     private var ownerID: UUID?
     private var elapsedClock = MeetingRecordingElapsedClock()
@@ -176,12 +177,8 @@ final class MeetingRecordingPanelController: NSObject {
         let configuration = configuration ?? configStore.load()
         self.now = now
         self.savedControlCenter = configuration.meetingRecordingPanelCenter.map { CGPoint(x: $0.x, y: $0.y) }
-        self.savedTranscriptOrigin = configuration.meetingPanelOrigin.map { CGPoint(x: $0.x, y: $0.y) }
-        self.showsTranscriptOnHover = configuration.showMeetingTranscriptOnRecordingPanelHover
+        self.preferredPanelOpen = configuration.meetingPanelOpen
         super.init()
-        transcriptPanel.savedOriginProvider = { [weak self] in
-            self?.savedTranscriptOrigin
-        }
 
         let screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -221,11 +218,26 @@ final class MeetingRecordingPanelController: NSObject {
         [transcriptButton, pauseButton, stopButton].compactMap { $0?.accessibilityLabel() }
     }
     var hasMeetingContextForTesting: Bool { transcriptPanel.hasMeetingContextForTesting }
+    var preferredPanelOpenForTesting: Bool? { preferredPanelOpen }
+    var resolvedPanelOpenForTesting: Bool { resolvedPanelOpen }
+    var panelOpenSaveCountForTesting: Int { panelOpenSaveCount }
+    var lastSavedPanelOpenForTesting: Bool? { lastSavedPanelOpen }
 
+    /// Config is only the seed for the *next* start: the live layout stays
+    /// authoritative, so a re-entrant config apply never re-folds an open panel.
     func applyConfiguration(_ configuration: AppConfig) {
         savedControlCenter = configuration.meetingRecordingPanelCenter.map { CGPoint(x: $0.x, y: $0.y) }
-        savedTranscriptOrigin = configuration.meetingPanelOrigin.map { CGPoint(x: $0.x, y: $0.y) }
-        showsTranscriptOnHover = configuration.showMeetingTranscriptOnRecordingPanelHover
+        preferredPanelOpen = configuration.meetingPanelOpen
+    }
+
+    /// The remembered choice wins for every start that can present the floating
+    /// object; a start that opens the meeting document always rests as the pill.
+    nonisolated static func resolvesPanelOpen(
+        preferred: Bool?,
+        presentation: MeetingStartPresentation
+    ) -> Bool {
+        guard !presentation.opensMeetingDocument else { return false }
+        return preferred ?? presentation.presentsFloatingPanelWhenRecordingStarts
     }
 
     func showRecording(
@@ -233,7 +245,7 @@ final class MeetingRecordingPanelController: NSObject {
         startedAt: Date,
         powerProvider: @escaping () -> Float,
         chatContext: FloatingMeetingChatContext? = nil,
-        showTranscript: Bool
+        presentation: MeetingStartPresentation
     ) {
         self.ownerID = ownerID
         self.powerProvider = powerProvider
@@ -257,7 +269,11 @@ final class MeetingRecordingPanelController: NSObject {
         panel.orderFrontRegardless()
         startAnimationTimer()
 
-        if showTranscript {
+        resolvedPanelOpen = Self.resolvesPanelOpen(
+            preferred: preferredPanelOpen,
+            presentation: presentation
+        )
+        if resolvedPanelOpen {
             showTranscriptPanel()
         }
     }
@@ -325,6 +341,7 @@ final class MeetingRecordingPanelController: NSObject {
         ownerID = nil
         state = .hidden
         elapsedClock.reset()
+        resolvedPanelOpen = false
         isTranscriptManuallyDismissed = false
         dragWindowOrigin = nil
         dragPointerOrigin = nil
@@ -348,8 +365,10 @@ final class MeetingRecordingPanelController: NSObject {
         if transcriptPanel.isVisible {
             isTranscriptManuallyDismissed = true
             hideTranscript()
+            rememberPanelOpen(false)
         } else {
             showTranscriptPanel()
+            rememberPanelOpen(true)
         }
     }
 
@@ -359,12 +378,9 @@ final class MeetingRecordingPanelController: NSObject {
         showTranscript()
     }
 
-    func pointerEntered() {
-        guard state == .recording || state == .paused else { return }
-        guard !isTranscriptManuallyDismissed else { return }
-        guard showsTranscriptOnHover else { return }
-        showTranscript()
-    }
+    /// Hover no longer opens the transcript; the hover state machine lands with
+    /// the three-state layout axis.
+    func pointerEntered() {}
 
     func pointerInteractionBegan(at screenPoint: NSPoint) {
         guard let panel else { return }
@@ -708,6 +724,14 @@ final class MeetingRecordingPanelController: NSObject {
         guard let visibleFrame else { return }
         transcriptPanel.show(beside: panel.frame, in: visibleFrame)
         refreshTranscriptButton()
+    }
+
+    private func rememberPanelOpen(_ isOpen: Bool) {
+        preferredPanelOpen = isOpen
+        resolvedPanelOpen = isOpen
+        panelOpenSaveCount += 1
+        lastSavedPanelOpen = isOpen
+        onPanelOpenSaved?(isOpen)
     }
 
     private func hideTranscript(reset: Bool = false) {

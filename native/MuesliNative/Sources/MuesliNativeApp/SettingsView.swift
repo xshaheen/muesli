@@ -875,13 +875,6 @@ struct SettingsView: View {
                 .frame(height: 24)
             }
             Divider().background(MuesliTheme.surfaceBorder)
-            settingsRow("Show transcript on hover") {
-                settingsSwitch(isOn: appState.config.showMeetingTranscriptOnRecordingPanelHover) { newValue in
-                    controller.updateConfig { $0.showMeetingTranscriptOnRecordingPanelHover = newValue }
-                }
-            }
-            settingsDescription("Show recent transcript beside the waveform.")
-            Divider().background(MuesliTheme.surfaceBorder)
             settingsRow(
                 "Live preview model",
                 description: meetingLiveTranscriptDescription,

@@ -137,32 +137,6 @@ struct LegacyIndicatorConfigurationTests {
         #expect(!config.showHotkeyInMenuBar)
     }
 
-    @Test("meeting transcript hover defaults on and persists")
-    func meetingTranscriptHoverRoundTrip() throws {
-        var config = AppConfig()
-        #expect(config.showMeetingTranscriptOnRecordingPanelHover)
-        config.showMeetingTranscriptOnRecordingPanelHover = false
-
-        let data = try JSONEncoder().encode(config)
-        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
-
-        #expect(!decoded.showMeetingTranscriptOnRecordingPanelHover)
-    }
-
-    @Test("legacy meeting transcript hover false decodes for the recording panel")
-    func legacyMeetingTranscriptHoverFalseDecode() throws {
-        let json = #"{"show_meeting_transcript_on_indicator_hover": false}"#
-        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
-        #expect(!config.showMeetingTranscriptOnRecordingPanelHover)
-    }
-
-    @Test("legacy meeting transcript hover true decodes for the recording panel")
-    func legacyMeetingTranscriptHoverTrueDecode() throws {
-        let json = #"{"show_meeting_transcript_on_indicator_hover": true}"#
-        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
-        #expect(config.showMeetingTranscriptOnRecordingPanelHover)
-    }
-
     @Test("post processor defaults to disabled")
     func postProcessorDisabledByDefault() {
         let config = AppConfig()

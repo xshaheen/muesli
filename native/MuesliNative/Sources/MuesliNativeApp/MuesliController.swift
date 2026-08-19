@@ -912,10 +912,8 @@ final class MuesliController: NSObject {
                 $0.meetingRecordingPanelCenter = CGPointCodable(x: center.x, y: center.y)
             }
         }
-        meetingRecordingPanel.onTranscriptPanelOriginSaved = { [weak self] origin in
-            self?.updateConfig {
-                $0.meetingPanelOrigin = CGPointCodable(x: origin.x, y: origin.y)
-            }
+        meetingRecordingPanel.onPanelOpenSaved = { [weak self] isOpen in
+            self?.updateConfig { $0.meetingPanelOpen = isOpen }
         }
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
@@ -3617,6 +3615,7 @@ final class MuesliController: NSObject {
                     title: event.title,
                     calendarOccurrence: event.resolvedCalendarOccurrence,
                     openDocument: false,
+                    presentation: .backgroundPill,
                     endDate: event.endDate,
                     autoStopSource: event.meetingURL.flatMap { MeetingAutoStopSource(meetingURL: $0) },
                     startOrigin: .calendarAutoRecord
@@ -5900,7 +5899,7 @@ final class MuesliController: NSObject {
             calendarEventID: calendarEventID,
             calendarOccurrence: calendarOccurrence,
             openDocument: presentation.opensMeetingDocument,
-            showFloatingPanelWhenActive: presentation.presentsFloatingPanelWhenRecordingStarts,
+            presentation: presentation,
             endDate: endDate,
             autoStopSource: autoStopSource,
             startOrigin: startOrigin
@@ -5918,7 +5917,7 @@ final class MuesliController: NSObject {
         calendarEventID: String? = nil,
         calendarOccurrence: CalendarOccurrenceReference? = nil,
         openDocument: Bool = false,
-        showFloatingPanelWhenActive: Bool = false,
+        presentation: MeetingStartPresentation = .backgroundPill,
         endDate: Date? = nil,
         autoStopSource: MeetingAutoStopSource? = nil,
         startOrigin: MeetingRecordingStartOrigin = .manual,
@@ -6011,7 +6010,7 @@ final class MuesliController: NSObject {
                     backend: meetingBackend,
                     config: meetingConfig,
                     templateSnapshot: templateSnapshot,
-                    showFloatingPanelWhenActive: showFloatingPanelWhenActive,
+                    presentation: presentation,
                     endDate: endDate,
                     previousMeetingNotes: previousMeetingNotes
                 )
@@ -6086,6 +6085,7 @@ final class MuesliController: NSObject {
         startMeetingRecording(
             title: MeetingFollowUpPolicy.followUpTitle(from: predecessor.title),
             openDocument: true,
+            presentation: .foregroundNotes,
             followUpToID: predecessor.id,
             inheritedFolderID: predecessor.folderID,
             previousMeetingNotes: MeetingFollowUpPolicy.carriedContext(from: predecessor)
@@ -6595,7 +6595,7 @@ final class MuesliController: NSObject {
         backend: BackendOption,
         config meetingConfig: AppConfig,
         templateSnapshot: MeetingTemplateSnapshot,
-        showFloatingPanelWhenActive: Bool = false,
+        presentation: MeetingStartPresentation = .backgroundPill,
         endDate: Date?,
         previousMeetingNotes: String? = nil
     ) async throws {
@@ -6820,7 +6820,7 @@ final class MuesliController: NSObject {
                         meetingSession?.currentPower() ?? -160
                     },
                     chatContext: meetingChatContext,
-                    showTranscript: showFloatingPanelWhenActive
+                    presentation: presentation
                 )
                 statusBarController?.refresh()
                 syncAppState()

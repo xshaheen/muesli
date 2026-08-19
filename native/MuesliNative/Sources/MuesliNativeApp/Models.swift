@@ -1754,9 +1754,10 @@ struct AppConfig: Codable {
     /// Stable center of the independent compact meeting recording controller.
     /// This is intentionally separate from the legacy dictation indicator origin.
     var meetingRecordingPanelCenter: CGPointCodable? = nil
-    /// Bottom-left origin the user last dragged the floating transcript panel to.
-    /// The panel is user-positioned, not pill-attached; nil means never moved.
-    var meetingPanelOrigin: CGPointCodable? = nil
+    /// Whether the meeting object rests open as the panel or minimized as the pill.
+    /// nil until the user opens or minimizes it once; while nil the start entry
+    /// point decides, so a fresh install keeps today's per-entry-point behaviour.
+    var meetingPanelOpen: Bool? = nil
     var openAIAPIKey: String = ""
     var openRouterAPIKey: String = ""
     var openAIModel: String = ""
@@ -1842,8 +1843,6 @@ struct AppConfig: Codable {
     /// Preserves the original unified Nemotron behavior unless the user explicitly
     /// chooses a separate downloaded model for the final transcript.
     var useLiveMeetingTranscriptAsFinal: Bool = true
-    /// Reveals the live transcript while the pointer is over the Meeting Recording Panel.
-    var showMeetingTranscriptOnRecordingPanelHover: Bool = true
     var meetingHookEnabled: Bool = false
     var meetingHookPath: String = ""
     var meetingHookTimeoutSeconds: Int = 30
@@ -1911,7 +1910,7 @@ struct AppConfig: Codable {
         case dashboardWindowFrame = "dashboard_window_frame"
         case indicatorOrigin = "indicator_origin"
         case meetingRecordingPanelCenter = "meeting_recording_panel_center"
-        case meetingPanelOrigin = "meeting_panel_origin"
+        case meetingPanelOpen = "meeting_panel_open"
         case openAIAPIKey = "openai_api_key"
         case openRouterAPIKey = "openrouter_api_key"
         case openAIModel = "openai_model"
@@ -1976,7 +1975,6 @@ struct AppConfig: Codable {
         case enableLiveStreamingPartials = "enable_live_streaming_partials"
         case meetingLiveCaptionBackend = "meeting_live_caption_backend"
         case useLiveMeetingTranscriptAsFinal = "use_live_meeting_transcript_as_final"
-        case showMeetingTranscriptOnRecordingPanelHover = "show_meeting_transcript_on_recording_panel_hover"
         case meetingHookEnabled = "meeting_hook_enabled"
         case meetingHookPath = "meeting_hook_path"
         case meetingHookTimeoutSeconds = "meeting_hook_timeout_seconds"
@@ -1998,7 +1996,6 @@ struct AppConfig: Codable {
         case dictationStyleCategoryAssignments = "dictation_style_category_assignments"
         case dictationStyleAppRules = "dictation_style_app_rules"
         case dictationStyleDomainRules = "dictation_style_domain_rules"
-        case showMeetingTranscriptOnIndicatorHover = "show_meeting_transcript_on_indicator_hover"
         case showDictationFocusReminder = "show_dictation_focus_reminder"
     }
 
@@ -2116,7 +2113,7 @@ struct AppConfig: Codable {
         dashboardWindowFrame = try? c.decode(WindowFrame.self, forKey: .dashboardWindowFrame)
         indicatorOrigin = try? c.decode(CGPointCodable.self, forKey: .indicatorOrigin)
         meetingRecordingPanelCenter = try? c.decode(CGPointCodable.self, forKey: .meetingRecordingPanelCenter)
-        meetingPanelOrigin = try? c.decode(CGPointCodable.self, forKey: .meetingPanelOrigin)
+        meetingPanelOpen = try? c.decode(Bool.self, forKey: .meetingPanelOpen)
         openAIAPIKey = (try? c.decode(String.self, forKey: .openAIAPIKey)) ?? defaults.openAIAPIKey
         openRouterAPIKey = (try? c.decode(String.self, forKey: .openRouterAPIKey)) ?? defaults.openRouterAPIKey
         openAIModel = SummaryModelPreset.migratedFromGPT55(
@@ -2229,10 +2226,6 @@ struct AppConfig: Codable {
             .rawValue
         useLiveMeetingTranscriptAsFinal = (try? c.decode(Bool.self, forKey: .useLiveMeetingTranscriptAsFinal))
             ?? defaults.useLiveMeetingTranscriptAsFinal
-        showMeetingTranscriptOnRecordingPanelHover =
-            (try? c.decode(Bool.self, forKey: .showMeetingTranscriptOnRecordingPanelHover))
-            ?? (try? legacy.decode(Bool.self, forKey: .showMeetingTranscriptOnIndicatorHover))
-            ?? defaults.showMeetingTranscriptOnRecordingPanelHover
         meetingHookEnabled = (try? c.decode(Bool.self, forKey: .meetingHookEnabled)) ?? defaults.meetingHookEnabled
         meetingHookPath = (try? c.decode(String.self, forKey: .meetingHookPath)) ?? defaults.meetingHookPath
         meetingHookTimeoutSeconds = (try? c.decode(Int.self, forKey: .meetingHookTimeoutSeconds)) ?? defaults.meetingHookTimeoutSeconds
