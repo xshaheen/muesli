@@ -8,6 +8,7 @@ let package = Package(
     ],
     products: [
         .library(name: "MuesliCore", targets: ["MuesliCore"]),
+        .library(name: "MuesliQwenCoreML", targets: ["MuesliQwenCoreML"]),
         .executable(name: "MuesliNativeApp", targets: ["MuesliNativeApp"]),
         .executable(name: "muesli-cli", targets: ["MuesliCLI"]),
     ],
@@ -35,10 +36,16 @@ let package = Package(
                 .linkedLibrary("sqlite3"),
             ]
         ),
+        .target(
+            name: "MuesliQwenCoreML",
+            dependencies: ["MuesliCore"],
+            path: "Sources/MuesliQwenCoreML"
+        ),
         .executableTarget(
             name: "MuesliNativeApp",
             dependencies: [
                 "MuesliCore",
+                "MuesliQwenCoreML",
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "LLM", package: "LLM.swift"),
                 .target(name: "CLiteRTLM_mac", condition: .when(platforms: [.macOS])),
@@ -63,6 +70,7 @@ let package = Package(
             name: "MuesliCLI",
             dependencies: [
                 "MuesliCore",
+                "MuesliQwenCoreML",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "WhisperKit", package: "WhisperKit"),
@@ -90,7 +98,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MuesliTests",
-            dependencies: ["MuesliNativeApp", "MuesliCore", "MuesliCLI", "AudioGraphExceptionBridge", "LocalVQEBridge"],
+            dependencies: ["MuesliNativeApp", "MuesliCore", "MuesliQwenCoreML", "MuesliCLI", "AudioGraphExceptionBridge", "LocalVQEBridge"],
             path: "Tests/MuesliTests",
             resources: [
                 .copy("Fixtures"),

@@ -3,6 +3,7 @@ import AVFoundation
 import FluidAudio
 import Foundation
 import MuesliCore
+import MuesliQwenCoreML
 import WhisperKit
 
 enum TranscribeOutputFormat: String, CaseIterable, ExpressibleByArgument {
@@ -798,10 +799,10 @@ actor SenseVoiceCLITranscriber: AudioTranscribing {
     }
 }
 
-/// Wraps FluidAudio's `Qwen3AsrManager` directly — a thin wrapper, same shape as
+/// Wraps Muesli's Core ML Qwen manager — a thin wrapper, same shape as
 /// the app's `Qwen3AsrTranscriber` (`Qwen3AsrBackend.swift`), reusing the app's
 /// default model cache. Requires macOS 15+ for CoreML stateful decoder support,
-/// same constraint FluidAudio's `Qwen3AsrManager` itself carries.
+/// same constraint as the Muesli-owned stateful decoder.
 actor Qwen3AsrCLITranscriber: AudioTranscribing {
     func transcribe(wavURL: URL, model: TranscribeModel, progress: @escaping (String) -> Void) async throws -> HeadlessTranscription {
         guard #available(macOS 15, *) else {
@@ -814,7 +815,7 @@ actor Qwen3AsrCLITranscriber: AudioTranscribing {
     private func transcribeOnSupportedOS(wavURL: URL, progress: @escaping (String) -> Void) async throws -> HeadlessTranscription {
         if manager == nil {
             progress("loading qwen3-asr")
-            let plan = ManagedASRModelPlans.qwen3ASRInt8()
+            let plan = Qwen3ModelIntegrity.plan()
             manager = try await ManagedASRModelDownloader.loadValidated(
                 plan,
                 progress: { fraction, message in
@@ -822,7 +823,7 @@ actor Qwen3AsrCLITranscriber: AudioTranscribing {
                 }
             ) { modelDir in
                 progress("preparing model")
-                let mgr = Qwen3AsrManager()
+                let mgr = MuesliQwen3AsrManager()
                 try await mgr.loadModels(from: modelDir)
                 return mgr
             }
@@ -833,12 +834,12 @@ actor Qwen3AsrCLITranscriber: AudioTranscribing {
         }
         let start = CFAbsoluteTimeGetCurrent()
         let samples = try AudioConverter().resampleAudioFile(wavURL)
-        let text = try await (manager as! Qwen3AsrManager).transcribe(audioSamples: samples)
+        let text = try await (manager as! MuesliQwen3AsrManager).transcribe(audioSamples: samples)
         progress("transcription complete in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - start))s")
         return HeadlessTranscription(text: text, durationSeconds: nil)
     }
 
-    // Stored as Any: `Qwen3AsrManager` itself is `@available(macOS 15, *)` in FluidAudio,
+    // Stored as Any: the Muesli Qwen manager is `@available(macOS 15, *)`,
     // and a stored property of that type would force this whole actor declaration behind
     // the same guard — but `RoutingAudioTranscriber` needs to construct this actor
     // unconditionally on any deployment target, and only fail at call time on older OSes.

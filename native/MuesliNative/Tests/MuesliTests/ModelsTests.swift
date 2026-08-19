@@ -5,9 +5,18 @@ import Foundation
 import FluidAudio
 import MuesliCore
 @testable import MuesliNativeApp
+@testable import MuesliQwenCoreML
 
 @Suite("BackendOption")
 struct BackendOptionTests {
+
+    @Test("Qwen runtime pins its independently managed model source")
+    func qwenRuntimeUsesPinnedManagedModelSource() {
+        let plan = Qwen3ModelIntegrity.plan()
+        #expect(plan.repository == Qwen3ModelIntegrity.repository)
+        #expect(plan.revision == Qwen3ModelIntegrity.revision)
+        #expect(plan.requiredArtifactAlternatives.count == Qwen3ModelIntegrity.digests.count)
+    }
 
     @Test("dictation tests freeze their backend override and Cohere language together")
     func dictationTestSelectionUsesEffectiveBackend() throws {
@@ -136,8 +145,8 @@ struct BackendOptionTests {
         #expect(Qwen3AsrModelStore.cacheDirectoryNames.contains("qwen3-asr-0.6b-coreml"))
     }
 
-    @Test("Qwen ASR readiness matches the complete managed INT8 runtime directory")
-    func qwenAsrReadinessMatchesManagedRuntimeDirectory() throws {
+    @Test("Qwen ASR readiness rejects unverified or tampered managed artifacts")
+    func qwenAsrReadinessRejectsUnverifiedManagedArtifacts() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory
             .appendingPathComponent("muesli-qwen-asr-path-\(UUID().uuidString)", isDirectory: true)
@@ -160,15 +169,10 @@ struct BackendOptionTests {
 
         #expect(!Qwen3AsrModelStore.isModelDownloaded(in: root, fileManager: fm))
 
-        let legacyDirectory = root
-            .appendingPathComponent("qwen3-asr-0.6b-coreml/int8", isDirectory: true)
-        try installRequiredArtifacts(in: legacyDirectory)
-        #expect(!Qwen3AsrModelStore.isModelDownloaded(in: root, fileManager: fm))
-
-        let managedDirectory = ManagedASRModelPlans.qwen3ASRInt8(modelsRoot: root).cacheDirectory
+        let managedDirectory = Qwen3ModelIntegrity.plan(modelsRoot: root).cacheDirectory
         try installRequiredArtifacts(in: managedDirectory)
-        let managedPlan = ManagedASRModelPlans.qwen3ASRInt8(modelsRoot: root)
-        #expect(Qwen3AsrModelStore.isModelDownloaded(in: root, fileManager: fm))
+        let managedPlan = Qwen3ModelIntegrity.plan(modelsRoot: root)
+        #expect(!Qwen3AsrModelStore.isModelDownloaded(in: root, fileManager: fm))
         let installedPaths = [
             "qwen3_asr_audio_encoder_v2.mlmodelc/coremldata.bin",
             "qwen3_asr_audio_encoder_v2.mlmodelc/weights/weight.bin",
@@ -188,16 +192,9 @@ struct BackendOptionTests {
                 )
             }
         )
-        try managedPlan.recordSuccessfulInstallation(installedManifest)
-        #expect(Qwen3AsrModelStore.isModelDownloaded(in: root, fileManager: fm))
-
-        let completionMarker = managedDirectory
-            .appendingPathComponent(".muesli-managed-model-complete.json")
-        try Data("not-json".utf8).write(to: completionMarker)
-        #expect(!Qwen3AsrModelStore.isModelDownloaded(in: root, fileManager: fm))
-
-        try managedPlan.recordSuccessfulInstallation(installedManifest)
-        try fm.removeItem(at: managedDirectory.appendingPathComponent("vocab.json"))
+        #expect(throws: Qwen3ModelIntegrityError.self) {
+            try managedPlan.recordSuccessfulInstallation(installedManifest)
+        }
         #expect(!Qwen3AsrModelStore.isModelDownloaded(in: root, fileManager: fm))
 
         try Qwen3AsrModelStore.deleteModelFiles(from: root, fileManager: fm)
