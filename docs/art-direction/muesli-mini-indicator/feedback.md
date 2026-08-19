@@ -156,3 +156,11 @@
 - Wave: seeded spark engine replaces the scrolling history.
 - Setting renamed: `show_dictation_idle_dot` (legacy `show_dictation_focus_reminder` honoured); copy: "Keep the Mini's dot near your text context when you're not dictating…".
 - Resulting node: `follower-14`.
+
+## 19-08-2026 16:24 UTC — measured against the reference follower
+
+- Observed (side by side in TextEdit, 2× captures): the reference idle dot is a 20 pt dark disc with a small cyan centre, centred about 4–5 pt left of the caret and ~3 pt under it; it shows for empty fields; it hides while typing and returns ≈0.7 s after the last key; it does not fade over 12 s of idleness; at a soft wrap it follows the insertion line while ours sat on the previous visual line.
+- Place: every Mini signal is now centred under the caret (bottom-centre anchor, 3 pt visible gap, −4 pt bias), flipping above the caret when the screen runs out; processing/success keep the same centre line and visible top as Preparing.
+- Fix: a line-aware caret tier (AXInsertionPointLineNumber + AXRangeForLine) realigns the insertion rect when it lands on the wrong visual line (soft wraps, bidi runs).
+- Adopt: typing hides the dot with a 0.7 s hold; the pointer is the anchor for a focused field whose caret bounds are unavailable when it rests inside that field (the reference's "mouse" tier), otherwise the first line.
+- Node: `follower-14` (behavioural follow-up).

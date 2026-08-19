@@ -363,11 +363,11 @@ final class DictationMiniIndicatorController: NSObject {
 
     private func moveIdleDot(to anchor: CGPoint) {
         let screens = screenProvider()
-        guard let placement = DictationMiniPlacement.place(
-            near: anchor,
+        guard let placement = DictationMiniPlacement.placeBelowCaret(
+            anchor,
             size: Self.surfaceSize(for: .idle),
             screens: screens,
-            clearance: caretClearanceProvider()
+            visualInset: Self.visualInset(for: .idle)
         ) else { return }
         if let previous = anchorPoint,
            let previousScreen = anchorScreen,
@@ -506,6 +506,16 @@ final class DictationMiniIndicatorController: NSObject {
         }
     }
 
+    /// Transparent margin around the visible glyph inside the window (seeds carry a glow margin).
+    static func visualInset(for presentation: Presentation) -> CGFloat {
+        switch presentation {
+        case .idle, .preparing:
+            return (signalWindowSide - DictationMiniRendering.preparingDotDiameter) / 2
+        default:
+            return 0
+        }
+    }
+
     static func usesCompositorShadow(_ presentation: Presentation) -> Bool {
         switch presentation {
         case .recording, .processing, .failure, .warning: return true
@@ -613,11 +623,8 @@ final class DictationMiniIndicatorController: NSObject {
     private func placeFollowingSurface(size: CGSize) {
         guard let anchor = anchorPoint ?? caretAnchorProvider() ?? activeFallbackAnchor() else { return }
         let screens = screenProvider()
-        guard let result = DictationMiniPlacement.place(
-            near: anchor,
-            size: size,
-            screens: screens,
-            clearance: caretClearanceProvider()
+        guard let result = DictationMiniPlacement.placeBelowCaret(
+            anchor, size: size, screens: screens, visualInset: Self.visualInset(for: presentation)
         ) else { return }
         anchorPoint = anchor
         anchorScreen = result.screen
@@ -632,11 +639,8 @@ final class DictationMiniIndicatorController: NSObject {
         // Hold the session anchor, not the previous frame: a 20 pt signal placed against the
         // same caret anchor lands exactly where Preparing appeared, whatever size Recording was.
         if let anchor = anchorPoint,
-           let result = DictationMiniPlacement.place(
-               near: anchor,
-               size: size,
-               screens: screenProvider(),
-               clearance: caretClearanceProvider()
+           let result = DictationMiniPlacement.placeBelowCaret(
+               anchor, size: size, screens: screenProvider(), visualInset: Self.visualInset(for: presentation)
            ) {
             anchorScreen = result.screen
             currentFrame = result.frame
@@ -699,11 +703,11 @@ final class DictationMiniIndicatorController: NSObject {
         guard presentation == .preparing || presentation == .recording,
               let anchor = caretAnchorProvider() else { return }
         let screens = screenProvider()
-        guard let placement = DictationMiniPlacement.place(
-            near: anchor,
+        guard let placement = DictationMiniPlacement.placeBelowCaret(
+            anchor,
             size: Self.surfaceSize(for: presentation),
             screens: screens,
-            clearance: caretClearanceProvider()
+            visualInset: Self.visualInset(for: presentation)
         ) else { return }
         if let previousAnchor = anchorPoint,
            let previousScreen = anchorScreen,

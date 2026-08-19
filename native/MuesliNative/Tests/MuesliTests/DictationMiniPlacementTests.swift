@@ -108,4 +108,27 @@ struct DictationMiniPlacementTests {
 
         #expect(rehomed.map { surviving.visibleFrame.contains($0) } == true)
     }
+
+    @Test("below-caret placement centres under the caret, flips above at the bottom edge, and clamps")
+    func belowCaret() {
+        let screen = DictationMiniPlacement.Screen(
+            frame: CGRect(x: 0, y: 0, width: 800, height: 600),
+            visibleFrame: CGRect(x: 0, y: 24, width: 800, height: 576)
+        )
+        let size = CGSize(width: 20, height: 20)
+        let below = DictationMiniPlacement.placeBelowCaret(CGPoint(x: 400, y: 300), size: size, screens: [screen])
+        #expect(below?.quadrant == .below)
+        #expect(below?.frame == CGRect(x: 386, y: 277, width: 20, height: 20))
+        let seed = DictationMiniPlacement.placeBelowCaret(CGPoint(x: 400, y: 300), size: size, screens: [screen], visualInset: 5)
+        #expect(seed?.frame.maxY == 302)
+        #expect(seed?.frame.midX == 400 + DictationMiniPlacement.caretHorizontalBias)
+
+        let nearBottom = DictationMiniPlacement.placeBelowCaret(CGPoint(x: 400, y: 40), size: size, screens: [screen])
+        #expect(nearBottom?.quadrant == .above)
+        #expect(nearBottom?.frame.minY == 40 + DictationMiniPlacement.caretLiftAbove)
+
+        let corner = DictationMiniPlacement.placeBelowCaret(CGPoint(x: 2, y: 598), size: size, screens: [screen])
+        #expect(corner?.frame.minX == 4)
+        #expect((corner?.frame.maxY ?? 0) <= 596)
+    }
 }

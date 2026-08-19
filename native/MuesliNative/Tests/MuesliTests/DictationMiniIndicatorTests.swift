@@ -163,10 +163,11 @@ struct DictationMiniIndicatorTests {
         #expect(controller.presentation == .processing)
         #expect(controller.isMouseTransparentForTesting)
         #expect(!controller.isFollowingCaretForTesting)
-        // Processing hangs off the same caret anchor as the recording capsule did (shared
-        // top-right corner), and ignores the caret that moved after recording ended.
-        #expect(processingFrame?.maxX == recordingFrame?.maxX)
+        // Processing hangs under the same caret anchor as the recording capsule did (shared
+        // centre line and top edge), and ignores the caret that moved after recording ended.
+        #expect(processingFrame?.midX == recordingFrame?.midX)
         #expect(processingFrame?.maxY == recordingFrame?.maxY)
+        #expect(recordingFrame?.midX == 245 + DictationMiniPlacement.caretHorizontalBias)
         #expect(processingFrame?.size == CGSize(width: 20, height: 20))
         controller.close()
     }
@@ -188,7 +189,11 @@ struct DictationMiniIndicatorTests {
 
         #expect(controller.isVisibleForTesting)
         #expect(controller.currentFrame != fallbackFrame)
-        #expect(controller.currentFrame?.maxX == 210)
+        // Under the caret (with the follower's small leftward bias); the seed's visible top keeps the gap.
+        #expect(controller.currentFrame?.midX == 220 + DictationMiniPlacement.caretHorizontalBias)
+        let inset = DictationMiniIndicatorController.visualInset(for: .preparing)
+        #expect(inset == 5)
+        #expect((controller.currentFrame?.maxY ?? 0) - inset == 320 - DictationMiniPlacement.caretGap)
         controller.dismiss(generation: token)
         controller.close()
     }
@@ -198,18 +203,21 @@ struct DictationMiniIndicatorTests {
         var caret = CGPoint(x: 220, y: 320)
         let controller = makeController(caret: { caret })
         let token = controller.beginPreparing()
-        let preparingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+        let preparingFrame = controller.currentFrame
         controller.showRecording(generation: token) { -24 }
         controller.showProcessing(generation: token)
-        let processingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+        let processingFrame = controller.currentFrame
 
         caret = CGPoint(x: 500, y: 320)
         controller.showSuccess(generation: token, duration: 10)
-        let successCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+        let successFrame = controller.currentFrame
 
-        #expect(preparingCenter != nil)
-        #expect(processingCenter == preparingCenter)
-        #expect(successCenter == processingCenter)
+        // Same caret anchor, same centre line; the visible tops align (the seed's window carries
+        // a 5 pt glow margin the 20 pt disks do not), and the moved caret is ignored.
+        #expect(preparingFrame != nil)
+        #expect(processingFrame?.midX == preparingFrame?.midX)
+        #expect((processingFrame?.maxY ?? 0) == (preparingFrame?.maxY ?? 0) - DictationMiniIndicatorController.visualInset(for: .preparing))
+        #expect(successFrame == processingFrame)
         #expect(!controller.isFollowingCaretForTesting)
         controller.close()
     }
@@ -314,11 +322,12 @@ struct DictationMiniIndicatorTests {
         controller.updateIdleContext(nil)
         #expect(controller.presentation == .hidden)
 
-        // Typing hides it; stopping typing brings it back on the next sample.
+        // Typing hides it briefly; it returns on the next sample once the hold lapses.
         controller.updateIdleContext(sample(200))
         #expect(controller.presentation == .idle)
         controller.setIdleActivity(DictationFollowerActivity(isTyping: true))
         #expect(controller.presentation == .hidden)
+        #expect(DictationFollowerActivity.typingHold < 1)
         controller.setIdleActivity(DictationFollowerActivity())
         controller.updateIdleContext(sample(200))
         #expect(controller.presentation == .idle)
@@ -424,13 +433,13 @@ struct DictationMiniIndicatorTests {
         let token = controller.beginPreparing()
         #expect(controller.isVisibleForTesting)
         let pointerFrame = controller.currentFrame
-        #expect(pointerFrame?.maxX == 390)
+        #expect(pointerFrame?.midX == 400 + DictationMiniPlacement.caretHorizontalBias)
         controller.dismiss(generation: token)
 
         pointer = nil
         _ = controller.beginPreparing()
         #expect(controller.isVisibleForTesting)
-        #expect(controller.currentFrame?.maxX == 390)
+        #expect(controller.currentFrame?.midX == 400 + DictationMiniPlacement.caretHorizontalBias)
         #expect(controller.currentFrame?.minY ?? 0 < 100)
         controller.close()
 
@@ -459,7 +468,17 @@ struct DictationMiniIndicatorTests {
         )
 
         #expect(converted == CGRect(x: 120, y: 680, width: 2, height: 20))
-        #expect(anchor == CGPoint(x: 120, y: 690))
+        // Bottom-centre of the caret, so the Mini hangs directly under it.
+        #expect(anchor == CGPoint(x: 121, y: 680))
+        let field = CGRect(x: 10, y: 100, width: 300, height: 200)
+        #expect(DictationCaretAnchorProvider.firstLineAnchor(inAppKitRect: field) == CGPoint(x: 18, y: 282))
+        // No caret bounds: the pointer inside the field is the anchor; outside it, the first line.
+        #expect(DictationCaretAnchorProvider.fallbackAnchor(inAppKitRect: field, pointer: CGPoint(x: 150, y: 200))
+            == CGPoint(x: 150, y: 190))
+        #expect(DictationCaretAnchorProvider.fallbackAnchor(inAppKitRect: field, pointer: CGPoint(x: 700, y: 50))
+            == CGPoint(x: 18, y: 282))
+        #expect(DictationCaretAnchorProvider.fallbackAnchor(inAppKitRect: field, pointer: nil)
+            == CGPoint(x: 18, y: 282))
     }
 
     private func makeController(

@@ -48,10 +48,7 @@ enum DictationCaretAnchorProvider {
             anchor = appKitAnchor(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
         } else if let accessibilityRect = elementRect(element) {
             let converted = appKitRect(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
-            anchor = CGPoint(
-                x: converted.minX + min(8, converted.width / 2),
-                y: converted.maxY - min(10, converted.height / 2)
-            )
+            anchor = fallbackAnchor(inAppKitRect: converted, pointer: NSEvent.mouseLocation)
         } else {
             return nil
         }
@@ -127,10 +124,7 @@ enum DictationCaretAnchorProvider {
         }
         guard let accessibilityRect = elementRect(element) else { return nil }
         let converted = appKitRect(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
-        return CGPoint(
-            x: converted.minX + min(12, converted.width / 2),
-            y: converted.midY
-        )
+        return fallbackAnchor(inAppKitRect: converted, pointer: NSEvent.mouseLocation)
     }
 
     static func appKitRect(fromAccessibilityRect rect: CGRect, primaryMaxY: CGFloat) -> CGRect {
@@ -142,9 +136,27 @@ enum DictationCaretAnchorProvider {
         )
     }
 
+    /// The caret anchor is the caret's bottom-centre point: the Mini hangs directly under it.
     static func appKitAnchor(fromAccessibilityRect rect: CGRect, primaryMaxY: CGFloat) -> CGPoint {
         let converted = appKitRect(fromAccessibilityRect: rect, primaryMaxY: primaryMaxY)
-        return CGPoint(x: converted.minX, y: converted.midY)
+        return CGPoint(x: converted.midX, y: converted.minY)
+    }
+
+    /// Anchor for a field whose caret bounds are unavailable: the pointer when it rests inside
+    /// the field (the user most likely just clicked where they want to type — the reference
+    /// follower's "mouse" tier), otherwise the bottom of the field's first line.
+    static func fallbackAnchor(inAppKitRect converted: CGRect, pointer: CGPoint?) -> CGPoint {
+        if let pointer, converted.insetBy(dx: -2, dy: -2).contains(pointer) {
+            return CGPoint(x: pointer.x, y: max(converted.minY, pointer.y - 10))
+        }
+        return firstLineAnchor(inAppKitRect: converted)
+    }
+
+    static func firstLineAnchor(inAppKitRect converted: CGRect) -> CGPoint {
+        CGPoint(
+            x: converted.minX + min(8, converted.width / 2),
+            y: converted.maxY - min(18, converted.height)
+        )
     }
 
     static func isEditableTextElement(_ element: AXUIElement) -> Bool {
@@ -225,11 +237,16 @@ enum DictationCaretAnchorProvider {
         else { return nil }
 
         let caretLocation = selectedRange.location + selectedRange.length
+        guard let candidate = caretRectCandidate(for: element, caretLocation: caretLocation) else { return nil }
+        return alignedToInsertionLine(candidate, element: element)
+    }
+
+    /// Tiers: exact insertion rect → next character → previous character → WebKit text marker.
+    private static func caretRectCandidate(for element: AXUIElement, caretLocation: Int) -> CGRect? {
         if let exact = bounds(element, range: CFRange(location: caretLocation, length: 0)),
            exact.height > 0 {
             return CGRect(x: exact.minX, y: exact.minY, width: 0, height: exact.height)
         }
-
         let characterCount = copiedInt(element, attribute: kAXNumberOfCharactersAttribute)
         if characterCount.map({ caretLocation < $0 }) != false,
            let next = bounds(element, range: CFRange(location: caretLocation, length: 1)),
@@ -245,6 +262,38 @@ enum DictationCaretAnchorProvider {
             return marker
         }
         return nil
+    }
+
+    /// At a soft line break (and in bidi runs) text views report the insertion rect on the
+    /// previous visual line. The insertion-point line number is authoritative, so when the
+    /// candidate's vertical centre falls outside that line's bounds, adopt the line's vertical
+    /// extent and keep the candidate's horizontal position.
+    private static func alignedToInsertionLine(_ candidate: CGRect, element: AXUIElement) -> CGRect {
+        guard let line = copiedInt(element, attribute: kAXInsertionPointLineNumberAttribute),
+              line >= 0,
+              let lineRange = rangeForLine(element, line: line),
+              let lineBounds = bounds(element, range: lineRange),
+              lineBounds.height > 0
+        else { return candidate }
+        let centre = candidate.midY
+        guard centre < lineBounds.minY || centre > lineBounds.maxY else { return candidate }
+        return CGRect(x: candidate.minX, y: lineBounds.minY, width: 0, height: lineBounds.height)
+    }
+
+    private static func rangeForLine(_ element: AXUIElement, line: Int) -> CFRange? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element,
+            kAXRangeForLineParameterizedAttribute as CFString,
+            line as CFNumber,
+            &value
+        ) == .success,
+        let value,
+        CFGetTypeID(value) == AXValueGetTypeID()
+        else { return nil }
+        var range = CFRange(location: 0, length: 0)
+        guard AXValueGetValue(unsafeBitCast(value, to: AXValue.self), .cfRange, &range), range.length > 0 else { return nil }
+        return range
     }
 
     /// WebKit (Safari, Mail, Notes web content) answers caret geometry through text markers when

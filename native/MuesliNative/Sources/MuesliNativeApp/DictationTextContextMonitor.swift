@@ -21,7 +21,8 @@ struct DictationTextContextSample: Equatable {
 
 /// Transient user activity during which the idle dot stays out of the way.
 struct DictationFollowerActivity: Equatable {
-    static let typingHold: TimeInterval = 1.6
+    /// Measured against the reference follower: gone while keys fly, back ~0.7 s after the last.
+    static let typingHold: TimeInterval = 0.7
     static let scrollHold: TimeInterval = 0.6
     static let windowMoveHold: TimeInterval = 0.5
     static let spaceSwitchHold: TimeInterval = 0.6
