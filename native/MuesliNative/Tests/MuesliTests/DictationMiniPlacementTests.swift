@@ -9,40 +9,14 @@ struct DictationMiniPlacementTests {
         visibleFrame: CGRect(x: 0, y: 24, width: 300, height: 216)
     )
 
-    @Test("quadrants prefer behind the caret before using forward text space")
-    func orderedQuadrants() {
-        let size = CGSize(width: 58, height: 22)
-
-        let lowerLeft = DictationMiniPlacement.place(
-            near: CGPoint(x: 100, y: 140), size: size, screens: [primary]
-        )
-        let lowerRight = DictationMiniPlacement.place(
-            near: CGPoint(x: 20, y: 140), size: size, screens: [primary]
-        )
-        let upperLeft = DictationMiniPlacement.place(
-            near: CGPoint(x: 100, y: 40), size: size, screens: [primary]
-        )
-        let upperRight = DictationMiniPlacement.place(
-            near: CGPoint(x: 20, y: 40), size: size, screens: [primary]
-        )
-
-        #expect(lowerLeft?.quadrant == .lowerLeft)
-        #expect(lowerRight?.quadrant == .lowerRight)
-        #expect(upperLeft?.quadrant == .upperLeft)
-        #expect(upperRight?.quadrant == .upperRight)
-        for result in [lowerLeft, lowerRight, upperLeft, upperRight].compactMap({ $0 }) {
-            #expect(primary.visibleFrame.contains(result.frame))
-        }
-    }
-
     @Test("placement selects negative-origin and vertically offset displays")
     func multiDisplayCoordinates() {
         let negative = DictationMiniPlacement.Screen(
             frame: CGRect(x: -1_280, y: -180, width: 1_280, height: 800),
             visibleFrame: CGRect(x: -1_280, y: -180, width: 1_280, height: 776)
         )
-        let result = DictationMiniPlacement.place(
-            near: CGPoint(x: -1_100, y: 200),
+        let result = DictationMiniPlacement.placeBelowCaret(
+            CGPoint(x: -1_100, y: 200),
             size: CGSize(width: 58, height: 22),
             screens: [primary, negative]
         )
@@ -53,8 +27,8 @@ struct DictationMiniPlacementTests {
 
     @Test("a caret in the full screen frame still selects that screen")
     func caretOutsideVisibleFrame() {
-        let result = DictationMiniPlacement.place(
-            near: CGPoint(x: 100, y: 10),
+        let result = DictationMiniPlacement.placeBelowCaret(
+            CGPoint(x: 100, y: 10),
             size: CGSize(width: 58, height: 22),
             screens: [primary]
         )
@@ -65,8 +39,8 @@ struct DictationMiniPlacementTests {
 
     @Test("oversized surfaces remain centered and vertically reachable")
     func oversizedSurface() {
-        let result = DictationMiniPlacement.place(
-            near: CGPoint(x: 150, y: 120),
+        let result = DictationMiniPlacement.placeBelowCaret(
+            CGPoint(x: 150, y: 120),
             size: CGSize(width: 400, height: 22),
             screens: [primary]
         )

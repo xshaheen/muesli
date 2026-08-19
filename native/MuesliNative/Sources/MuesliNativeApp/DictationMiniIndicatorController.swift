@@ -30,7 +30,6 @@ final class DictationMiniIndicatorController: NSObject {
 
     private let screenProvider: () -> [DictationMiniPlacement.Screen]
     private let caretAnchorProvider: () -> CGPoint?
-    private let caretClearanceProvider: () -> CGFloat
     private let pointerProvider: () -> CGPoint?
     private let accessibilitySink: AccessibilitySink
     private let caretPollingInterval: TimeInterval
@@ -68,7 +67,6 @@ final class DictationMiniIndicatorController: NSObject {
                 }
             },
             caretAnchorProvider: { DictationCaretAnchorProvider.currentAnchor() },
-            caretClearanceProvider: { DictationMiniPlacement.minimumCaretClearance },
             pointerProvider: { NSEvent.mouseLocation },
             accessibilitySink: { message in
                 NSAccessibility.post(
@@ -86,16 +84,12 @@ final class DictationMiniIndicatorController: NSObject {
     init(
         screenProvider: @escaping () -> [DictationMiniPlacement.Screen],
         caretAnchorProvider: @escaping () -> CGPoint?,
-        caretClearanceProvider: @escaping () -> CGFloat = {
-            DictationMiniPlacement.minimumCaretClearance
-        },
         caretPollingInterval: TimeInterval = 0.1,
         pointerProvider: @escaping () -> CGPoint? = { nil },
         accessibilitySink: @escaping AccessibilitySink = { _ in }
     ) {
         self.screenProvider = screenProvider
         self.caretAnchorProvider = caretAnchorProvider
-        self.caretClearanceProvider = caretClearanceProvider
         self.pointerProvider = pointerProvider
         self.caretPollingInterval = caretPollingInterval
         self.accessibilitySink = accessibilitySink
@@ -339,8 +333,7 @@ final class DictationMiniIndicatorController: NSObject {
         guard let placement = DictationMiniPlacement.placeBelowCaret(
             anchor,
             size: Self.surfaceSize(for: .idle),
-            screens: screens,
-            visualInset: Self.visualInset(for: .idle)
+            screens: screens
         ) else { return }
         if let previous = anchorPoint,
            let previousScreen = anchorScreen,
@@ -458,12 +451,6 @@ final class DictationMiniIndicatorController: NSObject {
         case .warning(let text):
             return CGSize(width: min(max(CGFloat(text.count) * 6.4 + 34, 96), 320), height: 26)
         }
-    }
-
-    /// Transparent margin around the visible glyph inside the window (seeds carry a glow margin).
-    static func visualInset(for presentation: Presentation) -> CGFloat {
-        _ = presentation
-        return 0
     }
 
     /// The disc stretches into the capsule and back: idle/preparing ↔ recording ↔ processing.
@@ -594,9 +581,8 @@ final class DictationMiniIndicatorController: NSObject {
     private func placeFollowingSurface(size: CGSize) {
         guard let anchor = anchorPoint ?? caretAnchorProvider() ?? activeFallbackAnchor() else { return }
         let screens = screenProvider()
-        guard let result = DictationMiniPlacement.placeBelowCaret(
-            anchor, size: size, screens: screens, visualInset: Self.visualInset(for: presentation)
-        ) else { return }
+        guard let result = DictationMiniPlacement.placeBelowCaret(anchor, size: size, screens: screens)
+        else { return }
         anchorPoint = anchor
         anchorScreen = result.screen
         currentFrame = result.frame
@@ -606,9 +592,7 @@ final class DictationMiniIndicatorController: NSObject {
         // Hold the session anchor, not the previous frame: a 20 pt signal placed against the
         // same caret anchor lands exactly where Preparing appeared, whatever size Recording was.
         if let anchor = anchorPoint,
-           let result = DictationMiniPlacement.placeBelowCaret(
-               anchor, size: size, screens: screenProvider(), visualInset: Self.visualInset(for: presentation)
-           ) {
+           let result = DictationMiniPlacement.placeBelowCaret(anchor, size: size, screens: screenProvider()) {
             anchorScreen = result.screen
             currentFrame = result.frame
             return
@@ -673,8 +657,7 @@ final class DictationMiniIndicatorController: NSObject {
         guard let placement = DictationMiniPlacement.placeBelowCaret(
             anchor,
             size: Self.surfaceSize(for: presentation),
-            screens: screens,
-            visualInset: Self.visualInset(for: presentation)
+            screens: screens
         ) else { return }
         if let previousAnchor = anchorPoint,
            let previousScreen = anchorScreen,
@@ -737,7 +720,7 @@ final class DictationMiniIndicatorController: NSObject {
             let target = DictationMiniRendering.recordingLevel(decibels: CGFloat(decibels))
             let current = contentView?.power ?? 0
             let level = DictationMiniRendering.recordingEnvelope(current: current, target: target)
-            contentView?.power = level
+            // One redraw per tick: the wave view stores `power` itself after advancing its engine.
             contentView?.advanceRecordingWave(level: level)
         } else {
             let elapsed = ProcessInfo.processInfo.systemUptime - (animationStartedAt ?? 0)
@@ -1036,6 +1019,9 @@ private final class DictationMiniView: NSView {
             cueView.presentation = presentation
             waveformView.isHidden = presentation != .recording
             pointFieldView.isHidden = presentation != .processing
+            // Only the idle disc is clickable (it opens the idle menu); every other state is
+            // passive feedback, so assistive tech should hear a button only while idle.
+            setAccessibilityRole(presentation == .idle ? .button : .group)
             updateSurface()
         }
     }
@@ -1129,6 +1115,13 @@ private final class DictationMiniView: NSView {
         let current = NSEvent.mouseLocation
         // A click opens the menu; a drag is ignored (the disc follows the caret, not the mouse).
         if hypot(current.x - start.x, current.y - start.y) < 5 { owner?.idleClicked() }
+    }
+
+    /// VoiceOver's activate gesture reaches the same idle menu a mouse click does.
+    override func accessibilityPerformPress() -> Bool {
+        guard presentation == .idle, let owner else { return false }
+        owner.idleClicked()
+        return true
     }
 
     override func viewDidChangeBackingProperties() {
@@ -1427,9 +1420,10 @@ private final class DictationMiniWaveformView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
+    /// Advances the spark engine first so the single `power` redraw sees the fresh bar state.
     func advance(level: CGFloat) {
         engine.advance(level: level)
-        updateBars()
+        power = level
     }
 
     func reset() {

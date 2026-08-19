@@ -201,9 +201,7 @@ struct DictationMiniIndicatorTests {
         #expect(controller.currentFrame != fallbackFrame)
         // Under the caret (with the follower's small leftward bias); the seed's visible top keeps the gap.
         #expect(controller.currentFrame?.midX == 220 + DictationMiniPlacement.caretHorizontalBias)
-        let inset = DictationMiniIndicatorController.visualInset(for: .preparing)
-        #expect(inset == 0)
-        #expect((controller.currentFrame?.maxY ?? 0) - inset == 320 - DictationMiniPlacement.caretGap)
+        #expect(controller.currentFrame?.maxY == 320 - DictationMiniPlacement.caretGap)
         controller.dismiss(generation: token)
         controller.close()
     }
@@ -222,11 +220,10 @@ struct DictationMiniIndicatorTests {
         controller.showSuccess(generation: token, duration: 10)
         let successFrame = controller.currentFrame
 
-        // Same caret anchor, same centre line; the visible tops align (the seed's window carries
-        // a 5 pt glow margin the 20 pt disks do not), and the moved caret is ignored.
+        // Same caret anchor, same centre line and top edge; the moved caret is ignored.
         #expect(preparingFrame != nil)
         #expect(processingFrame?.midX == preparingFrame?.midX)
-        #expect((processingFrame?.maxY ?? 0) == (preparingFrame?.maxY ?? 0) - DictationMiniIndicatorController.visualInset(for: .preparing))
+        #expect(processingFrame?.maxY == preparingFrame?.maxY)
         #expect(successFrame == processingFrame)
         #expect(!controller.isFollowingCaretForTesting)
         controller.close()

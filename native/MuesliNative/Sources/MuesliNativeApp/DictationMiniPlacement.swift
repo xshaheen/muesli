@@ -8,10 +8,6 @@ struct DictationMiniPlacement {
     }
 
     enum Quadrant: CaseIterable, Equatable {
-        case lowerLeft
-        case lowerRight
-        case upperLeft
-        case upperRight
         /// Centred under the caret (the Mini's home position).
         case below
         /// Centred above the caret when there is no room below.
@@ -24,7 +20,6 @@ struct DictationMiniPlacement {
         let screen: Screen
     }
 
-    static let minimumCaretClearance: CGFloat = 10
     static let movementThreshold: CGFloat = 4
     static let screenEdgeInset: CGFloat = 4
     /// Gap between the caret's bottom edge and the Mini's visible top edge.
@@ -59,43 +54,6 @@ struct DictationMiniPlacement {
             return Result(frame: above, quadrant: .above, screen: screen)
         }
         return Result(frame: clamped(below, to: visibleFrame), quadrant: .below, screen: screen)
-    }
-
-    static func place(
-        near anchor: CGPoint,
-        size: CGSize,
-        screens: [Screen],
-        clearance: CGFloat = minimumCaretClearance
-    ) -> Result? {
-        guard size.width > 0, size.height > 0,
-              let screen = selectedScreen(containingOrNearestTo: anchor, screens: screens)
-        else { return nil }
-
-        let safeClearance = max(clearance, minimumCaretClearance)
-        let visibleFrame = insetVisibleFrame(screen.visibleFrame, by: screenEdgeInset)
-        for quadrant in [Quadrant.lowerLeft, .lowerRight, .upperLeft, .upperRight] {
-            let frame = proposedFrame(
-                near: anchor,
-                size: size,
-                clearance: safeClearance,
-                quadrant: quadrant
-            )
-            if visibleFrame.contains(frame) {
-                return Result(frame: frame, quadrant: quadrant, screen: screen)
-            }
-        }
-
-        let preferred = proposedFrame(
-            near: anchor,
-            size: size,
-            clearance: safeClearance,
-            quadrant: .lowerLeft
-        )
-        return Result(
-            frame: clamped(preferred, to: visibleFrame),
-            quadrant: .lowerLeft,
-            screen: screen
-        )
     }
 
     static func shouldReacquire(
@@ -143,18 +101,6 @@ struct DictationMiniPlacement {
         let x: CGFloat
         let y: CGFloat
         switch quadrant {
-        case .lowerRight:
-            x = anchor.x + clearance
-            y = anchor.y - clearance - size.height
-        case .lowerLeft:
-            x = anchor.x - clearance - size.width
-            y = anchor.y - clearance - size.height
-        case .upperRight:
-            x = anchor.x + clearance
-            y = anchor.y + clearance
-        case .upperLeft:
-            x = anchor.x - clearance - size.width
-            y = anchor.y + clearance
         case .below:
             x = anchor.x + caretHorizontalBias - size.width / 2
             y = anchor.y - clearance - size.height
