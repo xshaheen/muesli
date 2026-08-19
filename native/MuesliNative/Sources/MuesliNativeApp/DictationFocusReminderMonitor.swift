@@ -116,6 +116,7 @@ final class DictationFocusReminderMonitor {
             return
         }
 
+        DictationCaretAnchorProvider.enableManualAccessibility(for: pid)
         var created: AXObserver?
         let callback: AXObserverCallback = { _, _, _, refcon in
             guard let refcon else { return }

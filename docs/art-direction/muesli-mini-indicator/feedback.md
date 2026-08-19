@@ -139,3 +139,9 @@
 - Soften: per-element repeat guard 60 s → 30 s.
 - Suppress (live feedback): no reminder while a meeting recording is starting or running; the focus observer detaches and any visible seed is dismissed, then resumes after the meeting.
 - Node: `glass-success-13` (behavioural follow-up, no new visual artifact).
+
+## 19-08-2026 13:07 UTC — Monologue FollowerKit review
+
+- Reviewed: Monologue 1.4.2's follower from its binary metadata (see `monologue-followerkit-notes.md`).
+- Adopt: `AXManualAccessibility` for Chromium apps, WebKit text-marker caret tier, `AXEditableAncestor` editability — these raise caret accuracy where the Mini and the reminder previously fell back to the field frame.
+- Open decision: Monologue keeps an idle dot near the text context permanently (hidden while typing/scrolling/swiping, Escape to hide, snoozable) instead of a timed reminder.

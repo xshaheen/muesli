@@ -87,9 +87,16 @@ enum DictationCaretAnchorProvider {
     }
 
     static func isEditableTextElement(_ element: AXUIElement) -> Bool {
-        guard let role = copiedString(element, attribute: kAXRoleAttribute),
-              editableTextRoles.contains(role)
-        else { return false }
+        guard let role = copiedString(element, attribute: kAXRoleAttribute) else { return false }
+        // Web engines expose rich-text editors (contenteditable) as groups/web areas with an
+        // editable ancestor rather than a text-field role.
+        var editableAncestor: CFTypeRef?
+        let hasEditableAncestor = AXUIElementCopyAttributeValue(
+            element,
+            "AXEditableAncestor" as CFString,
+            &editableAncestor
+        ) == .success && editableAncestor != nil
+        guard editableTextRoles.contains(role) || hasEditableAncestor else { return false }
         var settable = DarwinBoolean(false)
         guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
               settable.boolValue
@@ -129,7 +136,26 @@ enum DictationCaretAnchorProvider {
         let value,
         CFGetTypeID(value) == AXUIElementGetTypeID()
         else { return nil }
-        return unsafeBitCast(value, to: AXUIElement.self)
+        let element = unsafeBitCast(value, to: AXUIElement.self)
+        var pid: pid_t = 0
+        if AXUIElementGetPid(element, &pid) == .success {
+            enableManualAccessibility(for: pid)
+        }
+        return element
+    }
+
+    private static var manualAccessibilityProcesses = Set<pid_t>()
+
+    /// Chromium-based apps (Chrome, Electron: VS Code, Slack, Teams, Discord…) only build a full
+    /// accessibility tree when a client asks for it; without `AXManualAccessibility` they expose
+    /// no caret bounds and every anchor degrades to the field frame. Setting it is a no-op for
+    /// every other app (attribute unsupported), so it is applied once per process.
+    static func enableManualAccessibility(for pid: pid_t) {
+        guard pid > 0, !manualAccessibilityProcesses.contains(pid) else { return }
+        manualAccessibilityProcesses.insert(pid)
+        let application = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(application, 0.08)
+        AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
     }
 
     private static func caretRect(for element: AXUIElement) -> CGRect? {
@@ -154,7 +180,36 @@ enum DictationCaretAnchorProvider {
            previous.height > 0 {
             return CGRect(x: previous.maxX, y: previous.minY, width: 0, height: previous.height)
         }
+        if let marker = textMarkerCaretRect(for: element) {
+            return marker
+        }
         return nil
+    }
+
+    /// WebKit (Safari, Mail, Notes web content) answers caret geometry through text markers when
+    /// range-based bounds come back empty: the selected marker range collapses to the caret.
+    private static func textMarkerCaretRect(for element: AXUIElement) -> CGRect? {
+        var markerRange: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            "AXSelectedTextMarkerRange" as CFString,
+            &markerRange
+        ) == .success, let markerRange else { return nil }
+        var boundsValue: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element,
+            "AXBoundsForTextMarkerRange" as CFString,
+            markerRange,
+            &boundsValue
+        ) == .success,
+        let boundsValue,
+        CFGetTypeID(boundsValue) == AXValueGetTypeID()
+        else { return nil }
+        var rect = CGRect.zero
+        guard AXValueGetValue(unsafeBitCast(boundsValue, to: AXValue.self), .cgRect, &rect),
+              rect.height > 0
+        else { return nil }
+        return CGRect(x: rect.minX, y: rect.minY, width: 0, height: rect.height)
     }
 
     private static func bounds(_ element: AXUIElement, range: CFRange) -> CGRect? {
