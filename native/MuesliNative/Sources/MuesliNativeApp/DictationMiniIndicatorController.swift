@@ -861,8 +861,9 @@ enum DictationMiniRendering {
     /// Core inside the idle/preparing disc: a quiet coral point that brightens while preparing.
     static let idleCoreDiameter: CGFloat = 3
     static let preparingCoreDiameter: CGFloat = 5
-    /// The disc reads as glass: lighter tint than the capsule plus a gel highlight.
-    static let discGlassTintAlpha: CGFloat = 0.60
+    /// The idle/preparing disc is near-black glass (reference: a black disc with a light core).
+    static let discGlassTintHex = 0x000000
+    static let discGlassTintAlpha: CGFloat = 0.80
     /// Completion fills the shared 20 pt window as a glass disk.
     static let completionDiameter: CGFloat = 20
     static let successGlassTintAlpha: CGFloat = 0.82
@@ -1245,6 +1246,11 @@ private final class DictationMiniView: NSView {
                 hex: DictationMiniPalette.successHex,
                 alpha: reduceTransparency ? 1 : DictationMiniRendering.successGlassTintAlpha
             ).cgColor
+        } else if presentation == .idle || presentation == .preparing {
+            tintView.layer?.backgroundColor = NSColor.colorWith(
+                hex: DictationMiniRendering.discGlassTintHex,
+                alpha: reduceTransparency ? 1 : DictationMiniRendering.discGlassTintAlpha
+            ).cgColor
         } else {
             tintView.layer?.backgroundColor = NSColor.colorWith(
                 hex: DictationMiniPalette.glassTintHex,
@@ -1344,6 +1350,7 @@ private final class DictationMiniCueView: NSView {
             diskLayer.isHidden = true
             glossMask.path = CGPath(ellipseIn: CGRect(origin: .zero, size: diskRect.size), transform: nil)
             glossLayer.frame = diskRect
+            glossLayer.opacity = 1
             glossLayer.isHidden = false
             let unit = diameter / 20
             let check = CGMutablePath()
@@ -1357,10 +1364,11 @@ private final class DictationMiniCueView: NSView {
         } else {
             diskLayer.isHidden = false
             checkLayer.isHidden = true
-            // The disc's gel highlight spans the whole window (the disc fills it).
+            // A faint catch-light only; the disc must read as black glass, not grey.
             let discRect = bounds
             glossMask.path = CGPath(ellipseIn: CGRect(origin: .zero, size: discRect.size), transform: nil)
             glossLayer.frame = discRect
+            glossLayer.opacity = 0.35
             glossLayer.isHidden = false
             diskLayer.path = CGPath(ellipseIn: diskRect, transform: nil)
             diskLayer.fillColor = fillColor.cgColor

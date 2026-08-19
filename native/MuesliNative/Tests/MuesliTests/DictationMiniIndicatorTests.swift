@@ -44,7 +44,8 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniRendering.glassTintAlpha == 0.44)
         #expect(DictationMiniRendering.idleCoreDiameter == 3)
         #expect(DictationMiniRendering.preparingCoreDiameter == 5)
-        #expect(DictationMiniRendering.discGlassTintAlpha < DictationMiniRendering.recordingGlassTintAlpha)
+        #expect(DictationMiniRendering.discGlassTintHex == 0x000000)
+        #expect(DictationMiniRendering.discGlassTintAlpha == 0.80)
         #expect(DictationMiniRendering.completionDiameter == 20)
         // The processing field and the completion glow must stay inside the shared 20 pt window.
         let fieldExtent = 2 * DictationMiniRendering.processingPointSpacing
