@@ -2,8 +2,9 @@ import AppKit
 import ApplicationServices
 import OSLog
 
-/// Equatable wrapper so `AXUIElement` identity can be compared.
-struct AXElementToken: Equatable {
+/// Equatable wrapper so `AXUIElement` identity can be compared. `AXUIElement` is an immutable
+/// CF handle, so the token is safe to hand across threads.
+struct AXElementToken: Equatable, @unchecked Sendable {
     let element: AXUIElement
 
     static func == (lhs: AXElementToken, rhs: AXElementToken) -> Bool {
@@ -12,7 +13,7 @@ struct AXElementToken: Equatable {
 }
 
 /// One observation of the focused editable text context.
-struct DictationTextContextSample: Equatable {
+struct DictationTextContextSample: Equatable, Sendable {
     let anchor: CGPoint
     let processIdentifier: pid_t
     let hasSelection: Bool
@@ -68,6 +69,10 @@ struct DictationFollowerHysteresis: Equatable {
 /// for focus/selection/window changes, a light poll for apps that stay silent, and global
 /// event monitors that report typing, scrolling, Space switches and Escape. It never reads
 /// text content; it resolves the caret anchor the Mini already uses for placement.
+///
+/// The accessibility round trips run on a detached utility task (one in flight at a time) so
+/// a slow accessibility server never blocks the main run loop; only the `AXObserver` source and
+/// the published callbacks live on the main actor.
 @MainActor
 final class DictationTextContextMonitor {
     private static let logger = Logger(subsystem: "com.muesli.native", category: "TextContext")
@@ -76,6 +81,10 @@ final class DictationTextContextMonitor {
     var onActivityChanged: ((DictationFollowerActivity) -> Void)?
     var onFocusChanged: (() -> Void)?
     var onEscape: (() -> Void)?
+    /// Sampling stopped outright (monitor stopped, or the frontmost app is Muesli itself,
+    /// untrusted or unknown): the consumer must drop any held context instead of waiting for a
+    /// miss streak that will never come.
+    var onContextCleared: (() -> Void)?
 
     private(set) var activity = DictationFollowerActivity() {
         didSet { if oldValue != activity { onActivityChanged?(activity) } }
@@ -91,6 +100,13 @@ final class DictationTextContextMonitor {
     private var eventMonitors: [Any] = []
     private var lastElement: AXElementToken?
     private var isRunning = false
+    /// One resolution in flight at a time; ticks that land while it runs are coalesced away.
+    private var isResolving = false
+    /// Bumped on attach/stop so a resolution started against an earlier target is discarded.
+    private var resolutionGeneration: UInt64 = 0
+    /// After a resolution exhausts its wall-clock budget, sampling pauses until this uptime so
+    /// a slow accessibility server is not hammered every tick.
+    private var resolutionBackoffUntil: TimeInterval = 0
 
     init(pollInterval: TimeInterval = 1 / 8) {
         self.pollInterval = pollInterval
@@ -151,14 +167,17 @@ final class DictationTextContextMonitor {
         pollTimer = nil
         evaluationTimer?.invalidate()
         evaluationTimer = nil
+        invalidateResolution()
         lastElement = nil
         activity = DictationFollowerActivity()
+        onContextCleared?()
     }
 
     // MARK: Attachment
 
     private func attach(to pid: pid_t?) {
         detach()
+        invalidateResolution()
         lastElement = nil
         onSample?(nil)
         guard isRunning,
@@ -169,6 +188,8 @@ final class DictationTextContextMonitor {
             Self.logger.notice("attach skipped pid=\(pid ?? -1, privacy: .public) running=\(self.isRunning, privacy: .public) trusted=\(AXIsProcessTrusted(), privacy: .public)")
             pollTimer?.invalidate()
             pollTimer = nil
+            // Polling stops here, so the consumer would otherwise hold the last anchor forever.
+            onContextCleared?()
             return
         }
         DictationCaretAnchorProvider.enableManualAccessibility(for: pid)
@@ -267,13 +288,40 @@ final class DictationTextContextMonitor {
 
     private var lastDiagnosticAt: TimeInterval = 0
 
+    /// Forgets any in-flight resolution: its result will be ignored when it lands.
+    private func invalidateResolution() {
+        resolutionGeneration &+= 1
+        isResolving = false
+        resolutionBackoffUntil = 0
+    }
+
+    /// Kicks off one off-main-actor resolution. Ticks are coalesced while one is in flight and
+    /// skipped during the back-off that follows a budget-exhausted sample.
     private func evaluate() {
+        guard isRunning, !isResolving else { return }
+        guard ProcessInfo.processInfo.systemUptime >= resolutionBackoffUntil else { return }
+        // NSScreen is main-actor state; read it here and hand the value to the worker.
+        let primaryMaxY = NSScreen.screens.first?.frame.maxY
+        let generation = resolutionGeneration
+        isResolving = true
+        Task.detached(priority: .utility) { [weak self] in
+            let resolution = DictationCaretAnchorProvider.resolveEditableFocus(primaryMaxY: primaryMaxY)
+            await self?.publish(resolution, generation: generation)
+        }
+    }
+
+    private func publish(_ resolution: DictationCaretAnchorProvider.Resolution, generation: UInt64) {
+        guard generation == resolutionGeneration else { return }
+        isResolving = false
         guard isRunning else { return }
-        let focus = DictationCaretAnchorProvider.currentEditableFocus()
         let now = ProcessInfo.processInfo.systemUptime
+        if resolution.exhaustedBudget {
+            resolutionBackoffUntil = now + pollInterval
+        }
+        let focus = resolution.focus
         if now - lastDiagnosticAt > 10 {
             lastDiagnosticAt = now
-            Self.logger.notice("sample pid=\(self.observedProcessIdentifier ?? -1, privacy: .public) editable=\(focus != nil, privacy: .public) focusPid=\(focus?.processIdentifier ?? -1, privacy: .public) activity=\(self.activity.isSuppressing, privacy: .public)")
+            Self.logger.notice("sample pid=\(self.observedProcessIdentifier ?? -1, privacy: .public) editable=\(focus != nil, privacy: .public) focusPid=\(focus?.processIdentifier ?? -1, privacy: .public) activity=\(self.activity.isSuppressing, privacy: .public) overBudget=\(resolution.exhaustedBudget, privacy: .public)")
         }
         guard let focus, focus.processIdentifier == observedProcessIdentifier else {
             if lastElement != nil {

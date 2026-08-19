@@ -397,6 +397,31 @@ struct DictationMiniIndicatorTests {
         fresh.close()
     }
 
+    @Test("clearing the idle context withdraws the dot at once and no stale anchor survives a re-enable")
+    func idleContextClear() {
+        let controller = makeController()
+        controller.isIdleDotAllowed = true
+        let token = AXElementToken(element: AXUIElementCreateSystemWide())
+        let sample = DictationTextContextSample(
+            anchor: CGPoint(x: 200, y: 300), processIdentifier: 1, hasSelection: true, element: token)
+        controller.updateIdleContext(sample)
+        #expect(controller.presentation == .idle)
+        #expect(controller.idleHasSelectionForTesting)
+
+        // A single miss would merely start the hysteresis streak; a clear is immediate.
+        controller.clearIdleContext()
+        #expect(controller.presentation == .hidden)
+        #expect(!controller.idleHasSelectionForTesting)
+
+        // Re-enabling shows nothing until a fresh sample arrives, then the dot returns.
+        controller.isIdleDotAllowed = false
+        controller.isIdleDotAllowed = true
+        #expect(controller.presentation == .hidden)
+        controller.updateIdleContext(sample)
+        #expect(controller.presentation == .idle)
+        controller.close()
+    }
+
     @Test("follower hysteresis holds through two misses and withdraws on the third")
     func followerHysteresis() {
         var hysteresis = DictationFollowerHysteresis()

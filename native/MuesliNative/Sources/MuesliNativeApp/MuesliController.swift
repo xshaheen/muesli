@@ -849,6 +849,9 @@ final class MuesliController: NSObject {
         dictationTextContextMonitor.onEscape = { [weak self] in
             self?.dictationMiniIndicator.hideIdleDotUntilFocusChanges()
         }
+        dictationTextContextMonitor.onContextCleared = { [weak self] in
+            self?.dictationMiniIndicator.clearIdleContext()
+        }
         dictationMiniIndicator.hotkeyLabelProvider = { [weak self] in
             self?.config.dictationHotkey.label ?? "the hotkey"
         }

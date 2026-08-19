@@ -266,6 +266,17 @@ final class DictationMiniIndicatorController: NSObject {
         refreshIdleDot()
     }
 
+    /// Drops the held text context outright: the monitor stopped sampling (Muesli is frontmost,
+    /// Accessibility is gone, or the dot was disallowed), so no miss streak will ever exhaust
+    /// the hysteresis and the dot must not linger at a caret nobody is following.
+    func clearIdleContext() {
+        idleHysteresis.reset()
+        idleAnchor = nil
+        idleHasSelection = false
+        idleSelectionHintElement = nil
+        refreshIdleDot()
+    }
+
     /// Escape: hide the dot until the focused text element changes.
     func hideIdleDotUntilFocusChanges() {
         guard presentation == .idle else { return }

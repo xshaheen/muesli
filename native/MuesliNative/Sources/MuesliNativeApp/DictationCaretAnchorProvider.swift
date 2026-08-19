@@ -1,13 +1,18 @@
 import AppKit
 import ApplicationServices
+import os
 
 /// Resolves the insertion caret of the currently focused editable accessibility element.
 /// Accessibility uses Quartz's top-left coordinate space, so the result is converted
 /// into AppKit's global bottom-left coordinate space before placement.
-@MainActor
+///
+/// Every `AXUIElement*` call here is a synchronous IPC round trip to the focused app and is
+/// thread-safe, so the resolution entry points are nonisolated and may run off the main actor;
+/// only the callers that read `NSScreen` stay on it.
 enum DictationCaretAnchorProvider {
     /// A focused editable text element and its resolved caret anchor.
-    struct EditableFocus {
+    /// `AXUIElement` is an immutable CF handle, so the value is safe to hand across threads.
+    struct EditableFocus: @unchecked Sendable {
         let anchor: CGPoint
         let element: AXUIElement
         let processIdentifier: pid_t
@@ -18,6 +23,32 @@ enum DictationCaretAnchorProvider {
             guard let other else { return false }
             return CFEqual(element, other.element)
         }
+    }
+
+    /// Outcome of one resolution attempt: the focus (if any) and whether the wall-clock budget
+    /// ran out first, so a caller can back off a slow accessibility server.
+    struct Resolution: @unchecked Sendable {
+        let focus: EditableFocus?
+        let exhaustedBudget: Bool
+
+        static let none = Resolution(focus: nil, exhaustedBudget: false)
+        static let timedOut = Resolution(focus: nil, exhaustedBudget: true)
+    }
+
+    /// End-to-end wall-clock budget for one resolution. Each AX call carries its own 50–80 ms
+    /// messaging timeout, so without this a slow target could chain 20+ individually timed-out
+    /// round trips into one multi-second sample.
+    static let resolutionBudget: TimeInterval = 0.07
+
+    /// Monotonic deadline for one resolution.
+    struct Deadline {
+        let uptime: TimeInterval
+
+        init(budget: TimeInterval = DictationCaretAnchorProvider.resolutionBudget) {
+            uptime = ProcessInfo.processInfo.systemUptime + budget
+        }
+
+        var isPast: Bool { ProcessInfo.processInfo.systemUptime >= uptime }
     }
 
     /// Roles that denote a user-editable text control. Web areas, groups, static text and
@@ -32,47 +63,78 @@ enum DictationCaretAnchorProvider {
     /// role, a settable value, a selected text range, and no read-only DOM marker. The anchor is
     /// the caret rect whenever the app exposes it; an empty field has no caret bounds yet, so it
     /// falls back to the first line of the element (top-leading), which is where its caret sits.
-    static func currentEditableFocus() -> EditableFocus? {
+    ///
+    /// `primaryMaxY` is the primary screen's top edge in AppKit coordinates (`NSScreen.screens
+    /// .first?.frame.maxY`), read by the caller on the main actor so this can run anywhere.
+    /// The whole chain shares one `resolutionBudget`; once it is past the result is a miss
+    /// flagged `exhaustedBudget` rather than a partially resolved (possibly wrong) anchor.
+    static func resolveEditableFocus(
+        primaryMaxY: CGFloat?,
+        budget: TimeInterval = resolutionBudget
+    ) -> Resolution {
+        let deadline = Deadline(budget: budget)
         guard AXIsProcessTrusted(),
-              let primaryMaxY = NSScreen.screens.first?.frame.maxY,
+              let primaryMaxY,
               let focused = focusedElement()
-        else { return nil }
+        else { return .none }
+        guard !deadline.isPast else { return .timedOut }
         AXUIElementSetMessagingTimeout(focused, 0.08)
-        // Some hosts focus a container (web area, scroll area, group) while the caret lives in
-        // a text input inside it; drill a couple of levels before giving up.
-        guard let element = isEditableTextElement(focused) ? focused : drillToTextInput(from: focused) else {
-            return nil
+        // The selected range is fetched once per element and threaded through the editable
+        // check, the caret rect and the selection flag instead of three separate round trips.
+        let focusedRange = copiedRange(focused, attribute: kAXSelectedTextRangeAttribute)
+        let element: AXUIElement
+        let selectedRange: CFRange?
+        if isEditableTextElement(focused, selectedRange: focusedRange) {
+            element = focused
+            selectedRange = focusedRange
+        } else {
+            // Some hosts focus a container (web area, scroll area, group) while the caret lives
+            // in a text input inside it; drill a couple of levels before giving up.
+            guard !deadline.isPast else { return .timedOut }
+            guard let drilled = drillToTextInput(from: focused, deadline: deadline) else {
+                return deadline.isPast ? .timedOut : .none
+            }
+            element = drilled.element
+            selectedRange = drilled.selectedRange
         }
+        guard !deadline.isPast else { return .timedOut }
         let anchor: CGPoint
-        if let accessibilityRect = caretRect(for: element) {
+        if let accessibilityRect = caretRect(for: element, selectedRange: selectedRange, deadline: deadline) {
             anchor = appKitAnchor(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
-        } else if copiedInt(element, attribute: kAXNumberOfCharactersAttribute) == 0,
+        } else if !deadline.isPast,
+                  copiedInt(element, attribute: kAXNumberOfCharactersAttribute) == 0,
                   let accessibilityRect = elementRect(element) {
             let converted = appKitRect(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
             anchor = firstLineAnchor(inAppKitRect: converted)
         } else {
-            return nil
+            return deadline.isPast ? .timedOut : .none
         }
         var pid: pid_t = 0
         AXUIElementGetPid(element, &pid)
-        let selection = copiedRange(element, attribute: kAXSelectedTextRangeAttribute)
-        return EditableFocus(
-            anchor: anchor,
-            element: element,
-            processIdentifier: pid,
-            hasSelection: (selection?.length ?? 0) > 0
+        return Resolution(
+            focus: EditableFocus(
+                anchor: anchor,
+                element: element,
+                processIdentifier: pid,
+                hasSelection: (selectedRange?.length ?? 0) > 0
+            ),
+            exhaustedBudget: false
         )
     }
 
     static let drillDepthLimit = 2
     static let drillNodeLimit = 16
 
-    /// Breadth-first search for the first editable text input below `root`, bounded so a
-    /// huge web page never stalls the main thread.
-    static func drillToTextInput(from root: AXUIElement) -> AXUIElement? {
+    /// Breadth-first search for the first editable text input below `root`, bounded by node
+    /// count and by the shared wall-clock deadline so a huge or slow web page never stalls a
+    /// sample. Returns the input together with the selected range already fetched for it.
+    static func drillToTextInput(
+        from root: AXUIElement,
+        deadline: Deadline
+    ) -> (element: AXUIElement, selectedRange: CFRange?)? {
         var frontier: [(AXUIElement, Int)] = [(root, 0)]
         var visited = 0
-        while !frontier.isEmpty, visited < drillNodeLimit {
+        while !frontier.isEmpty, visited < drillNodeLimit, !deadline.isPast {
             let (node, depth) = frontier.removeFirst()
             visited += 1
             guard depth < drillDepthLimit else { continue }
@@ -81,11 +143,15 @@ enum DictationCaretAnchorProvider {
                   let children = value as? [AXUIElement]
             else { continue }
             for child in children.prefix(drillNodeLimit) {
+                guard !deadline.isPast else { return nil }
                 AXUIElementSetMessagingTimeout(child, 0.05)
                 // Only a child that reports itself focused can own the caret; otherwise a page's
                 // stray search box would steal the anchor.
-                if copiedBool(child, attribute: kAXFocusedAttribute) == true, isEditableTextElement(child) {
-                    return child
+                if copiedBool(child, attribute: kAXFocusedAttribute) == true {
+                    let childRange = copiedRange(child, attribute: kAXSelectedTextRangeAttribute)
+                    if isEditableTextElement(child, selectedRange: childRange) {
+                        return (child, childRange)
+                    }
                 }
                 frontier.append((child, depth + 1))
             }
@@ -99,6 +165,7 @@ enum DictationCaretAnchorProvider {
         return value as? Bool
     }
 
+    @MainActor
     static func currentAnchor() -> CGPoint? {
         guard AXIsProcessTrusted(),
               let primaryMaxY = NSScreen.screens.first?.frame.maxY,
@@ -106,7 +173,8 @@ enum DictationCaretAnchorProvider {
         else { return nil }
 
         AXUIElementSetMessagingTimeout(element, 0.08)
-        if let accessibilityRect = caretRect(for: element) {
+        let selectedRange = copiedRange(element, attribute: kAXSelectedTextRangeAttribute)
+        if let accessibilityRect = caretRect(for: element, selectedRange: selectedRange, deadline: Deadline()) {
             return appKitAnchor(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
         }
         guard copiedInt(element, attribute: kAXNumberOfCharactersAttribute) == 0,
@@ -141,7 +209,10 @@ enum DictationCaretAnchorProvider {
         )
     }
 
-    static func isEditableTextElement(_ element: AXUIElement) -> Bool {
+    /// `selectedRange` is the element's already-fetched `kAXSelectedTextRangeAttribute`; a
+    /// control without one is not a caret host.
+    static func isEditableTextElement(_ element: AXUIElement, selectedRange: CFRange?) -> Bool {
+        guard selectedRange != nil else { return false }
         guard let role = copiedString(element, attribute: kAXRoleAttribute) else { return false }
         // Web engines expose rich-text editors (contenteditable) as groups/web areas with an
         // editable ancestor rather than a text-field role.
@@ -156,7 +227,6 @@ enum DictationCaretAnchorProvider {
         guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
               settable.boolValue
         else { return false }
-        guard copiedRange(element, attribute: kAXSelectedTextRangeAttribute) != nil else { return false }
         // Web engines ignore aria-readonly when reporting settability; read-only text areas used
         // as selection overlays (e.g. code viewers) usually say so in their DOM id or classes.
         let domMarkers: [String] = [copiedString(element, attribute: "AXDOMIdentifier")].compactMap { $0 }
@@ -199,45 +269,62 @@ enum DictationCaretAnchorProvider {
         return element
     }
 
-    private static var manualAccessibilityProcesses = Set<pid_t>()
+    /// Lock-protected because resolution runs on background tasks as well as the main actor.
+    private static let manualAccessibilityProcesses = OSAllocatedUnfairLock(initialState: Set<pid_t>())
 
     /// Chromium-based apps (Chrome, Electron: VS Code, Slack, Teams, Discord…) only build a full
     /// accessibility tree when a client asks for it; without `AXManualAccessibility` they expose
     /// no caret bounds and every anchor degrades to the field frame. Setting it is a no-op for
     /// every other app (attribute unsupported), so it is applied once per process.
     static func enableManualAccessibility(for pid: pid_t) {
-        guard pid > 0, !manualAccessibilityProcesses.contains(pid) else { return }
-        manualAccessibilityProcesses.insert(pid)
+        guard pid > 0 else { return }
+        let isFirstRequest = manualAccessibilityProcesses.withLock { $0.insert(pid).inserted }
+        guard isFirstRequest else { return }
         let application = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(application, 0.08)
         AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
     }
 
-    private static func caretRect(for element: AXUIElement) -> CGRect? {
-        guard let selectedRange = copiedRange(element, attribute: kAXSelectedTextRangeAttribute),
-              selectedRange.location >= 0
-        else { return nil }
+    /// `selectedRange` is the element's already-fetched `kAXSelectedTextRangeAttribute`.
+    private static func caretRect(
+        for element: AXUIElement,
+        selectedRange: CFRange?,
+        deadline: Deadline
+    ) -> CGRect? {
+        guard let selectedRange, selectedRange.location >= 0 else { return nil }
 
         let caretLocation = selectedRange.location + selectedRange.length
-        guard let candidate = caretRectCandidate(for: element, caretLocation: caretLocation) else { return nil }
+        guard let candidate = caretRectCandidate(for: element, caretLocation: caretLocation, deadline: deadline)
+        else { return nil }
+        // Out of budget: a candidate that skipped line alignment may sit on the wrong visual
+        // line, and a wrong position is worse than none.
+        guard !deadline.isPast else { return nil }
         return alignedToInsertionLine(candidate, element: element)
     }
 
     /// Tiers: exact insertion rect → text marker (WebKit/Chromium) → next character → previous character.
-    private static func caretRectCandidate(for element: AXUIElement, caretLocation: Int) -> CGRect? {
+    /// Each tier is one more round trip, so the deadline is checked before every fallback.
+    private static func caretRectCandidate(
+        for element: AXUIElement,
+        caretLocation: Int,
+        deadline: Deadline
+    ) -> CGRect? {
         if let exact = bounds(element, range: CFRange(location: caretLocation, length: 0)),
            exact.height > 0 {
             return CGRect(x: exact.minX, y: exact.minY, width: 0, height: exact.height)
         }
+        guard !deadline.isPast else { return nil }
         if let marker = textMarkerCaretRect(for: element) {
             return marker
         }
+        guard !deadline.isPast else { return nil }
         let characterCount = copiedInt(element, attribute: kAXNumberOfCharactersAttribute)
         if characterCount.map({ caretLocation < $0 }) != false,
            let next = bounds(element, range: CFRange(location: caretLocation, length: 1)),
            next.height > 0 {
             return CGRect(x: next.minX, y: next.minY, width: 0, height: next.height)
         }
+        guard !deadline.isPast else { return nil }
         if caretLocation > 0,
            let previous = bounds(element, range: CFRange(location: caretLocation - 1, length: 1)),
            previous.height > 0 {
