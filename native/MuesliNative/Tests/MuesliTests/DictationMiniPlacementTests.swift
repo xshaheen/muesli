@@ -9,28 +9,28 @@ struct DictationMiniPlacementTests {
         visibleFrame: CGRect(x: 0, y: 24, width: 300, height: 216)
     )
 
-    @Test("quadrants are tried in lower-right, lower-left, upper-right, upper-left order")
+    @Test("quadrants prefer behind the caret before using forward text space")
     func orderedQuadrants() {
         let size = CGSize(width: 58, height: 22)
 
-        let lowerRight = DictationMiniPlacement.place(
+        let lowerLeft = DictationMiniPlacement.place(
             near: CGPoint(x: 100, y: 140), size: size, screens: [primary]
         )
-        let lowerLeft = DictationMiniPlacement.place(
-            near: CGPoint(x: 270, y: 140), size: size, screens: [primary]
-        )
-        let upperRight = DictationMiniPlacement.place(
-            near: CGPoint(x: 100, y: 40), size: size, screens: [primary]
+        let lowerRight = DictationMiniPlacement.place(
+            near: CGPoint(x: 20, y: 140), size: size, screens: [primary]
         )
         let upperLeft = DictationMiniPlacement.place(
-            near: CGPoint(x: 270, y: 40), size: size, screens: [primary]
+            near: CGPoint(x: 100, y: 40), size: size, screens: [primary]
+        )
+        let upperRight = DictationMiniPlacement.place(
+            near: CGPoint(x: 20, y: 40), size: size, screens: [primary]
         )
 
-        #expect(lowerRight?.quadrant == .lowerRight)
         #expect(lowerLeft?.quadrant == .lowerLeft)
-        #expect(upperRight?.quadrant == .upperRight)
+        #expect(lowerRight?.quadrant == .lowerRight)
         #expect(upperLeft?.quadrant == .upperLeft)
-        for result in [lowerRight, lowerLeft, upperRight, upperLeft].compactMap({ $0 }) {
+        #expect(upperRight?.quadrant == .upperRight)
+        for result in [lowerLeft, lowerRight, upperLeft, upperRight].compactMap({ $0 }) {
             #expect(primary.visibleFrame.contains(result.frame))
         }
     }
@@ -51,8 +51,8 @@ struct DictationMiniPlacementTests {
         #expect(result.map { negative.visibleFrame.contains($0.frame) } == true)
     }
 
-    @Test("a pointer in the full screen frame still selects that screen")
-    func pointerOutsideVisibleFrame() {
+    @Test("a caret in the full screen frame still selects that screen")
+    func caretOutsideVisibleFrame() {
         let result = DictationMiniPlacement.place(
             near: CGPoint(x: 100, y: 10),
             size: CGSize(width: 58, height: 22),
@@ -85,17 +85,17 @@ struct DictationMiniPlacementTests {
         let origin = CGPoint(x: 100, y: 100)
 
         #expect(!DictationMiniPlacement.shouldReacquire(
-            from: origin, on: primary, to: CGPoint(x: 147, y: 100), on: primary
+            from: origin, on: primary, to: CGPoint(x: 103, y: 100), on: primary
         ))
         #expect(DictationMiniPlacement.shouldReacquire(
-            from: origin, on: primary, to: CGPoint(x: 148, y: 100), on: primary
+            from: origin, on: primary, to: CGPoint(x: 104, y: 100), on: primary
         ))
         #expect(DictationMiniPlacement.shouldReacquire(
             from: origin, on: primary, to: CGPoint(x: 101, y: 100), on: other
         ))
     }
 
-    @Test("a disconnected frozen anchor is rehomed without following the pointer")
+    @Test("a disconnected frozen anchor is rehomed without following the caret")
     func frozenFrameRehoming() {
         let surviving = DictationMiniPlacement.Screen(
             frame: CGRect(x: 500, y: 100, width: 200, height: 140),

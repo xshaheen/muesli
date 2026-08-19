@@ -24,22 +24,63 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniIndicatorController.accessibilityLabel(for: .failure) == "Dictation failed")
     }
 
-    @Test("recording is mouse-transparent and processing freezes the recording anchor")
+    @Test("recording follows the caret and processing freezes the recording anchor")
     func frozenProcessingAnchor() {
-        var pointer = CGPoint(x: 220, y: 320)
-        let controller = makeController(pointer: { pointer })
+        var caret = CGPoint(x: 220, y: 320)
+        let controller = makeController(caret: { caret })
         let token = controller.beginPreparing()
         controller.showRecording(generation: token) { -24 }
-        let recordingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+        let initialCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
 
-        pointer = CGPoint(x: 700, y: 100)
+        caret = CGPoint(x: 245, y: 320)
+        controller.refreshCaretAnchorForTesting()
+        let recordingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+        #expect(recordingCenter != initialCenter)
+
+        caret = CGPoint(x: 700, y: 100)
         controller.showProcessing(generation: token)
         let processingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
 
         #expect(controller.presentation == .processing)
         #expect(controller.isMouseTransparentForTesting)
-        #expect(!controller.isFollowingPointerForTesting)
+        #expect(!controller.isFollowingCaretForTesting)
         #expect(recordingCenter == processingCenter)
+        controller.close()
+    }
+
+    @Test("the Mini stays hidden until focused caret geometry becomes available")
+    func waitsForCaretGeometry() {
+        var caret: CGPoint?
+        let controller = makeController(caret: { caret })
+        let token = controller.beginPreparing()
+
+        #expect(controller.presentation == .preparing)
+        #expect(!controller.isVisibleForTesting)
+        #expect(controller.isFollowingCaretForTesting)
+
+        caret = CGPoint(x: 220, y: 320)
+        controller.refreshCaretAnchorForTesting()
+
+        #expect(controller.isVisibleForTesting)
+        controller.dismiss(generation: token)
+        controller.close()
+    }
+
+    @Test("terminal feedback reacquires the post-insertion caret once")
+    func terminalCaretReacquisition() {
+        var caret = CGPoint(x: 220, y: 320)
+        let controller = makeController(caret: { caret })
+        let token = controller.beginPreparing()
+        controller.showRecording(generation: token) { -24 }
+        controller.showProcessing(generation: token)
+        let processingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+
+        caret = CGPoint(x: 500, y: 320)
+        controller.showSuccess(generation: token, duration: 10)
+        let successCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+
+        #expect(successCenter != processingCenter)
+        #expect(!controller.isFollowingCaretForTesting)
         controller.close()
     }
 
@@ -111,14 +152,30 @@ struct DictationMiniIndicatorTests {
         #expect(!DictationMiniIndicatorController.processingAnimationIsContinuous(reduceMotion: true))
     }
 
+    @Test("accessibility caret rectangles convert into AppKit screen coordinates")
+    func caretCoordinateConversion() {
+        let accessibilityRect = CGRect(x: 120, y: 200, width: 2, height: 20)
+        let converted = DictationCaretAnchorProvider.appKitRect(
+            fromAccessibilityRect: accessibilityRect,
+            primaryMaxY: 900
+        )
+        let anchor = DictationCaretAnchorProvider.appKitAnchor(
+            fromAccessibilityRect: accessibilityRect,
+            primaryMaxY: 900
+        )
+
+        #expect(converted == CGRect(x: 120, y: 680, width: 2, height: 20))
+        #expect(anchor == CGPoint(x: 120, y: 690))
+    }
+
     private func makeController(
-        pointer: @escaping () -> CGPoint = { CGPoint(x: 220, y: 320) },
+        caret: @escaping () -> CGPoint? = { CGPoint(x: 220, y: 320) },
         accessibilitySink: @escaping DictationMiniIndicatorController.AccessibilitySink = { _ in }
     ) -> DictationMiniIndicatorController {
         DictationMiniIndicatorController(
             screenProvider: { [screen] },
-            pointerProvider: pointer,
-            movementCoalescingDelay: 0,
+            caretAnchorProvider: caret,
+            caretPollingInterval: 60,
             accessibilitySink: accessibilitySink
         )
     }

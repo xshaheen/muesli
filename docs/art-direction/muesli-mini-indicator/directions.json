@@ -33,9 +33,9 @@
       ],
       "round": 1,
       "mode": "iterate",
-      "thesis": "Dictation feedback should materialize beside the pointer only when it has information to convey, then disappear completely.",
+      "thesis": "Dictation feedback should materialize beside the focused text insertion caret only when it has information to convey, then disappear completely.",
       "anchors": [
-        "user-corrected near-pointer behavior",
+        "user-corrected caret-context behavior",
         "hidden idle default",
         "Muesli waveform language",
         "22 point active capsule height"
@@ -176,7 +176,7 @@
     {
       "from": "current-fixed-pill",
       "to": "contextual-spark-01",
-      "operation": "keep waveform and glass; drop fixed persistent idle; intensify contextual pointer placement",
+      "operation": "keep waveform and glass; drop fixed persistent idle; intensify contextual insertion-caret placement",
       "feedback_ref": "feedback.md#18-08-2026-1859-utc--contextual-placement-correction",
       "decided_at_utc": "2026-08-18T18:59:21Z"
     },

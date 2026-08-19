@@ -47,3 +47,13 @@
 - Preserve: meeting pause, stop, transcript toggle, duration, and drag/position behavior in the meeting-owned surface.
 - Prevent: shared visibility, hover, anchor, drag, or state between the two concepts.
 - Resulting node: `split-surfaces-05`.
+
+## 19-08-2026 — insertion-caret anchoring correction
+
+- Replace: mouse-pointer following with focused text insertion-caret following.
+- Resolve: the caret from the focused editable control's Accessibility selected-range bounds.
+- Follow: the caret while preparing and recording, with a small movement threshold to avoid jitter.
+- Freeze: the last caret anchor while processing.
+- Reacquire: the post-insertion caret once for success or failure, then freeze for the terminal dwell.
+- Fallback: use the focused element frame when range bounds are unavailable; otherwise keep the Mini hidden.
+- Avoid: any mouse-location fallback, because pointer position is unrelated to keyboard dictation context.

@@ -1,6 +1,6 @@
 import CoreGraphics
 
-/// Pure AppKit-coordinate placement for the pointer-contextual dictation Mini.
+/// Pure AppKit-coordinate placement for the caret-contextual dictation Mini.
 struct DictationMiniPlacement {
     struct Screen: Equatable {
         let frame: CGRect
@@ -8,10 +8,10 @@ struct DictationMiniPlacement {
     }
 
     enum Quadrant: CaseIterable, Equatable {
-        case lowerRight
         case lowerLeft
-        case upperRight
+        case lowerRight
         case upperLeft
+        case upperRight
     }
 
     struct Result: Equatable {
@@ -20,25 +20,25 @@ struct DictationMiniPlacement {
         let screen: Screen
     }
 
-    static let minimumPointerClearance: CGFloat = 28
-    static let movementThreshold: CGFloat = 48
+    static let minimumCaretClearance: CGFloat = 10
+    static let movementThreshold: CGFloat = 4
     static let screenEdgeInset: CGFloat = 4
 
     static func place(
-        near pointer: CGPoint,
+        near anchor: CGPoint,
         size: CGSize,
         screens: [Screen],
-        clearance: CGFloat = minimumPointerClearance
+        clearance: CGFloat = minimumCaretClearance
     ) -> Result? {
         guard size.width > 0, size.height > 0,
-              let screen = selectedScreen(containingOrNearestTo: pointer, screens: screens)
+              let screen = selectedScreen(containingOrNearestTo: anchor, screens: screens)
         else { return nil }
 
-        let safeClearance = max(clearance, minimumPointerClearance)
+        let safeClearance = max(clearance, minimumCaretClearance)
         let visibleFrame = insetVisibleFrame(screen.visibleFrame, by: screenEdgeInset)
         for quadrant in Quadrant.allCases {
             let frame = proposedFrame(
-                near: pointer,
+                near: anchor,
                 size: size,
                 clearance: safeClearance,
                 quadrant: quadrant
@@ -49,29 +49,29 @@ struct DictationMiniPlacement {
         }
 
         let preferred = proposedFrame(
-            near: pointer,
+            near: anchor,
             size: size,
             clearance: safeClearance,
-            quadrant: .lowerRight
+            quadrant: .lowerLeft
         )
         return Result(
             frame: clamped(preferred, to: visibleFrame),
-            quadrant: .lowerRight,
+            quadrant: .lowerLeft,
             screen: screen
         )
     }
 
     static func shouldReacquire(
-        from previousPointer: CGPoint,
+        from previousAnchor: CGPoint,
         on previousScreen: Screen,
-        to currentPointer: CGPoint,
+        to currentAnchor: CGPoint,
         on currentScreen: Screen,
         threshold: CGFloat = movementThreshold
     ) -> Bool {
         guard previousScreen == currentScreen else { return true }
         let distance = hypot(
-            currentPointer.x - previousPointer.x,
-            currentPointer.y - previousPointer.y
+            currentAnchor.x - previousAnchor.x,
+            currentAnchor.y - previousAnchor.y
         )
         return distance >= max(threshold, 0)
     }
@@ -98,7 +98,7 @@ struct DictationMiniPlacement {
     }
 
     private static func proposedFrame(
-        near pointer: CGPoint,
+        near anchor: CGPoint,
         size: CGSize,
         clearance: CGFloat,
         quadrant: Quadrant
@@ -107,17 +107,17 @@ struct DictationMiniPlacement {
         let y: CGFloat
         switch quadrant {
         case .lowerRight:
-            x = pointer.x + clearance
-            y = pointer.y - clearance - size.height
+            x = anchor.x + clearance
+            y = anchor.y - clearance - size.height
         case .lowerLeft:
-            x = pointer.x - clearance - size.width
-            y = pointer.y - clearance - size.height
+            x = anchor.x - clearance - size.width
+            y = anchor.y - clearance - size.height
         case .upperRight:
-            x = pointer.x + clearance
-            y = pointer.y + clearance
+            x = anchor.x + clearance
+            y = anchor.y + clearance
         case .upperLeft:
-            x = pointer.x - clearance - size.width
-            y = pointer.y + clearance
+            x = anchor.x - clearance - size.width
+            y = anchor.y + clearance
         }
         return CGRect(origin: CGPoint(x: x, y: y), size: size)
     }

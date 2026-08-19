@@ -23,23 +23,21 @@ final class DictationMiniIndicatorController: NSObject {
     private(set) var currentFrame: CGRect?
 
     private let screenProvider: () -> [DictationMiniPlacement.Screen]
-    private let pointerProvider: () -> CGPoint
-    private let pointerClearanceProvider: () -> CGFloat
+    private let caretAnchorProvider: () -> CGPoint?
+    private let caretClearanceProvider: () -> CGFloat
     private let accessibilitySink: AccessibilitySink
-    private let movementCoalescingDelay: TimeInterval
+    private let caretPollingInterval: TimeInterval
 
     private var panel: NSPanel?
     private var contentView: DictationMiniView?
     private var generation: UInt64 = 0
     private var activeGeneration: Generation?
-    private var anchorPointer: CGPoint?
+    private var anchorPoint: CGPoint?
     private var anchorScreen: DictationMiniPlacement.Screen?
     private var powerProvider: (() -> Float)?
     private var animationTimer: Timer?
     private var dismissTask: Task<Void, Never>?
-    private var pointerDebounceSource: DispatchSourceTimer?
-    private var globalPointerMonitor: Any?
-    private var localPointerMonitor: Any?
+    private var caretPollingTimer: Timer?
     private var accessibilityObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
 
@@ -50,14 +48,8 @@ final class DictationMiniIndicatorController: NSObject {
                     DictationMiniPlacement.Screen(frame: $0.frame, visibleFrame: $0.visibleFrame)
                 }
             },
-            pointerProvider: { NSEvent.mouseLocation },
-            pointerClearanceProvider: {
-                let cursorSize = NSCursor.current.image.size
-                return max(
-                    DictationMiniPlacement.minimumPointerClearance,
-                    max(cursorSize.width, cursorSize.height) + 4
-                )
-            },
+            caretAnchorProvider: { DictationCaretAnchorProvider.currentAnchor() },
+            caretClearanceProvider: { DictationMiniPlacement.minimumCaretClearance },
             accessibilitySink: { message in
                 NSAccessibility.post(
                     element: NSApp as Any,
@@ -73,17 +65,17 @@ final class DictationMiniIndicatorController: NSObject {
 
     init(
         screenProvider: @escaping () -> [DictationMiniPlacement.Screen],
-        pointerProvider: @escaping () -> CGPoint,
-        pointerClearanceProvider: @escaping () -> CGFloat = {
-            DictationMiniPlacement.minimumPointerClearance
+        caretAnchorProvider: @escaping () -> CGPoint?,
+        caretClearanceProvider: @escaping () -> CGFloat = {
+            DictationMiniPlacement.minimumCaretClearance
         },
-        movementCoalescingDelay: TimeInterval = 0.08,
+        caretPollingInterval: TimeInterval = 0.1,
         accessibilitySink: @escaping AccessibilitySink = { _ in }
     ) {
         self.screenProvider = screenProvider
-        self.pointerProvider = pointerProvider
-        self.pointerClearanceProvider = pointerClearanceProvider
-        self.movementCoalescingDelay = movementCoalescingDelay
+        self.caretAnchorProvider = caretAnchorProvider
+        self.caretClearanceProvider = caretClearanceProvider
+        self.caretPollingInterval = caretPollingInterval
         self.accessibilitySink = accessibilitySink
         super.init()
 
@@ -104,16 +96,16 @@ final class DictationMiniIndicatorController: NSObject {
     }
 
     @discardableResult
-    func beginPreparing(at pointer: CGPoint? = nil) -> Generation {
+    func beginPreparing(at anchor: CGPoint? = nil) -> Generation {
         generation &+= 1
         let token = Generation(rawValue: generation)
         activeGeneration = token
         dismissTask?.cancel()
         dismissTask = nil
         stopAnimation(clearPowerProvider: true)
-        anchorPointer = pointer ?? pointerProvider()
+        anchorPoint = anchor ?? caretAnchorProvider()
         anchorScreen = nil
-        present(.preparing, generation: token, followsPointer: true)
+        present(.preparing, generation: token, followsCaret: true)
         return token
     }
 
@@ -123,7 +115,7 @@ final class DictationMiniIndicatorController: NSObject {
     ) {
         guard accepts(token) else { return }
         self.powerProvider = powerProvider
-        present(.recording, generation: token, followsPointer: true)
+        present(.recording, generation: token, followsCaret: true)
         startAnimation()
     }
 
@@ -137,7 +129,7 @@ final class DictationMiniIndicatorController: NSObject {
 
     func showProcessing(generation token: Generation) {
         guard accepts(token) else { return }
-        present(.processing, generation: token, followsPointer: false)
+        present(.processing, generation: token, followsCaret: false)
         startAnimation()
     }
 
@@ -164,7 +156,7 @@ final class DictationMiniIndicatorController: NSObject {
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, self.accepts(token), self.presentation == .failure else { return }
-                self.present(.warning(normalized), generation: token, followsPointer: false)
+                self.present(.warning(normalized), generation: token, followsCaret: false)
             }
             try? await Task.sleep(for: .seconds(max(warningDuration, 0)))
             guard !Task.isCancelled else { return }
@@ -178,7 +170,7 @@ final class DictationMiniIndicatorController: NSObject {
     @discardableResult
     func showWarning(
         _ message: String,
-        at pointer: CGPoint? = nil,
+        at anchor: CGPoint? = nil,
         duration: TimeInterval = 3
     ) -> Generation? {
         guard presentation == .hidden || isWarning(presentation) else { return nil }
@@ -187,10 +179,10 @@ final class DictationMiniIndicatorController: NSObject {
         activeGeneration = token
         dismissTask?.cancel()
         stopAnimation(clearPowerProvider: true)
-        anchorPointer = pointer ?? pointerProvider()
+        anchorPoint = anchor ?? caretAnchorProvider()
         anchorScreen = nil
         let normalized = Self.normalizedWarning(message)
-        present(.warning(normalized), generation: token, followsPointer: false)
+        present(.warning(normalized), generation: token, followsCaret: false)
         scheduleDismissal(generation: token, duration: duration)
         return token
     }
@@ -218,9 +210,8 @@ final class DictationMiniIndicatorController: NSObject {
 
     var isVisibleForTesting: Bool { panel?.isVisible ?? false }
     var isMouseTransparentForTesting: Bool { panel?.ignoresMouseEvents ?? true }
-    var isFollowingPointerForTesting: Bool {
-        globalPointerMonitor != nil || localPointerMonitor != nil
-    }
+    var isFollowingCaretForTesting: Bool { caretPollingTimer != nil }
+    func refreshCaretAnchorForTesting() { reacquireCaretIfNeeded() }
     static func processingAnimationIsContinuous(reduceMotion: Bool) -> Bool { !reduceMotion }
 
     static func surfaceSize(for presentation: Presentation) -> CGSize {
@@ -254,23 +245,29 @@ final class DictationMiniIndicatorController: NSObject {
         duration: TimeInterval
     ) {
         guard accepts(token) else { return }
-        present(terminal, generation: token, followsPointer: false)
+        if let liveAnchor = caretAnchorProvider() {
+            anchorPoint = liveAnchor
+            anchorScreen = nil
+            currentFrame = nil
+            placeFollowingSurface(size: Self.surfaceSize(for: terminal))
+        }
+        present(terminal, generation: token, followsCaret: false)
         scheduleDismissal(generation: token, duration: duration)
     }
 
     private func present(
         _ newPresentation: Presentation,
         generation token: Generation,
-        followsPointer: Bool
+        followsCaret: Bool
     ) {
         guard accepts(token) else { return }
         let oldPresentation = presentation
         presentation = newPresentation
-        if followsPointer {
-            startPointerMonitoring()
+        if followsCaret {
+            startCaretMonitoring()
             placeFollowingSurface(size: Self.surfaceSize(for: newPresentation))
         } else {
-            stopPointerMonitoring()
+            stopCaretMonitoring()
             placeFrozenSurface(size: Self.surfaceSize(for: newPresentation))
         }
 
@@ -283,8 +280,10 @@ final class DictationMiniIndicatorController: NSObject {
         contentView?.needsDisplay = true
         if let currentFrame {
             panel.setFrame(currentFrame, display: true)
+            panel.orderFrontRegardless()
+        } else {
+            panel.orderOut(nil)
         }
-        panel.orderFrontRegardless()
 
         if oldPresentation != newPresentation,
            let announcement = Self.accessibilityAnnouncement(for: newPresentation) {
@@ -293,15 +292,15 @@ final class DictationMiniIndicatorController: NSObject {
     }
 
     private func placeFollowingSurface(size: CGSize) {
-        let pointer = anchorPointer ?? pointerProvider()
+        guard let anchor = anchorPoint ?? caretAnchorProvider() else { return }
         let screens = screenProvider()
         guard let result = DictationMiniPlacement.place(
-            near: pointer,
+            near: anchor,
             size: size,
             screens: screens,
-            clearance: pointerClearanceProvider()
+            clearance: caretClearanceProvider()
         ) else { return }
-        anchorPointer = pointer
+        anchorPoint = anchor
         anchorScreen = result.screen
         currentFrame = result.frame
     }
@@ -345,68 +344,53 @@ final class DictationMiniIndicatorController: NSObject {
         return panel
     }
 
-    private func startPointerMonitoring() {
-        guard globalPointerMonitor == nil, localPointerMonitor == nil else { return }
-        let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
-        let debounceSource = DispatchSource.makeTimerSource(queue: .main)
-        debounceSource.setEventHandler { [weak self] in
-            self?.reacquirePointerIfNeeded()
+    private func startCaretMonitoring() {
+        guard caretPollingTimer == nil else { return }
+        let timer = Timer(timeInterval: max(caretPollingInterval, 0.04), repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.reacquireCaretIfNeeded() }
         }
-        debounceSource.activate()
-        pointerDebounceSource = debounceSource
-        let delay = movementCoalescingDelay
-        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { _ in
-            debounceSource.schedule(deadline: .now() + delay)
-        }
-        localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { event in
-            debounceSource.schedule(deadline: .now() + delay)
-            return event
-        }
+        RunLoop.main.add(timer, forMode: .common)
+        caretPollingTimer = timer
     }
 
-    private func stopPointerMonitoring() {
-        if let globalPointerMonitor {
-            NSEvent.removeMonitor(globalPointerMonitor)
-            self.globalPointerMonitor = nil
-        }
-        if let localPointerMonitor {
-            NSEvent.removeMonitor(localPointerMonitor)
-            self.localPointerMonitor = nil
-        }
-        pointerDebounceSource?.cancel()
-        pointerDebounceSource = nil
+    private func stopCaretMonitoring() {
+        caretPollingTimer?.invalidate()
+        caretPollingTimer = nil
     }
 
-    private func reacquirePointerIfNeeded() {
+    private func reacquireCaretIfNeeded() {
         guard presentation == .preparing || presentation == .recording,
-              let previousPointer = anchorPointer,
-              let previousScreen = anchorScreen else { return }
-        let pointer = pointerProvider()
+              let anchor = caretAnchorProvider() else { return }
         let screens = screenProvider()
         guard let placement = DictationMiniPlacement.place(
-            near: pointer,
+            near: anchor,
             size: Self.surfaceSize(for: presentation),
             screens: screens,
-            clearance: pointerClearanceProvider()
-        ),
-        DictationMiniPlacement.shouldReacquire(
-            from: previousPointer,
-            on: previousScreen,
-            to: pointer,
-            on: placement.screen
+            clearance: caretClearanceProvider()
         ) else { return }
-        anchorPointer = pointer
+        if let previousAnchor = anchorPoint,
+           let previousScreen = anchorScreen,
+           !DictationMiniPlacement.shouldReacquire(
+               from: previousAnchor,
+               on: previousScreen,
+               to: anchor,
+               on: placement.screen
+           ) {
+            return
+        }
+        anchorPoint = anchor
         anchorScreen = placement.screen
         currentFrame = placement.frame
         if let currentFrame {
-            panel?.setFrame(currentFrame, display: true, animate: true)
+            panel?.setFrame(currentFrame, display: true)
+            panel?.orderFrontRegardless()
         }
     }
 
     private func handleScreensChanged() {
         switch presentation {
         case .preparing, .recording:
-            anchorPointer = pointerProvider()
+            anchorPoint = caretAnchorProvider() ?? anchorPoint
             placeFollowingSurface(size: Self.surfaceSize(for: presentation))
         case .processing, .success, .failure, .warning:
             guard let currentFrame else { return }
@@ -471,10 +455,10 @@ final class DictationMiniIndicatorController: NSObject {
         activeGeneration = nil
         dismissTask?.cancel()
         dismissTask = nil
-        stopPointerMonitoring()
+        stopCaretMonitoring()
         stopAnimation(clearPowerProvider: true)
         presentation = .hidden
-        anchorPointer = nil
+        anchorPoint = nil
         anchorScreen = nil
         currentFrame = nil
         contentView?.presentation = .hidden

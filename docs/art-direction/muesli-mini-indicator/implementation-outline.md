@@ -40,15 +40,15 @@ This is a source-grounded outline, not an implementation plan artifact. It inten
 
 ## Placement contract
 
-1. Sample `NSEvent.mouseLocation` on dictation activation.
-2. Resolve the pointer's current `NSScreen.visibleFrame`.
-3. Prefer lower-right with 14 pt clearance from the pointer hotspot.
-4. If it does not fit, try lower-left, upper-right, then upper-left before clamping.
-5. Ignore small pointer motion. Reacquire after roughly 48 pt of travel, a display transition, or explicit accessibility focus change.
-6. Coalesce movement and pause relocation while scrolling or moving a window; settle after geometry is stable.
-7. Freeze the final anchor through processing and completion so the state does not jump at the end.
+1. Query the focused macOS Accessibility element and its selected text range.
+2. Resolve `kAXBoundsForRangeParameterizedAttribute` and convert Quartz top-left coordinates to AppKit bottom-left coordinates.
+3. Prefer lower-left with 10 pt clearance so the Mini sits behind the insertion direction rather than covering upcoming text.
+4. If it does not fit, try lower-right, upper-left, then upper-right before clamping.
+5. Poll at roughly 10 Hz while preparing or recording and reacquire after 4 pt of caret movement or a display transition.
+6. If selected-range bounds are unavailable, use the focused element frame as a contextual fallback; if neither is available, keep the Mini hidden until an anchor resolves.
+7. Freeze the final anchor through processing. For success or failure, reacquire the post-insertion caret once and freeze for the terminal dwell.
 
-The exact distance and timing values are tuning hypotheses. They should be measured during dogfooding rather than treated as Monologue parity claims.
+The exact distance and timing values remain tuning hypotheses. They should be measured during dogfooding rather than treated as Monologue parity claims.
 
 ## Source changes when the direction is selected
 
@@ -62,14 +62,14 @@ The exact distance and timing values are tuning hypotheses. They should be measu
 ### 2. Pure placement policy
 
 - Introduce a small `ContextualIndicatorPlacement` value type beside `FloatingIndicatorController`.
-- Keep quadrant selection, pointer clearance, display selection, and clamping pure so they can be exhaustively unit tested.
+- Keep quadrant selection, caret clearance, display selection, and clamping pure so they can be exhaustively unit tested.
 - Reuse the coordinate-conversion lessons already captured by `computerUseCursorFrame`; do not mix AppKit bottom-left points with Quartz top-left points.
 
-### 3. Dictation context follower
+### 3. Dictation caret follower
 
-- Add a `ContextualIndicatorFollower` responsible only for pointer sampling, distance hysteresis, coalescing, and scroll/window-move suppression.
-- Feed resolved frames to `FloatingIndicatorController`; do not let the follower own chrome or dictation state.
-- Use local/global event monitors only for geometry. Do not read focused text content for indicator placement.
+- Add an Accessibility-backed caret anchor provider responsible only for focused-element lookup, selected-range bounds, coordinate conversion, and element-frame fallback.
+- Feed resolved anchors to `DictationMiniIndicatorController`; do not let the provider own chrome or dictation state.
+- Poll only while preparing or recording. Do not install mouse event monitors or read focused text content for indicator placement.
 
 ### 4. Split the shared controller
 
@@ -86,7 +86,7 @@ The exact distance and timing values are tuning hypotheses. They should be measu
 - Extend `FloatingIndicatorGeometryTests.swift` with hysteresis, stable processing anchors, and display-transition behavior.
 - Add config decoding/migration coverage for existing floating-indicator preferences, removed dictation anchors, new Mini defaults, and the meeting-only saved origin.
 - Extend `SoundControllerTests` with disabled/enabled Success and Failure coverage. Add lifecycle tests proving one Start, one Stop, and one terminal Success or Failure per session, with silent cancellation and no duplicate Failure across nested error handlers.
-- Native visual QA: 1x/2x displays, Reduce Motion, Increase Contrast, VoiceOver announcement, cursor hotspot clearance, typing, scrolling, window movement, full-screen apps, and multiple Spaces.
+- Native visual QA: 1x/2x displays, Reduce Motion, Increase Contrast, VoiceOver announcement, caret clearance, typing, selection changes, scrolling, window movement, full-screen apps, and multiple Spaces.
 - Dogfood short dictation separately from meetings; the two presentations have different interaction requirements.
 - Add routing tests proving dictation state changes cannot show/move the Meeting Recording Panel and meeting events cannot show/move Dictation Mini.
 
@@ -98,6 +98,6 @@ The exact distance and timing values are tuning hypotheses. They should be measu
 - `FloatingIndicatorSurfaceStyle` and the existing waveform layers preserve Muesli's visual identity.
 - Existing placement/geometry tests can be divided into Dictation Mini follower tests and Meeting Recording Panel anchor tests.
 
-## Decision still open
+## Settled placement decision
 
-The visual assumes pointer-at-activation plus thresholded reacquisition. Before implementation, compare it against continuous following during a real 30–60 second dictation. The winner should be the one that remains findable without feeling like a cursor trailer.
+The Mini follows the focused insertion caret rather than the mouse pointer. Dogfood the 10 Hz polling interval, 4 pt movement threshold, lower-left preference, and focused-element fallback during real 30–60 second dictations; tune those values without changing the caret-owned context model.

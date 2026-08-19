@@ -174,7 +174,7 @@ struct MeetingRecordingPanelLifecycleTests {
                     visibleFrame: CGRect(x: 0, y: 24, width: 800, height: 576)
                 )]
             },
-            pointerProvider: { CGPoint(x: 300, y: 300) }
+            caretAnchorProvider: { CGPoint(x: 300, y: 300) }
         )
         let owner = UUID()
         controller.showRecording(
