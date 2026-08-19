@@ -66,6 +66,20 @@ enum DictationCaretAnchorProvider {
         )
     }
 
+    /// The focused window of `pid`, converted to AppKit coordinates.
+    static func focusedWindowFrame(for pid: pid_t) -> CGRect? {
+        guard let primaryMaxY = NSScreen.screens.first?.frame.maxY else { return nil }
+        let application = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(application, 0.05)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXUIElementGetTypeID()
+        else { return nil }
+        let window = unsafeBitCast(value, to: AXUIElement.self)
+        guard let rect = elementRect(window) else { return nil }
+        return appKitRect(fromAccessibilityRect: rect, primaryMaxY: primaryMaxY)
+    }
+
     static let drillDepthLimit = 2
     static let drillNodeLimit = 16
 

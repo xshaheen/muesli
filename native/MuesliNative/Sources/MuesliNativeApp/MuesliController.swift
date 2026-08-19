@@ -844,6 +844,23 @@ final class MuesliController: NSObject {
         dictationTextContextMonitor.onEscape = { [weak self] in
             self?.dictationMiniIndicator.hideIdleDotUntilFocusChanges()
         }
+        dictationTextContextMonitor.onWindowFrame = { [weak self] frame, pid in
+            self?.dictationMiniIndicator.updateIdleWindowFrame(frame, processIdentifier: pid)
+        }
+        dictationMiniIndicator.hotkeyLabelProvider = { [weak self] in
+            self?.config.dictationHotkey.label ?? "the hotkey"
+        }
+        dictationMiniIndicator.onIdleMenuAction = { [weak self] action in
+            guard let self else { return }
+            switch action {
+            case .turnOff:
+                self.updateConfig { $0.showDictationIdleDot = false }
+            case .openSettings:
+                self.openSettingsTab()
+            case .hideUntilFieldChanges, .hideForHour, .unpin:
+                break
+            }
+        }
         dictationIdleDotAllowed = canRunMainApp
         syncDictationIdleDot()
         syncDictationRecorderWarmup(intent: .idlePrewarm(.startup))
@@ -10148,6 +10165,7 @@ final class MuesliController: NSObject {
         markDictationLatency("toggle_start")
         meetingMonitor.suppressWhileActive()
         beginDictationOutput(mode: outputMode)
+        dictationMiniIndicator.showToast("Hands-free — tap \(config.dictationHotkey.label) to stop")
         dictationStartedAt = nil
         clearCapturedDictationSessionContext()
         beginDictationStyleSession(mode: isStreamingDictationBackend ? .streaming : .standard)

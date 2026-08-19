@@ -346,6 +346,56 @@ struct DictationMiniIndicatorTests {
         controller.close()
     }
 
+    @Test("the idle dot shows hover keycaps, a selection hint, toasts, and pins to the focused window")
+    func idleExtras() async {
+        let controller = makeController()
+        controller.hotkeyLabelProvider = { "Right Cmd" }
+        controller.isIdleDotAllowed = true
+        let token = AXElementToken(element: AXUIElementCreateSystemWide())
+        let window = CGRect(x: 100, y: 100, width: 600, height: 400)
+        controller.updateIdleWindowFrame(window, processIdentifier: 42)
+        controller.updateIdleContext(DictationTextContextSample(
+            anchor: CGPoint(x: 220, y: 320), processIdentifier: 42, hasSelection: false, element: token))
+        #expect(controller.presentation == .idle)
+
+        controller.idleHoverChanged(true)
+        #expect(controller.hintTextForTesting == "Hold Right Cmd to dictate")
+        controller.idleHoverChanged(false)
+        #expect(controller.hintTextForTesting == nil)
+
+        controller.updateIdleContext(DictationTextContextSample(
+            anchor: CGPoint(x: 220, y: 320), processIdentifier: 42, hasSelection: true, element: token))
+        #expect(controller.hintTextForTesting == "Hold Right Cmd to replace the selection")
+
+        controller.showToast("Hands-free — tap Right Cmd to stop", duration: 10)
+        #expect(controller.hintTextForTesting == "Hands-free — tap Right Cmd to stop")
+
+        // Drag the dot and drop it: it pins as an offset from the window's top-left and rides along.
+        controller.idleDragged(to: CGPoint(x: 500, y: 420))
+        controller.idleDragEnded()
+        #expect(controller.isIdlePinnedForTesting)
+        let pinnedFrame = controller.currentFrame
+        #expect(pinnedFrame?.origin == CGPoint(x: 500, y: 420))
+        controller.updateIdleWindowFrame(window.offsetBy(dx: 30, dy: -20), processIdentifier: 42)
+        #expect(controller.currentFrame?.origin == CGPoint(x: 530, y: 400))
+
+        // Pinned: caret samples no longer move it, and a miss streak does not hide it.
+        controller.updateIdleContext(DictationTextContextSample(
+            anchor: CGPoint(x: 150, y: 150), processIdentifier: 42, hasSelection: false, element: token))
+        #expect(controller.currentFrame?.origin == CGPoint(x: 530, y: 400))
+        for _ in 0..<4 { controller.updateIdleContext(nil) }
+        #expect(controller.presentation == .idle)
+
+        // A toast with no visible Mini waits for the next presentation.
+        controller.close()
+        let fresh = makeController()
+        fresh.showToast("Hands-free", duration: 10)
+        #expect(fresh.hintTextForTesting == nil)
+        _ = fresh.beginPreparing()
+        #expect(fresh.hintTextForTesting == "Hands-free")
+        fresh.close()
+    }
+
     @Test("follower hysteresis holds through two misses and withdraws on the third")
     func followerHysteresis() {
         var hysteresis = DictationFollowerHysteresis()

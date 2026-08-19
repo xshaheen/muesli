@@ -72,6 +72,8 @@ final class DictationTextContextMonitor {
     private static let logger = Logger(subsystem: "com.muesli.native", category: "TextContext")
 
     var onSample: ((DictationTextContextSample?) -> Void)?
+    /// The observed app's focused window frame (AppKit coordinates), for window pinning.
+    var onWindowFrame: ((CGRect?, pid_t?) -> Void)?
     var onActivityChanged: ((DictationFollowerActivity) -> Void)?
     var onFocusChanged: (() -> Void)?
     var onEscape: (() -> Void)?
@@ -264,6 +266,7 @@ final class DictationTextContextMonitor {
 
     private func evaluate() {
         guard isRunning else { return }
+        onWindowFrame?(observedProcessIdentifier.flatMap { DictationCaretAnchorProvider.focusedWindowFrame(for: $0) }, observedProcessIdentifier)
         guard let focus = DictationCaretAnchorProvider.currentEditableFocus(),
               focus.processIdentifier == observedProcessIdentifier
         else {

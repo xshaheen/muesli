@@ -428,6 +428,35 @@
         "generated_at_utc": "2026-08-19T11:00:01Z",
         "remote_service_disclosure": "none"
       }
+    },
+    {
+      "id": "follower-14",
+      "parents": [
+        "glass-success-13",
+        "recording-wave-10"
+      ],
+      "round": 14,
+      "mode": "iterate",
+      "thesis": "The Mini should behave as a follower: a persistent idle seed near the text context that steps aside during activity, with hover keycaps, a selection hint, toasts, window pinning, tiered caret resolution with active fallbacks, and a spark-lit recording wave.",
+      "anchors": [
+        "user decision: adopt the Monologue follower approach in all five reviewed aspects",
+        "monologue-followerkit-notes.md",
+        "glass-success-13 and recording-wave-10 visuals"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/follower-14.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T13:34:37Z",
+      "generation": {
+        "capability": "manual-html-css-canvas",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T13:34:37Z",
+        "remote_service_disclosure": "none"
+      }
     }
   ],
   "decisions": [
@@ -528,6 +557,13 @@
       "operation": "replace the solid green completion disk with a tinted glass disk and small white check; drop compositor shadows on bright signals; add pop-in/fade-out; restrict the reminder to empty editable fields with a 60 s repeat guard",
       "feedback_ref": "feedback.md#19-08-2026-1100-utc--glass-success-and-quiet-reminder",
       "decided_at_utc": "2026-08-19T11:00:01Z"
+    },
+    {
+      "from": "glass-success-13",
+      "to": "follower-14",
+      "operation": "replace the timed reminder with a persistent idle follower (hysteresis, activity suppression, Escape, snooze, pinning, hover keycaps, selection hint, toasts), add pointer/screen-bottom fallbacks for active states and child drilling, and light the recording wave with seeded sparks",
+      "feedback_ref": "feedback.md#19-08-2026-1334-utc--adopt-the-follower-approach",
+      "decided_at_utc": "2026-08-19T13:34:37Z"
     }
   ]
 }

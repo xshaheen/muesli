@@ -145,3 +145,14 @@
 - Reviewed: Monologue 1.4.2's follower from its binary metadata (see `monologue-followerkit-notes.md`).
 - Adopt: `AXManualAccessibility` for Chromium apps, WebKit text-marker caret tier, `AXEditableAncestor` editability — these raise caret accuracy where the Mini and the reminder previously fell back to the field frame.
 - Open decision: Monologue keeps an idle dot near the text context permanently (hidden while typing/scrolling/swiping, Escape to hide, snoozable) instead of a timed reminder.
+
+## 19-08-2026 13:34 UTC — adopt the follower approach
+
+- Decision: adopt Monologue's follower approach in all five reviewed aspects.
+- Idle signal: the timed reminder becomes a persistent idle seed near the focused text context; glides with the caret; hidden while typing (1.0 s), scrolling (0.6 s), moving windows (0.5 s) and switching Spaces (0.6 s); Escape hides it until the focused element changes; snooze and turn-off from its menu; off during meeting recordings.
+- Caret tiers: drill into focused containers for the text input; active states fall back caret → pointer → screen bottom so recording is never homeless; the idle dot never uses the ladder.
+- Hysteresis: 8 Hz poll plus AX notifications, held caret through two misses, withdrawn on the third.
+- Extras: hover keycaps with the configured hotkey, a once-per-selection "replace the selection" hint, a hands-free toast on double-tap lock, and drag-to-pin onto the focused window (per app, unpin from the menu).
+- Wave: seeded spark engine replaces the scrolling history.
+- Setting renamed: `show_dictation_idle_dot` (legacy `show_dictation_focus_reminder` honoured); copy: "Keep the Mini's dot near your text context when you're not dictating…".
+- Resulting node: `follower-14`.

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muesli Mini Indicator — Follower</title>
+  <style>
+    :root { color-scheme:dark; --coral:#ff7043; --amber:#ffb04d; --ink:#f3f2ef; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0b0b0a; color:#f3f2ef; font-family:-apple-system,BlinkMacSystemFont,sans-serif; }
+    main { width:min(1040px,calc(100% - 48px)); padding:40px 0; }
+    h1 { margin:0 0 14px; font-size:44px; line-height:1; letter-spacing:-.04em; }
+    .lede { max-width:780px; margin:0 0 30px; color:#99958f; line-height:1.55; }
+    .stage { display:grid; grid-template-columns:1.15fr 1fr; gap:1px; overflow:hidden; border:1px solid rgba(255,255,255,.11); border-radius:28px; background:rgba(255,255,255,.11); box-shadow:0 32px 90px rgba(0,0,0,.46); }
+    article { padding:34px; background:linear-gradient(145deg,#171716,#0f0f0e); }
+    .index { color:#6f6c67; font:700 12px ui-monospace,SFMono-Regular,monospace; letter-spacing:.16em; }
+    h2 { margin:10px 0 18px; font-size:27px; }
+    .host { position:relative; height:170px; border-radius:16px; background:linear-gradient(#232325,#19191b); overflow:hidden; margin-bottom:12px; }
+    .host .text { position:absolute; left:18px; top:22px; color:#d8d6d0; font:14px/1.4 ui-monospace,SFMono-Regular,monospace; }
+    .host .caret { position:absolute; left:214px; top:21px; width:2px; height:18px; background:#6fa3ff; }
+    .seed { position:absolute; width:10px; height:10px; border-radius:50%; background:var(--coral); box-shadow:0 0 4px 2px rgba(255,112,67,.32); }
+    .hint { position:absolute; height:22px; padding:0 10px; border-radius:11px; background:rgba(33,31,30,.62); box-shadow:inset 0 0 0 1px rgba(255,255,255,.16), 0 6px 16px rgba(0,0,0,.45); color:var(--ink); font:600 11px/22px -apple-system,BlinkMacSystemFont,sans-serif; white-space:nowrap; }
+    .wave { position:relative; width:58px; height:22px; border-radius:11px; background:rgba(33,31,30,.62); box-shadow:inset 0 0 0 1px rgba(255,255,255,.16); }
+    canvas { position:absolute; inset:0; width:58px; height:22px; }
+    table { width:100%; border-collapse:collapse; font:12px/1.5 ui-monospace,SFMono-Regular,monospace; color:#b9b5ae; }
+    td { padding:3px 0; border-bottom:1px solid rgba(255,255,255,.07); vertical-align:top; } td:first-child { color:#7f7b75; width:36%; }
+    .foot { color:#85817c; font:600 13px ui-monospace,SFMono-Regular,monospace; margin-top:14px; } .foot strong { color:#d4d1cb; } .foot span { display:block; margin-top:6px; font:400 13px/1.45 -apple-system,BlinkMacSystemFont,sans-serif; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>The dot that follows.</h1>
+    <p class="lede">The Mini adopts the follower model: a persistent idle seed near the focused text context that glides with the caret, steps aside while you type or scroll, hides on Escape, and can be dragged onto a window to ride with it. Hovering shows the hotkey; a selection shows what holding it will do; hands‑free mode toasts. Recording is lit by seeded sparks instead of a scrolling history.</p>
+    <section class="stage">
+      <article>
+        <div class="index">0 · idle</div><h2>Idle follower, hover, hint</h2>
+        <div class="host">
+          <div class="text">Hello there, the quick brown fox jumps over</div>
+          <div class="caret"></div>
+          <div class="seed" style="left:189px;top:46px"></div>
+          <div class="hint" style="left:214px;top:40px">Hold Right Cmd to dictate</div>
+        </div>
+        <div class="host" style="height:120px">
+          <div class="text">Selected <span style="background:#355c9a;color:#fff">text here</span> in the field</div>
+          <div class="seed" style="left:118px;top:46px"></div>
+          <div class="hint" style="left:143px;top:40px">Hold Right Cmd to replace the selection</div>
+        </div>
+        <div class="host" style="height:90px;display:grid;place-items:center"><div class="wave"><canvas id="w" width="116" height="44"></canvas></div></div>
+        <div class="foot"><strong>Same seed, same capsule, same palette</strong><span>Idle dot = the Preparing seed; hints and toasts share the recording capsule's glass. Recording bars: 24 × 1 pt, lit by sparks.</span></div>
+      </article>
+      <article>
+        <div class="index">Δ</div><h2>Behaviour</h2>
+        <table>
+          <tr><td>Idle dot</td><td>shows while an editable control has focus; 8 Hz poll + AX focus/selection/window notifications; 3‑miss hysteresis; glides ≤ 0.12 s on caret moves ≥ 4 pt</td></tr>
+          <tr><td>Steps aside</td><td>typing 1.0 s · scrolling 0.6 s · window move/resize 0.5 s · Space switch 0.6 s</td></tr>
+          <tr><td>Escape</td><td>hidden until the focused element changes; menu: hide for an hour, turn off, settings</td></tr>
+          <tr><td>Pin</td><td>drag the dot → pinned as an offset from the focused window's top‑left, per app; Unpin from the menu</td></tr>
+          <tr><td>Hover</td><td>“Hold 〈hotkey〉 to dictate”; selection → “…to replace the selection” (2.5 s, once per selection)</td></tr>
+          <tr><td>Toast</td><td>double‑tap hands‑free → “Hands‑free — tap 〈hotkey〉 to stop” beside the capsule</td></tr>
+          <tr><td>Active fallback</td><td>caret → pointer → screen bottom (recording is never homeless); idle never uses the ladder</td></tr>
+          <tr><td>Caret tiers</td><td>caret · char · charPrev · WebKit marker · field; drill into focused containers; AXManualAccessibility for Chromium; AXEditableAncestor for web editors</td></tr>
+          <tr><td>Wave</td><td>seeded sparks (≤ 2.2/frame at full level), kernel [.32 .68 1 .68 .32], carry 0.84, attack 0.6 / release 0.28, quiet shimmer 0.06</td></tr>
+          <tr><td>Setting</td><td>Appearance › Idle dot near your text (on); legacy show_dictation_focus_reminder honoured</td></tr>
+        </table>
+      </article>
+    </section>
+  </main>
+  <script>
+    const COUNT=24, K=[.32,.68,1,.68,.32]; let bars=new Array(COUNT).fill(0), sparks=[], t=0;
+    function rnd(){ return Math.random(); }
+    function step(level){ sparks.forEach(s=>s.a*=.84); sparks=sparks.filter(s=>s.a>.02); let b=level*2.2; while(b>0){ if(rnd()<Math.min(b,1)) sparks.push({i:Math.floor(rnd()*COUNT), a:level*(.55+.45*rnd())}); b-=1; }
+      const tgt=new Array(COUNT).fill(0).map((_,i)=>.06*(1-Math.abs(i-11.5)/11.5*.6)*(.6+.4*(.5+.5*Math.sin(t*.11+i*.9))));
+      sparks.forEach(s=>{ for(let o=-2;o<=2;o++){ const i=s.i+o; if(i>=0&&i<COUNT) tgt[i]+=s.a*K[o+2]; } });
+      bars=bars.map((v,i)=>{ const g=Math.min(1,tgt[i]); return v+(g-v)*(g>v?.6:.28); }); }
+    const ctx=document.getElementById('w').getContext('2d');
+    function frame(){ t++; const level=Math.max(0,Math.sin(t/40)*Math.sin(t/9+1))*.9; step(level); ctx.setTransform(2,0,0,2,0,0); ctx.clearRect(0,0,58,22);
+      bars.forEach((v,i)=>{ const h=Math.round((1+11*v)*2)/2, x=5.5+i*2, y=Math.round((11-h/2)*2)/2; const a=.48+.52*Math.min(1,v*1.6); const g=Math.round(112+(176-112)*v*.85), b=Math.round(67+(77-67)*v*.85); ctx.fillStyle=`rgba(255,${g},${b},${a})`; ctx.beginPath(); ctx.roundRect(x,y,1,h,.5); ctx.fill(); });
+      requestAnimationFrame(frame); }
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
