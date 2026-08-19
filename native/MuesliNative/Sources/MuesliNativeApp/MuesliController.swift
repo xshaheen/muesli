@@ -523,7 +523,6 @@ final class MuesliController: NSObject {
     private var nextStandardDictationStopSequence: UInt64 = 0
     private var dictationLifecycleFeedback = DictationLifecycleFeedback()
     private var dictationMiniGeneration: DictationMiniIndicatorController.Generation?
-    private var dictationMiniSessionID: UUID?
     private var activeComputerUseAudioSessionID: UUID?
     private var computerUseCommandStartedAt: Date?
     private var pendingComputerUseStopStartedAt: Date?
@@ -694,7 +693,10 @@ final class MuesliController: NSObject {
         }) ?? .chatGPT
         self.selectedPostProcessorBackend = loadedPostProcessorBackend
         self.dictationMiniIndicator = DictationMiniIndicatorController()
-        self.meetingRecordingPanel = MeetingRecordingPanelController(configStore: configStore)
+        self.meetingRecordingPanel = MeetingRecordingPanelController(
+            configStore: configStore,
+            configuration: loadedConfig
+        )
         super.init()
         dictationAudioSessionManager.onEvent = { [weak self] event in
             Task { @MainActor [weak self] in
@@ -831,7 +833,14 @@ final class MuesliController: NSObject {
         meetingRecordingPanel.onDiscard = { [weak self] in self?.discardMeetingWithConfirmation() }
         meetingRecordingPanel.onTogglePause = { [weak self] in self?.toggleMeetingRecordingPause() }
         meetingRecordingPanel.onOpenNotes = { [weak self] in self?.openActiveMeetingNotes() }
-        ComputerUseCursorOverlay.shared.onStop = { [weak self] in self?.handleComputerUseStop() }
+        ComputerUseCursorOverlay.shared.onStop = { [weak self] in
+            guard let self else { return }
+            if self.computerUseHotkeyMonitor.isToggleRecording {
+                self.computerUseHotkeyMonitor.stopToggleMode()
+            } else {
+                self.handleComputerUseStop()
+            }
+        }
         ComputerUseCursorOverlay.shared.onCancel = { [weak self] in
             self?.handleComputerUseCancel()
             self?.computerUseHotkeyMonitor.cancelToggleMode()
@@ -1139,7 +1148,6 @@ final class MuesliController: NSObject {
         dictationStartedAt = nil
         pendingStandardDictationStops.removeAll()
         frozenDictationTranscriptionSelections.removeAll()
-        dictationMiniSessionID = nil
         dictationMiniGeneration = nil
         clearCapturedDictationSessionContext()
         resetDictationOutputMode()
@@ -1825,6 +1833,7 @@ final class MuesliController: NSObject {
             config.meetingTranscriptionModel = selectedMeetingTranscriptionBackend.model
         }
         configStore.save(config)
+        meetingRecordingPanel.applyConfiguration(config)
         selectedMeetingSummaryBackend = MeetingSummaryBackendOption.all.first(where: {
             $0.backend == config.meetingSummaryBackend
         }) ?? .chatGPT
@@ -6582,22 +6591,20 @@ final class MuesliController: NSObject {
                 // Carry the pre-resume transcript so panel chat sees the whole meeting, not
                 // just what this session recorded. Empty for a fresh meeting.
                 let priorTranscriptForChat = (try? dictationStore.meeting(id: meetingID))?.displayTranscript ?? ""
-                meetingRecordingPanel.setMeetingChatContext(
-                    FloatingMeetingChatContext(
-                        meetingID: meetingID,
-                        priorTranscript: priorTranscriptForChat,
-                        currentConfig: { [weak self] in self?.config ?? AppConfig() },
-                        isReady: { [weak self] in self?.isMeetingChatReady ?? false },
-                        // Through the live cache, not the row: while the meeting runs the
-                        // cache is the freshest copy (persistence is debounced) and it
-                        // avoids hydrating the growing row on every read.
-                        manualNotes: { [weak self] in
-                            self?.manualNotesForLiveMeeting(id: meetingID) ?? ""
-                        },
-                        saveManualNotes: { [weak self] notes in
-                            self?.cacheMeetingManualNotes(id: meetingID, notes: notes)
-                        }
-                    )
+                let meetingChatContext = FloatingMeetingChatContext(
+                    meetingID: meetingID,
+                    priorTranscript: priorTranscriptForChat,
+                    currentConfig: { [weak self] in self?.config ?? AppConfig() },
+                    isReady: { [weak self] in self?.isMeetingChatReady ?? false },
+                    // Through the live cache, not the row: while the meeting runs the
+                    // cache is the freshest copy (persistence is debounced) and it
+                    // avoids hydrating the growing row on every read.
+                    manualNotes: { [weak self] in
+                        self?.manualNotesForLiveMeeting(id: meetingID) ?? ""
+                    },
+                    saveManualNotes: { [weak self] notes in
+                        self?.cacheMeetingManualNotes(id: meetingID, notes: notes)
+                    }
                 )
                 let micHealthWarningLock = NSLock()
                 var lastForwardedMicHealthWarning: String?
@@ -6665,6 +6672,7 @@ final class MuesliController: NSObject {
                     powerProvider: { [weak meetingSession] in
                         meetingSession?.currentPower() ?? -160
                     },
+                    chatContext: meetingChatContext,
                     showTranscript: showFloatingPanelWhenActive
                 )
                 statusBarController?.refresh()
@@ -8214,42 +8222,35 @@ final class MuesliController: NSObject {
                 case .success: SoundController.playDictationSuccess(enabled: true)
                 case .failure: SoundController.playDictationFailure(enabled: true)
                 }
-            case let .mini(sessionID, presentation):
+            case let .mini(_, presentation):
                 switch presentation {
                 case .preparing:
-                    dictationMiniSessionID = sessionID
                     dictationMiniGeneration = dictationMiniIndicator.beginPreparing()
                 case .recording:
-                    guard dictationMiniSessionID == sessionID,
-                          let generation = dictationMiniGeneration else { continue }
+                    guard let generation = dictationMiniGeneration else { continue }
                     dictationMiniIndicator.showRecording(generation: generation) { [weak self] in
                         self?.dictationAudioSessionManager.currentPower() ?? -160
                     }
                 case .processing:
-                    guard dictationMiniSessionID == sessionID,
-                          let generation = dictationMiniGeneration else { continue }
+                    guard let generation = dictationMiniGeneration else { continue }
                     dictationMiniIndicator.showProcessing(generation: generation)
                 case .success:
-                    guard dictationMiniSessionID == sessionID,
-                          let generation = dictationMiniGeneration else { continue }
+                    guard let generation = dictationMiniGeneration else { continue }
                     dictationMiniIndicator.showSuccess(generation: generation)
-                    dictationMiniSessionID = nil
                     dictationMiniGeneration = nil
                 case .failure:
-                    guard dictationMiniSessionID == sessionID,
-                          let generation = dictationMiniGeneration else { continue }
+                    guard let generation = dictationMiniGeneration else { continue }
                     dictationMiniIndicator.showFailure(generation: generation)
-                    dictationMiniSessionID = nil
                     dictationMiniGeneration = nil
                 case .hidden:
-                    guard dictationMiniSessionID == sessionID,
-                          let generation = dictationMiniGeneration else { continue }
+                    guard let generation = dictationMiniGeneration else { continue }
                     dictationMiniIndicator.dismiss(generation: generation)
-                    dictationMiniSessionID = nil
                     dictationMiniGeneration = nil
                 }
-            case .showRetainedHistoryRecovery:
-                statusBarController?.setStatus("Dictation saved — target app changed")
+            case .showTargetChangedWithRetainedHistoryRecovery:
+                dictationMiniIndicator.showRecoveryWarningAfterFailure(
+                    "Saved in Recent Dictations — target changed"
+                )
             }
         }
     }
@@ -11223,7 +11224,7 @@ final class MuesliController: NSObject {
                     applyDictationLifecycleActions(dictationLifecycleFeedback.finish(
                         sessionID: job.id,
                         outcome: .failure(
-                            recovery: dictationID == nil ? .unavailable : .retainedHistory
+                            recovery: dictationID == nil ? .unavailable : .targetChangedWithRetainedHistory
                         ),
                         soundAllowed: shouldPlayDictationLifecycleSounds
                     ))

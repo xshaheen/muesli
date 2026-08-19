@@ -303,6 +303,7 @@ final class FloatingMeetingTranscriptPanelController {
     /// class of bug that simply does not exist once the two are separate windows.
     private var window: NSPanel?
     var presentationWindow: NSPanel? { window }
+    var hasMeetingContextForTesting: Bool { model.isNotesAvailable }
 
     private var currentPanelSize: NSSize {
         window?.frame.size ?? FloatingMeetingTranscriptPlacement.panelSize

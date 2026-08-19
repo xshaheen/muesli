@@ -87,12 +87,28 @@ struct DictationLifecycleFeedbackTests {
 
         #expect(feedback.finish(
             sessionID: sessionID,
-            outcome: .failure(recovery: .retainedHistory),
+            outcome: .failure(recovery: .targetChangedWithRetainedHistory),
             soundAllowed: true
         ) == [
             .mini(sessionID: sessionID, .failure),
             .cue(.failure),
-            .showRetainedHistoryRecovery,
+            .showTargetChangedWithRetainedHistoryRecovery,
+        ])
+    }
+
+    @Test("unavailable failure emits only the terminal failure feedback")
+    func unavailableFailure() {
+        var feedback = DictationLifecycleFeedback()
+        let sessionID = UUID()
+        _ = feedback.begin(sessionID: sessionID, isTestMode: false)
+
+        #expect(feedback.finish(
+            sessionID: sessionID,
+            outcome: .failure(recovery: .unavailable),
+            soundAllowed: true
+        ) == [
+            .mini(sessionID: sessionID, .failure),
+            .cue(.failure),
         ])
     }
 }

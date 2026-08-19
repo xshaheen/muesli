@@ -43,7 +43,7 @@ struct DictationMiniPlacement {
                 clearance: safeClearance,
                 quadrant: quadrant
             )
-            if contains(frame, in: visibleFrame) {
+            if visibleFrame.contains(frame) {
                 return Result(frame: frame, quadrant: quadrant, screen: screen)
             }
         }
@@ -120,13 +120,6 @@ struct DictationMiniPlacement {
             y = pointer.y + clearance
         }
         return CGRect(origin: CGPoint(x: x, y: y), size: size)
-    }
-
-    private static func contains(_ frame: CGRect, in bounds: CGRect) -> Bool {
-        frame.minX >= bounds.minX
-            && frame.maxX <= bounds.maxX
-            && frame.minY >= bounds.minY
-            && frame.maxY <= bounds.maxY
     }
 
     private static func clamped(_ frame: CGRect, to bounds: CGRect) -> CGRect {
