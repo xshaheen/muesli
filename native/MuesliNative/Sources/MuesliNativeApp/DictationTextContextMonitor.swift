@@ -21,7 +21,7 @@ struct DictationTextContextSample: Equatable {
 
 /// Transient user activity during which the idle dot stays out of the way.
 struct DictationFollowerActivity: Equatable {
-    static let typingHold: TimeInterval = 1.0
+    static let typingHold: TimeInterval = 1.6
     static let scrollHold: TimeInterval = 0.6
     static let windowMoveHold: TimeInterval = 0.5
     static let spaceSwitchHold: TimeInterval = 0.6
@@ -102,7 +102,7 @@ final class DictationTextContextMonitor {
     func start() {
         guard !isRunning else { return }
         isRunning = true
-        Self.logger.info("text context monitor started")
+        Self.logger.notice("text context monitor started")
         let center = NSWorkspace.shared.notificationCenter
         workspaceTokens.append(center.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
@@ -167,6 +167,7 @@ final class DictationTextContextMonitor {
               pid != ProcessInfo.processInfo.processIdentifier,
               AXIsProcessTrusted()
         else {
+            Self.logger.notice("attach skipped pid=\(pid ?? -1, privacy: .public) running=\(self.isRunning, privacy: .public) trusted=\(AXIsProcessTrusted(), privacy: .public)")
             pollTimer?.invalidate()
             pollTimer = nil
             return
@@ -198,6 +199,7 @@ final class DictationTextContextMonitor {
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(created), .commonModes)
         observer = created
         observedProcessIdentifier = pid
+        Self.logger.notice("attached pid=\(pid, privacy: .public)")
         startPolling()
         scheduleEvaluation()
     }
@@ -264,12 +266,18 @@ final class DictationTextContextMonitor {
         evaluationTimer = timer
     }
 
+    private var lastDiagnosticAt: TimeInterval = 0
+
     private func evaluate() {
         guard isRunning else { return }
         onWindowFrame?(observedProcessIdentifier.flatMap { DictationCaretAnchorProvider.focusedWindowFrame(for: $0) }, observedProcessIdentifier)
-        guard let focus = DictationCaretAnchorProvider.currentEditableFocus(),
-              focus.processIdentifier == observedProcessIdentifier
-        else {
+        let focus = DictationCaretAnchorProvider.currentEditableFocus()
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastDiagnosticAt > 10 {
+            lastDiagnosticAt = now
+            Self.logger.notice("sample pid=\(self.observedProcessIdentifier ?? -1, privacy: .public) editable=\(focus != nil, privacy: .public) focusPid=\(focus?.processIdentifier ?? -1, privacy: .public) activity=\(self.activity.isSuppressing, privacy: .public)")
+        }
+        guard let focus, focus.processIdentifier == observedProcessIdentifier else {
             if lastElement != nil {
                 lastElement = nil
                 onFocusChanged?()

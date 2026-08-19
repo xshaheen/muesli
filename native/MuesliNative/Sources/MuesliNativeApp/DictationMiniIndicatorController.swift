@@ -1,8 +1,10 @@
 import AppKit
+import OSLog
 
 /// The sole window and lifecycle owner for short-lived dictation feedback.
 @MainActor
 final class DictationMiniIndicatorController: NSObject {
+    private static let idleLogger = Logger(subsystem: "com.muesli.native", category: "MiniIdle")
     struct Generation: Hashable, Sendable {
         fileprivate let rawValue: UInt64
     }
@@ -298,10 +300,17 @@ final class DictationMiniIndicatorController: NSObject {
     var isIdleDotVisibleForTesting: Bool { presentation == .idle && (panel?.isVisible ?? false) }
     var idleHasSelectionForTesting: Bool { idleHasSelection }
 
+    private var lastIdleDiagnosticAt: TimeInterval = 0
+
     private func refreshIdleDot() {
         guard presentation == .hidden || presentation == .idle else { return }
         let snoozed = idleSnoozedUntil.map { ProcessInfo.processInfo.systemUptime < $0 } ?? false
         let pinnedFrame = pinnedIdleFrame()
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastIdleDiagnosticAt > 10 {
+            lastIdleDiagnosticAt = now
+            Self.idleLogger.notice("idle allowed=\(self.isIdleDotAllowed, privacy: .public) anchor=\(self.idleAnchor != nil, privacy: .public) suppress=\(self.idleActivity.isSuppressing, privacy: .public) escape=\(self.idleHiddenUntilFocusChange, privacy: .public) snoozed=\(snoozed, privacy: .public) presentation=\(String(describing: self.presentation), privacy: .public)")
+        }
         let canShow = isIdleDotAllowed
             && !idleActivity.isSuppressing
             && !idleHiddenUntilFocusChange
@@ -567,6 +576,7 @@ final class DictationMiniIndicatorController: NSObject {
             if oldPresentation != newPresentation {
                 contentView?.playAppearance(
                     reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                        || newPresentation == .idle
                 )
             }
             panel.orderFrontRegardless()
