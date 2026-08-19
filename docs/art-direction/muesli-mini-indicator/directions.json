@@ -485,6 +485,64 @@
         "generated_at_utc": "2026-08-19T16:48:54Z",
         "remote_service_disclosure": "none"
       }
+    },
+    {
+      "id": "meeting-panel-two-state-16",
+      "parents": [
+        "meeting-record-pill-12",
+        "glass-disc-15"
+      ],
+      "round": 16,
+      "mode": "iterate",
+      "thesis": "The Meeting Recording Panel should be the same 22 pt Contextual Spark glass capsule as the Record pill and the Mini: minimized it is the Record pill with a live clock; expanded it unfolds in place into one low row with the wave, pause/resume, stop, transcript and collapse; the choice is remembered and the legacy 224 x 46 HUD bar goes away.",
+      "anchors": [
+        "user request 19-08-2026: minimize/expand the meeting panel, pause/resume + stop, visible recording time",
+        "meeting-record-pill-12 footprint and hand-off",
+        "glass-disc-15 disc-to-capsule morph",
+        "current MeetingRecordingPanelController states and controls"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/meeting-panel-two-state-16.html",
+      "status": "parent",
+      "created_at_utc": "2026-08-19T19:42:00Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T19:42:00Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "merged-panel-three-states-17",
+      "parents": [
+        "meeting-panel-two-state-16"
+      ],
+      "round": 17,
+      "mode": "iterate",
+      "thesis": "The recording capsule and the floating transcript panel should be one glass object with three sizes: a pill with the live clock, a hover row with the wave, pause/resume, stop and an open-panel button, and a sticky panel whose header is that row and whose body is the transcript, chat and notes.",
+      "anchors": [
+        "user direction 19-08-2026: merge the capsule and the panel; minimized shows the clock; expanded on hover; an icon converts the row into the floating panel; redesign the panel in this phase",
+        "meeting-panel-two-state-16",
+        "current FloatingMeetingTranscriptPanel tabs, copy, notes and chat features"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/merged-panel-three-states-17.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T19:55:00Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T19:55:00Z",
+        "remote_service_disclosure": "none"
+      }
     }
   ],
   "decisions": [
@@ -599,6 +657,27 @@
       "operation": "replace the naked seed with an 18 pt glass disc and coral core for idle/preparing, morph disc↔capsule↔orb, eager hotkey start with tap discard and gated start cue",
       "feedback_ref": "feedback.md#19-08-2026-1648-utc--design-review-decisions",
       "decided_at_utc": "2026-08-19T16:48:54Z"
+    },
+    {
+      "from": "meeting-record-pill-12",
+      "to": "meeting-panel-two-state-16",
+      "operation": "fold the Meeting Recording Panel into a two-state 22 pt glass capsule: minimized Record-pill footprint with a live clock, expanded single-row controls; click toggles, state remembered, legacy HUD bar retired",
+      "feedback_ref": "feedback.md#19-08-2026-1942-utc--two-state-meeting-panel",
+      "decided_at_utc": "2026-08-19T19:42:00Z"
+    },
+    {
+      "from": "meeting-panel-two-state-16",
+      "to": "merged-panel-three-states-17",
+      "operation": "merge the recording capsule and the floating transcript panel into one three-size object: pill, hover row with an open-panel button, sticky panel with the row as header and transcript/chat/notes body; one anchor, one remembered choice, transcript panel redesigned in the Spark glass",
+      "feedback_ref": "feedback.md#19-08-2026-1955-utc--merge-the-capsule-and-the-transcript-panel",
+      "decided_at_utc": "2026-08-19T19:55:00Z"
+    },
+    {
+      "from": "merged-panel-three-states-17",
+      "to": "merged-panel-three-states-17",
+      "operation": "panel header settled on variant A: stretched spark wave between the clock and a trailing pause · stop ‖ minimize cluster",
+      "feedback_ref": "feedback.md#19-08-2026-2007-utc--panel-header-variant-a",
+      "decided_at_utc": "2026-08-19T20:07:00Z"
     }
   ]
 }

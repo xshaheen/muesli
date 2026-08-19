@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muesli Meeting Panel — Three States</title>
+  <style>
+    :root { color-scheme:dark; --coral:#ff7043; --amber:#ffb04d; --ink:#f3f2ef; --glass:rgba(33,31,30,.62); --edge:rgba(255,255,255,.16); }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0b0b0a; color:#f3f2ef; font-family:-apple-system,BlinkMacSystemFont,sans-serif; }
+    main { width:min(1120px,calc(100% - 48px)); padding:40px 0 60px; }
+    h1 { margin:0 0 14px; font-size:44px; line-height:1; letter-spacing:-.04em; }
+    .lede { max-width:800px; margin:0 0 30px; color:#99958f; line-height:1.55; }
+    .stage { display:grid; grid-template-columns:1fr; gap:1px; overflow:hidden; border:1px solid rgba(255,255,255,.11); border-radius:28px; background:rgba(255,255,255,.11); box-shadow:0 32px 90px rgba(0,0,0,.46); }
+    .stage + .stage { margin-top:18px; }
+    .stage.two { grid-template-columns:1.1fr 1fr; }
+    article { padding:34px; background:linear-gradient(145deg,#171716,#0f0f0e); }
+    .index { color:#6f6c67; font:700 12px ui-monospace,SFMono-Regular,monospace; letter-spacing:.16em; }
+    h2 { margin:10px 0 18px; font-size:27px; }
+    h3 { margin:22px 0 8px; font-size:14px; color:#d4d1cb; letter-spacing:.02em; }
+    .foot { color:#85817c; font:600 13px ui-monospace,SFMono-Regular,monospace; margin-top:18px; }
+    .foot strong { color:#d4d1cb; }
+    .foot span { display:block; margin-top:6px; font:400 13px/1.45 -apple-system,BlinkMacSystemFont,sans-serif; }
+    .host { position:relative; border-radius:16px; overflow:hidden; display:grid; place-items:center; background:
+      radial-gradient(220px 120px at 25% 20%, #2c3f63 0%, transparent 70%),
+      radial-gradient(260px 140px at 80% 90%, #4a2f26 0%, transparent 70%),
+      linear-gradient(#2a2a2c,#1a1a1c); }
+    .host::after { content:"Zoom Meeting — Weekly sync"; position:absolute; left:14px; top:12px; color:#d8d6d0; font:13px/1.3 -apple-system,BlinkMacSystemFont,sans-serif; opacity:.7; }
+    .host.quiet::after { content:none; }
+    .caption { position:absolute; left:14px; bottom:12px; right:14px; color:#85817c; font:600 11px/1.4 ui-monospace,SFMono-Regular,monospace; }
+    .row { display:grid; gap:10px; margin-top:12px; }
+    .row.two { grid-template-columns:1fr 1fr; }
+    .row.three { grid-template-columns:1fr 1fr 1fr; }
+    .cell { position:relative; border-radius:14px; background:linear-gradient(#232325,#19191b); display:flex; flex-direction:column; align-items:center; padding:14px 12px 10px; overflow:hidden; }
+    .cell .art { width:100%; display:grid; place-items:center; height:44px; }
+    .cell small { display:block; width:100%; margin-top:10px; color:#85817c; font:600 11px/1.35 ui-monospace,SFMono-Regular,monospace; }
+    .cell .unit { transform:scale(1.75); }
+    .cell.x24 .art { height:64px; } .cell.x24 .unit { transform:scale(2.4); } .cell.x24 .unit.status { transform:scale(2.1); }
+    .cell.x2 .art { height:54px; } .cell.x2 .unit { transform:scale(2); }
+    .cell.x15 .art { height:40px; } .cell.x15 .unit { transform:scale(1.5); }
+    .cell.x1 .art { height:30px; } .cell.x1 .unit { transform:none; }
+
+    /* ---- The object ---- */
+    .unit { position:relative; display:flex; align-items:center; height:22px; border-radius:11px; padding:0 9px;
+      background:var(--glass); -webkit-backdrop-filter:blur(22px) saturate(1.2); backdrop-filter:blur(22px) saturate(1.2);
+      box-shadow:inset 0 0 0 1px var(--edge), 0 6px 16px rgba(0,0,0,.45); color:var(--ink); font:600 11px/1 -apple-system,BlinkMacSystemFont,sans-serif; cursor:default; white-space:nowrap; }
+    .unit.pill { width:72px; }
+    .unit.pill.long { width:86px; }
+    .unit.pill.status { width:auto; padding-right:11px; }
+    .unit.rowcap { width:196px; padding-right:6px; }
+    .unit.hover { background:rgba(33,31,30,.50); }
+    .unit.contrast { box-shadow:inset 0 0 0 2px rgba(255,255,255,.82), 0 6px 16px rgba(0,0,0,.45); }
+    .unit.opaque { background:#211f1e; -webkit-backdrop-filter:none; backdrop-filter:none; }
+    .unit.starting .dot { opacity:.55; box-shadow:none; } .unit.starting .label { opacity:.55; }
+
+    .dot { position:relative; width:8px; height:8px; border-radius:50%; background:var(--coral); flex:none; margin-right:5px;
+      box-shadow:0 0 3px 2px rgba(255,112,67,.42); animation:pulse 1.6s ease-in-out infinite; }
+    .dot::after { content:""; position:absolute; left:2px; top:2px; width:3px; height:3px; border-radius:50%; background:rgba(255,176,77,.78); }
+    .dot.still { animation:none; }
+    .dot.paused { background:var(--amber); box-shadow:none; animation:none; }
+    .dot.paused::after { background:rgba(255,255,255,.55); }
+    .dot.busy { background:var(--amber); box-shadow:0 0 3px 2px rgba(255,176,77,.42); animation:pulse-fast .9s ease-in-out infinite; }
+    .dot.busy::after { background:rgba(255,255,255,.6); }
+    @keyframes pulse { 0%,100% { box-shadow:0 0 3px 2px rgba(255,112,67,.36); } 50% { box-shadow:0 0 5px 3px rgba(255,112,67,.70); } }
+    @keyframes pulse-fast { 0%,100% { box-shadow:0 0 2px 1px rgba(255,176,77,.30); } 50% { box-shadow:0 0 5px 3px rgba(255,176,77,.72); } }
+
+    .time { font-family:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace; font-variant-numeric:tabular-nums; font-weight:600; opacity:.92; letter-spacing:.01em; }
+    .time.dim { opacity:.70; }
+    .label { opacity:.92; }
+    .status { color:var(--amber); opacity:.92; font-size:10px; }
+
+    .wave { display:flex; align-items:center; gap:1px; height:14px; width:48px; margin:0 6px 0 8px; flex:none; }
+    .wave i { display:block; width:1px; border-radius:.5px; background:#ff7043; opacity:.48; height:1px; }
+    .wave i.l { background:#ffb04d; opacity:1; }
+    .wave.live i { animation:bar 1.1s ease-in-out infinite; }
+    .wave.live i:nth-child(3n) { animation-duration:.8s; } .wave.live i:nth-child(3n+1) { animation-duration:1.4s; animation-delay:-.3s; } .wave.live i:nth-child(5n) { animation-duration:.95s; animation-delay:-.6s; }
+    @keyframes bar { 0%,100% { height:2px; } 50% { height:11px; } }
+    .slot { width:48px; margin:0 6px 0 8px; flex:none; display:grid; place-items:center; }
+    .wave.wide { width:176px; overflow:hidden; }
+    .sep { display:block; width:1px; height:14px; background:rgba(255,255,255,.12); margin:0 4px 0 6px; flex:none; }
+    .cluster { display:flex; align-items:center; margin-left:auto; }
+    .ttl { color:rgba(243,242,239,.62); font-weight:500; margin:0 8px; overflow:hidden; text-overflow:ellipsis; max-width:96px; }
+    .hdrs { width:360px; }
+    .hdrs .hdr { height:30px; display:flex; align-items:center; padding:0 6px 0 11px; white-space:nowrap; border-radius:14px 14px 0 0; background:rgba(33,31,30,.62); box-shadow:inset 0 0 0 1px var(--edge); color:var(--ink); font:600 11px/1 -apple-system,BlinkMacSystemFont,sans-serif; }
+    .hdrs .tabs { border-radius:0 0 14px 14px; background:rgba(33,31,30,.62); box-shadow:inset 0 0 0 1px var(--edge); }
+    .variant { display:grid; grid-template-columns:1fr; gap:10px; margin-top:12px; }
+    .variant .cell .art { height:auto; padding:6px 0; }
+    .variant .hdrs { transform:scale(1.45); transform-origin:center center; margin:22px 0; }
+
+    .btn { width:24px; height:22px; display:grid; place-items:center; flex:none; color:var(--ink); opacity:.86; cursor:pointer; }
+    .btn svg { width:10px; height:10px; fill:currentColor; }
+    .btn.sel { color:var(--coral); opacity:.95; }
+    .btn.off { opacity:.36; cursor:default; }
+
+    /* ---- Morph demo: pill → row (hover) → panel ---- */
+    .demo-box { width:360px; height:260px; position:relative; transform:scale(1.6); transform-origin:center center; }
+    .demo { position:absolute; right:0; bottom:0; width:72px; height:22px; border-radius:11px; overflow:hidden;
+      background:var(--glass); -webkit-backdrop-filter:blur(22px) saturate(1.2); backdrop-filter:blur(22px) saturate(1.2);
+      box-shadow:inset 0 0 0 1px var(--edge), 0 10px 26px rgba(0,0,0,.5); color:var(--ink); font:600 11px/1 -apple-system,BlinkMacSystemFont,sans-serif;
+      animation:demo 11s ease-out -5.5s infinite; }
+    .demo .hdr { position:absolute; left:0; top:0; height:22px; display:flex; align-items:center; padding:0 6px 0 9px; white-space:nowrap; width:360px; animation:demo-hdr 11s ease-out -5.5s infinite; }
+    @keyframes demo-hdr { 0%,43% { height:22px; padding-left:9px; } 47%,86% { height:30px; padding-left:11px; } 90%,100% { height:22px; padding-left:9px; } }
+    .demo .body { top:30px; }
+    .demo .ctl { display:flex; align-items:center; opacity:0; animation:demo-ctl 11s linear -5.5s infinite; }
+    .demo .hdr .min { margin-left:auto; opacity:0; animation:demo-min 11s linear -5.5s infinite; }
+    .demo .hdr .open { animation:demo-open 11s linear -5.5s infinite; }
+    @keyframes demo-open { 0%,43% { opacity:1; width:24px; } 47%,100% { opacity:0; width:0; } }
+    .demo .body { position:absolute; left:0; right:0; top:30px; bottom:0; opacity:0; animation:demo-body 11s linear -5.5s infinite; }
+    .demo .wave.wide { animation:demo-wave 11s ease-out -5.5s infinite; }
+    @keyframes demo-wave { 0%,43% { width:48px; } 47%,86% { width:176px; } 90%,100% { width:48px; } }
+    .demo .hdr .cluster { margin-left:auto; }
+    .demo .hdr .pcl { display:flex; align-items:center; opacity:0; animation:demo-min 11s linear -5.5s infinite; }
+    .demo .hdr .rcl { display:flex; align-items:center; opacity:1; animation:demo-open 11s linear -5.5s infinite; }
+    @keyframes demo { 0%,18% { width:72px; height:22px; border-radius:11px; } 21%,40% { width:196px; height:22px; border-radius:11px; } 44%,86% { width:360px; height:260px; border-radius:14px; } 90%,100% { width:72px; height:22px; border-radius:11px; } }
+    @keyframes demo-ctl { 0%,19% { opacity:0; } 23%,87% { opacity:1; } 89%,100% { opacity:0; } }
+    @keyframes demo-min { 0%,43% { opacity:0; } 47%,86% { opacity:1; } 89%,100% { opacity:0; } }
+    @keyframes demo-body { 0%,44% { opacity:0; } 49%,86% { opacity:1; } 89%,100% { opacity:0; } }
+
+    /* ---- Panel state ---- */
+    .panel { position:relative; width:360px; height:260px; border-radius:14px; overflow:hidden; display:flex; flex-direction:column;
+      background:var(--glass); -webkit-backdrop-filter:blur(22px) saturate(1.2); backdrop-filter:blur(22px) saturate(1.2);
+      box-shadow:inset 0 0 0 1px var(--edge), 0 10px 26px rgba(0,0,0,.5); color:var(--ink); font:600 11px/1 -apple-system,BlinkMacSystemFont,sans-serif; }
+    .panel.tall { height:320px; }
+    .panel .hdr { height:30px; display:flex; align-items:center; padding:0 6px 0 11px; white-space:nowrap; flex:none; }
+    .panel .hdr .wave.wide { margin:0 10px 0 10px; }
+    .tabs { height:28px; display:flex; align-items:center; gap:2px; padding:0 6px 0 8px; border-top:1px solid rgba(255,255,255,.07); border-bottom:1px solid rgba(255,255,255,.07); flex:none; font-weight:600; font-size:11px; }
+    .tab { padding:0 9px; height:20px; display:grid; place-items:center; border-radius:6px; color:rgba(243,242,239,.62); }
+    .tab.sel { color:var(--ink); background:rgba(255,255,255,.08); }
+    .tabs .live { margin-left:auto; display:flex; align-items:center; gap:5px; color:rgba(243,242,239,.62); font-size:10px; }
+    .tabs .live i { width:5px; height:5px; border-radius:50%; background:#62d691; display:inline-block; }
+    .tabs .live.paused i { background:var(--amber); }
+    .feed { flex:1; padding:8px 12px; display:flex; flex-direction:column; gap:7px; font:400 11px/1.4 -apple-system,BlinkMacSystemFont,sans-serif; overflow:hidden; }
+    .line { display:grid; grid-template-columns:44px 1fr; gap:8px; color:rgba(243,242,239,.9); }
+    .line b { font-weight:600; color:rgba(243,242,239,.55); font-size:10px; padding-top:1px; }
+    .line.you b { color:var(--coral); }
+    .line.partial span { color:rgba(243,242,239,.5); font-style:italic; }
+    .editor { flex:1; padding:10px 12px; font:400 11px/1.45 -apple-system,BlinkMacSystemFont,sans-serif; color:rgba(243,242,239,.42); }
+    .copy { margin-left:8px; }
+
+    table { width:100%; border-collapse:collapse; font:12px/1.5 ui-monospace,SFMono-Regular,monospace; color:#b9b5ae; }
+    td { padding:4px 0; border-bottom:1px solid rgba(255,255,255,.07); vertical-align:top; }
+    td:first-child { color:#7f7b75; width:15%; padding-right:12px; }
+    @media (prefers-reduced-motion: reduce) { .dot, .wave i, .demo, .demo .ctl, .demo .min, .demo .body { animation:none !important; } .demo { width:360px; height:260px; border-radius:14px; } .demo .ctl, .demo .min, .demo .body { opacity:1; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>One object, three sizes:<br>pill, row, panel.</h1>
+    <p class="lede">The recording capsule and the floating transcript panel merge into one glass object. <strong style="color:#d4d1cb">Pill</strong> at rest: a breathing coral dot and the live clock. <strong style="color:#d4d1cb">Row</strong> on hover: the wave, pause/resume, stop, and one button that opens the panel. <strong style="color:#d4d1cb">Panel</strong> on that button: the row becomes the header, tabs for Transcript · Chat · My notes sit under it, the body is the live feed, chat, or notes — resizable, draggable, and it folds back to the pill from ⤡. One position, one remembered choice, no second window.</p>
+
+    <section class="stage">
+      <article>
+        <div class="index">P1</div><h2>Pill → Row → Panel · 1.6×</h2>
+        <div class="host" style="height:520px">
+          <div class="demo-box"><div class="demo" role="group" aria-label="Meeting recording, 12:34, recording">
+            <div class="hdr">
+              <div class="dot"></div><span class="time">12:34</span>
+              <div class="ctl"><div class="wave live wide"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="l"></i></div><div class="rcl"><div class="btn" title="Pause"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn" title="Stop"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><div class="btn open" title="Open panel"><svg viewBox="0 0 10 10"><path d="M6 1.2h2.8V4M4 8.8H1.2V6M8.8 1.2 5.8 4.2M1.2 8.8l3-3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div></div>
+              <div class="cluster pcl"><div class="btn" title="Pause"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn" title="Stop"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><i class="sep"></i><div class="btn min" title="Minimize"><svg viewBox="0 0 10 10"><path d="M4.2 1.2V4H1.4M5.8 8.8V6h2.8M1.4 1.4 4.2 4M8.6 8.6 5.8 5.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div>
+            </div>
+            <div class="body">
+              <div class="tabs"><div class="tab sel">Transcript</div><div class="tab">Chat</div><div class="tab">My notes</div><div class="live"><i></i>Live</div><div class="btn copy" title="Copy"><svg viewBox="0 0 10 10"><rect x="3" y="3" width="6" height="6" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M7 3V2a1 1 0 0 0-1-1H2a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></div></div>
+              <div class="feed">
+                <div class="line"><b>Others</b><span>Let's lock the launch date before we go through the open bugs.</span></div>
+                <div class="line you"><b>You</b><span>Agreed. The build from Monday is stable on both lanes.</span></div>
+                <div class="line"><b>Others</b><span>Then Thursday. Can you post the notes after?</span></div>
+                <div class="line you partial"><b>You</b><span>Sure, I'll send them right after the</span></div>
+              </div>
+            </div>
+          </div></div>
+          <div class="caption">rest → hover: row unfolds 0.16 s · leave: folds back 0.4 s later · ⤢ opens the panel (sticky, remembered) · ⤡ folds it to the pill · the held corner is the one nearest the screen edges · demo panel shown at 360 × 260 to fit this frame; the real default is 360 × 320 (P2 shows it at 1×)</div>
+        </div>
+        <div class="foot"><strong>72 × 22 pill · 196 × 22 row · 360 × 320 panel (min 360 × 240, resizable) · HUD glass #211f1e @ 62 % · 1 pt 16 % edge · radius 11 / 14</strong><span>Row: dot + clock · 24 × 1 pt spark wave · pause/resume · stop · open-panel (arrow.up.left.and.arrow.down.right). Panel header is the same row plus minimize (arrow.down.right.and.arrow.up.left) at the trailing end; a 28 pt tab strip (Transcript · Chat · My notes · Live/Paused · copy); the body is the live feed, chat, or notes editor as today. Hover opens the row only; the panel needs the button, so a stray hover never covers the call.</span></div>
+      </article>
+    </section>
+
+    <section class="stage two">
+      <article>
+        <div class="index">P2</div><h2>Panel · 1×</h2>
+        <div class="host quiet" style="height:380px">
+          <div class="panel tall">
+            <div class="hdr">
+              <div class="dot"></div><span class="time">12:34</span>
+              <div class="wave live wide"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="l"></i></div>
+              <div class="cluster"><div class="btn" title="Pause"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn" title="Stop"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><i class="sep"></i><div class="btn min" title="Minimize"><svg viewBox="0 0 10 10"><path d="M4.2 1.2V4H1.4M5.8 8.8V6h2.8M1.4 1.4 4.2 4M8.6 8.6 5.8 5.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div>
+            </div>
+            <div class="tabs"><div class="tab sel">Transcript</div><div class="tab">Chat</div><div class="tab">My notes</div><div class="live"><i></i>Live</div><div class="btn copy" title="Copy"><svg viewBox="0 0 10 10"><rect x="3" y="3" width="6" height="6" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M7 3V2a1 1 0 0 0-1-1H2a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></div></div>
+            <div class="feed">
+              <div class="line"><b>Others</b><span>Let's lock the launch date before we go through the open bugs.</span></div>
+              <div class="line you"><b>You</b><span>Agreed. The build from Monday is stable on both lanes.</span></div>
+              <div class="line"><b>Others</b><span>Then Thursday. Can you post the notes after the call? I'd like the action items in the channel.</span></div>
+              <div class="line you"><b>You</b><span>Yes — and I'll add the perf numbers from the canary.</span></div>
+              <div class="line"><b>Others</b><span>One more thing on the onboarding flow…</span></div>
+              <div class="line you partial"><b>You</b><span>Sure, I'll send them right after the</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="foot"><strong>Header 30 pt · tabs 28 pt · body fills · drag by the header · resize from the edges</strong><span>What the old transcript panel had, kept: tab switching, Live/Paused, copy of the visible tab, notes editor writing through to the meeting, chat with the live transcript, "open notes" from the feed. Retired: the separate saved origin, the dismiss chevron (minimize replaces it), the "show transcript on hover" switch (hover opens the row now).</span></div>
+      </article>
+      <article>
+        <div class="index">P3</div><h2>States</h2>
+        <div class="row two">
+          <div class="cell x24"><div class="art"><div class="unit pill"><div class="dot"></div><span class="time">12:34</span></div></div><small>pill · rest · coral dot breathes 1.6 s</small></div>
+          <div class="cell x24"><div class="art"><div class="unit pill"><div class="dot paused"></div><span class="time dim">12:34</span></div></div><small>pill · paused · amber still dot · clock 70 %</small></div>
+        </div>
+        <div class="row two">
+          <div class="cell x24"><div class="art"><div class="unit pill status"><div class="dot busy"></div><span class="status">Transcribing</span></div></div><small>finalizing · folds to the pill · status replaces the clock</small></div>
+          <div class="cell x24"><div class="art"><div class="unit pill starting"><div class="dot still"></div><span class="label">Starting…</span></div></div><small>Record pill → Starting… → pill · never an empty spot</small></div>
+        </div>
+        <h3>Row on hover · 1.75×</h3>
+        <div class="row">
+          <div class="cell"><div class="art"><div class="unit rowcap hover"><div class="dot"></div><span class="time">12:34</span><div class="wave live"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="l"></i></div><div class="btn"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><div class="btn"><svg viewBox="0 0 10 10"><path d="M6 1.2h2.8V4M4 8.8H1.2V6M8.8 1.2 5.8 4.2M1.2 8.8l3-3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div></div><small>recording · wave · pause · stop · open panel · drag from the clock or wave</small></div>
+          <div class="cell"><div class="art"><div class="unit rowcap hover"><div class="dot paused"></div><span class="time dim">12:34</span><div class="slot"><span class="status">Paused</span></div><div class="btn"><svg viewBox="0 0 10 10"><path d="M2.2 1.2v7.6L8.4 5z"/></svg></div><div class="btn"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><div class="btn"><svg viewBox="0 0 10 10"><path d="M6 1.2h2.8V4M4 8.8H1.2V6M8.8 1.2 5.8 4.2M1.2 8.8l3-3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div></div><small>paused · "Paused" in the wave slot · play glyph</small></div>
+          <div class="cell"><div class="art"><div class="unit rowcap hover"><div class="dot busy"></div><span class="time dim">12:34</span><div class="slot"><span class="status">Summarizing</span></div><div class="btn off"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn off"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><div class="btn off"><svg viewBox="0 0 10 10"><path d="M6 1.2h2.8V4M4 8.8H1.2V6M8.8 1.2 5.8 4.2M1.2 8.8l3-3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div></div><small>finalizing · status in the wave slot · controls 36 % · closes when saved</small></div>
+        </div>
+        <h3>Accessibility · 2×</h3>
+        <div class="row two">
+          <div class="cell x2"><div class="art"><div class="unit pill contrast"><div class="dot"></div><span class="time">12:34</span></div></div><small>Increase Contrast · 2 pt 82 % edge</small></div>
+          <div class="cell x2"><div class="art"><div class="unit pill opaque"><div class="dot still"></div><span class="time">12:34</span></div></div><small>Reduce Transparency / Reduce Motion · opaque · no pulse · instant sizes · hover still works</small></div>
+        </div>
+      </article>
+    </section>
+
+
+    <section class="stage">
+      <article>
+        <div class="index">P4</div><h2>Panel header · three variants · 1.45×</h2>
+        <div class="variant">
+          <div class="cell"><div class="art"><div class="hdrs"><div class="hdr"><div class="dot"></div><span class="time">12:34</span><div class="wave live wide" style="margin:0 10px"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="l"></i></div><div class="cluster"><div class="btn" title="Pause"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn" title="Stop"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><i class="sep"></i><div class="btn min" title="Minimize"><svg viewBox="0 0 10 10"><path d="M4.2 1.2V4H1.4M5.8 8.8V6h2.8M1.4 1.4 4.2 4M8.6 8.6 5.8 5.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div></div><div class="tabs"><div class="tab sel">Transcript</div><div class="tab">Chat</div><div class="tab">My notes</div><div class="live"><i></i>Live</div></div></div></div><small>A · recommended · the wave stretches across the header (88 bars, same engine); pause · stop sit with minimize behind a hairline — one trailing control cluster, nothing floats</small></div>
+          <div class="cell"><div class="art"><div class="hdrs"><div class="hdr"><div class="dot"></div><span class="time">12:34</span><span class="ttl">Weekly sync</span><div class="wave live" style="margin:0 8px"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="l"></i></div><div class="cluster"><div class="btn" title="Pause"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn" title="Stop"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><i class="sep"></i><div class="btn min" title="Minimize"><svg viewBox="0 0 10 10"><path d="M4.2 1.2V4H1.4M5.8 8.8V6h2.8M1.4 1.4 4.2 4M8.6 8.6 5.8 5.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div></div><div class="tabs"><div class="tab sel">Transcript</div><div class="tab">Chat</div><div class="tab">My notes</div><div class="live"><i></i>Live</div></div></div></div><small>B · meeting title takes the slack (62 % ink, truncates), the 48 pt wave stays as in the row, same trailing cluster</small></div>
+          <div class="cell"><div class="art"><div class="hdrs"><div class="hdr"><div class="dot"></div><span class="time">12:34</span><div class="wave live" style="margin:0 8px"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="l"></i></div><div style="flex:1"></div><div class="btn" title="Pause"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn" title="Stop"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><div style="flex:1"></div><div class="btn min" title="Minimize"><svg viewBox="0 0 10 10"><path d="M4.2 1.2V4H1.4M5.8 8.8V6h2.8M1.4 1.4 4.2 4M8.6 8.6 5.8 5.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div><div class="tabs"><div class="tab sel">Transcript</div><div class="tab">Chat</div><div class="tab">My notes</div><div class="live"><i></i>Live</div></div></div></div><small>C · controls centred between the clock group and minimize — balanced but the centre pair has no edge to anchor to</small></div>
+        </div>
+      </article>
+    </section>
+    <section class="stage">
+      <article>
+        <div class="index">Δ</div><h2>Decisions</h2>
+        <table>
+          <tr><td>Merge</td><td>the recording capsule and the floating transcript panel become one object with three sizes; there is no second window, no second saved position</td></tr>
+          <tr><td>Pill → Row</td><td>hover opens the row (0.16 s); the dot + clock stay put and the controls unfold on the side with room (mirrored order when the pill sits against the right edge), so nothing lands under the resting pointer; the pointer leaving folds it back after 0.4 s; a press or drag holds it; after a minimize the row waits until the pointer has left the pill once; Reduce Motion → instant; the row never opens the panel by itself</td></tr>
+          <tr><td>Row → Panel</td><td>the ⤢ button opens the panel; the panel is sticky until ⤡ minimizes it; remembered in <code>meeting_panel_open</code> (<code>nil</code> → the entry point decides as today: pill/hotkey/status bar open it, calendar and auto-detect don't; after the first user toggle the remembered choice wins; starts that open the meeting document — Quick Note, Join &amp; Record, calendar items — always rest as the pill; only a user's open/minimize writes the choice, never the end-of-call fold)</td></tr>
+          <tr><td>Anchor</td><td>the 72 pt base pill frame is the anchor and <code>meeting_recording_panel_center</code> stores its center; the held corner is chosen once per recording (trailing edge in the right half of the display, bottom edge in the lower half) and kept across drags, minimize and reopen, so a panel dragged across the screen reopens where it was left; row and panel grow from that corner, clamped 12 pt inside; dragging any size moves the anchor by the pointer delta; resizing the panel keeps the held corner; minimizing returns to the anchor</td></tr>
+          <tr><td>Panel header</td><td>30 pt: dot + clock, the spark wave stretched across the free width (same engine, more bars), then one trailing cluster pause · stop ‖ minimize behind a hairline — the clock and the controls keep their row positions relative to the edges; the tab strip and body are the old transcript panel restyled in the Spark glass with coral for You and 92 % ink for Others</td></tr>
+          <tr><td>Finalizing</td><td>the object folds to the pill and shows the status word (amber 10 pt), widening once to fit the widest word while holding the held edge; hover still opens the row with pause/stop/open-panel at 36 %; the panel is not available; closes when the meeting is saved</td></tr>
+          <tr><td>Record pill</td><td>same footprint and chrome: “● Record” → “● Starting…” (dimmed, inert) → “● 00:00”; the Record pill stays hidden while the object is on screen, including finalizing</td></tr>
+          <tr><td>Menus / settings</td><td>status bar “Show/Hide Live Transcript” becomes “Open/Minimize Meeting Panel”; “Show transcript on hover” and <code>meeting_panel_origin</code> are retired (legacy keys ignored)</td></tr>
+          <tr><td>Accessibility</td><td>pill = one button “Meeting recording, 12:34, recording/paused” with custom actions Open panel · Pause/Resume · Stop; row/panel = group with labelled buttons; the panel keeps its no-key-window rule (orderFront, never makeKey) so typing stays in the call; state changes announced once</td></tr>
+          <tr><td>Not adopted</td><td>click-on-body toggles; a separate mini transcript window; auto-opening the panel on hover; keeping the panel's independent saved origin</td></tr>
+        </table>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
