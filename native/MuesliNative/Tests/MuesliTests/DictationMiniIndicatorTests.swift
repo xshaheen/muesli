@@ -64,8 +64,7 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniRendering.recordingBarPitch == 2)
         #expect(DictationMiniRendering.recordingBarMinHeight == 1)
         #expect(DictationMiniRendering.recordingBarMaxHeight == 12)
-        #expect(DictationMiniRendering.recordingSampleInterval == TimeInterval(1) / 30)
-        #expect(DictationMiniRendering.recordingTailAlpha == 0.42)
+        #expect(DictationMiniRendering.recordingQuietAlpha == 0.48)
 
         // The bar field must clear the 11-point rounded ends of the 58 x 22 capsule.
         let fieldWidth = CGFloat(DictationMiniRendering.recordingBarCount - 1)
@@ -96,25 +95,37 @@ struct DictationMiniIndicatorTests {
         #expect(attack > 1 - release)
     }
 
-    @Test("the history buffer keeps a fixed capacity with the newest level on the right")
-    func waveformHistory() {
-        var history = DictationMiniWaveformHistory(count: 4)
-        #expect(history.levels == [0, 0, 0, 0])
-        history.push(0.5)
-        history.push(2)
-        history.push(-1)
-        #expect(history.count == 4)
-        #expect(history.levels == [0, 0.5, 1, 0])
-        history.reset()
-        #expect(history.levels == [0, 0, 0, 0])
-        #expect(DictationMiniWaveformHistory(count: 0).count == 1)
+    @Test("the spike engine is deterministic, bounded, quiet in silence and lively under voice")
+    func spikeEngine() {
+        var a = DictationMiniSpikeEngine(count: 24, seed: 7)
+        var b = DictationMiniSpikeEngine(count: 24, seed: 7)
+        for _ in 0..<40 { a.advance(level: 0.8); b.advance(level: 0.8) }
+        #expect(a == b)
+        #expect(a.bars.allSatisfy { $0 >= 0 && $0 <= 1 })
+        #expect(!a.isQuiet)
+        let loudMean = a.bars.reduce(0, +) / CGFloat(a.bars.count)
+        #expect(loudMean > 0.15)
+
+        var quiet = DictationMiniSpikeEngine(count: 24, seed: 7)
+        for _ in 0..<40 { quiet.advance(level: 0) }
+        #expect(quiet.isQuiet)
+        #expect(quiet.sparks.isEmpty)
+        let quietMax = quiet.bars.max() ?? 1
+        #expect(quietMax <= DictationMiniSpikeEngine.quietShimmer + 0.001)
+
+        // Release: after the voice stops the field decays instead of snapping.
+        var decaying = a
+        decaying.advance(level: 0)
+        let afterOneFrame = decaying.bars.reduce(0, +) / CGFloat(decaying.bars.count)
+        #expect(afterOneFrame < loudMean && afterOneFrame > quietMax)
+        for _ in 0..<120 { decaying.advance(level: 0) }
+        #expect(decaying.bars.max() ?? 1 < 0.1)
+        decaying.reset()
+        #expect(decaying.bars.allSatisfy { $0 == 0 })
     }
 
-    @Test("bar ageing fades the tail and Reduce Motion uses a symmetric static envelope")
-    func barAgeingAndStaticEnvelope() {
-        #expect(DictationMiniRendering.recordingBarAge(index: 0, count: 24) == 0)
-        #expect(DictationMiniRendering.recordingBarAge(index: 23, count: 24) == 1)
-        #expect(DictationMiniRendering.recordingBarAge(index: 0, count: 1) == 1)
+    @Test("Reduce Motion uses a symmetric static envelope")
+    func staticEnvelope() {
         let envelope = (0..<24).map {
             DictationMiniRendering.recordingStaticEnvelope(index: $0, count: 24)
         }

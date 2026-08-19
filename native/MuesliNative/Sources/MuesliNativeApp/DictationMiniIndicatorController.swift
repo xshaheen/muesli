@@ -42,7 +42,6 @@ final class DictationMiniIndicatorController: NSObject {
     private var powerProvider: (() -> Float)?
     private var animationTimer: Timer?
     private var animationStartedAt: TimeInterval?
-    private var lastRecordingSampleAt: TimeInterval = 0
     private var disappearanceGeneration: UInt64 = 0
     private var idleHysteresis = DictationFollowerHysteresis()
     private var idleAnchor: CGPoint?
@@ -573,8 +572,7 @@ final class DictationMiniIndicatorController: NSObject {
             return
         }
         animationStartedAt = ProcessInfo.processInfo.systemUptime
-        lastRecordingSampleAt = 0
-        if presentation == .recording { contentView?.resetRecordingHistory() }
+        if presentation == .recording { contentView?.resetRecordingWave() }
         let timer = Timer(timeInterval: 1 / 60, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.advanceAnimation() }
         }
@@ -593,11 +591,7 @@ final class DictationMiniIndicatorController: NSObject {
             let current = contentView?.power ?? 0
             let level = DictationMiniRendering.recordingEnvelope(current: current, target: target)
             contentView?.power = level
-            let now = ProcessInfo.processInfo.systemUptime
-            if now - lastRecordingSampleAt >= DictationMiniRendering.recordingSampleInterval {
-                lastRecordingSampleAt = now
-                contentView?.pushRecordingSample(level)
-            }
+            contentView?.advanceRecordingWave(level: level)
         } else {
             let elapsed = ProcessInfo.processInfo.systemUptime - (animationStartedAt ?? 0)
             contentView?.animationPhase = CGFloat(elapsed * 3.2).truncatingRemainder(dividingBy: .pi * 2)
@@ -716,9 +710,7 @@ enum DictationMiniRendering {
     static let recordingBarPitch: CGFloat = 2
     static let recordingBarMinHeight: CGFloat = 1
     static let recordingBarMaxHeight: CGFloat = 12
-    /// History advances at 30 Hz: 24 bars hold the last 0.8 s of speech.
-    static let recordingSampleInterval: TimeInterval = 1 / 30
-    static let recordingTailAlpha: CGFloat = 0.42
+    static let recordingQuietAlpha: CGFloat = 0.48
     /// Processing point field inside the 20 pt orb: five columns span 11.2 pt plus dot radii.
     static let processingPointSpacing: CGFloat = 2.8
     static let processingPointMaxDiameter: CGFloat = 2.3
@@ -748,12 +740,6 @@ enum DictationMiniRendering {
         return current + (target - current) * weight
     }
 
-    /// Bars age from a hot amber live edge (right) to a muted orange tail (left).
-    static func recordingBarAge(index: Int, count: Int) -> CGFloat {
-        guard count > 1 else { return 1 }
-        return CGFloat(index) / CGFloat(count - 1)
-    }
-
     /// Reduce Motion replaces the scrolling history with a calm, centred envelope.
     static func recordingStaticEnvelope(index: Int, count: Int) -> CGFloat {
         guard count > 1 else { return 1 }
@@ -768,23 +754,108 @@ enum DictationMiniRendering {
     }
 }
 
-/// Fixed-capacity level history, oldest first, newest last.
-struct DictationMiniWaveformHistory: Equatable {
-    private(set) var levels: [CGFloat]
+/// Deterministic pseudo-random source so the wave is reproducible for a given seed.
+struct DictationMiniSplitMix64: Equatable {
+    private(set) var state: UInt64
 
-    init(count: Int = DictationMiniRendering.recordingBarCount) {
-        levels = Array(repeating: 0, count: max(count, 1))
+    init(seed: UInt64) { state = seed }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
     }
 
-    var count: Int { levels.count }
-
-    mutating func push(_ level: CGFloat) {
-        levels.removeFirst()
-        levels.append(max(0, min(1, level)))
+    /// Uniform in 0..<1.
+    mutating func nextUnit() -> CGFloat {
+        CGFloat(next() >> 11) / CGFloat(1 << 53)
     }
+}
+
+/// The recording wave: a field of bars lit by short-lived sparks. Each frame the live level
+/// spawns sparks at seeded positions; sparks spread to their neighbours, carry over with decay,
+/// and the bars ease toward the lit shape. Silence leaves a faint, slowly shimmering baseline.
+struct DictationMiniSpikeEngine: Equatable {
+    struct Spark: Equatable {
+        var index: Int
+        var amplitude: CGFloat
+    }
+
+    static let carry: CGFloat = 0.84
+    static let sparksPerFrameAtFullLevel: CGFloat = 2.2
+    static let kernel: [CGFloat] = [0.32, 0.68, 1, 0.68, 0.32]
+    static let quietThreshold: CGFloat = 0.05
+    static let quietShimmer: CGFloat = 0.06
+    static let attack: CGFloat = 0.6
+    static let release: CGFloat = 0.28
+
+    private(set) var bars: [CGFloat]
+    private(set) var sparks: [Spark] = []
+    private(set) var isQuiet = true
+    private var rng: DictationMiniSplitMix64
+    private var shimmerPhase: CGFloat = 0
+
+    init(count: Int = DictationMiniRendering.recordingBarCount, seed: UInt64 = 0x4D75_6573_6C69) {
+        bars = Array(repeating: 0, count: max(count, 1))
+        rng = DictationMiniSplitMix64(seed: seed)
+    }
+
+    var count: Int { bars.count }
 
     mutating func reset() {
-        levels = Array(repeating: 0, count: levels.count)
+        bars = Array(repeating: 0, count: bars.count)
+        sparks.removeAll()
+        isQuiet = true
+        shimmerPhase = 0
+    }
+
+    mutating func advance(level rawLevel: CGFloat) {
+        let level = max(0, min(1, rawLevel))
+        isQuiet = level < Self.quietThreshold
+
+        // Carry: existing sparks fade and the dimmest die.
+        for index in sparks.indices {
+            sparks[index].amplitude *= Self.carry
+        }
+        sparks.removeAll { $0.amplitude < 0.02 }
+
+        // Spawn: the louder the voice, the more sparks per frame.
+        var budget = level * Self.sparksPerFrameAtFullLevel
+        while budget > 0 {
+            if rng.nextUnit() < min(budget, 1) {
+                let amplitude = level * (0.55 + 0.45 * rng.nextUnit())
+                let index = Int(rng.nextUnit() * CGFloat(bars.count)) % bars.count
+                sparks.append(Spark(index: index, amplitude: amplitude))
+            }
+            budget -= 1
+        }
+        if sparks.count > 48 { sparks.removeFirst(sparks.count - 48) }
+
+        // Compose: baseline shimmer plus the spark kernels.
+        shimmerPhase += 0.11
+        var target = [CGFloat](repeating: 0, count: bars.count)
+        let midpoint = CGFloat(bars.count - 1) / 2
+        for index in target.indices {
+            let distance = abs(CGFloat(index) - midpoint) / max(midpoint, 1)
+            let shimmer = 0.5 + 0.5 * sin(shimmerPhase + CGFloat(index) * 0.9)
+            target[index] = Self.quietShimmer * (1 - distance * 0.6) * (0.6 + 0.4 * shimmer)
+        }
+        for spark in sparks {
+            for offset in -2...2 {
+                let index = spark.index + offset
+                guard bars.indices.contains(index) else { continue }
+                target[index] += spark.amplitude * Self.kernel[offset + 2]
+            }
+        }
+
+        // Ease: fast attack, slower release.
+        for index in bars.indices {
+            let goal = min(1, target[index])
+            let weight = goal > bars[index] ? Self.attack : Self.release
+            bars[index] += (goal - bars[index]) * weight
+        }
     }
 }
 
@@ -809,8 +880,8 @@ private final class DictationMiniView: NSView {
         get { waveformView.power }
         set { waveformView.power = newValue }
     }
-    func pushRecordingSample(_ level: CGFloat) { waveformView.push(level) }
-    func resetRecordingHistory() { waveformView.reset() }
+    func advanceRecordingWave(level: CGFloat) { waveformView.advance(level: level) }
+    func resetRecordingWave() { waveformView.reset() }
     var animationPhase: CGFloat {
         get { pointFieldView.phase }
         set { pointFieldView.phase = newValue }
@@ -1109,9 +1180,9 @@ private final class DictationMiniCueView: NSView {
 private final class DictationMiniWaveformView: NSView {
     private var bars: [CALayer] = []
     private let haloLayer = CAGradientLayer()
-    private var history = DictationMiniWaveformHistory()
+    private var engine = DictationMiniSpikeEngine()
     private var backingScale: CGFloat = 2
-    /// Smoothed live level: drives the halo and the newest bar between history pushes.
+    /// Smoothed live level: drives the halo.
     var power: CGFloat = 0 { didSet { updateBars() } }
 
     override init(frame frameRect: NSRect) {
@@ -1142,13 +1213,13 @@ private final class DictationMiniWaveformView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
-    func push(_ level: CGFloat) {
-        history.push(level)
+    func advance(level: CGFloat) {
+        engine.advance(level: level)
         updateBars()
     }
 
     func reset() {
-        history.reset()
+        engine.reset()
         power = 0
     }
 
@@ -1173,12 +1244,12 @@ private final class DictationMiniWaveformView: NSView {
         let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
         let highlight = NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1)
         let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-        let tailAlpha = increaseContrast ? 0.78 : DictationMiniRendering.recordingTailAlpha
+        let quietAlpha = increaseContrast ? 0.8 : DictationMiniRendering.recordingQuietAlpha
+        // Lit bars warm toward amber and brighten; quiet bars rest as muted orange.
         for (index, bar) in bars.enumerated() {
-            let age = DictationMiniRendering.recordingBarAge(index: index, count: bars.count)
-            let warmth = age * age
-            let color = accent.blended(withFraction: warmth * 0.8, of: highlight) ?? accent
-            bar.backgroundColor = color.withAlphaComponent(tailAlpha + (1 - tailAlpha) * age).cgColor
+            let level = engine.bars.indices.contains(index) ? engine.bars[index] : 0
+            let color = accent.blended(withFraction: level * 0.85, of: highlight) ?? accent
+            bar.backgroundColor = color.withAlphaComponent(quietAlpha + (1 - quietAlpha) * min(1, level * 1.6)).cgColor
         }
     }
 
@@ -1191,15 +1262,14 @@ private final class DictationMiniWaveformView: NSView {
         let fieldWidth = CGFloat(bars.count - 1) * pitch + barWidth
         let startX = DictationMiniRendering.pixelAligned(bounds.midX - fieldWidth / 2, scale: backingScale)
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let levels = history.levels
+        let levels = engine.bars
+        if !reduceMotion { applyBarColors() }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for (index, bar) in bars.enumerated() {
             let level: CGFloat
             if reduceMotion {
                 level = power * 0.55 * DictationMiniRendering.recordingStaticEnvelope(index: index, count: bars.count)
-            } else if index == bars.count - 1 {
-                level = max(levels[index], power)
             } else {
                 level = levels[index]
             }
