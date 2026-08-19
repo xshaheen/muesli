@@ -24,6 +24,18 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniIndicatorController.accessibilityLabel(for: .failure) == "Dictation failed")
     }
 
+    @Test("palette matches the approved contextual spark direction")
+    func contextualSparkPalette() {
+        #expect(DictationMiniPalette.surfaceTopHex == 0x32312F)
+        #expect(DictationMiniPalette.surfaceBottomHex == 0x181817)
+        #expect(DictationMiniPalette.orbTopHex == 0x272725)
+        #expect(DictationMiniPalette.orbBottomHex == 0x0E0E0D)
+        #expect(DictationMiniPalette.accentHex == 0xFF7043)
+        #expect(DictationMiniPalette.accentHighlightHex == 0xFFB04D)
+        #expect(DictationMiniPalette.successHex == 0x62D691)
+        #expect(DictationMiniPalette.failureHex == 0xFF6961)
+    }
+
     @Test("recording follows the caret and processing freezes the recording anchor")
     func frozenProcessingAnchor() {
         var caret = CGPoint(x: 220, y: 320)

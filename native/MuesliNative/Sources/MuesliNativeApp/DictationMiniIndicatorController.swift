@@ -501,6 +501,18 @@ final class DictationMiniIndicatorController: NSObject {
     }
 }
 
+enum DictationMiniPalette {
+    static let surfaceTopHex = 0x32312F
+    static let surfaceBottomHex = 0x181817
+    static let orbTopHex = 0x272725
+    static let orbBottomHex = 0x0E0E0D
+    static let accentHex = 0xFF7043
+    static let accentHighlightHex = 0xFFB04D
+    static let successHex = 0x62D691
+    static let failureHex = 0xFF6961
+    static let inkHex = 0xF3F2EF
+}
+
 private final class DictationMiniView: NSView {
     var presentation: DictationMiniIndicatorController.Presentation = .hidden
     var power: CGFloat = 0
@@ -525,70 +537,87 @@ private final class DictationMiniView: NSView {
         super.draw(dirtyRect)
         guard presentation != .hidden else { return }
         let workspace = NSWorkspace.shared
-        let style = FloatingIndicatorSurfaceStyle.resolve(
-            role: role,
-            reduceTransparency: workspace.accessibilityDisplayShouldReduceTransparency,
-            increaseContrast: workspace.accessibilityDisplayShouldIncreaseContrast
-        )
+        let reduceTransparency = workspace.accessibilityDisplayShouldReduceTransparency
+        let increaseContrast = workspace.accessibilityDisplayShouldIncreaseContrast
         switch presentation {
         case .preparing:
             drawPreparing()
         case .recording:
-            drawSurface(style: style)
-            drawWaveform(style: style, reduceMotion: workspace.accessibilityDisplayShouldReduceMotion)
+            drawSurface(
+                reduceTransparency: reduceTransparency,
+                increaseContrast: increaseContrast
+            )
+            drawWaveform(reduceMotion: workspace.accessibilityDisplayShouldReduceMotion)
         case .processing:
-            drawSurface(style: style, circular: true)
+            drawSurface(
+                circular: true,
+                usesOrbPalette: true,
+                reduceTransparency: reduceTransparency,
+                increaseContrast: increaseContrast
+            )
             drawPointField(reduceMotion: workspace.accessibilityDisplayShouldReduceMotion)
         case .success:
             drawSuccess()
         case .failure:
-            drawSurface(style: style, circular: true)
+            drawSurface(
+                circular: true,
+                reduceTransparency: reduceTransparency,
+                increaseContrast: increaseContrast
+            )
             drawFailure()
         case .warning(let message):
-            drawSurface(style: style)
-            drawWarning(message, style: style)
+            drawSurface(
+                reduceTransparency: reduceTransparency,
+                increaseContrast: increaseContrast
+            )
+            drawWarning(message)
         case .hidden:
             break
         }
     }
 
-    private var role: FloatingIndicatorPresentationRole {
-        switch presentation {
-        case .preparing, .success: return .preparing
-        case .recording: return .recording
-        case .processing: return .transcribing
-        case .failure, .warning: return .warning
-        case .hidden: return .idleCollapsed
-        }
-    }
-
-    private func drawSurface(style: FloatingIndicatorSurfaceStyle, circular: Bool = false) {
+    private func drawSurface(
+        circular: Bool = false,
+        usesOrbPalette: Bool = false,
+        reduceTransparency: Bool,
+        increaseContrast: Bool
+    ) {
         let surface = bounds.insetBy(dx: 1, dy: 1)
-        NSColor.colorWith(hexString: style.tintHex, alpha: style.tintAlpha).setFill()
         let radius = circular ? surface.height / 2 : min(surface.height / 2, 11)
         let path = NSBezierPath(roundedRect: surface, xRadius: radius, yRadius: radius)
-        path.fill()
-        NSColor.colorWith(hexString: style.borderHex, alpha: style.borderAlpha).setStroke()
-        path.lineWidth = style.borderWidth
+
+        let topHex = usesOrbPalette ? DictationMiniPalette.orbTopHex : DictationMiniPalette.surfaceTopHex
+        let bottomHex = usesOrbPalette ? DictationMiniPalette.orbBottomHex : DictationMiniPalette.surfaceBottomHex
+        let surfaceAlpha: CGFloat = reduceTransparency ? 1 : 0.98
+        let top = NSColor.colorWith(hex: topHex, alpha: surfaceAlpha)
+        let bottom = NSColor.colorWith(hex: bottomHex, alpha: surfaceAlpha)
+        NSGradient(starting: top, ending: bottom)?.draw(in: path, angle: -90)
+
+        NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 0.08).setStroke()
+        path.lineWidth = increaseContrast ? 3 : 2
+        path.stroke()
+        NSColor.white.withAlphaComponent(increaseContrast ? 0.80 : 0.14).setStroke()
+        path.lineWidth = increaseContrast ? 2 : 1
         path.stroke()
     }
 
     private func drawPreparing() {
-        let accent = NSColor.colorWith(hex: MuesliTheme.resolvedAccentDarkHex, alpha: 1)
+        let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
         accent.withAlphaComponent(0.18).setFill()
         NSBezierPath(ovalIn: bounds).fill()
         accent.setFill()
         NSBezierPath(ovalIn: bounds.insetBy(dx: 4, dy: 4)).fill()
     }
 
-    private func drawWaveform(style: FloatingIndicatorSurfaceStyle, reduceMotion: Bool) {
+    private func drawWaveform(reduceMotion: Bool) {
         let multipliers: [CGFloat] = [0.6, 0.85, 1, 0.85, 0.6]
-        let barWidth: CGFloat = 3
+        let barWidth: CGFloat = 2
         let spacing: CGFloat = 3
         let totalWidth = CGFloat(multipliers.count) * barWidth + CGFloat(multipliers.count - 1) * spacing
         let startX = bounds.midX - totalWidth / 2
         let motionScale: CGFloat = reduceMotion ? 0.55 : 1
-        NSColor.colorWith(hexString: style.glyphHex, alpha: style.glyphAlpha).setFill()
+        let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
+        let highlight = NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1)
         for (index, multiplier) in multipliers.enumerated() {
             let height = max(3, min(14, 3 + 11 * power * multiplier * motionScale))
             let rect = CGRect(
@@ -597,12 +626,27 @@ private final class DictationMiniView: NSView {
                 width: barWidth,
                 height: height
             )
-            NSBezierPath(roundedRect: rect, xRadius: 1.5, yRadius: 1.5).fill()
+            let path = NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1)
+            NSGraphicsContext.saveGraphicsState()
+            let shadow = NSShadow()
+            shadow.shadowColor = accent.withAlphaComponent(0.55)
+            shadow.shadowBlurRadius = 5
+            shadow.shadowOffset = .zero
+            shadow.set()
+            accent.setFill()
+            path.fill()
+            NSGraphicsContext.restoreGraphicsState()
+
+            NSGraphicsContext.saveGraphicsState()
+            path.addClip()
+            NSGradient(starting: highlight, ending: accent)?.draw(in: rect, angle: -90)
+            NSGraphicsContext.restoreGraphicsState()
         }
     }
 
     private func drawPointField(reduceMotion: Bool) {
-        let accent = NSColor.colorWith(hex: MuesliTheme.resolvedAccentDarkHex, alpha: 1)
+        let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
+        let highlight = NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1)
         let center = CGPoint(x: bounds.midX, y: bounds.midY)
         let spacing: CGFloat = 4
         for row in -3...3 {
@@ -618,14 +662,16 @@ private final class DictationMiniView: NSView {
                     width: diameter,
                     height: diameter
                 )
-                accent.withAlphaComponent(alpha).setFill()
+                let warmth = max(0, min(1, 0.55 - distance * 0.12))
+                let color = accent.blended(withFraction: warmth, of: highlight) ?? accent
+                color.withAlphaComponent(alpha).setFill()
                 NSBezierPath(ovalIn: point).fill()
             }
         }
     }
 
     private func drawSuccess() {
-        let color = NSColor.systemGreen
+        let color = NSColor.colorWith(hex: DictationMiniPalette.successHex, alpha: 1)
         color.withAlphaComponent(0.22).setFill()
         NSBezierPath(ovalIn: bounds).fill()
         color.setStroke()
@@ -640,7 +686,7 @@ private final class DictationMiniView: NSView {
     }
 
     private func drawFailure() {
-        let color = NSColor.systemRed
+        let color = NSColor.colorWith(hex: DictationMiniPalette.failureHex, alpha: 1)
         color.withAlphaComponent(0.20).setFill()
         NSBezierPath(ovalIn: bounds.insetBy(dx: 4, dy: 4)).fill()
         color.setStroke()
@@ -657,9 +703,9 @@ private final class DictationMiniView: NSView {
         }
     }
 
-    private func drawWarning(_ message: String, style: FloatingIndicatorSurfaceStyle) {
+    private func drawWarning(_ message: String) {
         let warningRect = CGRect(x: 8, y: 6, width: 14, height: 14)
-        NSColor.systemOrange.setStroke()
+        NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1).setStroke()
         let triangle = NSBezierPath()
         triangle.move(to: CGPoint(x: warningRect.midX, y: warningRect.maxY))
         triangle.line(to: CGPoint(x: warningRect.maxX, y: warningRect.minY))
@@ -671,7 +717,7 @@ private final class DictationMiniView: NSView {
         paragraph.lineBreakMode = .byTruncatingTail
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-            .foregroundColor: NSColor.colorWith(hexString: style.glyphHex, alpha: style.textAlpha),
+            .foregroundColor: NSColor.colorWith(hex: DictationMiniPalette.inkHex, alpha: 0.95),
             .paragraphStyle: paragraph,
         ]
         (message as NSString).draw(

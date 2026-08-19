@@ -9,6 +9,7 @@ This is a source-grounded outline, not an implementation plan artifact. It inten
 - Extract **Meeting Recording Panel** as a separate stable, draggable, interactive surface that owns pause, stop, duration, transcript toggle, and meeting status.
 - Show the Meeting Recording Panel when an actual meeting recording enters preparing/recording, and dismiss it after the meeting reaches its terminal state. Detecting a teleconference app alone does not create persistent chrome.
 - The two surfaces must not share position, hover, drag, visibility, or interaction state.
+- The Dictation Mini owns the Contextual Spark palette (`#32312f` → `#181817` surface, `#ff7043`/`#ffb04d` activity, `#62d691` success, `#ff6961` failure) rather than inheriting the shared floating-panel palette.
 
 ## State contract
 

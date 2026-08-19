@@ -67,7 +67,7 @@
         "user-annotated processing screenshot",
         "animated circular point field",
         "distinct recording and processing silhouettes",
-        "Muesli warm accent"
+        "approved orange and amber Contextual Spark palette"
       ],
       "artifact": "docs/art-direction/muesli-mini-indicator/transcription-orb-02.html",
       "status": "candidate",
@@ -183,7 +183,7 @@
     {
       "from": "contextual-spark-01",
       "to": "transcription-orb-02",
-      "operation": "replace generic processing ellipsis with animated transcription point field; preserve contextual placement and Muesli color identity",
+      "operation": "replace generic processing ellipsis with an orange and amber animated transcription point field; preserve contextual placement and Contextual Spark color identity",
       "feedback_ref": "feedback.md#18-08-2026-1923-utc--processing-is-an-animated-transcription-orb",
       "decided_at_utc": "2026-08-18T19:23:46Z"
     },

@@ -31,7 +31,7 @@ upstream `main`.
 - Added asynchronous model deletion after unloading the resident model.
 - Added test-shard assignments for the expanded native test suite.
 - Added placement diagnostics for the floating pill and panel.
-- Replaced the fixed, idle-visible dictation button and its placement controls with an idle-hidden Mini that appears beside the focused text insertion caret, shows distinct preparing, recording, processing, success, and failure states, and plays separate lifecycle sounds; meeting recording controls now use an independent panel.
+- Replaced the fixed, idle-visible dictation button and its placement controls with an idle-hidden, warm-charcoal Contextual Spark Mini that appears beside the focused text insertion caret, shows distinct preparing, recording, processing, success, and failure states, and plays separate lifecycle sounds; meeting recording controls now use an independent panel.
 - Added first-strong bidirectional text presentation for meeting titles, notes, transcripts, and chat, with per-block Arabic, Hebrew, and LTR alignment that leaves application chrome and speaker-role placement unchanged.
 - Added Arabic-aware meeting output so Arabic-dominant transcripts generate Arabic titles, summaries, section headings, fallback notes, and retained-note labels across every summary backend.
 - Added trusted macOS microphone-attribution evidence for Teams and other dedicated meeting apps when CoreAudio does not expose an output stream.

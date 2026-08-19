@@ -57,3 +57,11 @@
 - Reacquire: the post-insertion caret once for success or failure, then freeze for the terminal dwell.
 - Fallback: use the focused element frame when range bounds are unavailable; otherwise keep the Mini hidden.
 - Avoid: any mouse-location fallback, because pointer position is unrelated to keyboard dictation context.
+
+## 19-08-2026 — Contextual Spark palette correction
+
+- Replace: the inherited blue-black shared panel surface and white waveform glyphs.
+- Use: warm charcoal `#32312f` → `#181817` for the recording surface and `#272725` → `#0e0e0d` for the processing orb.
+- Use: orange `#ff7043` with amber `#ffb04d` for preparing, recording, and processing activity.
+- Preserve: semantic green `#62d691` for success and coral-red `#ff6961` for failure.
+- Separate: Dictation Mini color ownership from the Meeting Recording Panel and the app-wide accent setting.

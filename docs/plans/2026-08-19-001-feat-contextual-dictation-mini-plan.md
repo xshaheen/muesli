@@ -56,7 +56,7 @@ The current `FloatingIndicatorController` combines a persistent dictation afford
 - R1. Idle dictation must create no visible panel; preparing, recording, processing, success, failure, and pre-session dictation readiness warnings may show the Mini. A warning never replaces active recording or processing.
 - R2. The Mini must appear beside the focused text insertion caret, choose an edge-safe quadrant, follow meaningful caret movement while preparing or recording, freeze through processing, and reacquire the post-insertion caret once for terminal feedback.
 - R3. The Mini must be a non-activating, normally mouse-transparent surface with no drag, hover expansion, stop button, mode menu, or focus transfer.
-- R4. Preparing uses a small accent seed, recording uses a compact live waveform, processing uses an animated circular point field, success uses a brief completion spark, failure uses a distinct red terminal mark, and a nonterminal readiness warning uses a compact labeled capsule with a non-color warning glyph.
+- R4. Preparing uses an orange seed, recording uses an orange-to-amber waveform on warm charcoal glass, processing uses an orange-to-amber point field on a darker charcoal orb, success uses a `#62d691` completion spark, failure uses a `#ff6961` terminal mark, and a nonterminal readiness warning uses a compact labeled capsule with a non-color warning glyph. Dictation Mini does not inherit the shared panel palette or app-wide accent.
 
 **Lifecycle audio and outcomes**
 
@@ -371,7 +371,7 @@ flowchart TD
 - **Approach:**
   1. Implement pure screen selection, ordered quadrant placement, clamping, threshold, and processing-anchor freeze policies.
   2. Resolve the focused insertion caret through macOS Accessibility; poll meaningful moves only during preparing/recording and stop polling at processing/terminal/idle.
-  3. Reuse Muesli's glass/accent and waveform vocabulary for the seed and recording capsule; add a deterministic circular point-field layer for processing and compact success/failure terminal visuals.
+  3. Reuse Muesli's glass and waveform vocabulary while applying the approved Contextual Spark tokens (`#32312f` → `#181817`, `#ff7043`, `#ffb04d`, `#62d691`, `#ff6961`); add a deterministic circular point-field layer for processing and compact success/failure terminal visuals.
   4. Add the compact labeled readiness warning only when no capture/job owns the Mini; it keeps the contextual anchor, announces once, and dismisses or yields to a newer active session deterministically.
   5. Make the panel non-activating and mouse-transparent, with generation-safe animations and terminal holds.
   6. Let screen removal rehome a frozen processing/terminal frame to a fitting surviving display without restarting caret following.

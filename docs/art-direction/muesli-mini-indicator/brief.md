@@ -8,7 +8,7 @@
 - Required states: preparing, recording, processing, success, warning/error.
 - Required auditory feedback: distinct cues for recording start, recording stop/processing handoff, successful text delivery, and terminal failure. All respect the existing sound-effects preference; cancellation remains silent.
 - Required constraints: no focus stealing, no interception of normal pointer events, multi-display safe, high-contrast and Reduce Motion aware.
-- Product continuity: preserve Muesli's waveform vocabulary and configurable accent in the dictation Mini. Stop, pause, transcript, and meeting-specific controls belong exclusively to a separate Meeting Recording Panel.
+- Product continuity: preserve Muesli's waveform vocabulary using the approved Contextual Spark palette: warm charcoal surfaces, orange/amber activity, green success, and coral-red failure. Stop, pause, transcript, and meeting-specific controls belong exclusively to a separate Meeting Recording Panel.
 
 ## Surface boundary
 
