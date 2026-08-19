@@ -9,9 +9,10 @@ final class DictationMiniIndicatorController: NSObject {
 
     enum Presentation: Equatable {
         case hidden
-        /// A brief, surface-free nudge that dictation is available in the focused field.
-        /// Visually identical to `preparing`; never announced; yields to any real session.
-        case reminder
+        /// The idle dot: a surface-free seed that sits near the focused text context while no
+        /// session is running. Visually identical to `preparing`; never announced; yields to
+        /// any real session, typing, scrolling, Space switches and Escape.
+        case idle
         case preparing
         case recording
         case processing
@@ -28,6 +29,7 @@ final class DictationMiniIndicatorController: NSObject {
     private let screenProvider: () -> [DictationMiniPlacement.Screen]
     private let caretAnchorProvider: () -> CGPoint?
     private let caretClearanceProvider: () -> CGFloat
+    private let pointerProvider: () -> CGPoint?
     private let accessibilitySink: AccessibilitySink
     private let caretPollingInterval: TimeInterval
 
@@ -42,6 +44,12 @@ final class DictationMiniIndicatorController: NSObject {
     private var animationStartedAt: TimeInterval?
     private var lastRecordingSampleAt: TimeInterval = 0
     private var disappearanceGeneration: UInt64 = 0
+    private var idleHysteresis = DictationFollowerHysteresis()
+    private var idleAnchor: CGPoint?
+    private var idleActivity = DictationFollowerActivity()
+    private var idleHiddenUntilFocusChange = false
+    private var idleSnoozedUntil: TimeInterval?
+    private var idleHasSelection = false
     private var dismissTask: Task<Void, Never>?
     private var caretPollingTimer: Timer?
     private var accessibilityObserver: NSObjectProtocol?
@@ -56,6 +64,7 @@ final class DictationMiniIndicatorController: NSObject {
             },
             caretAnchorProvider: { DictationCaretAnchorProvider.currentAnchor() },
             caretClearanceProvider: { DictationMiniPlacement.minimumCaretClearance },
+            pointerProvider: { NSEvent.mouseLocation },
             accessibilitySink: { message in
                 NSAccessibility.post(
                     element: NSApp as Any,
@@ -76,11 +85,13 @@ final class DictationMiniIndicatorController: NSObject {
             DictationMiniPlacement.minimumCaretClearance
         },
         caretPollingInterval: TimeInterval = 0.1,
+        pointerProvider: @escaping () -> CGPoint? = { nil },
         accessibilitySink: @escaping AccessibilitySink = { _ in }
     ) {
         self.screenProvider = screenProvider
         self.caretAnchorProvider = caretAnchorProvider
         self.caretClearanceProvider = caretClearanceProvider
+        self.pointerProvider = pointerProvider
         self.caretPollingInterval = caretPollingInterval
         self.accessibilitySink = accessibilitySink
         super.init()
@@ -179,7 +190,7 @@ final class DictationMiniIndicatorController: NSObject {
         at anchor: CGPoint? = nil,
         duration: TimeInterval = 3
     ) -> Generation? {
-        guard presentation == .hidden || presentation == .reminder || isWarning(presentation) else { return nil }
+        guard presentation == .hidden || presentation == .idle || isWarning(presentation) else { return nil }
         generation &+= 1
         let token = Generation(rawValue: generation)
         activeGeneration = token
@@ -193,27 +204,106 @@ final class DictationMiniIndicatorController: NSObject {
         return token
     }
 
-    /// Briefly shows the Preparing signal beside a newly focused caret as a nudge that
-    /// dictation is available. Only shows while idle; any real session or warning takes over.
-    @discardableResult
-    func showReminder(at anchor: CGPoint? = nil, duration: TimeInterval = 3) -> Generation? {
-        guard presentation == .hidden || presentation == .reminder else { return nil }
+    // MARK: Idle dot (text-context follower)
+
+    /// Whether the idle dot may show at all (setting, onboarding, no meeting recording).
+    var isIdleDotAllowed = false {
+        didSet { if oldValue != isIdleDotAllowed { refreshIdleDot() } }
+    }
+
+    /// Feeds one text-context observation (or a miss). Hysteresis holds the last caret for a
+    /// few misses before the dot withdraws.
+    func updateIdleContext(_ sample: DictationTextContextSample?) {
+        idleHasSelection = sample?.hasSelection ?? false
+        idleAnchor = idleHysteresis.observe(sample?.anchor)
+        refreshIdleDot()
+    }
+
+    func setIdleActivity(_ activity: DictationFollowerActivity) {
+        idleActivity = activity
+        refreshIdleDot()
+    }
+
+    /// Escape: hide the dot until the focused text element changes.
+    func hideIdleDotUntilFocusChanges() {
+        guard presentation == .idle else { return }
+        idleHiddenUntilFocusChange = true
+        refreshIdleDot()
+    }
+
+    /// The focused element changed; an Escape hide is over.
+    func idleFocusDidChange() {
+        guard idleHiddenUntilFocusChange else { return }
+        idleHiddenUntilFocusChange = false
+        refreshIdleDot()
+    }
+
+    func snoozeIdleDot(for duration: TimeInterval) {
+        idleSnoozedUntil = ProcessInfo.processInfo.systemUptime + max(duration, 0)
+        refreshIdleDot()
+    }
+
+    var isIdleDotVisibleForTesting: Bool { presentation == .idle && (panel?.isVisible ?? false) }
+    var idleHasSelectionForTesting: Bool { idleHasSelection }
+
+    private func refreshIdleDot() {
+        guard presentation == .hidden || presentation == .idle else { return }
+        let snoozed = idleSnoozedUntil.map { ProcessInfo.processInfo.systemUptime < $0 } ?? false
+        let canShow = isIdleDotAllowed
+            && !idleActivity.isSuppressing
+            && !idleHiddenUntilFocusChange
+            && !snoozed
+            && idleAnchor != nil
+        guard canShow, let anchor = idleAnchor else {
+            if presentation == .idle { hide(invalidateGeneration: true) }
+            return
+        }
+        if presentation == .idle {
+            moveIdleDot(to: anchor)
+            return
+        }
         generation &+= 1
         let token = Generation(rawValue: generation)
         activeGeneration = token
         dismissTask?.cancel()
+        dismissTask = nil
         stopAnimation(clearPowerProvider: true)
-        anchorPoint = anchor ?? caretAnchorProvider()
+        anchorPoint = anchor
         anchorScreen = nil
         currentFrame = nil
-        present(.reminder, generation: token, followsCaret: false)
-        scheduleDismissal(generation: token, duration: duration)
-        return token
+        present(.idle, generation: token, followsCaret: false)
     }
 
-    func dismissReminder() {
-        guard presentation == .reminder else { return }
-        hide(invalidateGeneration: true)
+    private func moveIdleDot(to anchor: CGPoint) {
+        let screens = screenProvider()
+        guard let placement = DictationMiniPlacement.place(
+            near: anchor,
+            size: Self.surfaceSize(for: .idle),
+            screens: screens,
+            clearance: caretClearanceProvider()
+        ) else { return }
+        if let previous = anchorPoint,
+           let previousScreen = anchorScreen,
+           !DictationMiniPlacement.shouldReacquire(
+               from: previous,
+               on: previousScreen,
+               to: anchor,
+               on: placement.screen
+           ) {
+            return
+        }
+        anchorPoint = anchor
+        anchorScreen = placement.screen
+        currentFrame = placement.frame
+        if let panel, let currentFrame {
+            // Glide rather than jump so the dot reads as following the caret.
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.12
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().setFrame(currentFrame, display: true)
+            }
+            panel.orderFrontRegardless()
+        }
     }
 
     /// Neutral completion/cancellation. A terminal hold owns its own dismissal.
@@ -250,7 +340,7 @@ final class DictationMiniIndicatorController: NSObject {
     static func surfaceSize(for presentation: Presentation) -> CGSize {
         switch presentation {
         case .hidden: return .zero
-        case .reminder, .preparing, .processing, .success, .failure:
+        case .idle, .preparing, .processing, .success, .failure:
             return CGSize(width: Self.signalWindowSide, height: Self.signalWindowSide)
         case .recording: return CGSize(width: 58, height: 22)
         case .warning(let text):
@@ -261,14 +351,14 @@ final class DictationMiniIndicatorController: NSObject {
     static func usesCompositorShadow(_ presentation: Presentation) -> Bool {
         switch presentation {
         case .recording, .processing, .failure, .warning: return true
-        case .hidden, .reminder, .preparing, .success: return false
+        case .hidden, .idle, .preparing, .success: return false
         }
     }
 
     static func accessibilityLabel(for presentation: Presentation) -> String? {
         switch presentation {
         case .hidden: return nil
-        case .reminder: return "Dictation ready"
+        case .idle: return "Dictation ready"
         case .preparing: return "Preparing dictation"
         case .recording: return "Recording dictation"
         case .processing: return "Generating transcription"
@@ -340,8 +430,18 @@ final class DictationMiniIndicatorController: NSObject {
         }
     }
 
+    /// Active states are never left without a home: caret → pointer → screen bottom.
+    /// The idle dot uses only real text context and never reaches this ladder.
+    private func activeFallbackAnchor() -> CGPoint? {
+        if let pointer = pointerProvider() { return pointer }
+        guard let screen = screenProvider().first else { return nil }
+        return CGPoint(x: screen.visibleFrame.midX, y: screen.visibleFrame.minY + Self.bottomFallbackInset)
+    }
+
+    static let bottomFallbackInset: CGFloat = 36
+
     private func placeFollowingSurface(size: CGSize) {
-        guard let anchor = anchorPoint ?? caretAnchorProvider() else { return }
+        guard let anchor = anchorPoint ?? caretAnchorProvider() ?? activeFallbackAnchor() else { return }
         let screens = screenProvider()
         guard let result = DictationMiniPlacement.place(
             near: anchor,
@@ -454,7 +554,7 @@ final class DictationMiniIndicatorController: NSObject {
         case .preparing, .recording:
             anchorPoint = caretAnchorProvider() ?? anchorPoint
             placeFollowingSurface(size: Self.surfaceSize(for: presentation))
-        case .reminder, .processing, .success, .failure, .warning:
+        case .idle, .processing, .success, .failure, .warning:
             guard let currentFrame else { return }
             self.currentFrame = DictationMiniPlacement.rehomeFrozenFrame(currentFrame, screens: screenProvider())
         case .hidden:
@@ -582,7 +682,7 @@ final class DictationMiniIndicatorController: NSObject {
 
     private static func accessibilityAnnouncement(for presentation: Presentation) -> String? {
         switch presentation {
-        case .hidden, .reminder, .preparing:
+        case .hidden, .idle, .preparing:
             return nil
         case .warning(let message):
             return message
@@ -849,7 +949,7 @@ private final class DictationMiniView: NSView {
         switch presentation {
         case .recording, .processing, .failure, .warning, .success:
             usesSurface = true
-        case .hidden, .reminder, .preparing:
+        case .hidden, .idle, .preparing:
             usesSurface = false
         }
         glassView.isHidden = !usesSurface || reduceTransparency
@@ -956,7 +1056,7 @@ private final class DictationMiniCueView: NSView {
         let diameter: CGFloat
         let fillColor: NSColor
         switch presentation {
-        case .preparing, .reminder:
+        case .preparing, .idle:
             diameter = DictationMiniRendering.preparingDotDiameter
             fillColor = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
         case .success:
@@ -1255,7 +1355,7 @@ private final class DictationMiniArtworkView: NSView {
             context.interpolationQuality = .high
         }
         switch presentation {
-        case .preparing, .reminder:
+        case .preparing, .idle:
             break
         case .recording:
             break

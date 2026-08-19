@@ -11,6 +11,8 @@ enum DictationCaretAnchorProvider {
         let anchor: CGPoint
         let element: AXUIElement
         let processIdentifier: pid_t
+        /// True when the caret is a non-empty selection (dictating would replace it).
+        let hasSelection: Bool
 
         func isSameElement(as other: EditableFocus?) -> Bool {
             guard let other else { return false }
@@ -33,10 +35,14 @@ enum DictationCaretAnchorProvider {
     static func currentEditableFocus() -> EditableFocus? {
         guard AXIsProcessTrusted(),
               let primaryMaxY = NSScreen.screens.first?.frame.maxY,
-              let element = focusedElement()
+              let focused = focusedElement()
         else { return nil }
-        AXUIElementSetMessagingTimeout(element, 0.08)
-        guard isEditableTextElement(element) else { return nil }
+        AXUIElementSetMessagingTimeout(focused, 0.08)
+        // Some hosts focus a container (web area, scroll area, group) while the caret lives in
+        // a text input inside it; drill a couple of levels before giving up.
+        guard let element = isEditableTextElement(focused) ? focused : drillToTextInput(from: focused) else {
+            return nil
+        }
         let anchor: CGPoint
         if let accessibilityRect = caretRect(for: element) {
             anchor = appKitAnchor(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
@@ -51,7 +57,48 @@ enum DictationCaretAnchorProvider {
         }
         var pid: pid_t = 0
         AXUIElementGetPid(element, &pid)
-        return EditableFocus(anchor: anchor, element: element, processIdentifier: pid)
+        let selection = copiedRange(element, attribute: kAXSelectedTextRangeAttribute)
+        return EditableFocus(
+            anchor: anchor,
+            element: element,
+            processIdentifier: pid,
+            hasSelection: (selection?.length ?? 0) > 0
+        )
+    }
+
+    static let drillDepthLimit = 2
+    static let drillNodeLimit = 16
+
+    /// Breadth-first search for the first editable text input below `root`, bounded so a
+    /// huge web page never stalls the main thread.
+    static func drillToTextInput(from root: AXUIElement) -> AXUIElement? {
+        var frontier: [(AXUIElement, Int)] = [(root, 0)]
+        var visited = 0
+        while !frontier.isEmpty, visited < drillNodeLimit {
+            let (node, depth) = frontier.removeFirst()
+            visited += 1
+            guard depth < drillDepthLimit else { continue }
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &value) == .success,
+                  let children = value as? [AXUIElement]
+            else { continue }
+            for child in children.prefix(drillNodeLimit) {
+                AXUIElementSetMessagingTimeout(child, 0.05)
+                // Only a child that reports itself focused can own the caret; otherwise a page's
+                // stray search box would steal the anchor.
+                if copiedBool(child, attribute: kAXFocusedAttribute) == true, isEditableTextElement(child) {
+                    return child
+                }
+                frontier.append((child, depth + 1))
+            }
+        }
+        return nil
+    }
+
+    private static func copiedBool(_ element: AXUIElement, attribute: String) -> Bool? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+        return value as? Bool
     }
 
     static func currentAnchor() -> CGPoint? {

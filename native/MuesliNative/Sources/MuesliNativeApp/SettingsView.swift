@@ -1736,12 +1736,12 @@ struct SettingsView: View {
                     }
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Dictation reminder in text fields") {
-                    settingsSwitch(isOn: appState.config.showDictationFocusReminder) { newValue in
-                        controller.updateConfig { $0.showDictationFocusReminder = newValue }
+                settingsRow("Idle dot near your text") {
+                    settingsSwitch(isOn: appState.config.showDictationIdleDot) { newValue in
+                        controller.updateConfig { $0.showDictationIdleDot = newValue }
                     }
                 }
-                settingsDescription("Briefly shows the dictation dot beside the caret when a text field gains focus.")
+                settingsDescription("Keep the Mini's dot near your text context when you're not dictating. It hides while you type or scroll; press Escape to hide it until you move to another field. Turn off to only show the Mini while recording or processing.")
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Show next meeting in menu bar") {
                     settingsSwitch(isOn: appState.config.showNextMeetingInMenuBar) { newValue in

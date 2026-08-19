@@ -50,7 +50,7 @@ struct DictationMiniIndicatorTests {
         // Bright signals carry no compositor shadow (it reads as a dark ring); glass capsules do.
         #expect(!DictationMiniIndicatorController.usesCompositorShadow(.success))
         #expect(!DictationMiniIndicatorController.usesCompositorShadow(.preparing))
-        #expect(!DictationMiniIndicatorController.usesCompositorShadow(.reminder))
+        #expect(!DictationMiniIndicatorController.usesCompositorShadow(.idle))
         #expect(DictationMiniIndicatorController.usesCompositorShadow(.recording))
         #expect(DictationMiniIndicatorController.usesCompositorShadow(.processing))
         #expect(DictationMiniRendering.preparingDotDiameter < DictationMiniRendering.completionDiameter)
@@ -160,20 +160,24 @@ struct DictationMiniIndicatorTests {
         controller.close()
     }
 
-    @Test("the Mini stays hidden until focused caret geometry becomes available")
-    func waitsForCaretGeometry() {
+    @Test("without caret or pointer the Mini homes to the screen bottom, then snaps to the caret once it resolves")
+    func fallsBackThenSnapsToCaret() {
         var caret: CGPoint?
         let controller = makeController(caret: { caret })
         let token = controller.beginPreparing()
 
         #expect(controller.presentation == .preparing)
-        #expect(!controller.isVisibleForTesting)
+        #expect(controller.isVisibleForTesting)
         #expect(controller.isFollowingCaretForTesting)
+        let fallbackFrame = controller.currentFrame
+        #expect((fallbackFrame?.minY ?? 999) < 100)
 
         caret = CGPoint(x: 220, y: 320)
         controller.refreshCaretAnchorForTesting()
 
         #expect(controller.isVisibleForTesting)
+        #expect(controller.currentFrame != fallbackFrame)
+        #expect(controller.currentFrame?.maxX == 210)
         controller.dismiss(generation: token)
         controller.close()
     }
@@ -267,56 +271,118 @@ struct DictationMiniIndicatorTests {
         #expect(!DictationMiniIndicatorController.processingAnimationIsContinuous(reduceMotion: true))
     }
 
-    @Test("the focus reminder shows only while idle, holds its anchor, yields to a session, and self-dismisses")
-    func focusReminderLifecycle() async {
+    @Test("the idle dot follows the text context, hides on activity and Escape, and yields to a session")
+    func idleDotFollower() {
         var announcements: [String] = []
         let controller = makeController(accessibilitySink: { announcements.append($0) })
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .reminder) == CGSize(width: 20, height: 20))
-        #expect(DictationMiniIndicatorController.accessibilityLabel(for: .reminder) == "Dictation ready")
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .idle) == CGSize(width: 20, height: 20))
+        #expect(DictationMiniIndicatorController.accessibilityLabel(for: .idle) == "Dictation ready")
+        let token = AXElementToken(element: AXUIElementCreateSystemWide())
+        func sample(_ x: CGFloat, selection: Bool = false) -> DictationTextContextSample {
+            DictationTextContextSample(anchor: CGPoint(x: x, y: 300), processIdentifier: 1, hasSelection: selection, element: token)
+        }
 
-        #expect(controller.showReminder(duration: 10) != nil)
-        #expect(controller.presentation == .reminder)
-        #expect(controller.isVisibleForTesting)
-        #expect(!controller.isFollowingCaretForTesting)
+        // Not allowed yet: samples arrive but nothing shows.
+        controller.updateIdleContext(sample(200))
+        #expect(!controller.isIdleDotVisibleForTesting)
+
+        controller.isIdleDotAllowed = true
+        #expect(controller.isIdleDotVisibleForTesting)
         #expect(announcements.isEmpty)
-        let reminderCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+        let first = controller.currentFrame
 
-        let token = controller.beginPreparing()
-        #expect(controller.presentation == .preparing)
-        let preparingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
-        #expect(preparingCenter == reminderCenter)
-        #expect(controller.showReminder() == nil)
-        controller.dismiss(generation: token)
+        // Follows the caret once it moves past the jitter threshold.
+        controller.updateIdleContext(sample(260, selection: true))
+        #expect(controller.currentFrame != first)
+        #expect(controller.idleHasSelectionForTesting)
 
-        #expect(controller.showReminder(duration: 0.01) != nil)
-        try? await Task.sleep(for: .milliseconds(40))
+        // Brief misses hold the last caret; a streak withdraws it.
+        controller.updateIdleContext(nil)
+        controller.updateIdleContext(nil)
+        #expect(controller.presentation == .idle)
+        controller.updateIdleContext(nil)
         #expect(controller.presentation == .hidden)
 
-        #expect(controller.showReminder(duration: 10) != nil)
-        controller.dismissReminder()
+        // Typing hides it; stopping typing brings it back on the next sample.
+        controller.updateIdleContext(sample(200))
+        #expect(controller.presentation == .idle)
+        controller.setIdleActivity(DictationFollowerActivity(isTyping: true))
+        #expect(controller.presentation == .hidden)
+        controller.setIdleActivity(DictationFollowerActivity())
+        controller.updateIdleContext(sample(200))
+        #expect(controller.presentation == .idle)
+
+        // Escape hides until the focused element changes.
+        controller.hideIdleDotUntilFocusChanges()
+        #expect(controller.presentation == .hidden)
+        controller.updateIdleContext(sample(205))
+        #expect(controller.presentation == .hidden)
+        controller.idleFocusDidChange()
+        #expect(controller.presentation == .idle)
+
+        // A real session takes over in place and the dot returns after it ends.
+        let session = controller.beginPreparing()
+        #expect(controller.presentation == .preparing)
+        controller.updateIdleContext(sample(200))
+        #expect(controller.presentation == .preparing)
+        controller.dismiss(generation: session)
+        controller.updateIdleContext(sample(200))
+        #expect(controller.presentation == .idle)
+
+        // Snooze.
+        controller.snoozeIdleDot(for: 60)
         #expect(controller.presentation == .hidden)
         controller.close()
     }
 
-    @Test("the reminder gate fires once per focused element with a global cooldown")
-    func focusReminderGate() {
-        #expect(DictationFocusReminderGate<String>.defaultRepeatInterval == 30)
-        var gate = DictationFocusReminderGate<String>(cooldown: 1.5, repeatInterval: 60)
-        let firstFocus = gate.shouldRemind(for: "field-a", at: 10)
-        let sameElement = gate.shouldRemind(for: "field-a", at: 10.5)
-        let withinCooldown = gate.shouldRemind(for: "field-b", at: 11)
-        let afterCooldown = gate.shouldRemind(for: "field-c", at: 13)
-        gate.focusLost()
-        let bounceBackTooSoon = gate.shouldRemind(for: "field-c", at: 20)
-        gate.focusLost()
-        let bounceBackMuchLater = gate.shouldRemind(for: "field-c", at: 80)
-        #expect(firstFocus)
-        #expect(!sameElement)
-        #expect(!withinCooldown)
-        #expect(afterCooldown)
-        #expect(!bounceBackTooSoon)
-        #expect(bounceBackMuchLater)
+    @Test("follower hysteresis holds through two misses and withdraws on the third")
+    func followerHysteresis() {
+        var hysteresis = DictationFollowerHysteresis()
+        let anchor = CGPoint(x: 10, y: 10)
+        #expect(hysteresis.observe(anchor) == anchor)
+        #expect(hysteresis.observe(nil) == anchor)
+        #expect(hysteresis.observe(nil) == anchor)
+        #expect(hysteresis.observe(nil) == nil)
+        #expect(hysteresis.observe(nil) == nil)
+        #expect(hysteresis.observe(anchor) == anchor)
+        #expect(hysteresis.missStreak == 0)
+        #expect(DictationFollowerActivity(isScrolling: true).isSuppressing)
+        #expect(!DictationFollowerActivity().isSuppressing)
         #expect(DictationCaretAnchorProvider.editableTextRoles == ["AXTextField", "AXTextArea", "AXComboBox"])
+    }
+
+    @Test("active states fall back to the pointer, then the screen bottom, and the idle dot never does")
+    func activeFallbackLadder() {
+        var pointer: CGPoint? = CGPoint(x: 400, y: 100)
+        let controller = DictationMiniIndicatorController(
+            screenProvider: { [screen] },
+            caretAnchorProvider: { nil },
+            caretPollingInterval: 60,
+            pointerProvider: { pointer }
+        )
+        let token = controller.beginPreparing()
+        #expect(controller.isVisibleForTesting)
+        let pointerFrame = controller.currentFrame
+        #expect(pointerFrame?.maxX == 390)
+        controller.dismiss(generation: token)
+
+        pointer = nil
+        _ = controller.beginPreparing()
+        #expect(controller.isVisibleForTesting)
+        #expect(controller.currentFrame?.maxX == 390)
+        #expect(controller.currentFrame?.minY ?? 0 < 100)
+        controller.close()
+
+        let idle = DictationMiniIndicatorController(
+            screenProvider: { [screen] },
+            caretAnchorProvider: { nil },
+            caretPollingInterval: 60,
+            pointerProvider: { CGPoint(x: 400, y: 100) }
+        )
+        idle.isIdleDotAllowed = true
+        idle.updateIdleContext(nil)
+        #expect(!idle.isIdleDotVisibleForTesting)
+        idle.close()
     }
 
     @Test("accessibility caret rectangles convert into AppKit screen coordinates")

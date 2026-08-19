@@ -456,7 +456,7 @@ final class MuesliController: NSObject {
     )
     private let dictationLatencyTimestampFormatter = ISO8601DateFormatter()
     private let dictationMiniIndicator: DictationMiniIndicatorController
-    private let dictationFocusReminderMonitor = DictationFocusReminderMonitor()
+    private let dictationTextContextMonitor = DictationTextContextMonitor()
     private let meetingRecordingPanel: MeetingRecordingPanelController
     private let meetingRecordButton = MeetingRecordButtonController()
     private var dismissedMeetingRecordButtonCandidateID: String?
@@ -561,7 +561,7 @@ final class MuesliController: NSObject {
     private var meetingDurationStopTimer: Timer?
     private var activeMeetingCalendarEndDate: Date?
     private var latestMeetingActivityCandidate: MeetingCandidate?
-    private var dictationFocusReminderMonitorAllowed = false
+    private var dictationIdleDotAllowed = false
     private var latestMeetingActivityCandidateObservedAt: Date?
     private var activeMeetingAutoStop = MeetingAutoStopTracker()
     private var activeMeetingSignalLossResponse: MeetingSignalLossResponse = .none
@@ -832,15 +832,20 @@ final class MuesliController: NSObject {
         if canRunMainApp {
             startMeetingRecordingHotkeyMonitorIfNeeded()
         }
-        dictationFocusReminderMonitor.onEditableFocus = { [weak self] focus in
-            guard let self, self.config.showDictationFocusReminder else { return }
-            self.dictationMiniIndicator.showReminder(at: focus.anchor)
+        dictationTextContextMonitor.onSample = { [weak self] sample in
+            self?.dictationMiniIndicator.updateIdleContext(sample)
         }
-        dictationFocusReminderMonitor.onFocusLost = { [weak self] in
-            self?.dictationMiniIndicator.dismissReminder()
+        dictationTextContextMonitor.onActivityChanged = { [weak self] activity in
+            self?.dictationMiniIndicator.setIdleActivity(activity)
         }
-        dictationFocusReminderMonitorAllowed = canRunMainApp
-        syncDictationFocusReminderMonitor()
+        dictationTextContextMonitor.onFocusChanged = { [weak self] in
+            self?.dictationMiniIndicator.idleFocusDidChange()
+        }
+        dictationTextContextMonitor.onEscape = { [weak self] in
+            self?.dictationMiniIndicator.hideIdleDotUntilFocusChanges()
+        }
+        dictationIdleDotAllowed = canRunMainApp
+        syncDictationIdleDot()
         syncDictationRecorderWarmup(intent: .idlePrewarm(.startup))
         meetingRecordingPanel.onStop = { [weak self] in self?.stopMeetingRecording() }
         meetingRecordingPanel.onDiscard = { [weak self] in self?.discardMeetingWithConfirmation() }
@@ -1087,8 +1092,8 @@ final class MuesliController: NSObject {
         notifiedUpcomingEventIDs.removeAll()
         autoRecordedCalendarEventIDs.removeAll()
         meetingFeatureMonitorsAllowed = false
-        dictationFocusReminderMonitorAllowed = false
-        syncDictationFocusReminderMonitor()
+        dictationIdleDotAllowed = false
+        syncDictationIdleDot()
         disarmMeetingAutoStop()
         cancelMeetingDurationLimit()
         meetingMonitor.stop()
@@ -1133,7 +1138,7 @@ final class MuesliController: NSObject {
         await syncEngineCancellationTask?.value
         await transcriptionCoordinator.shutdown()
         ComputerUseCursorOverlay.shared.close()
-        dictationFocusReminderMonitor.stop()
+        dictationTextContextMonitor.stop()
         meetingRecordButton.close()
         dictationMiniIndicator.close()
         CoreAudioSystemRecorder.cleanupStaleDevices()
@@ -1961,7 +1966,7 @@ final class MuesliController: NSObject {
         appState.isChatGPTAuthenticated = chatGPTAuth.isAuthenticated
         syncCalendarMonitor()
         syncMeetingDetectionMonitor()
-        syncDictationFocusReminderMonitor()
+        syncDictationIdleDot()
         updateDesignatedTranscriptionBackends()
         updateMeetingNotificationVisibility()
         syncDictationRecorderWarmup(intent: .idlePrewarm(.configChange))
@@ -3446,20 +3451,21 @@ final class MuesliController: NSObject {
         )
     }
 
-    /// The reminder needs Accessibility and a completed onboarding; it never runs inside
-    /// onboarding where the focused field belongs to Muesli's own flow, and it stays silent
+    /// The idle dot needs Accessibility and a completed onboarding; it never runs inside
+    /// onboarding where the focused field belongs to Muesli's own flow, and it stays away
     /// while a meeting recording is starting or running.
-    private func syncDictationFocusReminderMonitor() {
-        let shouldRun = dictationFocusReminderMonitorAllowed
-            && config.showDictationFocusReminder
+    private func syncDictationIdleDot() {
+        let idleAllowed = dictationIdleDotAllowed
             && config.resolvedOnboardingUseCase.includesPushToTalk
+            && config.showDictationIdleDot
             && !isMeetingRecording()
             && !isStartingMeetingRecording
-        if shouldRun {
-            dictationFocusReminderMonitor.start()
+        dictationMiniIndicator.isIdleDotAllowed = idleAllowed
+        if idleAllowed {
+            dictationTextContextMonitor.start()
         } else {
-            dictationFocusReminderMonitor.stop()
-            dictationMiniIndicator.dismissReminder()
+            // Nothing consumes samples while the dot is disallowed; stop polling to stay cheap.
+            dictationTextContextMonitor.stop()
         }
     }
 
@@ -3474,7 +3480,7 @@ final class MuesliController: NSObject {
             dismissPresentedMeetingDetection()
         }
         syncMeetingRecordButton()
-        syncDictationFocusReminderMonitor()
+        syncDictationIdleDot()
     }
 
     private func syncMeetingRecordButton() {
@@ -4474,8 +4480,8 @@ final class MuesliController: NSObject {
                 hotkeyMonitor.start()
                 startComputerUseHotkeyMonitorIfNeeded()
             }
-            dictationFocusReminderMonitorAllowed = true
-            syncDictationFocusReminderMonitor()
+            dictationIdleDotAllowed = true
+            syncDictationIdleDot()
             syncCalendarMonitor()
             // Start monitors that were deferred during onboarding
             if shouldRunMeetingFeatureMonitors {
