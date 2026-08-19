@@ -48,7 +48,7 @@ enum DictationCaretAnchorProvider {
             anchor = appKitAnchor(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
         } else if let accessibilityRect = elementRect(element) {
             let converted = appKitRect(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
-            anchor = fallbackAnchor(inAppKitRect: converted, pointer: NSEvent.mouseLocation)
+            anchor = fallbackAnchor(inAppKitRect: converted, pointer: focusPointerHint)
         } else {
             return nil
         }
@@ -124,7 +124,7 @@ enum DictationCaretAnchorProvider {
         }
         guard let accessibilityRect = elementRect(element) else { return nil }
         let converted = appKitRect(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
-        return fallbackAnchor(inAppKitRect: converted, pointer: NSEvent.mouseLocation)
+        return fallbackAnchor(inAppKitRect: converted, pointer: focusPointerHint)
     }
 
     static func appKitRect(fromAccessibilityRect rect: CGRect, primaryMaxY: CGFloat) -> CGRect {
@@ -142,9 +142,14 @@ enum DictationCaretAnchorProvider {
         return CGPoint(x: converted.midX, y: converted.minY)
     }
 
-    /// Anchor for a field whose caret bounds are unavailable: the pointer when it rests inside
-    /// the field (the user most likely just clicked where they want to type — the reference
-    /// follower's "mouse" tier), otherwise the bottom of the field's first line.
+    /// Where the pointer was when the current text element gained focus (set by the text-context
+    /// monitor). Used only as a one-shot hint for fields without caret bounds; the live pointer is
+    /// never followed.
+    static var focusPointerHint: CGPoint?
+
+    /// Anchor for a field whose caret bounds are unavailable: the focus-time pointer when it
+    /// rests inside the field (the user most likely clicked where they want to type — the
+    /// reference follower's "mouse" tier), otherwise the bottom of the field's first line.
     static func fallbackAnchor(inAppKitRect converted: CGRect, pointer: CGPoint?) -> CGPoint {
         if let pointer, converted.insetBy(dx: -2, dy: -2).contains(pointer) {
             return CGPoint(x: pointer.x, y: max(converted.minY, pointer.y - 10))

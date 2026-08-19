@@ -178,3 +178,8 @@
 - Distance: caret gap 3 → 6 pt.
 - Follow: typing no longer hides the disc; it glides with the caret while you type (scrolling, window moves and Space switches still hide it).
 - Node: `glass-disc-15` (tuning).
+
+## 19-08-2026 17:01 UTC — pointer hint and glass level
+
+- Fix (live feedback: "it follows the mouse"): in hosts without caret bounds the pointer is sampled once when the field gains focus (where you clicked) and held; the live pointer is never followed.
+- Glass: disc tint back to 60 % per request.

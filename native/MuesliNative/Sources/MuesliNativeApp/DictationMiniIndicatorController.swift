@@ -928,7 +928,7 @@ enum DictationMiniRendering {
     static let idleCoreDiameter: CGFloat = 3
     static let preparingCoreDiameter: CGFloat = 5
     /// The disc reads as glass: lighter tint than the capsule plus a gel highlight.
-    static let discGlassTintAlpha: CGFloat = 0.46
+    static let discGlassTintAlpha: CGFloat = 0.60
     /// Completion fills the shared 20 pt window as a glass disk.
     static let completionDiameter: CGFloat = 20
     static let successGlassTintAlpha: CGFloat = 0.82
