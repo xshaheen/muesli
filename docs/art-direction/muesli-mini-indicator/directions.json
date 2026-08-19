@@ -400,6 +400,34 @@
         "generated_at_utc": "2026-08-19T09:54:39Z",
         "remote_service_disclosure": "none"
       }
+    },
+    {
+      "id": "glass-success-13",
+      "parents": [
+        "compact-signal-11"
+      ],
+      "round": 13,
+      "mode": "iterate",
+      "thesis": "Completion should read as a bright green glass disk with a small white check and no dark ring, every signal should pop in and fade out, and the focus reminder should fire only for empty, genuinely editable fields.",
+      "anchors": [
+        "user feedback: brighter green, glassy, small check, no dark border",
+        "user feedback: reminder fired on GitHub code views and non-inputs; wants a small appearance animation",
+        "compact-signal-11 footprint and anchor rules"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/glass-success-13.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T11:00:01Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T11:00:01Z",
+        "remote_service_disclosure": "none"
+      }
     }
   ],
   "decisions": [
@@ -493,6 +521,13 @@
       "operation": "reintroduce a meeting-only floating Record pill shown during detected meeting activity, restyled in the Contextual Spark glass palette, handing off to the Meeting Recording Panel",
       "feedback_ref": "feedback.md#19-08-2026-0954-utc--compact-signal-reminder-and-meeting-record-pill",
       "decided_at_utc": "2026-08-19T09:54:39Z"
+    },
+    {
+      "from": "compact-signal-11",
+      "to": "glass-success-13",
+      "operation": "replace the solid green completion disk with a tinted glass disk and small white check; drop compositor shadows on bright signals; add pop-in/fade-out; restrict the reminder to empty editable fields with a 60 s repeat guard",
+      "feedback_ref": "feedback.md#19-08-2026-1100-utc--glass-success-and-quiet-reminder",
+      "decided_at_utc": "2026-08-19T11:00:01Z"
     }
   ]
 }

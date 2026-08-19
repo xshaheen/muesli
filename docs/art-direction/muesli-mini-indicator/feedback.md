@@ -121,3 +121,12 @@
 - Preserve: recording-wave-10, lifecycle sounds, and the dictation/meeting surface boundary.
 - Resulting nodes: `compact-signal-11`, `meeting-record-pill-12`.
 - Shrink (live feedback: "it too big"): the pill from 98 × 28 pt to 72 × 22 pt — the Mini's capsule height — with an 8 pt dot and 11 pt label.
+
+## 19-08-2026 11:00 UTC — glass success and quiet reminder
+
+- Replace: the solid green completion disk with a 20 pt glass disk (light material, vivid #48e57b tint at 82 %, gel highlight) and a small white check; no solid fill, no edge.
+- Drop: the compositor shadow on reminder, preparing and success — on light pages it read as a dark ring.
+- Add: a small pop-in (fade + 0.55 → 1.06 → 1 scale over 0.26 s) on every signal appearance and a 0.14 s fade-out on dismissal; Reduce Motion keeps the fade only.
+- Fix: the reminder never appeared for a fresh document (no caret bounds yet) — empty fields now anchor to the element frame.
+- Restrict (live feedback: it appeared on GitHub code views and non-inputs): the reminder requires an editable role (AXTextField/AXTextArea/AXComboBox), a settable value, a selected range, and an empty field; 60 s per-element repeat guard.
+- Resulting node: `glass-success-13`.

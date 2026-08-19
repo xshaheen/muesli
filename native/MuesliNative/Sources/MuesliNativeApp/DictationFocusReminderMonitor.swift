@@ -1,24 +1,47 @@
 import AppKit
 import ApplicationServices
+import OSLog
 
 /// Pure gate deciding when a newly focused editable element earns a dictation reminder.
-/// One reminder per focused element; a short global cooldown absorbs focus storms.
+/// One reminder per focused element, a short global cooldown to absorb focus storms, and a
+/// long per-element repeat interval so bouncing between a field and its neighbours never nags.
 struct DictationFocusReminderGate<Token: Equatable>: Equatable {
     static var defaultCooldown: TimeInterval { 1.5 }
+    static var defaultRepeatInterval: TimeInterval { 60 }
+    static var rememberedElementLimit: Int { 12 }
+
+    struct Reminded: Equatable {
+        let token: Token
+        let at: TimeInterval
+    }
 
     private(set) var lastToken: Token?
     private(set) var lastShownAt: TimeInterval?
+    private(set) var reminded: [Reminded] = []
     let cooldown: TimeInterval
+    let repeatInterval: TimeInterval
 
-    init(cooldown: TimeInterval = DictationFocusReminderGate.defaultCooldown) {
+    init(
+        cooldown: TimeInterval = DictationFocusReminderGate.defaultCooldown,
+        repeatInterval: TimeInterval = DictationFocusReminderGate.defaultRepeatInterval
+    ) {
         self.cooldown = cooldown
+        self.repeatInterval = repeatInterval
     }
 
     mutating func shouldRemind(for token: Token, at now: TimeInterval) -> Bool {
         if let lastToken, lastToken == token { return false }
         lastToken = token
         if let lastShownAt, now - lastShownAt < cooldown { return false }
+        let repeatInterval = self.repeatInterval
+        if reminded.contains(where: { $0.token == token && now - $0.at < repeatInterval }) { return false }
         lastShownAt = now
+        reminded.removeAll { now - $0.at >= repeatInterval }
+        reminded.append(Reminded(token: token, at: now))
+        let overflow = reminded.count - Self.rememberedElementLimit
+        if overflow > 0 {
+            reminded.removeFirst(overflow)
+        }
         return true
     }
 
@@ -28,10 +51,12 @@ struct DictationFocusReminderGate<Token: Equatable>: Equatable {
 }
 
 /// Watches the frontmost application's focused UI element through an `AXObserver` and
-/// reports when an editable text element with a real caret gains focus. It never reads
-/// text content; it only resolves the caret anchor the Mini already uses for placement.
+/// reports when an empty editable text control gains focus. It never reads text content;
+/// it checks the character count and resolves the caret anchor the Mini already uses.
 @MainActor
 final class DictationFocusReminderMonitor {
+    private static let logger = Logger(subsystem: "com.muesli.native", category: "FocusReminder")
+
     var onEditableFocus: ((DictationCaretAnchorProvider.EditableFocus) -> Void)?
     var onFocusLost: (() -> Void)?
 
@@ -52,6 +77,7 @@ final class DictationFocusReminderMonitor {
     func start() {
         guard !isRunning else { return }
         isRunning = true
+        Self.logger.info("focus reminder monitor started")
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
@@ -85,7 +111,10 @@ final class DictationFocusReminderMonitor {
               let pid,
               pid != ProcessInfo.processInfo.processIdentifier,
               AXIsProcessTrusted()
-        else { return }
+        else {
+            Self.logger.debug("attach skipped pid=\(pid ?? -1, privacy: .public) running=\(self.isRunning, privacy: .public)")
+            return
+        }
 
         var created: AXObserver?
         let callback: AXObserverCallback = { _, _, _, refcon in
@@ -93,16 +122,25 @@ final class DictationFocusReminderMonitor {
             let monitor = Unmanaged<DictationFocusReminderMonitor>.fromOpaque(refcon).takeUnretainedValue()
             MainActor.assumeIsolated { monitor.scheduleEvaluation() }
         }
-        guard AXObserverCreate(pid, callback, &created) == .success, let created else { return }
+        let createResult = AXObserverCreate(pid, callback, &created)
+        guard createResult == .success, let created else {
+            Self.logger.error("AXObserverCreate failed pid=\(pid, privacy: .public) code=\(createResult.rawValue, privacy: .public)")
+            return
+        }
         let application = AXUIElementCreateApplication(pid)
         let refcon = Unmanaged.passUnretained(self).toOpaque()
-        guard AXObserverAddNotification(
+        let addResult = AXObserverAddNotification(
             created,
             application,
             kAXFocusedUIElementChangedNotification as CFString,
             refcon
-        ) == .success else { return }
-        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(created), .defaultMode)
+        )
+        guard addResult == .success else {
+            Self.logger.error("AXObserverAddNotification failed pid=\(pid, privacy: .public) code=\(addResult.rawValue, privacy: .public)")
+            return
+        }
+        Self.logger.debug("attached to pid=\(pid, privacy: .public)")
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(created), .commonModes)
         observer = created
         observedProcessIdentifier = pid
         // The app may already have a focused field; the notification only fires on change.
@@ -111,7 +149,7 @@ final class DictationFocusReminderMonitor {
 
     private func detach() {
         if let observer {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
         }
         observer = nil
         observedProcessIdentifier = nil
@@ -128,14 +166,17 @@ final class DictationFocusReminderMonitor {
 
     private func evaluateFocus() {
         guard isRunning else { return }
-        guard let focus = DictationCaretAnchorProvider.currentEditableFocus(),
+        guard let focus = DictationCaretAnchorProvider.currentEditableFocus(requireEmpty: true),
               focus.processIdentifier == observedProcessIdentifier
         else {
+            Self.logger.debug("evaluate: no editable focus in observed pid=\(self.observedProcessIdentifier ?? -1, privacy: .public)")
             gate.focusLost()
             onFocusLost?()
             return
         }
-        if gate.shouldRemind(for: AXElementToken(element: focus.element), at: now()) {
+        let remind = gate.shouldRemind(for: AXElementToken(element: focus.element), at: now())
+        Self.logger.debug("evaluate: editable focus pid=\(focus.processIdentifier, privacy: .public) remind=\(remind, privacy: .public)")
+        if remind {
             onEditableFocus?(focus)
         }
     }

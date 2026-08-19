@@ -18,23 +18,42 @@ enum DictationCaretAnchorProvider {
         }
     }
 
-    /// Resolves the focused element only when it exposes a real insertion caret (a selected
-    /// text range with bounds). Buttons and other non-text controls return nil, unlike
-    /// `currentAnchor()`, which falls back to the focused element frame.
-    static func currentEditableFocus() -> EditableFocus? {
+    /// Roles that denote a user-editable text control. Web areas, groups, static text and
+    /// code viewers also expose selection ranges, so a range alone is not enough.
+    static let editableTextRoles: Set<String> = [
+        kAXTextFieldRole as String,
+        kAXTextAreaRole as String,
+        kAXComboBoxRole as String,
+    ]
+
+    /// Resolves the focused element only when it is an editable text control: an allow-listed
+    /// role, a settable value, and a selected text range. When `requireEmpty` is set the field
+    /// must also be empty — the moment a reminder to dictate is useful, and a cheap way to skip
+    /// read-only code viewers and documents the user is merely re-entering. An empty field has
+    /// no caret bounds yet, so the anchor falls back to the element frame exactly as dictation
+    /// placement does.
+    static func currentEditableFocus(requireEmpty: Bool = false) -> EditableFocus? {
         guard AXIsProcessTrusted(),
               let primaryMaxY = NSScreen.screens.first?.frame.maxY,
               let element = focusedElement()
         else { return nil }
         AXUIElementSetMessagingTimeout(element, 0.08)
-        guard let accessibilityRect = caretRect(for: element) else { return nil }
+        guard isEditableTextElement(element) else { return nil }
+        if requireEmpty {
+            guard let count = copiedInt(element, attribute: kAXNumberOfCharactersAttribute), count == 0 else { return nil }
+        }
+        let anchor: CGPoint
+        if let accessibilityRect = caretRect(for: element) {
+            anchor = appKitAnchor(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
+        } else if let accessibilityRect = elementRect(element) {
+            let converted = appKitRect(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
+            anchor = CGPoint(x: converted.minX + min(12, converted.width / 2), y: converted.midY)
+        } else {
+            return nil
+        }
         var pid: pid_t = 0
         AXUIElementGetPid(element, &pid)
-        return EditableFocus(
-            anchor: appKitAnchor(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY),
-            element: element,
-            processIdentifier: pid
-        )
+        return EditableFocus(anchor: anchor, element: element, processIdentifier: pid)
     }
 
     static func currentAnchor() -> CGPoint? {
@@ -67,6 +86,23 @@ enum DictationCaretAnchorProvider {
     static func appKitAnchor(fromAccessibilityRect rect: CGRect, primaryMaxY: CGFloat) -> CGPoint {
         let converted = appKitRect(fromAccessibilityRect: rect, primaryMaxY: primaryMaxY)
         return CGPoint(x: converted.minX, y: converted.midY)
+    }
+
+    static func isEditableTextElement(_ element: AXUIElement) -> Bool {
+        guard let role = copiedString(element, attribute: kAXRoleAttribute),
+              editableTextRoles.contains(role)
+        else { return false }
+        var settable = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
+              settable.boolValue
+        else { return false }
+        return copiedRange(element, attribute: kAXSelectedTextRangeAttribute) != nil
+    }
+
+    private static func copiedString(_ element: AXUIElement, attribute: String) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+        return value as? String
     }
 
     private static func focusedElement() -> AXUIElement? {

@@ -41,6 +41,7 @@ final class DictationMiniIndicatorController: NSObject {
     private var animationTimer: Timer?
     private var animationStartedAt: TimeInterval?
     private var lastRecordingSampleAt: TimeInterval = 0
+    private var disappearanceGeneration: UInt64 = 0
     private var dismissTask: Task<Void, Never>?
     private var caretPollingTimer: Timer?
     private var accessibilityObserver: NSObjectProtocol?
@@ -257,6 +258,13 @@ final class DictationMiniIndicatorController: NSObject {
         }
     }
 
+    static func usesCompositorShadow(_ presentation: Presentation) -> Bool {
+        switch presentation {
+        case .recording, .processing, .failure, .warning: return true
+        case .hidden, .reminder, .preparing, .success: return false
+        }
+    }
+
     static func accessibilityLabel(for presentation: Presentation) -> String? {
         switch presentation {
         case .hidden: return nil
@@ -301,12 +309,26 @@ final class DictationMiniIndicatorController: NSObject {
         let panel = ensurePanel(size: Self.surfaceSize(for: newPresentation))
         panel.ignoresMouseEvents = true
         panel.level = .statusBar
+        // Small bright signals get no compositor shadow: on a light page it reads as a dark
+        // ring around the seed or the completion disk.
+        let wantsShadow = Self.usesCompositorShadow(newPresentation)
+        if panel.hasShadow != wantsShadow {
+            panel.hasShadow = wantsShadow
+            panel.invalidateShadow()
+        }
         contentView?.presentation = newPresentation
         contentView?.animationPhase = 0
         contentView?.updateAccessibilityLabel(Self.accessibilityLabel(for: newPresentation))
         contentView?.needsDisplay = true
+        disappearanceGeneration &+= 1
+        contentView?.cancelDisappearance()
         if let currentFrame {
             panel.setFrame(currentFrame, display: true)
+            if oldPresentation != newPresentation {
+                contentView?.playAppearance(
+                    reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                )
+            }
             panel.orderFrontRegardless()
         } else {
             panel.orderOut(nil)
@@ -514,9 +536,25 @@ final class DictationMiniIndicatorController: NSObject {
         anchorPoint = nil
         anchorScreen = nil
         currentFrame = nil
-        contentView?.presentation = .hidden
         contentView?.updateAccessibilityLabel(nil)
-        panel?.orderOut(nil)
+        orderOutPanel()
+    }
+
+    /// Fades the visible signal out before ordering the panel out; a newer presentation
+    /// cancels the fade and keeps the panel.
+    private func orderOutPanel() {
+        guard let panel, let contentView, panel.isVisible else {
+            contentView?.presentation = .hidden
+            panel?.orderOut(nil)
+            return
+        }
+        disappearanceGeneration &+= 1
+        let generation = disappearanceGeneration
+        contentView.playDisappearance { [weak self] in
+            guard let self, self.disappearanceGeneration == generation, self.presentation == .hidden else { return }
+            self.contentView?.presentation = .hidden
+            self.panel?.orderOut(nil)
+        }
     }
 
     private func refreshAccessibilityPresentation() {
@@ -562,7 +600,9 @@ enum DictationMiniPalette {
     static let orbBottomHex = 0x0E0E0D
     static let accentHex = 0xFF7043
     static let accentHighlightHex = 0xFFB04D
-    static let successHex = 0x62D691
+    /// Vivid completion green; rendered as a tinted glass disk, not a solid fill.
+    static let successHex = 0x48E57B
+    static let successHighlightHex = 0xB6FFCF
     static let failureHex = 0xFF6961
     static let inkHex = 0xF3F2EF
 }
@@ -584,7 +624,13 @@ enum DictationMiniRendering {
     static let processingPointMaxDiameter: CGFloat = 2.3
     static let processingPointMinDiameter: CGFloat = 1.7
     static let preparingDotDiameter: CGFloat = 10
-    static let completionDiameter: CGFloat = 18
+    /// Completion fills the shared 20 pt window as a glass disk.
+    static let completionDiameter: CGFloat = 20
+    static let successGlassTintAlpha: CGFloat = 0.82
+    static let successCheckLineWidth: CGFloat = 1.8
+    static let appearanceFadeDuration: TimeInterval = 0.14
+    static let appearancePopDuration: TimeInterval = 0.26
+    static let disappearanceFadeDuration: TimeInterval = 0.14
 
     /// Maps `AVAudioRecorder` average power to a 0...1 bar level. The floor matches the
     /// recorder's −58 dB speech threshold so anything Muesli treats as speech lifts off the
@@ -739,27 +785,91 @@ private final class DictationMiniView: NSView {
         set { artworkView.needsDisplay = newValue }
     }
 
+    /// A brief pop: fade in with a slight overshoot scale about the signal's centre.
+    /// Reduce Motion keeps the fade and drops the scale.
+    func playAppearance(reduceMotion: Bool) {
+        guard let layer else { return }
+        layer.removeAnimation(forKey: "disappear")
+        layer.removeAnimation(forKey: "appear")
+        layer.opacity = 1
+        layer.transform = CATransform3DIdentity
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = DictationMiniRendering.appearanceFadeDuration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        var animations: [CAAnimation] = [fade]
+        if !reduceMotion {
+            let pop = CAKeyframeAnimation(keyPath: "transform")
+            pop.values = [0.55, 1.06, 1].map { NSValue(caTransform3D: centredScale($0)) }
+            pop.keyTimes = [0, 0.7, 1]
+            pop.timingFunctions = [
+                CAMediaTimingFunction(name: .easeOut),
+                CAMediaTimingFunction(name: .easeInEaseOut),
+            ]
+            pop.duration = DictationMiniRendering.appearancePopDuration
+            animations.append(pop)
+        }
+        let group = CAAnimationGroup()
+        group.animations = animations
+        group.duration = DictationMiniRendering.appearancePopDuration
+        layer.add(group, forKey: "appear")
+    }
+
+    func playDisappearance(completion: @escaping () -> Void) {
+        guard let layer else { completion(); return }
+        layer.removeAnimation(forKey: "appear")
+        CATransaction.begin()
+        CATransaction.setCompletionBlock(completion)
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        fade.duration = DictationMiniRendering.disappearanceFadeDuration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        fade.fillMode = .forwards
+        fade.isRemovedOnCompletion = false
+        layer.add(fade, forKey: "disappear")
+        CATransaction.commit()
+    }
+
+    func cancelDisappearance() {
+        layer?.removeAnimation(forKey: "disappear")
+        layer?.opacity = 1
+    }
+
+    private func centredScale(_ scale: CGFloat) -> CATransform3D {
+        let toOrigin = CATransform3DMakeTranslation(-bounds.midX, -bounds.midY, 0)
+        let back = CATransform3DMakeTranslation(bounds.midX, bounds.midY, 0)
+        return CATransform3DConcat(CATransform3DConcat(toOrigin, CATransform3DMakeScale(scale, scale, 1)), back)
+    }
+
     private func updateSurface() {
         let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
         let usesSurface: Bool
         switch presentation {
-        case .recording, .processing, .failure, .warning:
+        case .recording, .processing, .failure, .warning, .success:
             usesSurface = true
-        case .hidden, .reminder, .preparing, .success:
+        case .hidden, .reminder, .preparing:
             usesSurface = false
         }
         glassView.isHidden = !usesSurface || reduceTransparency
         tintView.isHidden = !usesSurface
+        // Completion sits on a light material so the green reads bright on any page; every
+        // other surface keeps the dark HUD material.
+        let successMaterial = presentation == .success
+        glassView.material = successMaterial ? .popover : .hudWindow
+        glassView.appearance = NSAppearance(named: successMaterial ? .aqua : .darkAqua)
         let radius: CGFloat
         switch presentation {
-        case .processing, .failure:
+        case .processing, .failure, .success:
             radius = bounds.height / 2
         default:
             radius = min(bounds.height / 2, 11)
         }
         layer?.masksToBounds = usesSurface
         layer?.cornerRadius = radius
-        layer?.borderWidth = usesSurface
+        let isSuccess = presentation == .success
+        layer?.borderWidth = usesSurface && !isSuccess
             ? (NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 2 : 1)
             : 0
         layer?.borderColor = NSColor.white.withAlphaComponent(
@@ -773,15 +883,24 @@ private final class DictationMiniView: NSView {
         let tintAlpha = presentation == .recording
             ? DictationMiniRendering.recordingGlassTintAlpha
             : DictationMiniRendering.glassTintAlpha
-        tintView.layer?.backgroundColor = NSColor.colorWith(
-            hex: DictationMiniPalette.glassTintHex,
-            alpha: reduceTransparency ? 1 : tintAlpha
-        ).cgColor
+        if isSuccess {
+            tintView.layer?.backgroundColor = NSColor.colorWith(
+                hex: DictationMiniPalette.successHex,
+                alpha: reduceTransparency ? 1 : DictationMiniRendering.successGlassTintAlpha
+            ).cgColor
+        } else {
+            tintView.layer?.backgroundColor = NSColor.colorWith(
+                hex: DictationMiniPalette.glassTintHex,
+                alpha: reduceTransparency ? 1 : tintAlpha
+            ).cgColor
+        }
     }
 }
 
 private final class DictationMiniCueView: NSView {
     private let diskLayer = CAShapeLayer()
+    private let glossLayer = CAGradientLayer()
+    private let glossMask = CAShapeLayer()
     private let checkLayer = CAShapeLayer()
     private var backingScale: CGFloat = 2
 
@@ -793,10 +912,21 @@ private final class DictationMiniCueView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         diskLayer.shadowOffset = .zero
+        // Glass gel: a light catch on the upper half and a faint shade at the base.
+        glossLayer.colors = [
+            NSColor.white.withAlphaComponent(0.34).cgColor,
+            NSColor.white.withAlphaComponent(0.06).cgColor,
+            NSColor.black.withAlphaComponent(0.10).cgColor,
+        ]
+        glossLayer.locations = [0, 0.55, 1]
+        glossLayer.startPoint = CGPoint(x: 0.5, y: 1)
+        glossLayer.endPoint = CGPoint(x: 0.5, y: 0)
+        glossLayer.mask = glossMask
         checkLayer.fillColor = nil
         checkLayer.lineCap = .round
         checkLayer.lineJoin = .round
         layer?.addSublayer(diskLayer)
+        layer?.addSublayer(glossLayer)
         layer?.addSublayer(checkLayer)
         updateCue()
     }
@@ -812,6 +942,8 @@ private final class DictationMiniCueView: NSView {
     func updateBackingScale(_ scale: CGFloat) {
         backingScale = max(scale, 1)
         diskLayer.contentsScale = backingScale
+        glossLayer.contentsScale = backingScale
+        glossMask.contentsScale = backingScale
         checkLayer.contentsScale = backingScale
         updateCue()
     }
@@ -844,28 +976,31 @@ private final class DictationMiniCueView: NSView {
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        diskLayer.path = CGPath(ellipseIn: diskRect, transform: nil)
-        diskLayer.fillColor = fillColor.cgColor
-        diskLayer.shadowColor = fillColor.withAlphaComponent(0.52).cgColor
-        diskLayer.shadowOpacity = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0.3 : 1
-        diskLayer.shadowRadius = presentation == .preparing ? 4 : 3
-
         if presentation == .success {
-            // Check geometry is expressed as fractions of the disk so the glyph tracks its size.
+            // The green comes from the tinted glass surface underneath; here we only add the
+            // gloss and a small white check. No solid disk, no glow, no edge.
+            diskLayer.isHidden = true
+            glossMask.path = CGPath(ellipseIn: CGRect(origin: .zero, size: diskRect.size), transform: nil)
+            glossLayer.frame = diskRect
+            glossLayer.isHidden = false
             let unit = diameter / 20
             let check = CGMutablePath()
-            check.move(to: CGPoint(x: diskRect.minX + 5.1 * unit, y: diskRect.midY + 0.1 * unit))
-            check.addLine(to: CGPoint(x: diskRect.minX + 8.7 * unit, y: diskRect.minY + 6.4 * unit))
-            check.addLine(to: CGPoint(x: diskRect.minX + 15.3 * unit, y: diskRect.minY + 13.3 * unit))
+            check.move(to: CGPoint(x: diskRect.minX + 6.3 * unit, y: diskRect.midY + 0.1 * unit))
+            check.addLine(to: CGPoint(x: diskRect.minX + 9.0 * unit, y: diskRect.minY + 7.3 * unit))
+            check.addLine(to: CGPoint(x: diskRect.minX + 14.0 * unit, y: diskRect.minY + 12.5 * unit))
             checkLayer.path = check
-            checkLayer.strokeColor = NSColor.colorWith(
-                hex: DictationMiniPalette.orbBottomHex,
-                alpha: 0.92
-            ).cgColor
-            checkLayer.lineWidth = 2.2 * unit
+            checkLayer.strokeColor = NSColor.white.withAlphaComponent(0.97).cgColor
+            checkLayer.lineWidth = DictationMiniRendering.successCheckLineWidth * unit
             checkLayer.isHidden = false
         } else {
+            diskLayer.isHidden = false
+            glossLayer.isHidden = true
             checkLayer.isHidden = true
+            diskLayer.path = CGPath(ellipseIn: diskRect, transform: nil)
+            diskLayer.fillColor = fillColor.cgColor
+            diskLayer.shadowColor = fillColor.withAlphaComponent(0.52).cgColor
+            diskLayer.shadowOpacity = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0.3 : 1
+            diskLayer.shadowRadius = 4
         }
         CATransaction.commit()
     }

@@ -34,16 +34,25 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniPalette.orbBottomHex == 0x0E0E0D)
         #expect(DictationMiniPalette.accentHex == 0xFF7043)
         #expect(DictationMiniPalette.accentHighlightHex == 0xFFB04D)
-        #expect(DictationMiniPalette.successHex == 0x62D691)
+        #expect(DictationMiniPalette.successHex == 0x48E57B)
+        #expect(DictationMiniPalette.successHighlightHex == 0xB6FFCF)
+        #expect(DictationMiniRendering.successGlassTintAlpha == 0.82)
+        #expect(DictationMiniRendering.successCheckLineWidth == 1.8)
         #expect(DictationMiniPalette.failureHex == 0xFF6961)
         #expect(DictationMiniRendering.glassTintAlpha == 0.44)
         #expect(DictationMiniRendering.preparingDotDiameter == 10)
-        #expect(DictationMiniRendering.completionDiameter == 18)
+        #expect(DictationMiniRendering.completionDiameter == 20)
         // The processing field and the completion glow must stay inside the shared 20 pt window.
         let fieldExtent = 2 * DictationMiniRendering.processingPointSpacing
             + DictationMiniRendering.processingPointMaxDiameter
         #expect(fieldExtent * 2 < DictationMiniIndicatorController.signalWindowSide)
-        #expect(DictationMiniRendering.completionDiameter <= DictationMiniIndicatorController.signalWindowSide - 2)
+        #expect(DictationMiniRendering.completionDiameter == DictationMiniIndicatorController.signalWindowSide)
+        // Bright signals carry no compositor shadow (it reads as a dark ring); glass capsules do.
+        #expect(!DictationMiniIndicatorController.usesCompositorShadow(.success))
+        #expect(!DictationMiniIndicatorController.usesCompositorShadow(.preparing))
+        #expect(!DictationMiniIndicatorController.usesCompositorShadow(.reminder))
+        #expect(DictationMiniIndicatorController.usesCompositorShadow(.recording))
+        #expect(DictationMiniIndicatorController.usesCompositorShadow(.processing))
         #expect(DictationMiniRendering.preparingDotDiameter < DictationMiniRendering.completionDiameter)
     }
 
@@ -291,18 +300,22 @@ struct DictationMiniIndicatorTests {
 
     @Test("the reminder gate fires once per focused element with a global cooldown")
     func focusReminderGate() {
-        var gate = DictationFocusReminderGate<String>(cooldown: 1.5)
+        var gate = DictationFocusReminderGate<String>(cooldown: 1.5, repeatInterval: 60)
         let firstFocus = gate.shouldRemind(for: "field-a", at: 10)
         let sameElement = gate.shouldRemind(for: "field-a", at: 10.5)
         let withinCooldown = gate.shouldRemind(for: "field-b", at: 11)
         let afterCooldown = gate.shouldRemind(for: "field-c", at: 13)
         gate.focusLost()
-        let refocusAfterLoss = gate.shouldRemind(for: "field-c", at: 20)
+        let bounceBackTooSoon = gate.shouldRemind(for: "field-c", at: 20)
+        gate.focusLost()
+        let bounceBackMuchLater = gate.shouldRemind(for: "field-c", at: 80)
         #expect(firstFocus)
         #expect(!sameElement)
         #expect(!withinCooldown)
         #expect(afterCooldown)
-        #expect(refocusAfterLoss)
+        #expect(!bounceBackTooSoon)
+        #expect(bounceBackMuchLater)
+        #expect(DictationCaretAnchorProvider.editableTextRoles == ["AXTextField", "AXTextArea", "AXComboBox"])
     }
 
     @Test("accessibility caret rectangles convert into AppKit screen coordinates")
