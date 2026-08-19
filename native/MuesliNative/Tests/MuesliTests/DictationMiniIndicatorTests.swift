@@ -14,7 +14,7 @@ struct DictationMiniIndicatorTests {
     func stateVocabulary() {
         #expect(DictationMiniIndicatorController.surfaceSize(for: .hidden) == .zero)
         let signal = CGSize(width: 20, height: 20)
-        let disc = CGSize(width: 18, height: 18)
+        let disc = CGSize(width: 14, height: 14)
         #expect(DictationMiniIndicatorController.surfaceSize(for: .idle) == disc)
         #expect(DictationMiniIndicatorController.surfaceSize(for: .preparing) == disc)
         #expect(DictationMiniIndicatorController.surfaceSize(for: .recording) == CGSize(width: 58, height: 22))
@@ -42,8 +42,9 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniRendering.successCheckLineWidth == 1.8)
         #expect(DictationMiniPalette.failureHex == 0xFF6961)
         #expect(DictationMiniRendering.glassTintAlpha == 0.44)
-        #expect(DictationMiniRendering.idleCoreDiameter == 4)
-        #expect(DictationMiniRendering.preparingCoreDiameter == 6)
+        #expect(DictationMiniRendering.idleCoreDiameter == 3)
+        #expect(DictationMiniRendering.preparingCoreDiameter == 5)
+        #expect(DictationMiniRendering.discGlassTintAlpha < DictationMiniRendering.recordingGlassTintAlpha)
         #expect(DictationMiniRendering.completionDiameter == 20)
         // The processing field and the completion glow must stay inside the shared 20 pt window.
         let fieldExtent = 2 * DictationMiniRendering.processingPointSpacing
@@ -302,7 +303,7 @@ struct DictationMiniIndicatorTests {
     func idleDotFollower() {
         var announcements: [String] = []
         let controller = makeController(accessibilitySink: { announcements.append($0) })
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .idle) == CGSize(width: 18, height: 18))
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .idle) == CGSize(width: 14, height: 14))
         #expect(DictationMiniIndicatorController.accessibilityLabel(for: .idle) == "Dictation ready")
         let token = AXElementToken(element: AXUIElementCreateSystemWide())
         func sample(_ x: CGFloat, selection: Bool = false) -> DictationTextContextSample {
@@ -330,12 +331,13 @@ struct DictationMiniIndicatorTests {
         controller.updateIdleContext(nil)
         #expect(controller.presentation == .hidden)
 
-        // Typing hides it briefly; it returns on the next sample once the hold lapses.
+        // Typing does not hide it (it follows the caret); scrolling does.
         controller.updateIdleContext(sample(200))
         #expect(controller.presentation == .idle)
         controller.setIdleActivity(DictationFollowerActivity(isTyping: true))
+        #expect(controller.presentation == .idle)
+        controller.setIdleActivity(DictationFollowerActivity(isScrolling: true))
         #expect(controller.presentation == .hidden)
-        #expect(DictationFollowerActivity.typingHold < 1)
         controller.setIdleActivity(DictationFollowerActivity())
         controller.updateIdleContext(sample(200))
         #expect(controller.presentation == .idle)

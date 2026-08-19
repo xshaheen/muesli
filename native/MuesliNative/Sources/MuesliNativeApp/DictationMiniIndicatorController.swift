@@ -495,7 +495,8 @@ final class DictationMiniIndicatorController: NSObject {
     /// appears to jump between states; they are centred on the same anchor.
     static let signalWindowSide: CGFloat = 20
     /// The idle/preparing disc: the same glass object that stretches into the recording capsule.
-    static let discSide: CGFloat = 18
+    /// Sized against a caret, not a cursor: roughly the x-height of body text.
+    static let discSide: CGFloat = 14
 
     static func surfaceSize(for presentation: Presentation) -> CGSize {
         switch presentation {
@@ -924,8 +925,10 @@ enum DictationMiniRendering {
     static let processingPointMaxDiameter: CGFloat = 2.3
     static let processingPointMinDiameter: CGFloat = 1.7
     /// Core inside the idle/preparing disc: a quiet coral point that brightens while preparing.
-    static let idleCoreDiameter: CGFloat = 4
-    static let preparingCoreDiameter: CGFloat = 6
+    static let idleCoreDiameter: CGFloat = 3
+    static let preparingCoreDiameter: CGFloat = 5
+    /// The disc reads as glass: lighter tint than the capsule plus a gel highlight.
+    static let discGlassTintAlpha: CGFloat = 0.46
     /// Completion fills the shared 20 pt window as a glass disk.
     static let completionDiameter: CGFloat = 20
     static let successGlassTintAlpha: CGFloat = 0.82
@@ -1305,8 +1308,10 @@ private final class DictationMiniView: NSView {
         tintView.layer?.cornerCurve = .continuous
         let tintAlpha: CGFloat
         switch presentation {
-        case .recording, .idle, .preparing:
+        case .recording:
             tintAlpha = DictationMiniRendering.recordingGlassTintAlpha
+        case .idle, .preparing:
+            tintAlpha = DictationMiniRendering.discGlassTintAlpha
         default:
             tintAlpha = DictationMiniRendering.glassTintAlpha
         }
@@ -1352,8 +1357,8 @@ private final class DictationMiniCueView: NSView {
         checkLayer.fillColor = nil
         checkLayer.lineCap = .round
         checkLayer.lineJoin = .round
-        layer?.addSublayer(diskLayer)
         layer?.addSublayer(glossLayer)
+        layer?.addSublayer(diskLayer)
         layer?.addSublayer(checkLayer)
         updateCue()
     }
@@ -1426,13 +1431,17 @@ private final class DictationMiniCueView: NSView {
             checkLayer.isHidden = false
         } else {
             diskLayer.isHidden = false
-            glossLayer.isHidden = true
             checkLayer.isHidden = true
+            // The disc's gel highlight spans the whole window (the disc fills it).
+            let discRect = bounds
+            glossMask.path = CGPath(ellipseIn: CGRect(origin: .zero, size: discRect.size), transform: nil)
+            glossLayer.frame = discRect
+            glossLayer.isHidden = false
             diskLayer.path = CGPath(ellipseIn: diskRect, transform: nil)
             diskLayer.fillColor = fillColor.cgColor
             diskLayer.shadowColor = fillColor.withAlphaComponent(presentation == .preparing ? 0.7 : 0.45).cgColor
             diskLayer.shadowOpacity = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0.3 : 1
-            diskLayer.shadowRadius = presentation == .preparing ? 4 : 2.5
+            diskLayer.shadowRadius = presentation == .preparing ? 3.5 : 2
         }
         CATransaction.commit()
     }

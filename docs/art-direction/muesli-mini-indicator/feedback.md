@@ -170,3 +170,11 @@
 - Decided together after a hold: (1) idle/preparing become an 18 pt dark glass disc with a small coral core — the same object that stretches into the recording capsule; (2) keep the hover keycap, the selection hint (a rewrite-selection mode is planned) and the click menu; (3) recording with no field → pointer; idle with no focused text field → hidden; with a caret → under it, slightly left, as measured; (4) eager hotkey start: record at key-down, discard taps silently with the start cue gated until the tap guard passes; (5) keep drag-to-pin.
 - Implemented as one pass: disc look + disc↔capsule↔orb morph (0.16 s), eager start (`HotkeyMonitor.eagerStart`, opt-in so the existing timing tests hold; enabled for the dictation hotkey), gated start cue.
 - Resulting node: `glass-disc-15`.
+
+## 19-08-2026 16:57 UTC — disc tuning from live use
+
+- Shrink: disc 18 → 14 pt (core 3 pt idle / 5 pt preparing) — it read too big against a body-text caret.
+- Glass: disc tint 62 % → 46 % plus a gel highlight, so it reads as glass rather than a black dot; the recording capsule keeps 62 % for bar legibility.
+- Distance: caret gap 3 → 6 pt.
+- Follow: typing no longer hides the disc; it glides with the caret while you type (scrolling, window moves and Space switches still hide it).
+- Node: `glass-disc-15` (tuning).

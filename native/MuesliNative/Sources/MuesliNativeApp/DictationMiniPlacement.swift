@@ -28,7 +28,7 @@ struct DictationMiniPlacement {
     static let movementThreshold: CGFloat = 4
     static let screenEdgeInset: CGFloat = 4
     /// Gap between the caret's bottom edge and the Mini's visible top edge.
-    static let caretGap: CGFloat = 3
+    static let caretGap: CGFloat = 6
     /// Lift used when the Mini must sit above the caret (caret bottom → Mini bottom).
     static let caretLiftAbove: CGFloat = 22
     /// The follower sits a touch left of the caret so it reads as "under the insertion point",

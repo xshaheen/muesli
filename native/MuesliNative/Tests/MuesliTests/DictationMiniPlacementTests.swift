@@ -118,9 +118,9 @@ struct DictationMiniPlacementTests {
         let size = CGSize(width: 20, height: 20)
         let below = DictationMiniPlacement.placeBelowCaret(CGPoint(x: 400, y: 300), size: size, screens: [screen])
         #expect(below?.quadrant == .below)
-        #expect(below?.frame == CGRect(x: 386, y: 277, width: 20, height: 20))
+        #expect(below?.frame == CGRect(x: 386, y: 274, width: 20, height: 20))
         let seed = DictationMiniPlacement.placeBelowCaret(CGPoint(x: 400, y: 300), size: size, screens: [screen], visualInset: 5)
-        #expect(seed?.frame.maxY == 302)
+        #expect(seed?.frame.maxY == 299)
         #expect(seed?.frame.midX == 400 + DictationMiniPlacement.caretHorizontalBias)
 
         let nearBottom = DictationMiniPlacement.placeBelowCaret(CGPoint(x: 400, y: 40), size: size, screens: [screen])

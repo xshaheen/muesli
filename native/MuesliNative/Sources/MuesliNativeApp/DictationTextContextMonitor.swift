@@ -32,7 +32,9 @@ struct DictationFollowerActivity: Equatable {
     var isWindowMoving = false
     var isSwitchingSpace = false
 
-    var isSuppressing: Bool { isTyping || isScrolling || isWindowMoving || isSwitchingSpace }
+    /// Typing does not hide the disc — it follows the caret as you type; scrolling, window moves
+    /// and Space switches do, because the caret geometry is in flux.
+    var isSuppressing: Bool { isScrolling || isWindowMoving || isSwitchingSpace }
 }
 
 /// Pure hysteresis for the idle dot: hold the last caret through brief dropouts and hide only
