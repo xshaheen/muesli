@@ -46,9 +46,10 @@ enum DictationCaretAnchorProvider {
         let anchor: CGPoint
         if let accessibilityRect = caretRect(for: element) {
             anchor = appKitAnchor(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
-        } else if let accessibilityRect = elementRect(element) {
+        } else if copiedInt(element, attribute: kAXNumberOfCharactersAttribute) == 0,
+                  let accessibilityRect = elementRect(element) {
             let converted = appKitRect(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
-            anchor = fallbackAnchor(inAppKitRect: converted, pointer: focusPointerHint)
+            anchor = firstLineAnchor(inAppKitRect: converted)
         } else {
             return nil
         }
@@ -61,20 +62,6 @@ enum DictationCaretAnchorProvider {
             processIdentifier: pid,
             hasSelection: (selection?.length ?? 0) > 0
         )
-    }
-
-    /// The focused window of `pid`, converted to AppKit coordinates.
-    static func focusedWindowFrame(for pid: pid_t) -> CGRect? {
-        guard let primaryMaxY = NSScreen.screens.first?.frame.maxY else { return nil }
-        let application = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(application, 0.05)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &value) == .success,
-              let value, CFGetTypeID(value) == AXUIElementGetTypeID()
-        else { return nil }
-        let window = unsafeBitCast(value, to: AXUIElement.self)
-        guard let rect = elementRect(window) else { return nil }
-        return appKitRect(fromAccessibilityRect: rect, primaryMaxY: primaryMaxY)
     }
 
     static let drillDepthLimit = 2
@@ -122,9 +109,11 @@ enum DictationCaretAnchorProvider {
         if let accessibilityRect = caretRect(for: element) {
             return appKitAnchor(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
         }
-        guard let accessibilityRect = elementRect(element) else { return nil }
+        guard copiedInt(element, attribute: kAXNumberOfCharactersAttribute) == 0,
+              let accessibilityRect = elementRect(element)
+        else { return nil }
         let converted = appKitRect(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
-        return fallbackAnchor(inAppKitRect: converted, pointer: focusPointerHint)
+        return firstLineAnchor(inAppKitRect: converted)
     }
 
     static func appKitRect(fromAccessibilityRect rect: CGRect, primaryMaxY: CGFloat) -> CGRect {
@@ -142,21 +131,9 @@ enum DictationCaretAnchorProvider {
         return CGPoint(x: converted.midX, y: converted.minY)
     }
 
-    /// Where the pointer was when the current text element gained focus (set by the text-context
-    /// monitor). Used only as a one-shot hint for fields without caret bounds; the live pointer is
-    /// never followed.
-    static var focusPointerHint: CGPoint?
-
-    /// Anchor for a field whose caret bounds are unavailable: the focus-time pointer when it
-    /// rests inside the field (the user most likely clicked where they want to type — the
-    /// reference follower's "mouse" tier), otherwise the bottom of the field's first line.
-    static func fallbackAnchor(inAppKitRect converted: CGRect, pointer: CGPoint?) -> CGPoint {
-        if let pointer, converted.insetBy(dx: -2, dy: -2).contains(pointer) {
-            return CGPoint(x: pointer.x, y: max(converted.minY, pointer.y - 10))
-        }
-        return firstLineAnchor(inAppKitRect: converted)
-    }
-
+    /// Anchor for a field whose caret bounds are unavailable but which is known to be empty: the
+    /// caret sits at the start of the first line. Non-empty fields without caret bounds get no
+    /// anchor at all — a wrong position is worse than none, and the pointer is never used.
     static func firstLineAnchor(inAppKitRect converted: CGRect) -> CGPoint {
         CGPoint(
             x: converted.minX + min(8, converted.width / 2),
@@ -246,11 +223,14 @@ enum DictationCaretAnchorProvider {
         return alignedToInsertionLine(candidate, element: element)
     }
 
-    /// Tiers: exact insertion rect → next character → previous character → WebKit text marker.
+    /// Tiers: exact insertion rect → text marker (WebKit/Chromium) → next character → previous character.
     private static func caretRectCandidate(for element: AXUIElement, caretLocation: Int) -> CGRect? {
         if let exact = bounds(element, range: CFRange(location: caretLocation, length: 0)),
            exact.height > 0 {
             return CGRect(x: exact.minX, y: exact.minY, width: 0, height: exact.height)
+        }
+        if let marker = textMarkerCaretRect(for: element) {
+            return marker
         }
         let characterCount = copiedInt(element, attribute: kAXNumberOfCharactersAttribute)
         if characterCount.map({ caretLocation < $0 }) != false,
@@ -262,9 +242,6 @@ enum DictationCaretAnchorProvider {
            let previous = bounds(element, range: CFRange(location: caretLocation - 1, length: 1)),
            previous.height > 0 {
             return CGRect(x: previous.maxX, y: previous.minY, width: 0, height: previous.height)
-        }
-        if let marker = textMarkerCaretRect(for: element) {
-            return marker
         }
         return nil
     }

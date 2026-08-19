@@ -32,9 +32,7 @@ struct DictationFollowerActivity: Equatable {
     var isWindowMoving = false
     var isSwitchingSpace = false
 
-    /// Typing does not hide the disc — it follows the caret as you type; scrolling, window moves
-    /// and Space switches do, because the caret geometry is in flux.
-    var isSuppressing: Bool { isScrolling || isWindowMoving || isSwitchingSpace }
+    var isSuppressing: Bool { isTyping || isScrolling || isWindowMoving || isSwitchingSpace }
 }
 
 /// Pure hysteresis for the idle dot: hold the last caret through brief dropouts and hide only
@@ -75,8 +73,6 @@ final class DictationTextContextMonitor {
     private static let logger = Logger(subsystem: "com.muesli.native", category: "TextContext")
 
     var onSample: ((DictationTextContextSample?) -> Void)?
-    /// The observed app's focused window frame (AppKit coordinates), for window pinning.
-    var onWindowFrame: ((CGRect?, pid_t?) -> Void)?
     var onActivityChanged: ((DictationFollowerActivity) -> Void)?
     var onFocusChanged: (() -> Void)?
     var onEscape: (() -> Void)?
@@ -273,7 +269,6 @@ final class DictationTextContextMonitor {
 
     private func evaluate() {
         guard isRunning else { return }
-        onWindowFrame?(observedProcessIdentifier.flatMap { DictationCaretAnchorProvider.focusedWindowFrame(for: $0) }, observedProcessIdentifier)
         let focus = DictationCaretAnchorProvider.currentEditableFocus()
         let now = ProcessInfo.processInfo.systemUptime
         if now - lastDiagnosticAt > 10 {
@@ -283,7 +278,6 @@ final class DictationTextContextMonitor {
         guard let focus, focus.processIdentifier == observedProcessIdentifier else {
             if lastElement != nil {
                 lastElement = nil
-                DictationCaretAnchorProvider.focusPointerHint = nil
                 onFocusChanged?()
             }
             onSample?(nil)
@@ -292,9 +286,6 @@ final class DictationTextContextMonitor {
         let token = AXElementToken(element: focus.element)
         if lastElement != token {
             lastElement = token
-            // Snapshot the pointer once per newly focused field: a one-shot hint for hosts that
-            // expose no caret bounds. It is deliberately not refreshed while the mouse moves.
-            DictationCaretAnchorProvider.focusPointerHint = NSEvent.mouseLocation
             onFocusChanged?()
         }
         onSample?(DictationTextContextSample(

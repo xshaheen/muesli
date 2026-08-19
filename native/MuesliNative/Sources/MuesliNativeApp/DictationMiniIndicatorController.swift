@@ -52,9 +52,6 @@ final class DictationMiniIndicatorController: NSObject {
     private var idleSnoozedUntil: TimeInterval?
     private var idleHasSelection = false
     private var idleSelectionHintElement: AXElementToken?
-    private var idleWindowFrame: CGRect?
-    private var idleProcessIdentifier: pid_t?
-    private var idlePins: [pid_t: CGPoint] = [:]
     private var idleIsHovered = false
     private var pendingToast: (text: String, duration: TimeInterval)?
     private let hintPanel = DictationMiniHintPanel()
@@ -219,7 +216,6 @@ final class DictationMiniIndicatorController: NSObject {
         case hideForHour
         case turnOff
         case openSettings
-        case unpin
     }
 
     /// Supplies the dictation hotkey label for keycaps, hints and toasts.
@@ -237,14 +233,6 @@ final class DictationMiniIndicatorController: NSObject {
     }
 
     var hintTextForTesting: String? { hintPanel.text }
-    var isIdlePinnedForTesting: Bool { idlePinOffset(for: idleProcessIdentifier) != nil }
-
-    /// The frontmost app's focused window (AppKit coordinates), used for window pinning.
-    func updateIdleWindowFrame(_ frame: CGRect?, processIdentifier: pid_t?) {
-        idleWindowFrame = frame
-        idleProcessIdentifier = processIdentifier
-        if idlePinOffset(for: processIdentifier) != nil { refreshIdleDot() }
-    }
 
     /// Whether the idle dot may show at all (setting, onboarding, no meeting recording).
     var isIdleDotAllowed = false {
@@ -305,7 +293,6 @@ final class DictationMiniIndicatorController: NSObject {
     private func refreshIdleDot() {
         guard presentation == .hidden || presentation == .idle else { return }
         let snoozed = idleSnoozedUntil.map { ProcessInfo.processInfo.systemUptime < $0 } ?? false
-        let pinnedFrame = pinnedIdleFrame()
         let now = ProcessInfo.processInfo.systemUptime
         if now - lastIdleDiagnosticAt > 10 {
             lastIdleDiagnosticAt = now
@@ -315,17 +302,13 @@ final class DictationMiniIndicatorController: NSObject {
             && !idleActivity.isSuppressing
             && !idleHiddenUntilFocusChange
             && !snoozed
-            && (idleAnchor != nil || pinnedFrame != nil)
-        guard canShow, let anchor = idleAnchor ?? pinnedFrame.map({ CGPoint(x: $0.midX, y: $0.midY) }) else {
+            && idleAnchor != nil
+        guard canShow, let anchor = idleAnchor else {
             if presentation == .idle { hide(invalidateGeneration: true) }
             return
         }
         if presentation == .idle {
-            if let pinnedFrame {
-                moveIdleDot(toFrame: pinnedFrame)
-            } else {
-                moveIdleDot(to: anchor)
-            }
+            moveIdleDot(to: anchor)
             return
         }
         generation &+= 1
@@ -336,29 +319,8 @@ final class DictationMiniIndicatorController: NSObject {
         stopAnimation(clearPowerProvider: true)
         anchorPoint = anchor
         anchorScreen = nil
-        currentFrame = pinnedFrame
+        currentFrame = nil
         present(.idle, generation: token, followsCaret: false)
-    }
-
-    /// Frame for a dot pinned to the frontmost app's focused window, if pinned and known.
-    private func pinnedIdleFrame() -> CGRect? {
-        guard let offset = idlePinOffset(for: idleProcessIdentifier), let window = idleWindowFrame else { return nil }
-        let size = Self.surfaceSize(for: .idle)
-        let raw = CGRect(x: window.minX + offset.x, y: window.maxY + offset.y, width: size.width, height: size.height)
-        return DictationMiniPlacement.rehomeFrozenFrame(raw, screens: screenProvider()) ?? raw
-    }
-
-    private func idlePinOffset(for pid: pid_t?) -> CGPoint? {
-        guard let pid else { return nil }
-        return idlePins[pid]
-    }
-
-    private func moveIdleDot(toFrame frame: CGRect) {
-        guard currentFrame != frame else { return }
-        currentFrame = frame
-        anchorPoint = CGPoint(x: frame.midX, y: frame.midY)
-        panel?.setFrame(frame, display: true)
-        panel?.orderFrontRegardless()
     }
 
     private func moveIdleDot(to anchor: CGPoint) {
@@ -414,7 +376,6 @@ final class DictationMiniIndicatorController: NSObject {
     func idleClicked() {
         guard presentation == .idle, let panel else { return }
         let menu = NSMenu()
-        let pinned = idlePinOffset(for: idleProcessIdentifier) != nil
         func item(_ title: String, _ action: IdleMenuAction) -> NSMenuItem {
             let item = NSMenuItem(title: title, action: #selector(handleIdleMenuItem(_:)), keyEquivalent: "")
             item.target = self
@@ -423,7 +384,6 @@ final class DictationMiniIndicatorController: NSObject {
         }
         menu.addItem(item("Hide until I switch fields", .hideUntilFieldChanges))
         menu.addItem(item("Hide for an hour", .hideForHour))
-        if pinned { menu.addItem(item("Unpin from window", .unpin)) }
         menu.addItem(.separator())
         menu.addItem(item("Turn off idle dot", .turnOff))
         menu.addItem(item("Open Settings…", .openSettings))
@@ -436,31 +396,9 @@ final class DictationMiniIndicatorController: NSObject {
         switch box.action {
         case .hideUntilFieldChanges: hideIdleDotUntilFocusChanges()
         case .hideForHour: snoozeIdleDot(for: 3600)
-        case .unpin:
-            if let pid = idleProcessIdentifier { idlePins[pid] = nil }
-            refreshIdleDot()
         case .turnOff, .openSettings: break
         }
         onIdleMenuAction?(box.action)
-    }
-
-    func idleDragged(to origin: CGPoint) {
-        guard presentation == .idle, let panel else { return }
-        let size = panel.frame.size
-        let frame = DictationMiniPlacement.rehomeFrozenFrame(CGRect(origin: origin, size: size), screens: screenProvider())
-            ?? CGRect(origin: origin, size: size)
-        currentFrame = frame
-        panel.setFrame(frame, display: true)
-        hintPanel.hide()
-    }
-
-    /// Dropping the dot pins it to the frontmost app's focused window as an offset from the
-    /// window's top-left; it then rides with that window until unpinned.
-    func idleDragEnded() {
-        guard presentation == .idle, let currentFrame else { return }
-        guard let pid = idleProcessIdentifier, let window = idleWindowFrame else { return }
-        idlePins[pid] = CGPoint(x: currentFrame.minX - window.minX, y: currentFrame.minY - window.maxY)
-        refreshIdleDot()
     }
 
     /// Neutral completion/cancellation. A terminal hold owns its own dismissal.
@@ -654,10 +592,6 @@ final class DictationMiniIndicatorController: NSObject {
     }
 
     private func placeFrozenSurface(size: CGSize) {
-        if presentation == .idle, let pinned = pinnedIdleFrame() {
-            currentFrame = pinned
-            return
-        }
         // Hold the session anchor, not the previous frame: a 20 pt signal placed against the
         // same caret anchor lands exactly where Preparing appeared, whatever size Recording was.
         if let anchor = anchorPoint,
@@ -1077,8 +1011,6 @@ private final class DictationMiniView: NSView {
     weak var owner: DictationMiniIndicatorController?
     private var trackingAreaRef: NSTrackingArea?
     private var mouseDownScreenLocation: NSPoint?
-    private var mouseDownWindowOrigin: NSPoint?
-    private var didDrag = false
     private let glassView = NSVisualEffectView()
     private let tintView = NSView()
     private let waveformView = DictationMiniWaveformView()
@@ -1176,22 +1108,15 @@ private final class DictationMiniView: NSView {
     override func mouseExited(with event: NSEvent) { owner?.idleHoverChanged(false) }
 
     override func mouseDown(with event: NSEvent) {
-        didDrag = false
         mouseDownScreenLocation = NSEvent.mouseLocation
-        mouseDownWindowOrigin = window?.frame.origin
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        guard let start = mouseDownScreenLocation, let origin = mouseDownWindowOrigin else { return }
-        let current = NSEvent.mouseLocation
-        guard didDrag || hypot(current.x - start.x, current.y - start.y) >= 5 else { return }
-        didDrag = true
-        owner?.idleDragged(to: CGPoint(x: origin.x + current.x - start.x, y: origin.y + current.y - start.y))
     }
 
     override func mouseUp(with event: NSEvent) {
-        defer { mouseDownScreenLocation = nil; mouseDownWindowOrigin = nil; didDrag = false }
-        if didDrag { owner?.idleDragEnded() } else { owner?.idleClicked() }
+        defer { mouseDownScreenLocation = nil }
+        guard let start = mouseDownScreenLocation else { return }
+        let current = NSEvent.mouseLocation
+        // A click opens the menu; a drag is ignored (the disc follows the caret, not the mouse).
+        if hypot(current.x - start.x, current.y - start.y) < 5 { owner?.idleClicked() }
     }
 
     override func viewDidChangeBackingProperties() {

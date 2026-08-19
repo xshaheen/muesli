@@ -849,9 +849,6 @@ final class MuesliController: NSObject {
         dictationTextContextMonitor.onEscape = { [weak self] in
             self?.dictationMiniIndicator.hideIdleDotUntilFocusChanges()
         }
-        dictationTextContextMonitor.onWindowFrame = { [weak self] frame, pid in
-            self?.dictationMiniIndicator.updateIdleWindowFrame(frame, processIdentifier: pid)
-        }
         dictationMiniIndicator.hotkeyLabelProvider = { [weak self] in
             self?.config.dictationHotkey.label ?? "the hotkey"
         }
@@ -862,7 +859,7 @@ final class MuesliController: NSObject {
                 self.updateConfig { $0.showDictationIdleDot = false }
             case .openSettings:
                 self.openSettingsTab()
-            case .hideUntilFieldChanges, .hideForHour, .unpin:
+            case .hideUntilFieldChanges, .hideForHour:
                 break
             }
         }

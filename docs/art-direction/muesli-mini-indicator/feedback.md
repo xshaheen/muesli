@@ -183,3 +183,10 @@
 
 - Fix (live feedback: "it follows the mouse"): in hosts without caret bounds the pointer is sampled once when the field gains focus (where you clicked) and held; the live pointer is never followed.
 - Glass: disc tint back to 60 % per request.
+
+## 19-08-2026 17:06 UTC — back to the reference on typing, no pinning, no pointer anchors
+
+- Hide while typing again (0.7 s hold), as the reference does.
+- Remove drag-to-pin; a click still opens the menu, a drag does nothing.
+- Never anchor to the pointer: a field without caret bounds shows the disc only when it is empty (its first line is the caret); otherwise the disc stays hidden rather than guessing. Text markers are tried before character tiers so web engines resolve the caret reliably.
+- Node: `glass-disc-15` (tuning).
