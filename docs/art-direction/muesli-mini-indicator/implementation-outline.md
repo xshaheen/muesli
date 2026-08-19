@@ -16,10 +16,11 @@ This is a source-grounded outline, not an implementation plan artifact. It inten
 | Muesli state | Mini presentation | Lifetime |
 |---|---|---|
 | Idle | No panel by default | Indefinite |
-| Preparing | 14 pt accent seed | Up to 180 ms before morphing |
+| Reminder | 10 pt accent seed beside a newly focused caret | 3 s, or until a session/focus change |
+| Preparing | 10 pt accent seed in a 20 pt window | Up to 180 ms before morphing |
 | Recording | 58 × 22 pt low dark glass capsule with a 24 × 1 pt scrolling history waveform | Until hotkey release/cancel |
-| Transcribing | 38 pt animated transcription orb | Until completion/error |
-| Complete | 12 pt green confirmation spark | About 120 ms, then fade |
+| Transcribing | 20 pt animated transcription orb at the held anchor | Until completion/error |
+| Complete | 18 pt green checked disk at the held anchor | About 350 ms |
 | Warning/error | Compact labeled capsule | Long enough to read or until replaced |
 
 ## Audio contract
@@ -47,7 +48,7 @@ This is a source-grounded outline, not an implementation plan artifact. It inten
 4. If it does not fit, try lower-right, upper-left, then upper-right before clamping.
 5. Poll at roughly 10 Hz while preparing or recording and reacquire after 4 pt of caret movement or a display transition.
 6. If selected-range bounds are unavailable, use the focused element frame as a contextual fallback; if neither is available, keep the Mini hidden until an anchor resolves.
-7. Freeze the final anchor through processing. For success or failure, reacquire the post-insertion caret once and freeze for the terminal dwell.
+7. Hold the final anchor through processing, success, and failure; place each against that anchor with the Preparing quadrant rule so the signal never moves after recording ends.
 
 The exact distance and timing values remain tuning hypotheses. They should be measured during dogfooding rather than treated as Monologue parity claims.
 

@@ -109,3 +109,15 @@
 - Soften: the reference's steel-cyan is not adopted; palette ownership stays with Contextual Spark.
 - Preserve: Preparing, Processing, Complete, Failure, caret placement, lifecycle sounds, and the independent meeting panel.
 - Resulting node: `recording-wave-10` (rejected sibling recorded as `wide-warm-field-rejected`).
+
+## 19-08-2026 09:54 UTC — compact signal, reminder, and meeting Record pill
+
+- Shrink: Preparing from a 14 pt to a 10 pt coral seed.
+- Unify: Processing (28 → 20 pt orb), Complete (20 → 18 pt disk) and Failure (22 → 20 pt) in one shared 20 pt window.
+- Hold: Processing, Complete and Failure are placed against the held caret anchor with the same quadrant rule as Preparing, so they appear exactly where Preparing appeared; the post-insertion caret reacquire is dropped. Recording keeps following the caret.
+- Add: a three-second focus reminder — the Preparing seed appears beside a newly focused text caret to remind the user that dictation is available; one per focused field, 1.5 s cooldown, never inside Muesli, never during a session, never announced; setting "Dictation reminder in text fields" (on by default).
+- Return: the floating button for meetings only as a compact Record pill shown while a meeting app is actively in use; one click starts recording and hands off in place to the Meeting Recording Panel; ⌥/right-click hides it for the current meeting; setting "Floating Record button" (on by default, requires meeting detection).
+- Restyle: the pill uses the Contextual Spark glass (#211f1e @ 62 %), coral record dot with amber core, ink label, hover/pressed states, shared saved position with the panel.
+- Preserve: recording-wave-10, lifecycle sounds, and the dictation/meeting surface boundary.
+- Resulting nodes: `compact-signal-11`, `meeting-record-pill-12`.
+- Shrink (live feedback: "it too big"): the pill from 98 × 28 pt to 72 × 22 pt — the Mini's capsule height — with an 8 pt dot and 11 pt label.

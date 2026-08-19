@@ -6,6 +6,37 @@ import ApplicationServices
 /// into AppKit's global bottom-left coordinate space before placement.
 @MainActor
 enum DictationCaretAnchorProvider {
+    /// A focused editable text element and its resolved caret anchor.
+    struct EditableFocus {
+        let anchor: CGPoint
+        let element: AXUIElement
+        let processIdentifier: pid_t
+
+        func isSameElement(as other: EditableFocus?) -> Bool {
+            guard let other else { return false }
+            return CFEqual(element, other.element)
+        }
+    }
+
+    /// Resolves the focused element only when it exposes a real insertion caret (a selected
+    /// text range with bounds). Buttons and other non-text controls return nil, unlike
+    /// `currentAnchor()`, which falls back to the focused element frame.
+    static func currentEditableFocus() -> EditableFocus? {
+        guard AXIsProcessTrusted(),
+              let primaryMaxY = NSScreen.screens.first?.frame.maxY,
+              let element = focusedElement()
+        else { return nil }
+        AXUIElementSetMessagingTimeout(element, 0.08)
+        guard let accessibilityRect = caretRect(for: element) else { return nil }
+        var pid: pid_t = 0
+        AXUIElementGetPid(element, &pid)
+        return EditableFocus(
+            anchor: appKitAnchor(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY),
+            element: element,
+            processIdentifier: pid
+        )
+    }
+
     static func currentAnchor() -> CGPoint? {
         guard AXIsProcessTrusted(),
               let primaryMaxY = NSScreen.screens.first?.frame.maxY,

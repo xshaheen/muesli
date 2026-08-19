@@ -9,6 +9,9 @@ final class DictationMiniIndicatorController: NSObject {
 
     enum Presentation: Equatable {
         case hidden
+        /// A brief, surface-free nudge that dictation is available in the focused field.
+        /// Visually identical to `preparing`; never announced; yields to any real session.
+        case reminder
         case preparing
         case recording
         case processing
@@ -175,7 +178,7 @@ final class DictationMiniIndicatorController: NSObject {
         at anchor: CGPoint? = nil,
         duration: TimeInterval = 3
     ) -> Generation? {
-        guard presentation == .hidden || isWarning(presentation) else { return nil }
+        guard presentation == .hidden || presentation == .reminder || isWarning(presentation) else { return nil }
         generation &+= 1
         let token = Generation(rawValue: generation)
         activeGeneration = token
@@ -187,6 +190,29 @@ final class DictationMiniIndicatorController: NSObject {
         present(.warning(normalized), generation: token, followsCaret: false)
         scheduleDismissal(generation: token, duration: duration)
         return token
+    }
+
+    /// Briefly shows the Preparing signal beside a newly focused caret as a nudge that
+    /// dictation is available. Only shows while idle; any real session or warning takes over.
+    @discardableResult
+    func showReminder(at anchor: CGPoint? = nil, duration: TimeInterval = 3) -> Generation? {
+        guard presentation == .hidden || presentation == .reminder else { return nil }
+        generation &+= 1
+        let token = Generation(rawValue: generation)
+        activeGeneration = token
+        dismissTask?.cancel()
+        stopAnimation(clearPowerProvider: true)
+        anchorPoint = anchor ?? caretAnchorProvider()
+        anchorScreen = nil
+        currentFrame = nil
+        present(.reminder, generation: token, followsCaret: false)
+        scheduleDismissal(generation: token, duration: duration)
+        return token
+    }
+
+    func dismissReminder() {
+        guard presentation == .reminder else { return }
+        hide(invalidateGeneration: true)
     }
 
     /// Neutral completion/cancellation. A terminal hold owns its own dismissal.
@@ -216,14 +242,16 @@ final class DictationMiniIndicatorController: NSObject {
     func refreshCaretAnchorForTesting() { reacquireCaretIfNeeded() }
     static func processingAnimationIsContinuous(reduceMotion: Bool) -> Bool { !reduceMotion }
 
+    /// Preparing, processing, success, and failure share one footprint so the session never
+    /// appears to jump between states; they are centred on the same anchor.
+    static let signalWindowSide: CGFloat = 20
+
     static func surfaceSize(for presentation: Presentation) -> CGSize {
         switch presentation {
         case .hidden: return .zero
-        case .preparing: return CGSize(width: 24, height: 24)
+        case .reminder, .preparing, .processing, .success, .failure:
+            return CGSize(width: Self.signalWindowSide, height: Self.signalWindowSide)
         case .recording: return CGSize(width: 58, height: 22)
-        case .processing: return CGSize(width: 28, height: 28)
-        case .success: return CGSize(width: 24, height: 24)
-        case .failure: return CGSize(width: 22, height: 22)
         case .warning(let text):
             return CGSize(width: min(max(CGFloat(text.count) * 6.4 + 34, 96), 320), height: 26)
         }
@@ -232,6 +260,7 @@ final class DictationMiniIndicatorController: NSObject {
     static func accessibilityLabel(for presentation: Presentation) -> String? {
         switch presentation {
         case .hidden: return nil
+        case .reminder: return "Dictation ready"
         case .preparing: return "Preparing dictation"
         case .recording: return "Recording dictation"
         case .processing: return "Generating transcription"
@@ -247,12 +276,8 @@ final class DictationMiniIndicatorController: NSObject {
         duration: TimeInterval
     ) {
         guard accepts(token) else { return }
-        if let liveAnchor = caretAnchorProvider() {
-            anchorPoint = liveAnchor
-            anchorScreen = nil
-            currentFrame = nil
-            placeFollowingSurface(size: Self.surfaceSize(for: terminal))
-        }
+        // Terminal states hold the session anchor: the user looks where Preparing appeared,
+        // not at wherever the caret landed after insertion.
         present(terminal, generation: token, followsCaret: false)
         scheduleDismissal(generation: token, duration: duration)
     }
@@ -308,6 +333,19 @@ final class DictationMiniIndicatorController: NSObject {
     }
 
     private func placeFrozenSurface(size: CGSize) {
+        // Hold the session anchor, not the previous frame: a 20 pt signal placed against the
+        // same caret anchor lands exactly where Preparing appeared, whatever size Recording was.
+        if let anchor = anchorPoint,
+           let result = DictationMiniPlacement.place(
+               near: anchor,
+               size: size,
+               screens: screenProvider(),
+               clearance: caretClearanceProvider()
+           ) {
+            anchorScreen = result.screen
+            currentFrame = result.frame
+            return
+        }
         if let currentFrame {
             let resized = CGRect(
                 x: currentFrame.midX - size.width / 2,
@@ -394,7 +432,7 @@ final class DictationMiniIndicatorController: NSObject {
         case .preparing, .recording:
             anchorPoint = caretAnchorProvider() ?? anchorPoint
             placeFollowingSurface(size: Self.surfaceSize(for: presentation))
-        case .processing, .success, .failure, .warning:
+        case .reminder, .processing, .success, .failure, .warning:
             guard let currentFrame else { return }
             self.currentFrame = DictationMiniPlacement.rehomeFrozenFrame(currentFrame, screens: screenProvider())
         case .hidden:
@@ -506,7 +544,7 @@ final class DictationMiniIndicatorController: NSObject {
 
     private static func accessibilityAnnouncement(for presentation: Presentation) -> String? {
         switch presentation {
-        case .hidden, .preparing:
+        case .hidden, .reminder, .preparing:
             return nil
         case .warning(let message):
             return message
@@ -541,8 +579,12 @@ enum DictationMiniRendering {
     /// History advances at 30 Hz: 24 bars hold the last 0.8 s of speech.
     static let recordingSampleInterval: TimeInterval = 1 / 30
     static let recordingTailAlpha: CGFloat = 0.42
-    static let preparingDotDiameter: CGFloat = 14
-    static let completionDiameter: CGFloat = 20
+    /// Processing point field inside the 20 pt orb: five columns span 11.2 pt plus dot radii.
+    static let processingPointSpacing: CGFloat = 2.8
+    static let processingPointMaxDiameter: CGFloat = 2.3
+    static let processingPointMinDiameter: CGFloat = 1.7
+    static let preparingDotDiameter: CGFloat = 10
+    static let completionDiameter: CGFloat = 18
 
     /// Maps `AVAudioRecorder` average power to a 0...1 bar level. The floor matches the
     /// recorder's −58 dB speech threshold so anything Muesli treats as speech lifts off the
@@ -703,7 +745,7 @@ private final class DictationMiniView: NSView {
         switch presentation {
         case .recording, .processing, .failure, .warning:
             usesSurface = true
-        case .hidden, .preparing, .success:
+        case .hidden, .reminder, .preparing, .success:
             usesSurface = false
         }
         glassView.isHidden = !usesSurface || reduceTransparency
@@ -782,7 +824,7 @@ private final class DictationMiniCueView: NSView {
         let diameter: CGFloat
         let fillColor: NSColor
         switch presentation {
-        case .preparing:
+        case .preparing, .reminder:
             diameter = DictationMiniRendering.preparingDotDiameter
             fillColor = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
         case .success:
@@ -806,19 +848,21 @@ private final class DictationMiniCueView: NSView {
         diskLayer.fillColor = fillColor.cgColor
         diskLayer.shadowColor = fillColor.withAlphaComponent(0.52).cgColor
         diskLayer.shadowOpacity = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0.3 : 1
-        diskLayer.shadowRadius = presentation == .preparing ? 5 : 4
+        diskLayer.shadowRadius = presentation == .preparing ? 4 : 3
 
         if presentation == .success {
+            // Check geometry is expressed as fractions of the disk so the glyph tracks its size.
+            let unit = diameter / 20
             let check = CGMutablePath()
-            check.move(to: CGPoint(x: diskRect.minX + 5.1, y: diskRect.midY + 0.1))
-            check.addLine(to: CGPoint(x: diskRect.minX + 8.7, y: diskRect.minY + 6.4))
-            check.addLine(to: CGPoint(x: diskRect.minX + 15.3, y: diskRect.minY + 13.3))
+            check.move(to: CGPoint(x: diskRect.minX + 5.1 * unit, y: diskRect.midY + 0.1 * unit))
+            check.addLine(to: CGPoint(x: diskRect.minX + 8.7 * unit, y: diskRect.minY + 6.4 * unit))
+            check.addLine(to: CGPoint(x: diskRect.minX + 15.3 * unit, y: diskRect.minY + 13.3 * unit))
             checkLayer.path = check
             checkLayer.strokeColor = NSColor.colorWith(
                 hex: DictationMiniPalette.orbBottomHex,
                 alpha: 0.92
             ).cgColor
-            checkLayer.lineWidth = 2.2
+            checkLayer.lineWidth = 2.2 * unit
             checkLayer.isHidden = false
         } else {
             checkLayer.isHidden = true
@@ -1013,11 +1057,14 @@ private final class DictationMiniPointFieldView: NSView {
     }
 
     private func updateDotGeometry() {
-        let spacing: CGFloat = 3.5
+        let spacing = DictationMiniRendering.processingPointSpacing
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for (definition, dot) in zip(points, dots) {
-            let diameter = max(2, 2.7 - definition.distance * 0.16)
+            let diameter = max(
+                DictationMiniRendering.processingPointMinDiameter,
+                DictationMiniRendering.processingPointMaxDiameter - definition.distance * 0.14
+            )
             let size = CGSize(width: diameter, height: diameter)
             dot.bounds = CGRect(origin: .zero, size: size)
             dot.position = CGPoint(
@@ -1073,7 +1120,7 @@ private final class DictationMiniArtworkView: NSView {
             context.interpolationQuality = .high
         }
         switch presentation {
-        case .preparing:
+        case .preparing, .reminder:
             break
         case .recording:
             break
@@ -1092,17 +1139,23 @@ private final class DictationMiniArtworkView: NSView {
 
     private func drawFailure() {
         let color = NSColor.colorWith(hex: DictationMiniPalette.failureHex, alpha: 1)
+        let side = min(bounds.width, bounds.height)
+        let inset = (side * 0.15).rounded()
         color.withAlphaComponent(0.20).setFill()
-        NSBezierPath(ovalIn: bounds.insetBy(dx: 4, dy: 4)).fill()
+        NSBezierPath(ovalIn: bounds.insetBy(dx: inset, dy: inset)).fill()
         color.setStroke()
+        let low = bounds.midX - side * 0.18
+        let high = bounds.midX + side * 0.18
+        let bottom = bounds.midY - side * 0.18
+        let top = bounds.midY + side * 0.18
         for endpoints in [
-            (CGPoint(x: 7, y: 7), CGPoint(x: 15, y: 15)),
-            (CGPoint(x: 15, y: 7), CGPoint(x: 7, y: 15)),
+            (CGPoint(x: low, y: bottom), CGPoint(x: high, y: top)),
+            (CGPoint(x: high, y: bottom), CGPoint(x: low, y: top)),
         ] {
             let path = NSBezierPath()
             path.move(to: endpoints.0)
             path.line(to: endpoints.1)
-            path.lineWidth = 2
+            path.lineWidth = max(1.6, side * 0.09)
             path.lineCapStyle = .round
             path.stroke()
         }

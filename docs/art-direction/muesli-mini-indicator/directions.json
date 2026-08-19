@@ -341,6 +341,65 @@
         "generated_at_utc": "2026-08-19T09:19:12Z",
         "remote_service_disclosure": "none"
       }
+    },
+    {
+      "id": "compact-signal-11",
+      "parents": [
+        "recording-wave-10"
+      ],
+      "round": 11,
+      "mode": "iterate",
+      "thesis": "Preparing, processing, completion and failure should share one compact 20 pt footprint anchored to the same caret position, and the Preparing seed should double as a brief focus reminder that dictation is available.",
+      "anchors": [
+        "user request for a smaller Preparing seed and equal-size processing/success at the Preparing position",
+        "user request to show the Preparing signal for three seconds when a caret gains focus",
+        "recording-wave-10 palette, glass and placement rules",
+        "Accessibility focused-element change notifications"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/compact-signal-11.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T09:54:39Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T09:54:39Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "meeting-record-pill-12",
+      "parents": [
+        "split-surfaces-05",
+        "recording-wave-10"
+      ],
+      "round": 12,
+      "mode": "iterate",
+      "thesis": "The floating button returns for meetings only: a compact Contextual Spark Record pill that appears while a meeting app is active, starts recording with one click, and hands off in place to the Meeting Recording Panel.",
+      "anchors": [
+        "user request to bring back the floating button for meetings only with a better look and colors",
+        "split-surfaces-05 boundary: meeting chrome never shares state with the dictation Mini",
+        "existing MeetingMonitor activity candidate and Meeting Recording Panel saved center",
+        "recording-wave-10 glass and palette"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/meeting-record-pill-12.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T09:54:39Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T09:54:39Z",
+        "remote_service_disclosure": "none"
+      }
     }
   ],
   "decisions": [
@@ -420,6 +479,20 @@
       "operation": "keep the 58 by 22 footprint and glass recipe; darken the recording tint to 62 percent; replace five glowing 2-point bars with twenty-four crisp 1-point bars scrolling as a 30 Hz history with an amber live edge, muted tail, and one ambient halo",
       "feedback_ref": "feedback.md#19-08-2026-0919-utc--recording-wave-on-a-low-dark-glass",
       "decided_at_utc": "2026-08-19T09:19:12Z"
+    },
+    {
+      "from": "recording-wave-10",
+      "to": "compact-signal-11",
+      "operation": "shrink Preparing to 10 pt; unify processing/success/failure in a shared 20 pt window placed against the held caret anchor; add a 3 s focus reminder using the Preparing seed",
+      "feedback_ref": "feedback.md#19-08-2026-0954-utc--compact-signal-reminder-and-meeting-record-pill",
+      "decided_at_utc": "2026-08-19T09:54:39Z"
+    },
+    {
+      "from": "split-surfaces-05",
+      "to": "meeting-record-pill-12",
+      "operation": "reintroduce a meeting-only floating Record pill shown during detected meeting activity, restyled in the Contextual Spark glass palette, handing off to the Meeting Recording Panel",
+      "feedback_ref": "feedback.md#19-08-2026-0954-utc--compact-signal-reminder-and-meeting-record-pill",
+      "decided_at_utc": "2026-08-19T09:54:39Z"
     }
   ]
 }

@@ -1743,6 +1743,10 @@ struct AppConfig: Codable {
     var launchAtLogin: Bool = false
     var openDashboardOnLaunch: Bool = true
     var showFloatingIndicator: Bool = true
+    /// Briefly shows the Dictation Mini seed beside a newly focused text caret.
+    var showDictationFocusReminder: Bool = true
+    /// Floating Record pill shown while a meeting app is active (requires meeting detection).
+    var showMeetingRecordButton: Bool = true
     var showHotkeyOnFloatingIndicator: Bool = false
     var indicatorAnchor: IndicatorAnchor = .midTrailing
     var dashboardWindowFrame: WindowFrame? = nil
@@ -1900,6 +1904,8 @@ struct AppConfig: Codable {
         case launchAtLogin = "launch_at_login"
         case openDashboardOnLaunch = "open_dashboard_on_launch"
         case showFloatingIndicator = "show_floating_indicator"
+        case showDictationFocusReminder = "show_dictation_focus_reminder"
+        case showMeetingRecordButton = "show_meeting_record_button"
         case showHotkeyOnFloatingIndicator = "show_hotkey_on_floating_indicator"
         case indicatorAnchor = "indicator_anchor"
         case dashboardWindowFrame = "dashboard_window_frame"
@@ -2094,6 +2100,12 @@ struct AppConfig: Codable {
         launchAtLogin = (try? c.decode(Bool.self, forKey: .launchAtLogin)) ?? defaults.launchAtLogin
         openDashboardOnLaunch = (try? c.decode(Bool.self, forKey: .openDashboardOnLaunch)) ?? defaults.openDashboardOnLaunch
         showFloatingIndicator = (try? c.decode(Bool.self, forKey: .showFloatingIndicator)) ?? defaults.showFloatingIndicator
+        showDictationFocusReminder =
+            (try? c.decode(Bool.self, forKey: .showDictationFocusReminder))
+            ?? defaults.showDictationFocusReminder
+        showMeetingRecordButton =
+            (try? c.decode(Bool.self, forKey: .showMeetingRecordButton))
+            ?? defaults.showMeetingRecordButton
         showHotkeyOnFloatingIndicator =
             (try? c.decode(Bool.self, forKey: .showHotkeyOnFloatingIndicator))
             ?? defaults.showHotkeyOnFloatingIndicator

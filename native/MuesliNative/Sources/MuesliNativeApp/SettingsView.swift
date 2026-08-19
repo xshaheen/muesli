@@ -1552,6 +1552,13 @@ struct SettingsView: View {
                     }
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Floating Record button") {
+                    settingsSwitch(isOn: appState.config.showMeetingRecordButton) { newValue in
+                        controller.updateConfig { $0.showMeetingRecordButton = newValue }
+                    }
+                }
+                settingsDescription("Shows a small Record pill while a meeting app is active. One click starts recording; drag to move. Requires meeting detection.")
+                Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Save meeting recording") {
                     settingsMenu(
                         selection: recordingSaveLabel(for: appState.config.meetingRecordingSavePolicy),
@@ -1728,6 +1735,13 @@ struct SettingsView: View {
                         controller.updateConfig { $0.soundEnabled = newValue }
                     }
                 }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Dictation reminder in text fields") {
+                    settingsSwitch(isOn: appState.config.showDictationFocusReminder) { newValue in
+                        controller.updateConfig { $0.showDictationFocusReminder = newValue }
+                    }
+                }
+                settingsDescription("Briefly shows the dictation dot beside the caret when a text field gains focus.")
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Show next meeting in menu bar") {
                     settingsSwitch(isOn: appState.config.showNextMeetingInMenuBar) { newValue in

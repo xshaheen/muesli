@@ -13,11 +13,12 @@ struct DictationMiniIndicatorTests {
     @Test("idle owns no visible surface and states use the approved footprints")
     func stateVocabulary() {
         #expect(DictationMiniIndicatorController.surfaceSize(for: .hidden) == .zero)
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .preparing) == CGSize(width: 24, height: 24))
+        let signal = CGSize(width: 20, height: 20)
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .preparing) == signal)
         #expect(DictationMiniIndicatorController.surfaceSize(for: .recording) == CGSize(width: 58, height: 22))
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .processing) == CGSize(width: 28, height: 28))
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .success) == CGSize(width: 24, height: 24))
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .failure) == CGSize(width: 22, height: 22))
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .processing) == signal)
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .success) == signal)
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .failure) == signal)
         #expect(DictationMiniIndicatorController.accessibilityLabel(for: .recording) == "Recording dictation")
         #expect(DictationMiniIndicatorController.accessibilityLabel(for: .processing) == "Generating transcription")
         #expect(DictationMiniIndicatorController.accessibilityLabel(for: .success) == "Dictation complete")
@@ -36,8 +37,14 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniPalette.successHex == 0x62D691)
         #expect(DictationMiniPalette.failureHex == 0xFF6961)
         #expect(DictationMiniRendering.glassTintAlpha == 0.44)
-        #expect(DictationMiniRendering.preparingDotDiameter == 14)
-        #expect(DictationMiniRendering.completionDiameter == 20)
+        #expect(DictationMiniRendering.preparingDotDiameter == 10)
+        #expect(DictationMiniRendering.completionDiameter == 18)
+        // The processing field and the completion glow must stay inside the shared 20 pt window.
+        let fieldExtent = 2 * DictationMiniRendering.processingPointSpacing
+            + DictationMiniRendering.processingPointMaxDiameter
+        #expect(fieldExtent * 2 < DictationMiniIndicatorController.signalWindowSide)
+        #expect(DictationMiniRendering.completionDiameter <= DictationMiniIndicatorController.signalWindowSide - 2)
+        #expect(DictationMiniRendering.preparingDotDiameter < DictationMiniRendering.completionDiameter)
     }
 
     @Test("recording keeps the compact capsule and renders a dense one-point history field")
@@ -128,14 +135,19 @@ struct DictationMiniIndicatorTests {
         let recordingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
         #expect(recordingCenter != initialCenter)
 
+        let recordingFrame = controller.currentFrame
         caret = CGPoint(x: 700, y: 100)
         controller.showProcessing(generation: token)
-        let processingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+        let processingFrame = controller.currentFrame
 
         #expect(controller.presentation == .processing)
         #expect(controller.isMouseTransparentForTesting)
         #expect(!controller.isFollowingCaretForTesting)
-        #expect(recordingCenter == processingCenter)
+        // Processing hangs off the same caret anchor as the recording capsule did (shared
+        // top-right corner), and ignores the caret that moved after recording ended.
+        #expect(processingFrame?.maxX == recordingFrame?.maxX)
+        #expect(processingFrame?.maxY == recordingFrame?.maxY)
+        #expect(processingFrame?.size == CGSize(width: 20, height: 20))
         controller.close()
     }
 
@@ -157,11 +169,12 @@ struct DictationMiniIndicatorTests {
         controller.close()
     }
 
-    @Test("terminal feedback reacquires the post-insertion caret once")
-    func terminalCaretReacquisition() {
+    @Test("terminal feedback holds the session anchor instead of chasing the post-insertion caret")
+    func terminalHoldsSessionAnchor() {
         var caret = CGPoint(x: 220, y: 320)
         let controller = makeController(caret: { caret })
         let token = controller.beginPreparing()
+        let preparingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
         controller.showRecording(generation: token) { -24 }
         controller.showProcessing(generation: token)
         let processingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
@@ -170,7 +183,9 @@ struct DictationMiniIndicatorTests {
         controller.showSuccess(generation: token, duration: 10)
         let successCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
 
-        #expect(successCenter != processingCenter)
+        #expect(preparingCenter != nil)
+        #expect(processingCenter == preparingCenter)
+        #expect(successCenter == processingCenter)
         #expect(!controller.isFollowingCaretForTesting)
         controller.close()
     }
@@ -241,6 +256,53 @@ struct DictationMiniIndicatorTests {
     func reducedMotionPolicy() {
         #expect(DictationMiniIndicatorController.processingAnimationIsContinuous(reduceMotion: false))
         #expect(!DictationMiniIndicatorController.processingAnimationIsContinuous(reduceMotion: true))
+    }
+
+    @Test("the focus reminder shows only while idle, holds its anchor, yields to a session, and self-dismisses")
+    func focusReminderLifecycle() async {
+        var announcements: [String] = []
+        let controller = makeController(accessibilitySink: { announcements.append($0) })
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .reminder) == CGSize(width: 20, height: 20))
+        #expect(DictationMiniIndicatorController.accessibilityLabel(for: .reminder) == "Dictation ready")
+
+        #expect(controller.showReminder(duration: 10) != nil)
+        #expect(controller.presentation == .reminder)
+        #expect(controller.isVisibleForTesting)
+        #expect(!controller.isFollowingCaretForTesting)
+        #expect(announcements.isEmpty)
+        let reminderCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+
+        let token = controller.beginPreparing()
+        #expect(controller.presentation == .preparing)
+        let preparingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+        #expect(preparingCenter == reminderCenter)
+        #expect(controller.showReminder() == nil)
+        controller.dismiss(generation: token)
+
+        #expect(controller.showReminder(duration: 0.01) != nil)
+        try? await Task.sleep(for: .milliseconds(40))
+        #expect(controller.presentation == .hidden)
+
+        #expect(controller.showReminder(duration: 10) != nil)
+        controller.dismissReminder()
+        #expect(controller.presentation == .hidden)
+        controller.close()
+    }
+
+    @Test("the reminder gate fires once per focused element with a global cooldown")
+    func focusReminderGate() {
+        var gate = DictationFocusReminderGate<String>(cooldown: 1.5)
+        let firstFocus = gate.shouldRemind(for: "field-a", at: 10)
+        let sameElement = gate.shouldRemind(for: "field-a", at: 10.5)
+        let withinCooldown = gate.shouldRemind(for: "field-b", at: 11)
+        let afterCooldown = gate.shouldRemind(for: "field-c", at: 13)
+        gate.focusLost()
+        let refocusAfterLoss = gate.shouldRemind(for: "field-c", at: 20)
+        #expect(firstFocus)
+        #expect(!sameElement)
+        #expect(!withinCooldown)
+        #expect(afterCooldown)
+        #expect(refocusAfterLoss)
     }
 
     @Test("accessibility caret rectangles convert into AppKit screen coordinates")

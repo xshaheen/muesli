@@ -456,7 +456,10 @@ final class MuesliController: NSObject {
     )
     private let dictationLatencyTimestampFormatter = ISO8601DateFormatter()
     private let dictationMiniIndicator: DictationMiniIndicatorController
+    private let dictationFocusReminderMonitor = DictationFocusReminderMonitor()
     private let meetingRecordingPanel: MeetingRecordingPanelController
+    private let meetingRecordButton = MeetingRecordButtonController()
+    private var dismissedMeetingRecordButtonCandidateID: String?
     private let calendarMonitor = CalendarMonitor()
     private let meetingMonitor = MeetingMonitor()
     private let meetingNotification = MeetingNotificationController()
@@ -558,6 +561,7 @@ final class MuesliController: NSObject {
     private var meetingDurationStopTimer: Timer?
     private var activeMeetingCalendarEndDate: Date?
     private var latestMeetingActivityCandidate: MeetingCandidate?
+    private var dictationFocusReminderMonitorAllowed = false
     private var latestMeetingActivityCandidateObservedAt: Date?
     private var activeMeetingAutoStop = MeetingAutoStopTracker()
     private var activeMeetingSignalLossResponse: MeetingSignalLossResponse = .none
@@ -828,6 +832,15 @@ final class MuesliController: NSObject {
         if canRunMainApp {
             startMeetingRecordingHotkeyMonitorIfNeeded()
         }
+        dictationFocusReminderMonitor.onEditableFocus = { [weak self] focus in
+            guard let self, self.config.showDictationFocusReminder else { return }
+            self.dictationMiniIndicator.showReminder(at: focus.anchor)
+        }
+        dictationFocusReminderMonitor.onFocusLost = { [weak self] in
+            self?.dictationMiniIndicator.dismissReminder()
+        }
+        dictationFocusReminderMonitorAllowed = canRunMainApp
+        syncDictationFocusReminderMonitor()
         syncDictationRecorderWarmup(intent: .idlePrewarm(.startup))
         meetingRecordingPanel.onStop = { [weak self] in self?.stopMeetingRecording() }
         meetingRecordingPanel.onDiscard = { [weak self] in self?.discardMeetingWithConfirmation() }
@@ -846,6 +859,19 @@ final class MuesliController: NSObject {
             self?.computerUseHotkeyMonitor.cancelToggleMode()
         }
         meetingRecordingPanel.onControlCenterSaved = { [weak self] center in
+            self?.updateConfig {
+                $0.meetingRecordingPanelCenter = CGPointCodable(x: center.x, y: center.y)
+            }
+        }
+        // The Record pill and the Meeting Recording Panel share one saved position so the
+        // pill hands off in place when recording starts.
+        meetingRecordButton.onRecord = { [weak self] in self?.recordFromMeetingRecordButton() }
+        meetingRecordButton.onDismiss = { [weak self] in
+            guard let self else { return }
+            self.dismissedMeetingRecordButtonCandidateID = self.latestMeetingActivityCandidate?.id
+            self.syncMeetingRecordButton()
+        }
+        meetingRecordButton.onCenterSaved = { [weak self] center in
             self?.updateConfig {
                 $0.meetingRecordingPanelCenter = CGPointCodable(x: center.x, y: center.y)
             }
@@ -1061,6 +1087,8 @@ final class MuesliController: NSObject {
         notifiedUpcomingEventIDs.removeAll()
         autoRecordedCalendarEventIDs.removeAll()
         meetingFeatureMonitorsAllowed = false
+        dictationFocusReminderMonitorAllowed = false
+        syncDictationFocusReminderMonitor()
         disarmMeetingAutoStop()
         cancelMeetingDurationLimit()
         meetingMonitor.stop()
@@ -1105,6 +1133,8 @@ final class MuesliController: NSObject {
         await syncEngineCancellationTask?.value
         await transcriptionCoordinator.shutdown()
         ComputerUseCursorOverlay.shared.close()
+        dictationFocusReminderMonitor.stop()
+        meetingRecordButton.close()
         dictationMiniIndicator.close()
         CoreAudioSystemRecorder.cleanupStaleDevices()
     }
@@ -1931,6 +1961,7 @@ final class MuesliController: NSObject {
         appState.isChatGPTAuthenticated = chatGPTAuth.isAuthenticated
         syncCalendarMonitor()
         syncMeetingDetectionMonitor()
+        syncDictationFocusReminderMonitor()
         updateDesignatedTranscriptionBackends()
         updateMeetingNotificationVisibility()
         syncDictationRecorderWarmup(intent: .idlePrewarm(.configChange))
@@ -3415,6 +3446,20 @@ final class MuesliController: NSObject {
         )
     }
 
+    /// The reminder needs Accessibility and a completed onboarding; it never runs inside
+    /// onboarding where the focused field belongs to Muesli's own flow.
+    private func syncDictationFocusReminderMonitor() {
+        let shouldRun = dictationFocusReminderMonitorAllowed
+            && config.showDictationFocusReminder
+            && config.resolvedOnboardingUseCase.includesPushToTalk
+        if shouldRun {
+            dictationFocusReminderMonitor.start()
+        } else {
+            dictationFocusReminderMonitor.stop()
+            dictationMiniIndicator.dismissReminder()
+        }
+    }
+
     private func syncMeetingDetectionMonitor() {
         let shouldRun = meetingFeatureMonitorsAllowed && shouldDetectMeetingActivity
         if shouldRun && !meetingDetectionMonitorStarted {
@@ -3425,6 +3470,46 @@ final class MuesliController: NSObject {
             meetingDetectionMonitorStarted = false
             dismissPresentedMeetingDetection()
         }
+        syncMeetingRecordButton()
+    }
+
+    private func syncMeetingRecordButton() {
+        let candidate = meetingDetectionMonitorStarted ? latestMeetingActivityCandidate : nil
+        let hasCandidate = candidate.map { !isMutedMeetingDetectionCandidate($0) } ?? false
+        let shouldShow = MeetingRecordButtonPolicy.shouldShow(
+            enabled: config.showMeetingRecordButton,
+            monitorsAllowed: meetingFeatureMonitorsAllowed,
+            hasActivityCandidate: hasCandidate,
+            candidateDismissed: candidate?.id == dismissedMeetingRecordButtonCandidateID,
+            isRecording: isMeetingRecording(),
+            isStartingRecording: isStartingMeetingRecording
+        )
+        if shouldShow {
+            meetingRecordButton.applySavedCenter(
+                config.meetingRecordingPanelCenter.map { CGPoint(x: $0.x, y: $0.y) }
+            )
+            meetingRecordButton.show(platformName: candidate?.platform.displayName)
+        } else {
+            meetingRecordButton.hide()
+        }
+    }
+
+    private func recordFromMeetingRecordButton() {
+        guard !isMeetingRecording(), !isStartingMeetingRecording else { return }
+        let candidate = latestMeetingActivityCandidate
+        let title = candidate?.subtitle ?? "Meeting"
+        let didStart = startMeetingRecordingFromEntryPoint(
+            title: title,
+            autoStopSource: candidate.map { MeetingAutoStopSource(candidate: $0) },
+            presentation: .compactControl,
+            startOrigin: .detectedPrompt
+        )
+        if didStart, let candidate {
+            meetingMonitor.markRecordingStarted(candidate)
+            presentedMeetingCandidate = nil
+            dismissPresentedMeetingDetection()
+        }
+        syncMeetingRecordButton()
     }
 
     /// Check all upcoming calendar events (EventKit + Google) for events entering the configured prompt window.
@@ -4385,6 +4470,8 @@ final class MuesliController: NSObject {
                 hotkeyMonitor.start()
                 startComputerUseHotkeyMonitorIfNeeded()
             }
+            dictationFocusReminderMonitorAllowed = true
+            syncDictationFocusReminderMonitor()
             syncCalendarMonitor()
             // Start monitors that were deferred during onboarding
             if shouldRunMeetingFeatureMonitors {
@@ -8483,8 +8570,10 @@ final class MuesliController: NSObject {
             } else {
                 latestMeetingActivityCandidate = nil
                 latestMeetingActivityCandidateObservedAt = nil
+                dismissedMeetingRecordButtonCandidateID = nil
             }
         }
+        syncMeetingRecordButton()
 
         if activeMeetingAutoStop.isArmed,
            isStartingMeetingRecording,
