@@ -37,6 +37,7 @@ final class DictationMiniIndicatorController: NSObject {
     private var powerProvider: (() -> Float)?
     private var animationTimer: Timer?
     private var animationStartedAt: TimeInterval?
+    private var lastRecordingSampleAt: TimeInterval = 0
     private var dismissTask: Task<Void, Never>?
     private var caretPollingTimer: Timer?
     private var accessibilityObserver: NSObjectProtocol?
@@ -412,6 +413,8 @@ final class DictationMiniIndicatorController: NSObject {
             return
         }
         animationStartedAt = ProcessInfo.processInfo.systemUptime
+        lastRecordingSampleAt = 0
+        if presentation == .recording { contentView?.resetRecordingHistory() }
         let timer = Timer(timeInterval: 1 / 60, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.advanceAnimation() }
         }
@@ -426,9 +429,15 @@ final class DictationMiniIndicatorController: NSObject {
         }
         if presentation == .recording {
             let decibels = powerProvider?() ?? -160
-            let normalized = max(0, min(1, (CGFloat(decibels) + 68) / 38))
+            let target = DictationMiniRendering.recordingLevel(decibels: CGFloat(decibels))
             let current = contentView?.power ?? 0
-            contentView?.power = current * 0.52 + normalized * 0.48
+            let level = DictationMiniRendering.recordingEnvelope(current: current, target: target)
+            contentView?.power = level
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - lastRecordingSampleAt >= DictationMiniRendering.recordingSampleInterval {
+                lastRecordingSampleAt = now
+                contentView?.pushRecordingSample(level)
+            }
         } else {
             let elapsed = ProcessInfo.processInfo.systemUptime - (animationStartedAt ?? 0)
             contentView?.animationPhase = CGFloat(elapsed * 3.2).truncatingRemainder(dividingBy: .pi * 2)
@@ -522,12 +531,72 @@ enum DictationMiniPalette {
 
 enum DictationMiniRendering {
     static let glassTintAlpha: CGFloat = 0.44
+    /// Recording sits on a lower, darker ground so the fine one-point bars stay legible.
+    static let recordingGlassTintAlpha: CGFloat = 0.62
+    static let recordingBarCount = 24
+    static let recordingBarWidth: CGFloat = 1
+    static let recordingBarPitch: CGFloat = 2
+    static let recordingBarMinHeight: CGFloat = 1
+    static let recordingBarMaxHeight: CGFloat = 12
+    /// History advances at 30 Hz: 24 bars hold the last 0.8 s of speech.
+    static let recordingSampleInterval: TimeInterval = 1 / 30
+    static let recordingTailAlpha: CGFloat = 0.42
     static let preparingDotDiameter: CGFloat = 14
     static let completionDiameter: CGFloat = 20
+
+    /// Maps `AVAudioRecorder` average power to a 0...1 bar level. The floor matches the
+    /// recorder's −58 dB speech threshold so anything Muesli treats as speech lifts off the
+    /// baseline dot; conversational speech fills the capsule without pinning at the ceiling.
+    static func recordingLevel(decibels: CGFloat) -> CGFloat {
+        let floor: CGFloat = -58
+        let ceiling: CGFloat = -18
+        let linear = max(0, min(1, (decibels - floor) / (ceiling - floor)))
+        return pow(linear, 0.7)
+    }
+
+    /// Fast attack, slower release so syllables register immediately and decay smoothly.
+    static func recordingEnvelope(current: CGFloat, target: CGFloat) -> CGFloat {
+        let weight: CGFloat = target > current ? 0.62 : 0.26
+        return current + (target - current) * weight
+    }
+
+    /// Bars age from a hot amber live edge (right) to a muted orange tail (left).
+    static func recordingBarAge(index: Int, count: Int) -> CGFloat {
+        guard count > 1 else { return 1 }
+        return CGFloat(index) / CGFloat(count - 1)
+    }
+
+    /// Reduce Motion replaces the scrolling history with a calm, centred envelope.
+    static func recordingStaticEnvelope(index: Int, count: Int) -> CGFloat {
+        guard count > 1 else { return 1 }
+        let midpoint = CGFloat(count - 1) / 2
+        let distance = abs(CGFloat(index) - midpoint) / midpoint
+        return 0.35 + 0.65 * (1 - distance * distance)
+    }
 
     static func pixelAligned(_ value: CGFloat, scale: CGFloat) -> CGFloat {
         guard scale > 0 else { return value }
         return (value * scale).rounded() / scale
+    }
+}
+
+/// Fixed-capacity level history, oldest first, newest last.
+struct DictationMiniWaveformHistory: Equatable {
+    private(set) var levels: [CGFloat]
+
+    init(count: Int = DictationMiniRendering.recordingBarCount) {
+        levels = Array(repeating: 0, count: max(count, 1))
+    }
+
+    var count: Int { levels.count }
+
+    mutating func push(_ level: CGFloat) {
+        levels.removeFirst()
+        levels.append(max(0, min(1, level)))
+    }
+
+    mutating func reset() {
+        levels = Array(repeating: 0, count: levels.count)
     }
 }
 
@@ -552,6 +621,8 @@ private final class DictationMiniView: NSView {
         get { waveformView.power }
         set { waveformView.power = newValue }
     }
+    func pushRecordingSample(_ level: CGFloat) { waveformView.push(level) }
+    func resetRecordingHistory() { waveformView.reset() }
     var animationPhase: CGFloat {
         get { pointFieldView.phase }
         set { pointFieldView.phase = newValue }
@@ -657,9 +728,12 @@ private final class DictationMiniView: NSView {
         glassView.layer?.masksToBounds = true
         tintView.layer?.cornerRadius = radius
         tintView.layer?.cornerCurve = .continuous
+        let tintAlpha = presentation == .recording
+            ? DictationMiniRendering.recordingGlassTintAlpha
+            : DictationMiniRendering.glassTintAlpha
         tintView.layer?.backgroundColor = NSColor.colorWith(
             hex: DictationMiniPalette.glassTintHex,
-            alpha: reduceTransparency ? 1 : DictationMiniRendering.glassTintAlpha
+            alpha: reduceTransparency ? 1 : tintAlpha
         ).cgColor
     }
 }
@@ -754,33 +828,50 @@ private final class DictationMiniCueView: NSView {
 }
 
 private final class DictationMiniWaveformView: NSView {
-    private let multipliers: [CGFloat] = [0.6, 0.85, 1, 0.85, 0.6]
-    private var bars: [CAGradientLayer] = []
+    private var bars: [CALayer] = []
+    private let haloLayer = CAGradientLayer()
+    private var history = DictationMiniWaveformHistory()
     private var backingScale: CGFloat = 2
+    /// Smoothed live level: drives the halo and the newest bar between history pushes.
     var power: CGFloat = 0 { didSet { updateBars() } }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        for _ in multipliers {
-            let bar = CAGradientLayer()
-            bar.colors = [
-                NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1).cgColor,
-                NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1).cgColor,
-            ]
-            bar.startPoint = CGPoint(x: 0.5, y: 1)
-            bar.endPoint = CGPoint(x: 0.5, y: 0)
-            bar.shadowColor = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 0.48).cgColor
-            bar.shadowOpacity = 1
-            bar.shadowRadius = 3
-            bar.shadowOffset = .zero
+        let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
+        haloLayer.type = .radial
+        haloLayer.colors = [
+            accent.withAlphaComponent(0.30).cgColor,
+            accent.withAlphaComponent(0.10).cgColor,
+            accent.withAlphaComponent(0).cgColor,
+        ]
+        haloLayer.locations = [0, 0.45, 1]
+        haloLayer.startPoint = CGPoint(x: 0.5, y: 0.5)
+        haloLayer.endPoint = CGPoint(x: 1, y: 1)
+        haloLayer.opacity = 0
+        layer?.addSublayer(haloLayer)
+        for _ in 0..<DictationMiniRendering.recordingBarCount {
+            let bar = CALayer()
+            bar.cornerRadius = DictationMiniRendering.recordingBarWidth / 2
+            bar.allowsEdgeAntialiasing = true
             layer?.addSublayer(bar)
             bars.append(bar)
         }
+        applyBarColors()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
+
+    func push(_ level: CGFloat) {
+        history.push(level)
+        updateBars()
+    }
+
+    func reset() {
+        history.reset()
+        power = 0
+    }
 
     override func layout() {
         super.layout()
@@ -790,33 +881,68 @@ private final class DictationMiniWaveformView: NSView {
     func updateBackingScale(_ scale: CGFloat) {
         backingScale = max(scale, 1)
         bars.forEach { $0.contentsScale = backingScale }
+        haloLayer.contentsScale = backingScale
         updateBars()
     }
 
     func refreshAccessibilityPresentation() {
+        applyBarColors()
         updateBars()
+    }
+
+    private func applyBarColors() {
+        let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
+        let highlight = NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1)
+        let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        let tailAlpha = increaseContrast ? 0.78 : DictationMiniRendering.recordingTailAlpha
+        for (index, bar) in bars.enumerated() {
+            let age = DictationMiniRendering.recordingBarAge(index: index, count: bars.count)
+            let warmth = age * age
+            let color = accent.blended(withFraction: warmth * 0.8, of: highlight) ?? accent
+            bar.backgroundColor = color.withAlphaComponent(tailAlpha + (1 - tailAlpha) * age).cgColor
+        }
     }
 
     private func updateBars() {
         guard !bars.isEmpty else { return }
-        let barWidth: CGFloat = 2
-        let spacing: CGFloat = 3
-        let totalWidth = CGFloat(bars.count) * barWidth + CGFloat(bars.count - 1) * spacing
-        let startX = bounds.midX - totalWidth / 2
+        let barWidth = DictationMiniRendering.recordingBarWidth
+        let pitch = DictationMiniRendering.recordingBarPitch
+        let minHeight = DictationMiniRendering.recordingBarMinHeight
+        let maxHeight = DictationMiniRendering.recordingBarMaxHeight
+        let fieldWidth = CGFloat(bars.count - 1) * pitch + barWidth
+        let startX = DictationMiniRendering.pixelAligned(bounds.midX - fieldWidth / 2, scale: backingScale)
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let motionScale: CGFloat = reduceMotion ? 0.55 : 1
+        let levels = history.levels
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for (index, bar) in bars.enumerated() {
-            let height = max(3, min(14, 3 + 11 * power * multipliers[index] * motionScale))
+            let level: CGFloat
+            if reduceMotion {
+                level = power * 0.55 * DictationMiniRendering.recordingStaticEnvelope(index: index, count: bars.count)
+            } else if index == bars.count - 1 {
+                level = max(levels[index], power)
+            } else {
+                level = levels[index]
+            }
+            let height = DictationMiniRendering.pixelAligned(
+                minHeight + (maxHeight - minHeight) * max(0, min(1, level)),
+                scale: backingScale
+            )
             bar.frame = CGRect(
-                x: DictationMiniRendering.pixelAligned(startX + CGFloat(index) * (barWidth + spacing), scale: backingScale),
+                x: DictationMiniRendering.pixelAligned(startX + CGFloat(index) * pitch, scale: backingScale),
                 y: DictationMiniRendering.pixelAligned(bounds.midY - height / 2, scale: backingScale),
                 width: barWidth,
-                height: DictationMiniRendering.pixelAligned(height, scale: backingScale)
+                height: height
             )
-            bar.cornerRadius = barWidth / 2
         }
+        let haloSize = CGSize(width: min(bounds.width - 8, 44), height: min(bounds.height, 18))
+        haloLayer.frame = CGRect(
+            x: bounds.midX - haloSize.width / 2,
+            y: bounds.midY - haloSize.height / 2,
+            width: haloSize.width,
+            height: haloSize.height
+        )
+        haloLayer.opacity = Float(reduceMotion ? 0.35 : 0.25 + 0.75 * power)
         CATransaction.commit()
     }
 }

@@ -98,3 +98,14 @@
 - Keep: the sizes, colors, glow bounds, and native implementation from `signal-pair-08`.
 - Correct: the HTML preview's top-left SVG coordinate system so the completion glyph reads as a check rather than a caret.
 - Resulting node: `signal-pair-09`.
+
+## 19-08-2026 09:19 UTC — recording wave on a low dark glass
+
+- Reject: the wide 104 × 32 pt recording capsule with 31 warm bars and a lighter tint; it drifted away from the reference's compact scale and still read as a weak guess.
+- Keep: the accepted 58 × 22 pt recording footprint, the HUD glass recipe, the 1 pt edge, and the Contextual Spark palette; the reference capsule measures the same scale (≈ 53 × 23 pt).
+- Intensify: darkness of the recording ground (tint 44 % → 62 %) so fine bars stay legible, matching the reference's near-black interior.
+- Replace: five glowing 2 pt bars with twenty-four crisp 1 pt bars at 2 pt pitch, backing-scale aligned, no per-bar shadow.
+- Explore: a 30 Hz scrolling history (newest on the right) with fast attack / slow release, an amber live edge fading to a 42 % muted orange tail, and one ambient halo that breathes with the voice.
+- Soften: the reference's steel-cyan is not adopted; palette ownership stays with Contextual Spark.
+- Preserve: Preparing, Processing, Complete, Failure, caret placement, lifecycle sounds, and the independent meeting panel.
+- Resulting node: `recording-wave-10` (rejected sibling recorded as `wide-warm-field-rejected`).

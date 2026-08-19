@@ -285,6 +285,62 @@
         "generated_at_utc": "2026-08-19T08:11:17Z",
         "remote_service_disclosure": "none"
       }
+    },
+    {
+      "id": "wide-warm-field-rejected",
+      "parents": [
+        "signal-pair-09"
+      ],
+      "round": 10,
+      "mode": "iterate",
+      "thesis": "A much wider 104 by 32 point capsule with 31 warm bars and a lighter tint would read as a richer recording surface.",
+      "anchors": [
+        "user-provided dark capsule reference",
+        "uncommitted native experiment without a preview artifact"
+      ],
+      "artifact": "discarded — uncommitted native Swift experiment, no preview retained",
+      "status": "rejected",
+      "created_at_utc": "unknown",
+      "generation": {
+        "capability": "native-swift-experiment",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "unknown",
+        "seed": "unknown",
+        "generated_at_utc": "unknown",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "recording-wave-10",
+      "parents": [
+        "signal-pair-09"
+      ],
+      "round": 10,
+      "mode": "iterate",
+      "thesis": "Recording should stay the accepted 58 by 22 point capsule but become a low dark glass ground carrying a dense, crisp one-point scrolling history of the voice, with one ambient halo instead of per-bar glow.",
+      "anchors": [
+        "user-provided dark capsule reference measured at about 53 by 23 points with one-point bars at about 1.75 point pitch",
+        "accepted Contextual Spark palette and HUD glass recipe from signal-pair-09",
+        "AVAudioRecorder average power with the recorder's -58 dB speech threshold as the floor",
+        "backing-scale-aligned Core Animation layers with no implicit animations"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/recording-wave-10.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T09:19:12Z",
+      "generation": {
+        "capability": "manual-html-css-canvas",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML with a canvas mirror of the native waveform mechanics",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T09:19:12Z",
+        "remote_service_disclosure": "none"
+      }
     }
   ],
   "decisions": [
@@ -350,6 +406,20 @@
       "operation": "preserve the approved signal pair and correct only the HTML preview check orientation",
       "feedback_ref": "feedback.md#19-08-2026-0811-utc--preview-coordinate-correction",
       "decided_at_utc": "2026-08-19T08:11:17Z"
+    },
+    {
+      "from": "signal-pair-09",
+      "to": "wide-warm-field-rejected",
+      "operation": "widen recording to 104 by 32 points with 31 warm bars and a lighter tint",
+      "feedback_ref": "feedback.md#19-08-2026-0919-utc--recording-wave-on-a-low-dark-glass",
+      "decided_at_utc": "2026-08-19T09:19:12Z"
+    },
+    {
+      "from": "signal-pair-09",
+      "to": "recording-wave-10",
+      "operation": "keep the 58 by 22 footprint and glass recipe; darken the recording tint to 62 percent; replace five glowing 2-point bars with twenty-four crisp 1-point bars scrolling as a 30 Hz history with an amber live edge, muted tail, and one ambient halo",
+      "feedback_ref": "feedback.md#19-08-2026-0919-utc--recording-wave-on-a-low-dark-glass",
+      "decided_at_utc": "2026-08-19T09:19:12Z"
     }
   ]
 }

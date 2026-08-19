@@ -40,6 +40,73 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniRendering.completionDiameter == 20)
     }
 
+    @Test("recording keeps the compact capsule and renders a dense one-point history field")
+    func recordingWaveGeometry() {
+        #expect(DictationMiniRendering.recordingGlassTintAlpha == 0.62)
+        #expect(DictationMiniRendering.recordingBarCount == 24)
+        #expect(DictationMiniRendering.recordingBarWidth == 1)
+        #expect(DictationMiniRendering.recordingBarPitch == 2)
+        #expect(DictationMiniRendering.recordingBarMinHeight == 1)
+        #expect(DictationMiniRendering.recordingBarMaxHeight == 12)
+        #expect(DictationMiniRendering.recordingSampleInterval == TimeInterval(1) / 30)
+        #expect(DictationMiniRendering.recordingTailAlpha == 0.42)
+
+        // The bar field must clear the 11-point rounded ends of the 58 x 22 capsule.
+        let fieldWidth = CGFloat(DictationMiniRendering.recordingBarCount - 1)
+            * DictationMiniRendering.recordingBarPitch
+            + DictationMiniRendering.recordingBarWidth
+        let capsule = DictationMiniIndicatorController.surfaceSize(for: .recording)
+        #expect(fieldWidth == 47)
+        #expect((capsule.width - fieldWidth) / 2 >= 5)
+        #expect(DictationMiniRendering.recordingBarMaxHeight <= capsule.height - 8)
+    }
+
+    @Test("microphone power maps to a clamped, monotonic bar level with fast attack and slow release")
+    func recordingLevelMapping() {
+        #expect(DictationMiniRendering.recordingLevel(decibels: -160) == 0)
+        #expect(DictationMiniRendering.recordingLevel(decibels: -58) == 0)
+        #expect(DictationMiniRendering.recordingLevel(decibels: 0) == 1)
+        #expect(DictationMiniRendering.recordingLevel(decibels: -18) == 1)
+        let quiet = DictationMiniRendering.recordingLevel(decibels: -50)
+        let speech = DictationMiniRendering.recordingLevel(decibels: -32)
+        let loud = DictationMiniRendering.recordingLevel(decibels: -20)
+        #expect(quiet > 0.2 && quiet < speech && speech < loud && loud < 1)
+        #expect(speech > 0.6 && speech < 0.9)
+
+        let attack = DictationMiniRendering.recordingEnvelope(current: 0, target: 1)
+        let release = DictationMiniRendering.recordingEnvelope(current: 1, target: 0)
+        #expect(attack > 0.5)
+        #expect(release > 0.6)
+        #expect(attack > 1 - release)
+    }
+
+    @Test("the history buffer keeps a fixed capacity with the newest level on the right")
+    func waveformHistory() {
+        var history = DictationMiniWaveformHistory(count: 4)
+        #expect(history.levels == [0, 0, 0, 0])
+        history.push(0.5)
+        history.push(2)
+        history.push(-1)
+        #expect(history.count == 4)
+        #expect(history.levels == [0, 0.5, 1, 0])
+        history.reset()
+        #expect(history.levels == [0, 0, 0, 0])
+        #expect(DictationMiniWaveformHistory(count: 0).count == 1)
+    }
+
+    @Test("bar ageing fades the tail and Reduce Motion uses a symmetric static envelope")
+    func barAgeingAndStaticEnvelope() {
+        #expect(DictationMiniRendering.recordingBarAge(index: 0, count: 24) == 0)
+        #expect(DictationMiniRendering.recordingBarAge(index: 23, count: 24) == 1)
+        #expect(DictationMiniRendering.recordingBarAge(index: 0, count: 1) == 1)
+        let envelope = (0..<24).map {
+            DictationMiniRendering.recordingStaticEnvelope(index: $0, count: 24)
+        }
+        #expect(envelope == envelope.reversed())
+        #expect(envelope.allSatisfy { $0 > 0.3 && $0 <= 1 })
+        #expect(envelope[11] > envelope[0])
+    }
+
     @Test("vector geometry aligns to the active backing scale")
     func pixelAlignment() {
         #expect(DictationMiniRendering.pixelAligned(5.24, scale: 2) == 5)

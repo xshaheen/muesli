@@ -17,7 +17,7 @@ This is a source-grounded outline, not an implementation plan artifact. It inten
 |---|---|---|
 | Idle | No panel by default | Indefinite |
 | Preparing | 14 pt accent seed | Up to 180 ms before morphing |
-| Recording | 58 × 22 pt live waveform capsule | Until hotkey release/cancel |
+| Recording | 58 × 22 pt low dark glass capsule with a 24 × 1 pt scrolling history waveform | Until hotkey release/cancel |
 | Transcribing | 38 pt animated transcription orb | Until completion/error |
 | Complete | 12 pt green confirmation spark | About 120 ms, then fade |
 | Warning/error | Compact labeled capsule | Long enough to read or until replaced |

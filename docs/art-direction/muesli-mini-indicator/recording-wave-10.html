@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muesli Mini Indicator — Recording Wave</title>
+  <style>
+    :root { color-scheme:dark; --orange:#ff7043; --amber:#ffb04d; --tint:#211f1e; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0b0b0a; color:#f3f2ef; font-family:-apple-system,BlinkMacSystemFont,sans-serif; }
+    main { width:min(1040px,calc(100% - 48px)); padding:40px 0; }
+    h1 { margin:0 0 14px; font-size:44px; line-height:1; letter-spacing:-.04em; }
+    .lede { max-width:720px; margin:0 0 30px; color:#99958f; line-height:1.55; }
+    .stage { display:grid; grid-template-columns:1.35fr 1fr; gap:1px; overflow:hidden; border:1px solid rgba(255,255,255,.11); border-radius:28px; background:rgba(255,255,255,.11); box-shadow:0 32px 90px rgba(0,0,0,.46); }
+    article { min-height:420px; padding:34px; background:linear-gradient(145deg,#171716,#0f0f0e); }
+    .index { color:#6f6c67; font:700 12px ui-monospace,SFMono-Regular,monospace; letter-spacing:.16em; }
+    h2 { margin:10px 0 0; font-size:27px; }
+    .field { display:grid; place-items:center; gap:18px; margin:22px 0 18px; }
+    .foot { color:#85817c; font:600 13px ui-monospace,SFMono-Regular,monospace; }
+    .foot strong { color:#d4d1cb; }
+    .foot span { display:block; margin-top:6px; font:400 13px/1.45 -apple-system,BlinkMacSystemFont,sans-serif; }
+    /* Host context: a blurred editor-like ground so the glass reads as glass. */
+    .host { position:relative; width:100%; border-radius:16px; overflow:hidden; background:
+      radial-gradient(120px 60px at 20% 30%, #3a4a6a 0%, transparent 70%),
+      radial-gradient(160px 80px at 70% 75%, #5a3a2a 0%, transparent 70%),
+      linear-gradient(#2a2a2c,#1a1a1c); display:grid; place-items:center; }
+    .host.zoom { height:190px; }
+    .host.real { height:80px; }
+    .host::after { content:"Hello there, the quick brown fox jumps over"; position:absolute; left:14px; top:12px; color:#d8d6d0; font:14px/1.3 ui-monospace,SFMono-Regular,monospace; opacity:.8; }
+    /* The capsule: 58 x 22 pt, 11 pt continuous radius, HUD material + 62% warm tint, 1 pt 16% white edge. */
+    .capsule { position:relative; width:58px; height:22px; border-radius:11px; overflow:hidden;
+      background:rgba(33,31,30,.62); -webkit-backdrop-filter:blur(22px) saturate(1.2); backdrop-filter:blur(22px) saturate(1.2);
+      box-shadow:inset 0 0 0 1px rgba(255,255,255,.16), 0 6px 16px rgba(0,0,0,.45); }
+    .zoom .capsule { transform:scale(4); transform-origin:center; }
+    .halo { position:absolute; left:7px; top:2px; width:44px; height:18px; border-radius:50%;
+      background:radial-gradient(closest-side, rgba(255,112,67,.30), rgba(255,112,67,.10) 45%, rgba(255,112,67,0)); opacity:.25; }
+    canvas { position:absolute; inset:0; width:58px; height:22px; }
+    .swatches { display:flex; gap:8px; margin-top:14px; }
+    .sw { width:36px; height:22px; border-radius:6px; border:1px solid rgba(255,255,255,.12); }
+    table { width:100%; border-collapse:collapse; margin-top:16px; font:12px/1.5 ui-monospace,SFMono-Regular,monospace; color:#b9b5ae; }
+    td { padding:3px 0; border-bottom:1px solid rgba(255,255,255,.07); vertical-align:top; }
+    td:first-child { color:#7f7b75; width:46%; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>A low dark capsule.<br>A dense, living line.</h1>
+    <p class="lede">Recording keeps the accepted 58 × 22 pt footprint — the reference capsule measures the same scale — and replaces five fat glowing bars with twenty-four crisp one-point bars scrolling as a 0.8 s history. The ground drops to a lower, darker warm glass so the fine bars stay legible; one subtle ambient halo breathes with the voice instead of per-bar glow.</p>
+    <section class="stage">
+      <article>
+        <div class="index">02</div><h2>Recording · 4× zoom</h2>
+        <div class="field">
+          <div class="host zoom"><div class="capsule"><div class="halo" id="halo4"></div><canvas id="wave4" width="116" height="44"></canvas></div></div>
+          <div class="host real"><div class="capsule"><div class="halo" id="halo1"></div><canvas id="wave1" width="116" height="44"></canvas></div></div>
+        </div>
+        <div class="foot"><strong>58 × 22 pt capsule · 24 × 1 pt bars · 2 pt pitch</strong><span>Dark Aqua HUD material, #211f1e at 62 %, one 1 pt 16 % white edge, continuous 11 pt radius. Bars age from a hot amber live edge on the right to a 42 % muted orange tail on the left. Backing-scale aligned; no per-bar shadows.</span></div>
+      </article>
+      <article>
+        <div class="index">Ref</div><h2>Anchor → decision</h2>
+        <table>
+          <tr><td>Reference capsule (2× shot)</td><td>≈ 53 × 23 pt, full-round, near-black #161619 interior, ≈ +10 % white 1 pt ring</td></tr>
+          <tr><td>Reference bars</td><td>1 pt wide, ≈ 1.75 pt pitch, 1–4 pt in a quiet frame, asymmetric history, steel-cyan</td></tr>
+          <tr><td>Kept from signal-pair-09</td><td>58 × 22 pt footprint, HUD glass recipe, 1 pt edge, coral/amber palette, Preparing/Processing/Complete/Failure untouched</td></tr>
+          <tr><td>Changed</td><td>tint 44 % → 62 % (recording only), 5 → 24 bars, 2 → 1 pt width, 3 → 1 pt gap, glow removed, history scroll at 30 Hz, single ambient halo</td></tr>
+          <tr><td>Level mapping</td><td>−58 dB floor (recorder speech threshold) → −18 dB ceiling, γ 0.7, attack 0.62 / release 0.26 per frame</td></tr>
+          <tr><td>Reduce Motion</td><td>no scrolling; calm centred envelope at 55 % amplitude</td></tr>
+          <tr><td>Increase Contrast</td><td>tail alpha 42 % → 78 %, 2 pt edge at 82 %</td></tr>
+        </table>
+        <div class="swatches"><div class="sw" style="background:#211f1e"></div><div class="sw" style="background:#ff7043"></div><div class="sw" style="background:#ffb04d"></div><div class="sw" style="background:rgba(255,112,67,.42)"></div></div>
+        <div class="foot" style="margin-top:14px"><strong>Not adopted</strong><span>The reference's cyan, its 104-pt-wide reinterpretation, and any pixel copy. Palette ownership stays with Contextual Spark.</span></div>
+      </article>
+    </section>
+  </main>
+  <script>
+    // Mirrors DictationMiniWaveformView: 24-slot history, newest right, 30 Hz push, amber→orange ageing, 1–12 pt heights.
+    const COUNT = 24, PITCH = 2, W = 1, MIN = 1, MAX = 12, TAIL = 0.42;
+    const accent = [255,112,67], highlight = [255,176,77];
+    const hist = new Array(COUNT).fill(0);
+    let power = 0, t = 0, lastPush = 0;
+    function mix(a,b,f){ return a.map((v,i)=>Math.round(v+(b[i]-v)*f)); }
+    function level(db){ const lin=Math.max(0,Math.min(1,(db+58)/40)); return Math.pow(lin,.7); }
+    function synth(t){ // speech-like: syllables ~4/s with pauses
+      const phrase = (Math.sin(t*0.9)+1)/2 > 0.25 ? 1 : 0;
+      const syll = Math.max(0, Math.sin(t*26) * Math.sin(t*7.3+1) ) ;
+      const noise = (Math.sin(t*61.7)*Math.sin(t*13.1)+1)/2*0.25;
+      return -58 + phrase*(syll*34 + noise*10) + 3;
+    }
+    function draw(ctx, scale){
+      ctx.setTransform(scale,0,0,scale,0,0); ctx.clearRect(0,0,58,22);
+      const field = (COUNT-1)*PITCH+W, x0 = Math.round((58-field)/2*2)/2;
+      for (let i=0;i<COUNT;i++){
+        const age = i/(COUNT-1), warm = age*age;
+        const c = mix(accent, highlight, warm*0.8), a = TAIL + (1-TAIL)*age;
+        const lv = i===COUNT-1 ? Math.max(hist[i], power) : hist[i];
+        const h = Math.round((MIN + (MAX-MIN)*lv)*2)/2, x = x0 + i*PITCH, y = Math.round((11 - h/2)*2)/2;
+        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+        ctx.beginPath(); ctx.roundRect(x, y, W, h, 0.5); ctx.fill();
+      }
+    }
+    const c4 = document.getElementById('wave4').getContext('2d'), c1 = document.getElementById('wave1').getContext('2d');
+    function frame(now){
+      t = now/1000;
+      const target = level(synth(t));
+      power += (target-power) * (target>power ? .62 : .26);
+      if (now - lastPush >= 1000/30){ lastPush = now; hist.shift(); hist.push(power); }
+      draw(c4,2); draw(c1,2);
+      const op = (.25 + .75*power).toFixed(3);
+      document.getElementById('halo4').style.opacity = op; document.getElementById('halo1').style.opacity = op;
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
