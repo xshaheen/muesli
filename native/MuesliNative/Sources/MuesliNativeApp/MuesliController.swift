@@ -562,6 +562,9 @@ final class MuesliController: NSObject {
     private var activeMeetingCalendarEndDate: Date?
     private var latestMeetingActivityCandidate: MeetingCandidate?
     private var dictationIdleDotAllowed = false
+    /// When the dictation hotkey went down; gates the start cue so a discarded tap never tinks.
+    private var dictationHotkeyPressedAt: Date?
+    private var pendingStartCueToken: UUID?
     private var latestMeetingActivityCandidateObservedAt: Date?
     private var activeMeetingAutoStop = MeetingAutoStopTracker()
     private var activeMeetingSignalLossResponse: MeetingSignalLossResponse = .none
@@ -790,6 +793,8 @@ final class MuesliController: NSObject {
         )
         cleanupHistoricalMeetingWaveformCacheFilesIfNeeded()
 
+        // Recording starts at key-down (taps are discarded on release), like the reference app.
+        hotkeyMonitor.eagerStart = true
         hotkeyMonitor.onArm = { [weak self] in self?.handleArm() }
         hotkeyMonitor.onPrepare = { [weak self] in self?.handlePrepare() }
         hotkeyMonitor.onStart = { [weak self] in self?.handleStart() }
@@ -8326,12 +8331,34 @@ final class MuesliController: NSObject {
         statusBarController?.setStatus(status)
     }
 
+    /// With eager start the stream can be live before the tap/hold decision; hold the start
+    /// cue until the press has outlived the tap guard so a discarded tap stays silent.
+    private func playGatedDictationStartCue() {
+        let guardDelay = HotkeyTriggerTiming.doubleTapTapGuardDelay
+        guard let pressedAt = dictationHotkeyPressedAt else {
+            SoundController.playDictationStart(enabled: true)
+            return
+        }
+        let remaining = guardDelay - Date().timeIntervalSince(pressedAt)
+        guard remaining > 0 else {
+            SoundController.playDictationStart(enabled: true)
+            return
+        }
+        let token = UUID()
+        pendingStartCueToken = token
+        DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
+            guard let self, self.pendingStartCueToken == token else { return }
+            self.pendingStartCueToken = nil
+            SoundController.playDictationStart(enabled: true)
+        }
+    }
+
     private func applyDictationLifecycleActions(_ actions: [DictationLifecycleFeedback.Action]) {
         for action in actions {
             switch action {
             case let .cue(cue):
                 switch cue {
-                case .start: SoundController.playDictationStart(enabled: true)
+                case .start: playGatedDictationStartCue()
                 case .stop: SoundController.playDictationStop(enabled: true)
                 case .success: SoundController.playDictationSuccess(enabled: true)
                 case .failure: SoundController.playDictationFailure(enabled: true)
@@ -9314,6 +9341,7 @@ final class MuesliController: NSObject {
     }
 
     private func handleArm() {
+        dictationHotkeyPressedAt = Date()
         if shouldRejectDictationForComputerUseActivity() { return }
         if isMeetingRecording() { return }
         if blockDictationForMeetingActivityIfNeeded() { return }
@@ -10092,6 +10120,8 @@ final class MuesliController: NSObject {
     }
 
     private func handleCancel() {
+        pendingStartCueToken = nil
+        dictationHotkeyPressedAt = nil
         if isMeetingRecording() { return }
         if shouldIgnoreDictationCleanupForComputerUseActivity() { return }
         fputs("[muesli-native] cancel\n", stderr)
@@ -10236,6 +10266,7 @@ final class MuesliController: NSObject {
     }
 
     private func handleStop() {
+        dictationHotkeyPressedAt = nil
         if isMeetingRecording() {
             cancelDictationAudioSessionForMeetingRecordingIfNeeded()
             return

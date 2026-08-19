@@ -494,11 +494,15 @@ final class DictationMiniIndicatorController: NSObject {
     /// Preparing, processing, success, and failure share one footprint so the session never
     /// appears to jump between states; they are centred on the same anchor.
     static let signalWindowSide: CGFloat = 20
+    /// The idle/preparing disc: the same glass object that stretches into the recording capsule.
+    static let discSide: CGFloat = 18
 
     static func surfaceSize(for presentation: Presentation) -> CGSize {
         switch presentation {
         case .hidden: return .zero
-        case .idle, .preparing, .processing, .success, .failure:
+        case .idle, .preparing:
+            return CGSize(width: Self.discSide, height: Self.discSide)
+        case .processing, .success, .failure:
             return CGSize(width: Self.signalWindowSide, height: Self.signalWindowSide)
         case .recording: return CGSize(width: 58, height: 22)
         case .warning(let text):
@@ -508,18 +512,26 @@ final class DictationMiniIndicatorController: NSObject {
 
     /// Transparent margin around the visible glyph inside the window (seeds carry a glow margin).
     static func visualInset(for presentation: Presentation) -> CGFloat {
-        switch presentation {
-        case .idle, .preparing:
-            return (signalWindowSide - DictationMiniRendering.preparingDotDiameter) / 2
+        _ = presentation
+        return 0
+    }
+
+    /// The disc stretches into the capsule and back: idle/preparing ↔ recording ↔ processing.
+    static func morphs(from old: Presentation, to new: Presentation) -> Bool {
+        switch (old, new) {
+        case (.idle, .preparing), (.preparing, .recording), (.idle, .recording),
+             (.recording, .processing), (.processing, .success), (.processing, .failure),
+             (.recording, .success), (.recording, .failure):
+            return true
         default:
-            return 0
+            return false
         }
     }
 
     static func usesCompositorShadow(_ presentation: Presentation) -> Bool {
         switch presentation {
-        case .recording, .processing, .failure, .warning: return true
-        case .hidden, .idle, .preparing, .success: return false
+        case .recording, .processing, .failure, .warning, .idle, .preparing: return true
+        case .hidden, .success: return false
         }
     }
 
@@ -582,8 +594,17 @@ final class DictationMiniIndicatorController: NSObject {
         disappearanceGeneration &+= 1
         contentView?.cancelDisappearance()
         if let currentFrame {
-            panel.setFrame(currentFrame, display: true)
-            if oldPresentation != newPresentation {
+            let morphs = Self.morphs(from: oldPresentation, to: newPresentation) && panel.isVisible
+            if morphs, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = DictationMiniRendering.morphDuration
+                    context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    panel.animator().setFrame(currentFrame, display: true)
+                }
+            } else {
+                panel.setFrame(currentFrame, display: true)
+            }
+            if oldPresentation != newPresentation, !morphs {
                 contentView?.playAppearance(
                     reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
                         || newPresentation == .idle
@@ -902,12 +923,15 @@ enum DictationMiniRendering {
     static let processingPointSpacing: CGFloat = 2.8
     static let processingPointMaxDiameter: CGFloat = 2.3
     static let processingPointMinDiameter: CGFloat = 1.7
-    static let preparingDotDiameter: CGFloat = 10
+    /// Core inside the idle/preparing disc: a quiet coral point that brightens while preparing.
+    static let idleCoreDiameter: CGFloat = 4
+    static let preparingCoreDiameter: CGFloat = 6
     /// Completion fills the shared 20 pt window as a glass disk.
     static let completionDiameter: CGFloat = 20
     static let successGlassTintAlpha: CGFloat = 0.82
     static let successCheckLineWidth: CGFloat = 1.8
     static let appearanceFadeDuration: TimeInterval = 0.14
+    static let morphDuration: TimeInterval = 0.16
     static let appearancePopDuration: TimeInterval = 0.26
     static let disappearanceFadeDuration: TimeInterval = 0.14
 
@@ -1246,9 +1270,9 @@ private final class DictationMiniView: NSView {
         let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
         let usesSurface: Bool
         switch presentation {
-        case .recording, .processing, .failure, .warning, .success:
+        case .recording, .processing, .failure, .warning, .success, .idle, .preparing:
             usesSurface = true
-        case .hidden, .idle, .preparing:
+        case .hidden:
             usesSurface = false
         }
         glassView.isHidden = !usesSurface || reduceTransparency
@@ -1260,7 +1284,7 @@ private final class DictationMiniView: NSView {
         glassView.appearance = NSAppearance(named: successMaterial ? .aqua : .darkAqua)
         let radius: CGFloat
         switch presentation {
-        case .processing, .failure, .success:
+        case .processing, .failure, .success, .idle, .preparing:
             radius = bounds.height / 2
         default:
             radius = min(bounds.height / 2, 11)
@@ -1279,9 +1303,13 @@ private final class DictationMiniView: NSView {
         glassView.layer?.masksToBounds = true
         tintView.layer?.cornerRadius = radius
         tintView.layer?.cornerCurve = .continuous
-        let tintAlpha = presentation == .recording
-            ? DictationMiniRendering.recordingGlassTintAlpha
-            : DictationMiniRendering.glassTintAlpha
+        let tintAlpha: CGFloat
+        switch presentation {
+        case .recording, .idle, .preparing:
+            tintAlpha = DictationMiniRendering.recordingGlassTintAlpha
+        default:
+            tintAlpha = DictationMiniRendering.glassTintAlpha
+        }
         if isSuccess {
             tintView.layer?.backgroundColor = NSColor.colorWith(
                 hex: DictationMiniPalette.successHex,
@@ -1355,9 +1383,14 @@ private final class DictationMiniCueView: NSView {
         let diameter: CGFloat
         let fillColor: NSColor
         switch presentation {
-        case .preparing, .idle:
-            diameter = DictationMiniRendering.preparingDotDiameter
-            fillColor = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
+        case .idle:
+            diameter = DictationMiniRendering.idleCoreDiameter
+            fillColor = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 0.96)
+        case .preparing:
+            diameter = DictationMiniRendering.preparingCoreDiameter
+            let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
+            let highlight = NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1)
+            fillColor = accent.blended(withFraction: 0.45, of: highlight) ?? accent
         case .success:
             diameter = DictationMiniRendering.completionDiameter
             fillColor = NSColor.colorWith(hex: DictationMiniPalette.successHex, alpha: 1)
@@ -1397,9 +1430,9 @@ private final class DictationMiniCueView: NSView {
             checkLayer.isHidden = true
             diskLayer.path = CGPath(ellipseIn: diskRect, transform: nil)
             diskLayer.fillColor = fillColor.cgColor
-            diskLayer.shadowColor = fillColor.withAlphaComponent(0.52).cgColor
+            diskLayer.shadowColor = fillColor.withAlphaComponent(presentation == .preparing ? 0.7 : 0.45).cgColor
             diskLayer.shadowOpacity = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0.3 : 1
-            diskLayer.shadowRadius = 4
+            diskLayer.shadowRadius = presentation == .preparing ? 4 : 2.5
         }
         CATransaction.commit()
     }

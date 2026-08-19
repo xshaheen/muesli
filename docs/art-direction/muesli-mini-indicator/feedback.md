@@ -164,3 +164,9 @@
 - Fix: a line-aware caret tier (AXInsertionPointLineNumber + AXRangeForLine) realigns the insertion rect when it lands on the wrong visual line (soft wraps, bidi runs).
 - Adopt: typing hides the dot with a 0.7 s hold; the pointer is the anchor for a focused field whose caret bounds are unavailable when it rests inside that field (the reference's "mouse" tier), otherwise the first line.
 - Node: `follower-14` (behavioural follow-up).
+
+## 19-08-2026 16:48 UTC — design review decisions
+
+- Decided together after a hold: (1) idle/preparing become an 18 pt dark glass disc with a small coral core — the same object that stretches into the recording capsule; (2) keep the hover keycap, the selection hint (a rewrite-selection mode is planned) and the click menu; (3) recording with no field → pointer; idle with no focused text field → hidden; with a caret → under it, slightly left, as measured; (4) eager hotkey start: record at key-down, discard taps silently with the start cue gated until the tap guard passes; (5) keep drag-to-pin.
+- Implemented as one pass: disc look + disc↔capsule↔orb morph (0.16 s), eager start (`HotkeyMonitor.eagerStart`, opt-in so the existing timing tests hold; enabled for the dictation hotkey), gated start cue.
+- Resulting node: `glass-disc-15`.

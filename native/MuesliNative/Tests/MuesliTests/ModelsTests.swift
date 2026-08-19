@@ -2247,6 +2247,63 @@ struct HotkeyMonitorTests {
         #expect(HotkeyTriggerTiming.prepareDelay(forThresholdMilliseconds: 100) == 0)
     }
 
+    @Test("eager start records at key-down, stops on a real hold, and discards taps silently")
+    @MainActor
+    func eagerStartHoldAndTap() {
+        let scheduler = ManualHotkeyScheduler()
+        let monitor = scheduler.makeMonitor(doubleTapWindow: 0.35)
+        monitor.eagerStart = true
+        var prepareCount = 0, startCount = 0, stopCount = 0, cancelCount = 0, toggleStartCount = 0
+        monitor.onPrepare = { prepareCount += 1 }
+        monitor.onStart = { startCount += 1 }
+        monitor.onStop = { stopCount += 1 }
+        monitor.onCancel = { cancelCount += 1 }
+        monitor.onToggleStart = { toggleStartCount += 1 }
+
+        // Hold: prepare at key-down, start after the eager delay, stop on release.
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        #expect(prepareCount == 1)
+        #expect(startCount == 0)
+        scheduler.advance(by: HotkeyTriggerTiming.eagerStartDelay + 0.01)
+        #expect(startCount == 1)
+        scheduler.advance(by: 0.5)
+        monitor.handleFlagsChanged(keyCode: 55, flags: [])
+        #expect(stopCount == 1)
+        #expect(cancelCount == 0)
+
+        // Tap: the started recording is discarded, never stopped.
+        scheduler.advance(by: 1)
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        scheduler.advance(by: 0.10)
+        #expect(startCount == 2)
+        monitor.handleFlagsChanged(keyCode: 55, flags: [])
+        #expect(stopCount == 1)
+        #expect(cancelCount == 1)
+
+        // Second tap inside the window goes hands-free.
+        scheduler.advance(by: 0.10)
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        #expect(toggleStartCount == 1)
+        #expect(startCount == 2)
+    }
+
+    @Test("eager start treats a chord inside the tap guard as a discard, not a stop")
+    @MainActor
+    func eagerStartChordDiscards() {
+        let scheduler = ManualHotkeyScheduler()
+        let monitor = scheduler.makeMonitor(doubleTapWindow: 0.35)
+        monitor.eagerStart = true
+        var stopCount = 0, cancelCount = 0
+        monitor.onStop = { stopCount += 1 }
+        monitor.onCancel = { cancelCount += 1 }
+
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        scheduler.advance(by: 0.08)
+        monitor.handleFlagsChanged(keyCode: 56, flags: [.command, .shift])
+        #expect(cancelCount == 1)
+        #expect(stopCount == 0)
+    }
+
     @Test("low trigger threshold still allows double-tap toggle")
     @MainActor
     func lowTriggerThresholdStillAllowsDoubleTapToggle() {

@@ -457,6 +457,34 @@
         "generated_at_utc": "2026-08-19T13:34:37Z",
         "remote_service_disclosure": "none"
       }
+    },
+    {
+      "id": "glass-disc-15",
+      "parents": [
+        "follower-14"
+      ],
+      "round": 15,
+      "mode": "iterate",
+      "thesis": "Idle and Preparing should be the same glass object as the recording capsule — an 18 pt dark disc with a coral core that brightens and then stretches into the wave — and the hotkey should record from key-down with taps discarded.",
+      "anchors": [
+        "user decisions 19-08-2026: disc look, keep hover affordances and selection hint, pointer only for recording without a field, eager start, keep pinning",
+        "side-by-side measurements of the reference follower",
+        "follower-14"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/glass-disc-15.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T16:48:54Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T16:48:54Z",
+        "remote_service_disclosure": "none"
+      }
     }
   ],
   "decisions": [
@@ -564,6 +592,13 @@
       "operation": "replace the timed reminder with a persistent idle follower (hysteresis, activity suppression, Escape, snooze, pinning, hover keycaps, selection hint, toasts), add pointer/screen-bottom fallbacks for active states and child drilling, and light the recording wave with seeded sparks",
       "feedback_ref": "feedback.md#19-08-2026-1334-utc--adopt-the-follower-approach",
       "decided_at_utc": "2026-08-19T13:34:37Z"
+    },
+    {
+      "from": "follower-14",
+      "to": "glass-disc-15",
+      "operation": "replace the naked seed with an 18 pt glass disc and coral core for idle/preparing, morph disc↔capsule↔orb, eager hotkey start with tap discard and gated start cue",
+      "feedback_ref": "feedback.md#19-08-2026-1648-utc--design-review-decisions",
+      "decided_at_utc": "2026-08-19T16:48:54Z"
     }
   ]
 }

@@ -9,6 +9,9 @@ enum HotkeyTriggerTiming {
     static let minThresholdMilliseconds = 50
     static let maxThresholdMilliseconds = 2_000
     static let doubleTapTapGuardDelay: TimeInterval = 0.18
+    /// Eager mode: recording starts this soon after key-down; anything shorter than the tap
+    /// guard on release is treated as a tap and discarded silently.
+    static let eagerStartDelay: TimeInterval = 0.06
 
     static func clampedMilliseconds(_ value: Int) -> Int {
         min(max(value, minThresholdMilliseconds), maxThresholdMilliseconds)
@@ -34,6 +37,9 @@ final class HotkeyMonitor {
     var onToggleStop: (() -> Void)?
     var targetKeyCode: UInt16 = 55
     var doubleTapEnabled: Bool = true
+    /// Start recording at key-down instead of after the trigger threshold. Taps (released
+    /// before the double-tap guard) are discarded via `onCancel`; holds stop normally.
+    var eagerStart: Bool = false
 
     // Combination mode (e.g. Cmd+Shift+R)
     var combinationModifiers: NSEvent.ModifierFlags?
@@ -50,6 +56,7 @@ final class HotkeyMonitor {
     private var armCancelWorkItem: DispatchWorkItem?
     private var combinationWorkItem: DispatchWorkItem?
     private var targetKeyDown = false
+    private var targetKeyDownAt: Date?
     private var otherKeyPressed = false
     private var armed = false
     private var prepared = false
@@ -428,6 +435,7 @@ final class HotkeyMonitor {
                         return
                     }
 
+                    targetKeyDownAt = now()
                     if let onArm {
                         armed = true
                         onArm()
@@ -445,6 +453,33 @@ final class HotkeyMonitor {
 
                 if toggleActive {
                     // Don't stop toggle on key-up — only on next key-down
+                    return
+                }
+
+                if eagerStart {
+                    let held = targetKeyDownAt.map { now().timeIntervalSince($0) } ?? 0
+                    targetKeyDownAt = nil
+                    let isTap = wasDown && !otherKeyPressed && held < HotkeyTriggerTiming.doubleTapTapGuardDelay
+                    if isTap {
+                        // A tap never produces a transcript: discard whatever started and keep
+                        // the double-tap window open so a second tap can go hands-free.
+                        lastTapWasShort = doubleTapEnabled
+                        lastTapUpTime = now()
+                        let hadSession = active || prepared || wasArmed
+                        active = false
+                        prepared = false
+                        if hadSession { onCancel?() }
+                        return
+                    }
+                    lastTapWasShort = false
+                    if active {
+                        active = false
+                        prepared = false
+                        onStop?()
+                    } else if prepared || wasArmed {
+                        prepared = false
+                        onCancel?()
+                    }
                     return
                 }
 
@@ -483,7 +518,7 @@ final class HotkeyMonitor {
             if active {
                 active = false
                 prepared = false
-                onStop?()
+                if eagerStart && heldWithinTapGuard() { onCancel?() } else { onStop?() }
             } else if prepared {
                 prepared = false
                 onCancel?()
@@ -546,7 +581,7 @@ final class HotkeyMonitor {
                 if active {
                     active = false
                     prepared = false
-                    onStop?()
+                    if eagerStart && heldWithinTapGuard() { onCancel?() } else { onStop?() }
                 } else if prepared {
                     prepared = false
                     onCancel?()
@@ -557,7 +592,30 @@ final class HotkeyMonitor {
         }
     }
 
+    private func heldWithinTapGuard() -> Bool {
+        guard let targetKeyDownAt else { return false }
+        return now().timeIntervalSince(targetKeyDownAt) < HotkeyTriggerTiming.doubleTapTapGuardDelay
+    }
+
     private func scheduleTimers() {
+        if eagerStart {
+            // Prepare now, record almost immediately; the release decides tap versus hold.
+            armCancelWorkItem?.cancel()
+            armCancelWorkItem = nil
+            prepared = true
+            armed = false
+            fputs("[hotkey] prepared (eager)\n", stderr)
+            onPrepare?()
+            let start = DispatchWorkItem { [weak self] in
+                guard let self, self.targetKeyDown, !self.otherKeyPressed, !self.active else { return }
+                self.active = true
+                fputs("[hotkey] start (eager)\n", stderr)
+                self.onStart?()
+            }
+            startWorkItem = start
+            scheduleAfter(HotkeyTriggerTiming.eagerStartDelay, start)
+            return
+        }
         let delays = timerDelays()
         let prepare = DispatchWorkItem { [weak self] in
             guard let self, self.targetKeyDown, !self.otherKeyPressed, !self.prepared, !self.active else { return }

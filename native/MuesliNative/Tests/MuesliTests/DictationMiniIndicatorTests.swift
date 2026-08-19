@@ -14,7 +14,9 @@ struct DictationMiniIndicatorTests {
     func stateVocabulary() {
         #expect(DictationMiniIndicatorController.surfaceSize(for: .hidden) == .zero)
         let signal = CGSize(width: 20, height: 20)
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .preparing) == signal)
+        let disc = CGSize(width: 18, height: 18)
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .idle) == disc)
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .preparing) == disc)
         #expect(DictationMiniIndicatorController.surfaceSize(for: .recording) == CGSize(width: 58, height: 22))
         #expect(DictationMiniIndicatorController.surfaceSize(for: .processing) == signal)
         #expect(DictationMiniIndicatorController.surfaceSize(for: .success) == signal)
@@ -40,7 +42,8 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniRendering.successCheckLineWidth == 1.8)
         #expect(DictationMiniPalette.failureHex == 0xFF6961)
         #expect(DictationMiniRendering.glassTintAlpha == 0.44)
-        #expect(DictationMiniRendering.preparingDotDiameter == 10)
+        #expect(DictationMiniRendering.idleCoreDiameter == 4)
+        #expect(DictationMiniRendering.preparingCoreDiameter == 6)
         #expect(DictationMiniRendering.completionDiameter == 20)
         // The processing field and the completion glow must stay inside the shared 20 pt window.
         let fieldExtent = 2 * DictationMiniRendering.processingPointSpacing
@@ -49,11 +52,16 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniRendering.completionDiameter == DictationMiniIndicatorController.signalWindowSide)
         // Bright signals carry no compositor shadow (it reads as a dark ring); glass capsules do.
         #expect(!DictationMiniIndicatorController.usesCompositorShadow(.success))
-        #expect(!DictationMiniIndicatorController.usesCompositorShadow(.preparing))
-        #expect(!DictationMiniIndicatorController.usesCompositorShadow(.idle))
+        #expect(DictationMiniIndicatorController.usesCompositorShadow(.preparing))
+        #expect(DictationMiniIndicatorController.usesCompositorShadow(.idle))
         #expect(DictationMiniIndicatorController.usesCompositorShadow(.recording))
         #expect(DictationMiniIndicatorController.usesCompositorShadow(.processing))
-        #expect(DictationMiniRendering.preparingDotDiameter < DictationMiniRendering.completionDiameter)
+        #expect(DictationMiniRendering.preparingCoreDiameter < DictationMiniIndicatorController.discSide)
+        #expect(DictationMiniIndicatorController.morphs(from: .idle, to: .preparing))
+        #expect(DictationMiniIndicatorController.morphs(from: .preparing, to: .recording))
+        #expect(DictationMiniIndicatorController.morphs(from: .recording, to: .processing))
+        #expect(!DictationMiniIndicatorController.morphs(from: .hidden, to: .preparing))
+        #expect(!DictationMiniIndicatorController.morphs(from: .success, to: .hidden))
     }
 
     @Test("recording keeps the compact capsule and renders a dense one-point history field")
@@ -192,7 +200,7 @@ struct DictationMiniIndicatorTests {
         // Under the caret (with the follower's small leftward bias); the seed's visible top keeps the gap.
         #expect(controller.currentFrame?.midX == 220 + DictationMiniPlacement.caretHorizontalBias)
         let inset = DictationMiniIndicatorController.visualInset(for: .preparing)
-        #expect(inset == 5)
+        #expect(inset == 0)
         #expect((controller.currentFrame?.maxY ?? 0) - inset == 320 - DictationMiniPlacement.caretGap)
         controller.dismiss(generation: token)
         controller.close()
@@ -294,7 +302,7 @@ struct DictationMiniIndicatorTests {
     func idleDotFollower() {
         var announcements: [String] = []
         let controller = makeController(accessibilitySink: { announcements.append($0) })
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .idle) == CGSize(width: 20, height: 20))
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .idle) == CGSize(width: 18, height: 18))
         #expect(DictationMiniIndicatorController.accessibilityLabel(for: .idle) == "Dictation ready")
         let token = AXElementToken(element: AXUIElementCreateSystemWide())
         func sample(_ x: CGFloat, selection: Bool = false) -> DictationTextContextSample {
