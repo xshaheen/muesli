@@ -779,7 +779,7 @@ struct ModelsView: View {
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .frame(width: 64, alignment: .leading)
 
-                Text(appState.config.languageProfile.effectiveBehavior(for: selectedOption).explanation)
+                Text(appState.config.dictationLanguageProfile.presentation(for: selectedOption).explanation)
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .frame(maxWidth: 300, alignment: .leading)
@@ -1089,7 +1089,7 @@ struct ModelsView: View {
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .frame(width: 64, alignment: .leading)
 
-                Text(appState.config.languageProfile.effectiveBehavior(for: option).explanation)
+                Text(appState.config.dictationLanguageProfile.presentation(for: option).explanation)
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .frame(maxWidth: 300, alignment: .leading)

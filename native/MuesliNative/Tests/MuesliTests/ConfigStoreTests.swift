@@ -157,18 +157,21 @@ struct ConfigStoreTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = ConfigStore(supportDirectory: directory)
         var candidate = AppConfig()
-        candidate.languageProfile = try LanguageProfile(
+        candidate.dictationLanguageProfile = try DictationLanguageProfile(
             selectedLanguages: [.english, .arabic],
-            dominantLanguage: .arabic,
-            meetingOutputPolicy: .dominantLanguage
+            dominantLanguage: .arabic
         )
+        candidate.meetingSpokenLanguage = .explicit(.arabic)
+        candidate.meetingArtifactLanguagePolicy = .arabic
         candidate.languageProfileNeedsConfirmation = true
 
         let persisted = try store.saveLanguageProfileConfiguration(candidate)
         let reloaded = store.load()
 
-        #expect(persisted.languageProfile == candidate.languageProfile)
-        #expect(reloaded.languageProfile == candidate.languageProfile)
+        #expect(persisted.dictationLanguageProfile == candidate.dictationLanguageProfile)
+        #expect(reloaded.dictationLanguageProfile == candidate.dictationLanguageProfile)
+        #expect(reloaded.meetingSpokenLanguage == .explicit(.arabic))
+        #expect(reloaded.meetingArtifactLanguagePolicy == .arabic)
         #expect(!reloaded.languageProfileNeedsConfirmation)
         #expect(reloaded.cohereLanguage == CohereTranscribeLanguage.arabic.rawValue)
         #expect(reloaded.nemotron35Language == Nemotron35Language.arabic.rawValue)

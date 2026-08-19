@@ -1859,9 +1859,9 @@ final class MuesliController: NSObject {
     /// recordings keep their frozen profile snapshots; only future sessions see
     /// the newly published value.
     @discardableResult
-    func saveLanguageProfile(_ profile: LanguageProfile) throws -> AppConfig {
+    func saveLanguageProfile(_ profile: DictationLanguageProfile) throws -> AppConfig {
         var candidate = config
-        candidate.languageProfile = profile
+        candidate.dictationLanguageProfile = profile
         let persisted = try configStore.saveLanguageProfileConfiguration(candidate)
         config = persisted
         appState.config = persisted
@@ -1871,10 +1871,10 @@ final class MuesliController: NSObject {
 
     func languageProfileClient() -> LanguageProfileClient {
         LanguageProfileClient(
-            load: { [weak self] in self?.config.languageProfile ?? .automatic },
+            load: { [weak self] in self?.config.dictationLanguageProfile ?? .automatic },
             save: { [weak self] profile in
                 guard let self else { throw LanguageProfileClient.Error.controllerUnavailable }
-                return try self.saveLanguageProfile(profile).languageProfile
+                return try self.saveLanguageProfile(profile).dictationLanguageProfile
             }
         )
     }
@@ -4335,10 +4335,10 @@ final class MuesliController: NSObject {
             config.userName = userName
             config.sttBackend = backend.backend
             config.sttModel = backend.model
-            config.languageProfile = LanguageProfile.onboarding(
+            config.applyLegacyLanguageProfile(LanguageProfile.onboarding(
                 backend: backend,
                 cohereLanguage: cohereLanguage
-            )
+            ))
             config.mirrorLanguageProfileToLegacyPins()
             config.meetingTranscriptionBackend = backend.backend
             config.meetingTranscriptionModel = backend.model
@@ -7838,7 +7838,7 @@ final class MuesliController: NSObject {
 
         let regeneratedNotes: String
         var summaryConfig = config
-        summaryConfig.languageProfile = result.languageProfile
+        summaryConfig.applyLegacyLanguageProfile(result.languageProfile)
         do {
             regeneratedNotes = try await MeetingSummaryClient.summarize(
                 transcript: combined,

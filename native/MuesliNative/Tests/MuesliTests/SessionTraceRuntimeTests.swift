@@ -18,13 +18,14 @@ struct SessionTraceRuntimeTests {
         ).utf8)
         let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
-        #expect(json["schemaVersion"] as? Int == 2)
+        #expect(json["schemaVersion"] as? Int == 3)
         #expect(json["status"] as? String == "frozen")
         #expect(json["selectedLanguages"] as? [String] == ["ar", "en"])
         #expect(json["dominantLanguage"] as? String == "ar")
         #expect(json["meetingOutputPolicy"] as? String == "dominant_language")
-        #expect(json["effectiveLanguage"] as? String == "en")
-        #expect(json["effectiveBehavior"] as? String == "english_only_fallback")
+        #expect(json["effectiveLanguage"] == nil)
+        #expect(json["effectiveBehavior"] as? String == "incompatible")
+        #expect(json["routingResult"] as? String == "incompatible")
     }
 
     @Test("initial profile evidence is ordered before an immediate terminal failure")

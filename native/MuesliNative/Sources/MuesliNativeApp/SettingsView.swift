@@ -284,7 +284,7 @@ struct SettingsView: View {
                 }
                 scrollToFeatureTourTarget(activeFeatureTourTarget, using: scrollProxy)
             }
-            .onChange(of: appState.config.languageProfile) { _, profile in
+            .onChange(of: appState.config.dictationLanguageProfile) { _, profile in
                 languageProfileEditor.synchronize(with: profile)
             }
             .onDisappear {
@@ -734,8 +734,8 @@ struct SettingsView: View {
             }
             Divider().background(MuesliTheme.surfaceBorder)
             settingsDescription(
-                controller.languageProfileClient().effectiveBehavior(
-                    appState.config.languageProfile,
+                controller.languageProfileClient().presentation(
+                    appState.config.dictationLanguageProfile,
                     appState.selectedBackend
                 ).explanation
             )
@@ -743,7 +743,7 @@ struct SettingsView: View {
     }
 
     private var languageProfileSettingsSection: some View {
-        settingsSection("Languages") {
+        settingsSection("Dictation languages") {
             if appState.config.languageProfileNeedsConfirmation {
                 Label(
                     "Previous model language choices disagreed. Review this profile, then save it.",
@@ -804,23 +804,6 @@ struct SettingsView: View {
                     onSelectIndex: { index in
                         guard options.indices.contains(index) else { return }
                         languageProfileEditor.setDominant(options[index])
-                    }
-                )
-                .frame(height: 24)
-            }
-
-            Divider().background(MuesliTheme.surfaceBorder)
-            settingsRow("Meeting output", controlWidth: meetingControlWidth) {
-                let policies: [MeetingOutputLanguagePolicy] = languageProfileEditor
-                    .dominantLanguage?.supportsMeetingOutputLanguage == true
-                    ? MeetingOutputLanguagePolicy.allCases
-                    : [.automatic]
-                FixedWidthPopUp(
-                    selection: languageProfileEditor.meetingOutputPolicy.label,
-                    options: policies.map(\.label),
-                    onSelectIndex: { index in
-                        guard policies.indices.contains(index) else { return }
-                        languageProfileEditor.setMeetingOutputPolicy(policies[index])
                     }
                 )
                 .frame(height: 24)
@@ -950,8 +933,8 @@ struct SettingsView: View {
             }
             Divider().background(MuesliTheme.surfaceBorder)
             settingsDescription(
-                controller.languageProfileClient().effectiveBehavior(
-                    appState.config.languageProfile,
+                controller.languageProfileClient().presentation(
+                    appState.config.dictationLanguageProfile,
                     appState.selectedMeetingTranscriptionBackend
                 ).explanation
             )
@@ -1498,8 +1481,6 @@ struct SettingsView: View {
 
     private var meetingsSettingsPane: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
-            languageProfileSettingsSection
-
             meetingTranscriptionSettingsSection
 
             settingsSection("Meeting Context") {

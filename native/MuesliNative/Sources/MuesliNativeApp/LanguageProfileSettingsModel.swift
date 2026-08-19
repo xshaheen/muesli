@@ -1,4 +1,5 @@
 import Foundation
+import MuesliCore
 import Observation
 
 /// Narrow persistence boundary for the profile editor. The runtime controller
@@ -13,20 +14,20 @@ struct LanguageProfileClient {
         }
     }
 
-    let load: () -> LanguageProfile
-    let save: (LanguageProfile) throws -> LanguageProfile
-    let effectiveBehavior: (LanguageProfile, BackendOption) -> LanguageProfileEffectiveBehavior
+    let load: () -> DictationLanguageProfile
+    let save: (DictationLanguageProfile) throws -> DictationLanguageProfile
+    let presentation: (DictationLanguageProfile, BackendOption) -> LanguageSelectionPresentation
 
     init(
-        load: @escaping () -> LanguageProfile = { .automatic },
-        save: @escaping (LanguageProfile) throws -> LanguageProfile,
-        effectiveBehavior: @escaping (LanguageProfile, BackendOption) -> LanguageProfileEffectiveBehavior = {
-            profile, backend in profile.effectiveBehavior(for: backend)
+        load: @escaping () -> DictationLanguageProfile = { .automatic },
+        save: @escaping (DictationLanguageProfile) throws -> DictationLanguageProfile,
+        presentation: @escaping (DictationLanguageProfile, BackendOption) -> LanguageSelectionPresentation = {
+            profile, backend in profile.presentation(for: backend)
         }
     ) {
         self.load = load
         self.save = save
-        self.effectiveBehavior = effectiveBehavior
+        self.presentation = presentation
     }
 }
 
@@ -35,15 +36,13 @@ struct LanguageProfileClient {
 final class LanguageProfileSettingsModel {
     private(set) var selectedLanguages: [TranscriptionLanguage]
     private(set) var dominantLanguage: TranscriptionLanguage?
-    private(set) var meetingOutputPolicy: MeetingOutputLanguagePolicy
-    private(set) var committedProfile: LanguageProfile
+    private(set) var committedProfile: DictationLanguageProfile
     private(set) var errorMessage: String?
     private(set) var didSave = false
 
-    init(profile: LanguageProfile = .automatic) {
+    init(profile: DictationLanguageProfile = .automatic) {
         selectedLanguages = profile.selectedLanguages
         dominantLanguage = profile.dominantLanguage
-        meetingOutputPolicy = profile.meetingOutputPolicy
         committedProfile = profile
     }
 
@@ -51,12 +50,11 @@ final class LanguageProfileSettingsModel {
         draftProfile != committedProfile
     }
 
-    var draftProfile: LanguageProfile {
+    var draftProfile: DictationLanguageProfile {
         // The mutation methods maintain the dominant-language invariant.
-        (try? LanguageProfile(
+        (try? DictationLanguageProfile(
             selectedLanguages: selectedLanguages,
-            dominantLanguage: dominantLanguage,
-            meetingOutputPolicy: meetingOutputPolicy
+            dominantLanguage: dominantLanguage
         )) ?? .automatic
     }
 
@@ -64,7 +62,7 @@ final class LanguageProfileSettingsModel {
         synchronize(with: client.load())
     }
 
-    func synchronize(with profile: LanguageProfile) {
+    func synchronize(with profile: DictationLanguageProfile) {
         guard !hasUnsavedChanges else { return }
         applyCommitted(profile)
     }
@@ -75,7 +73,6 @@ final class LanguageProfileSettingsModel {
             selected.remove(language)
             if dominantLanguage == language {
                 dominantLanguage = nil
-                meetingOutputPolicy = .automatic
             }
         } else {
             selected.insert(language)
@@ -88,25 +85,12 @@ final class LanguageProfileSettingsModel {
     func useAutomaticDetection() {
         selectedLanguages = []
         dominantLanguage = nil
-        meetingOutputPolicy = .automatic
         didSave = false
         errorMessage = nil
     }
 
     func setDominant(_ language: TranscriptionLanguage?) {
         dominantLanguage = language.flatMap { selectedLanguages.contains($0) ? $0 : nil }
-        if dominantLanguage?.supportsMeetingOutputLanguage != true,
-           meetingOutputPolicy == .dominantLanguage {
-            meetingOutputPolicy = .automatic
-        }
-        didSave = false
-        errorMessage = nil
-    }
-
-    func setMeetingOutputPolicy(_ policy: MeetingOutputLanguagePolicy) {
-        meetingOutputPolicy = dominantLanguage?.supportsMeetingOutputLanguage == true
-            ? policy
-            : .automatic
         didSave = false
         errorMessage = nil
     }
@@ -124,10 +108,9 @@ final class LanguageProfileSettingsModel {
         }
     }
 
-    private func applyCommitted(_ profile: LanguageProfile) {
+    private func applyCommitted(_ profile: DictationLanguageProfile) {
         selectedLanguages = profile.selectedLanguages
         dominantLanguage = profile.dominantLanguage
-        meetingOutputPolicy = profile.meetingOutputPolicy
         committedProfile = profile
     }
 }

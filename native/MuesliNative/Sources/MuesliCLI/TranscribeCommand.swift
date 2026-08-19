@@ -53,6 +53,50 @@ enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
         }
     }
 
+    var transcriptionBackendID: TranscriptionBackendID {
+        TranscriptionBackendID(rawValue: "cli:\(rawValue)")
+    }
+
+    /// U1 maps CLI identities into the shared contract. U3 consumes this
+    /// descriptor after it adds the `--language` input and backend adapters.
+    func languageCapabilities(constrainedConfidenceConformant: Bool = false) -> TranscriptionBackendCapabilities {
+        let multilingual = Set(TranscriptionLanguage.allCases)
+        let fixedEnglish: Bool
+        let supportsSingle: Bool
+        let supportsAuto: Bool
+        switch self {
+        case .parakeetV2, .whisperTinyEnglish, .whisperSmallEnglish, .whisperMediumEnglish:
+            fixedEnglish = true
+            supportsSingle = false
+            supportsAuto = false
+        case .qwen3Asr, .whisperTiny, .whisperSmall, .whisperLargeTurbo, .nemotron35:
+            fixedEnglish = false
+            supportsSingle = true
+            supportsAuto = true
+        default:
+            fixedEnglish = false
+            supportsSingle = false
+            supportsAuto = true
+        }
+        let mayEnableConstrained = constrainedConfidenceConformant
+            && (self == .qwen3Asr || [.whisperTiny, .whisperSmall, .whisperLargeTurbo].contains(self))
+        return TranscriptionBackendCapabilities(
+            backendID: transcriptionBackendID,
+            supportedLanguages: fixedEnglish ? [.english] : multilingual,
+            supportsAutomaticDetection: supportsAuto,
+            supportsSingleLanguage: supportsSingle,
+            constrainedCandidateLanguages: mayEnableConstrained ? [.arabic, .english] : [],
+            constrainedCandidateCapacity: mayEnableConstrained ? 2 : 0,
+            hasComparableCandidateConfidence: mayEnableConstrained,
+            fixedLanguage: fixedEnglish ? .english : nil,
+            supportsCodeSwitching: supportsAuto,
+            maximumSafeDuration: self == .qwen3Asr ? 20 : nil,
+            supportsStreaming: self == .parakeetEou320ms || self == .nemotron35,
+            workloads: [.cli],
+            isAvailable: true
+        )
+    }
+
 }
 
 struct TranscribeJSONPayload: Encodable {

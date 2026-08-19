@@ -225,14 +225,20 @@ struct TranscriptionActivityOwnership: Equatable {
 
 enum SessionTraceSnapshot {
     private struct EncodedLanguageProfile: Encodable {
-        let schemaVersion = 2
+        let schemaVersion = 3
         let status = "frozen"
         let backend: String
+        let backendID: String
         let selectedLanguages: [String]
         let dominantLanguage: String?
         let meetingOutputPolicy: String
         let effectiveLanguage: String?
         let effectiveBehavior: String
+        let routingResult: String
+        let candidateCount: Int
+        let supportsAutomaticDetection: Bool
+        let supportsSingleLanguage: Bool
+        let constrainedCandidateCapacity: Int
     }
 
     private struct EncodedRetranscriptionContext: Encodable {
@@ -257,14 +263,42 @@ enum SessionTraceSnapshot {
         backend: BackendOption,
         profile: LanguageProfile
     ) -> String {
-        let behavior = profile.effectiveBehavior(for: backend)
+        let dictationProfile = (try? DictationLanguageProfile(
+            selectedLanguages: profile.selectedLanguages,
+            dominantLanguage: profile.dominantLanguage
+        )) ?? .automatic
+        let capabilities = backend.languageCapabilities(isAvailable: true)
+        let routing = TranscriptionLanguageRouter.resolve(
+            selection: dictationProfile.selection,
+            capabilities: capabilities,
+            workload: .dictation
+        )
+        let effectiveLanguage: TranscriptionLanguage?
+        let candidateCount: Int
+        switch routing {
+        case .pinned(let language), .fixed(let language):
+            effectiveLanguage = language
+            candidateCount = 1
+        case .constrainedCandidates(let languages, _):
+            effectiveLanguage = nil
+            candidateCount = languages.count
+        case .automatic, .incompatible:
+            effectiveLanguage = nil
+            candidateCount = 0
+        }
         return encode(EncodedLanguageProfile(
             backend: backend.backend,
+            backendID: capabilities.backendID.rawValue,
             selectedLanguages: profile.selectedLanguages.map(\.rawValue),
             dominantLanguage: profile.dominantLanguage?.rawValue,
             meetingOutputPolicy: profile.meetingOutputPolicy.rawValue,
-            effectiveLanguage: behavior.effectiveLanguage?.rawValue,
-            effectiveBehavior: behavior.kind.rawValue
+            effectiveLanguage: effectiveLanguage?.rawValue,
+            effectiveBehavior: routing.identifier,
+            routingResult: routing.identifier,
+            candidateCount: candidateCount,
+            supportsAutomaticDetection: capabilities.supportsAutomaticDetection,
+            supportsSingleLanguage: capabilities.supportsSingleLanguage,
+            constrainedCandidateCapacity: capabilities.constrainedCandidateCapacity
         ))
     }
 
