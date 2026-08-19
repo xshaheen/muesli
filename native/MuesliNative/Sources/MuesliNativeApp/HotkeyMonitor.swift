@@ -33,12 +33,17 @@ final class HotkeyMonitor {
     var onStart: (() -> Void)?
     var onStop: (() -> Void)?
     var onCancel: (() -> Void)?
+    /// Fired instead of `onCancel` when an eager-start press is resolved as a tap (released or
+    /// chorded inside the double-tap guard). A tap never carries dictation audio, so the
+    /// receiver must drop whatever capture started regardless of save policy. Falls back to
+    /// `onCancel` when unset.
+    var onTapDiscard: (() -> Void)?
     var onToggleStart: (() -> Void)?
     var onToggleStop: (() -> Void)?
     var targetKeyCode: UInt16 = 55
     var doubleTapEnabled: Bool = true
     /// Start recording at key-down instead of after the trigger threshold. Taps (released
-    /// before the double-tap guard) are discarded via `onCancel`; holds stop normally.
+    /// before the double-tap guard) are discarded via `onTapDiscard`; holds stop normally.
     var eagerStart: Bool = false
 
     // Combination mode (e.g. Cmd+Shift+R)
@@ -468,7 +473,7 @@ final class HotkeyMonitor {
                         let hadSession = active || prepared || wasArmed
                         active = false
                         prepared = false
-                        if hadSession { onCancel?() }
+                        if hadSession { discardTap() }
                         return
                     }
                     lastTapWasShort = false
@@ -518,7 +523,7 @@ final class HotkeyMonitor {
             if active {
                 active = false
                 prepared = false
-                if eagerStart && heldWithinTapGuard() { onCancel?() } else { onStop?() }
+                if eagerStart && heldWithinTapGuard() { discardTap() } else { onStop?() }
             } else if prepared {
                 prepared = false
                 onCancel?()
@@ -581,7 +586,7 @@ final class HotkeyMonitor {
                 if active {
                     active = false
                     prepared = false
-                    if eagerStart && heldWithinTapGuard() { onCancel?() } else { onStop?() }
+                    if eagerStart && heldWithinTapGuard() { discardTap() } else { onStop?() }
                 } else if prepared {
                     prepared = false
                     onCancel?()
@@ -595,6 +600,10 @@ final class HotkeyMonitor {
     private func heldWithinTapGuard() -> Bool {
         guard let targetKeyDownAt else { return false }
         return now().timeIntervalSince(targetKeyDownAt) < HotkeyTriggerTiming.doubleTapTapGuardDelay
+    }
+
+    private func discardTap() {
+        (onTapDiscard ?? onCancel)?()
     }
 
     private func scheduleTimers() {

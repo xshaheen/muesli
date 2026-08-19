@@ -475,6 +475,10 @@ final class MuesliController: NSObject {
     private var autoRecordedCalendarEventIDs = Set<String>()
     private var meetingFeatureMonitorsAllowed = false
     private var meetingDetectionMonitorStarted = false
+    /// Bumped every time meeting detection starts; a cached activity candidate is only
+    /// actionable for the Record pill when it was observed during the current run.
+    private var meetingDetectionRunID = 0
+    private var latestMeetingActivityCandidateRunID: Int?
 
     private var searchTask: Task<Void, Never>?
     private var onboardingModelPreparationTask: Task<Void, Never>?
@@ -565,6 +569,10 @@ final class MuesliController: NSObject {
     /// When the dictation hotkey went down; gates the start cue so a discarded tap never tinks.
     private var dictationHotkeyPressedAt: Date?
     private var pendingStartCueToken: UUID?
+    /// Audio sessions whose cancel has been requested but whose terminal event has not yet
+    /// arrived. A first-buffer callback queued before the cancel can still emit `.streamActive`
+    /// afterwards; those late events must not flash recording or play the start cue.
+    private var cancelledDictationAudioSessionIDs: Set<UUID> = []
     private var latestMeetingActivityCandidateObservedAt: Date?
     private var activeMeetingAutoStop = MeetingAutoStopTracker()
     private var activeMeetingSignalLossResponse: MeetingSignalLossResponse = .none
@@ -800,6 +808,7 @@ final class MuesliController: NSObject {
         hotkeyMonitor.onStart = { [weak self] in self?.handleStart() }
         hotkeyMonitor.onStop = { [weak self] in self?.handleStop() }
         hotkeyMonitor.onCancel = { [weak self] in self?.handleCancel() }
+        hotkeyMonitor.onTapDiscard = { [weak self] in self?.handleTapDiscard() }
         hotkeyMonitor.onToggleStart = { [weak self] in self?.handleToggleStart() }
         hotkeyMonitor.onToggleStop = { [weak self] in self?.handleToggleStop() }
         hotkeyMonitor.doubleTapEnabled = config.enableDoubleTapDictation
@@ -895,7 +904,7 @@ final class MuesliController: NSObject {
         meetingRecordButton.onRecord = { [weak self] in self?.recordFromMeetingRecordButton() }
         meetingRecordButton.onDismiss = { [weak self] in
             guard let self else { return }
-            self.dismissedMeetingRecordButtonCandidateID = self.latestMeetingActivityCandidate?.id
+            self.dismissedMeetingRecordButtonCandidateID = self.currentRunMeetingActivityCandidate?.id
             self.syncMeetingRecordButton()
         }
         meetingRecordButton.onCenterSaved = { [weak self] center in
@@ -1118,8 +1127,7 @@ final class MuesliController: NSObject {
         syncDictationIdleDot()
         disarmMeetingAutoStop()
         cancelMeetingDurationLimit()
-        meetingMonitor.stop()
-        meetingDetectionMonitorStarted = false
+        stopMeetingDetectionMonitor()
         dismissPresentedMeetingDetection()
         meetingNotification.close()
         meetingRecordingPanel.close()
@@ -3494,19 +3502,39 @@ final class MuesliController: NSObject {
     private func syncMeetingDetectionMonitor() {
         let shouldRun = meetingFeatureMonitorsAllowed && shouldDetectMeetingActivity
         if shouldRun && !meetingDetectionMonitorStarted {
+            meetingDetectionRunID &+= 1
             meetingMonitor.start()
             meetingDetectionMonitorStarted = true
         } else if !shouldRun && meetingDetectionMonitorStarted {
-            meetingMonitor.stop()
-            meetingDetectionMonitorStarted = false
+            stopMeetingDetectionMonitor()
             dismissPresentedMeetingDetection()
         }
         syncMeetingRecordButton()
         syncDictationIdleDot()
     }
 
+    /// Stops detection and drops the cached candidate synchronously. The detector stops
+    /// asynchronously and never emits a nil candidate on stop, so without this a restart
+    /// would surface (and record) the previous run's meeting.
+    private func stopMeetingDetectionMonitor() {
+        meetingMonitor.stop()
+        meetingDetectionMonitorStarted = false
+        latestMeetingActivityCandidate = nil
+        latestMeetingActivityCandidateObservedAt = nil
+        latestMeetingActivityCandidateRunID = nil
+        dismissedMeetingRecordButtonCandidateID = nil
+    }
+
+    /// The activity candidate observed by the current detection run; anything cached from an
+    /// earlier run must never drive the Record pill.
+    private var currentRunMeetingActivityCandidate: MeetingCandidate? {
+        guard meetingDetectionMonitorStarted,
+              latestMeetingActivityCandidateRunID == meetingDetectionRunID else { return nil }
+        return latestMeetingActivityCandidate
+    }
+
     private func syncMeetingRecordButton() {
-        let candidate = meetingDetectionMonitorStarted ? latestMeetingActivityCandidate : nil
+        let candidate = currentRunMeetingActivityCandidate
         let hasCandidate = candidate.map { !isMutedMeetingDetectionCandidate($0) } ?? false
         let shouldShow = MeetingRecordButtonPolicy.shouldShow(
             enabled: config.showMeetingRecordButton,
@@ -3528,7 +3556,7 @@ final class MuesliController: NSObject {
 
     private func recordFromMeetingRecordButton() {
         guard !isMeetingRecording(), !isStartingMeetingRecording else { return }
-        let candidate = latestMeetingActivityCandidate
+        let candidate = currentRunMeetingActivityCandidate
         let title = candidate?.subtitle ?? "Meeting"
         let didStart = startMeetingRecordingFromEntryPoint(
             title: title,
@@ -8336,6 +8364,10 @@ final class MuesliController: NSObject {
     private func playGatedDictationStartCue() {
         let guardDelay = HotkeyTriggerTiming.doubleTapTapGuardDelay
         guard let pressedAt = dictationHotkeyPressedAt else {
+            // No press bookkeeping: only a session that is still live (hands-free toggle,
+            // Nemotron streaming) may cue immediately. A stream that went active after the
+            // hold was cancelled or stopped has nothing left to announce.
+            guard dictationAudioSessionManager.hasActiveSession || isNemotron35Streaming else { return }
             SoundController.playDictationStart(enabled: true)
             return
         }
@@ -8591,6 +8623,7 @@ final class MuesliController: NSObject {
         guard !isMutedMeetingDetectionCandidate(candidate) else {
             latestMeetingActivityCandidate = nil
             latestMeetingActivityCandidateObservedAt = nil
+            latestMeetingActivityCandidateRunID = nil
             return nil
         }
         return MeetingAutoStopSource(candidate: candidate)
@@ -8611,6 +8644,7 @@ final class MuesliController: NSObject {
         meetingSignalLossPromptState.resetForRecording()
         latestMeetingActivityCandidate = nil
         latestMeetingActivityCandidateObservedAt = nil
+        latestMeetingActivityCandidateRunID = nil
         syncMeetingDetectionMonitor()
     }
 
@@ -8621,9 +8655,11 @@ final class MuesliController: NSObject {
             if let candidate {
                 latestMeetingActivityCandidate = candidate
                 latestMeetingActivityCandidateObservedAt = Date()
+                latestMeetingActivityCandidateRunID = meetingDetectionRunID
             } else {
                 latestMeetingActivityCandidate = nil
                 latestMeetingActivityCandidateObservedAt = nil
+                latestMeetingActivityCandidateRunID = nil
                 dismissedMeetingRecordButtonCandidateID = nil
             }
         }
@@ -9586,12 +9622,19 @@ final class MuesliController: NSObject {
             markDictationLatency("acquiring_audio")
             activateDictationPreparingIndicator()
         case .streamActive(let sessionID, let capturedAt):
+            guard !cancelledDictationAudioSessionIDs.contains(sessionID) else {
+                fputs("[muesli-native] ignoring stream-active for cancelled session\n", stderr)
+                break
+            }
             handleDictationStreamActive(sessionID: sessionID, capturedAt: capturedAt)
         case .speechDetected(_, let capturedAt):
             handleDictationSpeechDetected(capturedAt: capturedAt)
         case .noAudioTimeout:
             statusBarController?.setStatus("Mic waiting for speech")
         case .stopped(let eventSessionID, let wavURL):
+            if let eventSessionID {
+                cancelledDictationAudioSessionIDs.remove(eventSessionID)
+            }
             guard let eventSessionID,
                   let pendingStop = pendingStandardDictationStops.removeValue(forKey: eventSessionID) else {
                 fputs("[muesli-native] ignoring stale stopped event\n", stderr)
@@ -9606,6 +9649,7 @@ final class MuesliController: NSObject {
             break
         case .cancelled(let sessionID, let reason, let terminalCapture):
             guard let sessionID else { break }
+            cancelledDictationAudioSessionIDs.remove(sessionID)
             frozenDictationTranscriptionSelections.removeValue(forKey: sessionID)
             let startedAt = pendingStandardDictationStops[sessionID]?.startedAt
                 ?? dictationStartedAt
@@ -9638,6 +9682,9 @@ final class MuesliController: NSObject {
             }
         case .failed(let sessionID, let error, let terminalCapture):
             fputs("[muesli-native] recorder start failed: \(error)\n", stderr)
+            if let sessionID {
+                cancelledDictationAudioSessionIDs.remove(sessionID)
+            }
             let terminalStartedAt = sessionID.flatMap { pendingStandardDictationStops[$0]?.startedAt }
                 ?? dictationStartedAt
                 ?? Date()
@@ -10119,12 +10166,27 @@ final class MuesliController: NSObject {
         }
     }
 
-    private func handleCancel() {
+    /// Marks the live audio session as cancelled before the asynchronous teardown so a late
+    /// `.streamActive` for it is ignored, then cancels it.
+    private func cancelDictationAudioSession(reason: String, retainCapture: Bool = true) {
+        if let sessionID = dictationAudioSessionManager.currentSessionID {
+            cancelledDictationAudioSessionIDs.insert(sessionID)
+        }
+        dictationAudioSessionManager.cancel(reason: reason, retainCapture: retainCapture)
+    }
+
+    /// An eager-start press resolved as a tap: same teardown as a cancel, but the capture is
+    /// dropped regardless of the save policy so a tap never leaves a history row or a prompt.
+    private func handleTapDiscard() {
+        handleCancel(retainCapture: false)
+    }
+
+    private func handleCancel(retainCapture: Bool = true) {
         pendingStartCueToken = nil
         dictationHotkeyPressedAt = nil
         if isMeetingRecording() { return }
         if shouldIgnoreDictationCleanupForComputerUseActivity() { return }
-        fputs("[muesli-native] cancel\n", stderr)
+        fputs("[muesli-native] \(retainCapture ? "cancel" : "tap-discard")\n", stderr)
         resetDictationOutputMode()
 
         if isNemotron35Streaming {
@@ -10155,7 +10217,7 @@ final class MuesliController: NSObject {
                         outcome: .neutral,
                         soundAllowed: self.shouldPlayDictationLifecycleSounds
                     ))
-                    guard recordingSavePolicy != .never else {
+                    guard retainCapture, recordingSavePolicy != .never else {
                         if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
                         return
                     }
@@ -10173,7 +10235,10 @@ final class MuesliController: NSObject {
             }
         }
 
-        dictationAudioSessionManager.cancel(reason: "user-cancel")
+        cancelDictationAudioSession(
+            reason: retainCapture ? "user-cancel" : "tap-discard",
+            retainCapture: retainCapture
+        )
         clearCapturedDictationSessionContext()
         dictationStartedAt = nil
         finishDictationLatencyTrace("cancelled")
@@ -10608,7 +10673,7 @@ final class MuesliController: NSObject {
             }
             dictationAudioSessionManager.endExternalSession(reason: "meeting-active")
         } else if dictationAudioSessionManager.hasActiveSession {
-            dictationAudioSessionManager.cancel(reason: "meeting-active")
+            cancelDictationAudioSession(reason: "meeting-active")
         }
 
         dictationStartedAt = nil

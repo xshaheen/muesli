@@ -375,11 +375,19 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         }
     }
 
-    func cancel(reason: String) {
+    /// Cancels the current session. `retainCapture: false` drops whatever was recorded
+    /// regardless of the session's save policy (no artifact, no history row, no prompt) —
+    /// used for eager-start taps that never carried dictation audio.
+    func cancel(reason: String, retainCapture: Bool = true) {
         let requestedSessionID = detachSessionHint(clearExternalSession: true)
         queue.async { [self] in
             let sessionID = self.stateStorage.sessionID ?? requestedSessionID
             self.recorder.keepsAudioGraphWarm = false
+            if !retainCapture {
+                // Must precede finishRecorderForTerminal so the recorder discards the wav and
+                // terminalCaptureIfRequested yields nothing.
+                self.activeRecordingSavePolicy = .never
+            }
             let wavURL = self.finishRecorderForTerminal()
             let capture = self.terminalCaptureIfRequested(
                 sessionID: sessionID,
