@@ -27,27 +27,25 @@ enum DictationCaretAnchorProvider {
     ]
 
     /// Resolves the focused element only when it is an editable text control: an allow-listed
-    /// role, a settable value, and a selected text range. When `requireEmpty` is set the field
-    /// must also be empty — the moment a reminder to dictate is useful, and a cheap way to skip
-    /// read-only code viewers and documents the user is merely re-entering. An empty field has
-    /// no caret bounds yet, so the anchor falls back to the element frame exactly as dictation
-    /// placement does.
-    static func currentEditableFocus(requireEmpty: Bool = false) -> EditableFocus? {
+    /// role, a settable value, a selected text range, and no read-only DOM marker. The anchor is
+    /// the caret rect whenever the app exposes it; an empty field has no caret bounds yet, so it
+    /// falls back to the first line of the element (top-leading), which is where its caret sits.
+    static func currentEditableFocus() -> EditableFocus? {
         guard AXIsProcessTrusted(),
               let primaryMaxY = NSScreen.screens.first?.frame.maxY,
               let element = focusedElement()
         else { return nil }
         AXUIElementSetMessagingTimeout(element, 0.08)
         guard isEditableTextElement(element) else { return nil }
-        if requireEmpty {
-            guard let count = copiedInt(element, attribute: kAXNumberOfCharactersAttribute), count == 0 else { return nil }
-        }
         let anchor: CGPoint
         if let accessibilityRect = caretRect(for: element) {
             anchor = appKitAnchor(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
         } else if let accessibilityRect = elementRect(element) {
             let converted = appKitRect(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
-            anchor = CGPoint(x: converted.minX + min(12, converted.width / 2), y: converted.midY)
+            anchor = CGPoint(
+                x: converted.minX + min(8, converted.width / 2),
+                y: converted.maxY - min(10, converted.height / 2)
+            )
         } else {
             return nil
         }
@@ -96,7 +94,21 @@ enum DictationCaretAnchorProvider {
         guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
               settable.boolValue
         else { return false }
-        return copiedRange(element, attribute: kAXSelectedTextRangeAttribute) != nil
+        guard copiedRange(element, attribute: kAXSelectedTextRangeAttribute) != nil else { return false }
+        // Web engines ignore aria-readonly when reporting settability; read-only text areas used
+        // as selection overlays (e.g. code viewers) usually say so in their DOM id or classes.
+        let domMarkers: [String] = [copiedString(element, attribute: "AXDOMIdentifier")].compactMap { $0 }
+            + (copiedStringArray(element, attribute: "AXDOMClassList") ?? [])
+        return !domMarkers.contains { marker in
+            marker.localizedCaseInsensitiveContains("read-only")
+                || marker.localizedCaseInsensitiveContains("readonly")
+        }
+    }
+
+    private static func copiedStringArray(_ element: AXUIElement, attribute: String) -> [String]? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+        return value as? [String]
     }
 
     private static func copiedString(_ element: AXUIElement, attribute: String) -> String? {

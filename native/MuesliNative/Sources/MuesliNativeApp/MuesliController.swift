@@ -3447,11 +3447,14 @@ final class MuesliController: NSObject {
     }
 
     /// The reminder needs Accessibility and a completed onboarding; it never runs inside
-    /// onboarding where the focused field belongs to Muesli's own flow.
+    /// onboarding where the focused field belongs to Muesli's own flow, and it stays silent
+    /// while a meeting recording is starting or running.
     private func syncDictationFocusReminderMonitor() {
         let shouldRun = dictationFocusReminderMonitorAllowed
             && config.showDictationFocusReminder
             && config.resolvedOnboardingUseCase.includesPushToTalk
+            && !isMeetingRecording()
+            && !isStartingMeetingRecording
         if shouldRun {
             dictationFocusReminderMonitor.start()
         } else {
@@ -3471,6 +3474,7 @@ final class MuesliController: NSObject {
             dismissPresentedMeetingDetection()
         }
         syncMeetingRecordButton()
+        syncDictationFocusReminderMonitor()
     }
 
     private func syncMeetingRecordButton() {

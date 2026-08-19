@@ -300,6 +300,7 @@ struct DictationMiniIndicatorTests {
 
     @Test("the reminder gate fires once per focused element with a global cooldown")
     func focusReminderGate() {
+        #expect(DictationFocusReminderGate<String>.defaultRepeatInterval == 30)
         var gate = DictationFocusReminderGate<String>(cooldown: 1.5, repeatInterval: 60)
         let firstFocus = gate.shouldRemind(for: "field-a", at: 10)
         let sameElement = gate.shouldRemind(for: "field-a", at: 10.5)

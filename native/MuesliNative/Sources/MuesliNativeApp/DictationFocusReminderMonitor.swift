@@ -7,7 +7,7 @@ import OSLog
 /// long per-element repeat interval so bouncing between a field and its neighbours never nags.
 struct DictationFocusReminderGate<Token: Equatable>: Equatable {
     static var defaultCooldown: TimeInterval { 1.5 }
-    static var defaultRepeatInterval: TimeInterval { 60 }
+    static var defaultRepeatInterval: TimeInterval { 30 }
     static var rememberedElementLimit: Int { 12 }
 
     struct Reminded: Equatable {
@@ -51,8 +51,8 @@ struct DictationFocusReminderGate<Token: Equatable>: Equatable {
 }
 
 /// Watches the frontmost application's focused UI element through an `AXObserver` and
-/// reports when an empty editable text control gains focus. It never reads text content;
-/// it checks the character count and resolves the caret anchor the Mini already uses.
+/// reports when an editable text control gains focus. It never reads text content; it only
+/// resolves the caret anchor the Mini already uses for placement.
 @MainActor
 final class DictationFocusReminderMonitor {
     private static let logger = Logger(subsystem: "com.muesli.native", category: "FocusReminder")
@@ -166,7 +166,7 @@ final class DictationFocusReminderMonitor {
 
     private func evaluateFocus() {
         guard isRunning else { return }
-        guard let focus = DictationCaretAnchorProvider.currentEditableFocus(requireEmpty: true),
+        guard let focus = DictationCaretAnchorProvider.currentEditableFocus(),
               focus.processIdentifier == observedProcessIdentifier
         else {
             Self.logger.debug("evaluate: no editable focus in observed pid=\(self.observedProcessIdentifier ?? -1, privacy: .public)")

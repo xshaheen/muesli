@@ -130,3 +130,12 @@
 - Fix: the reminder never appeared for a fresh document (no caret bounds yet) — empty fields now anchor to the element frame.
 - Restrict (live feedback: it appeared on GitHub code views and non-inputs): the reminder requires an editable role (AXTextField/AXTextArea/AXComboBox), a settable value, a selected range, and an empty field; 60 s per-element repeat guard.
 - Resulting node: `glass-success-13`.
+
+## 19-08-2026 13:01 UTC — reminder cadence and anchor corrections
+
+- Relax (live feedback: "now it doesn't appear a lot"): drop the empty-field requirement; the reminder fires for any editable text control (editable role, settable value, selected range).
+- Exclude: web text areas whose DOM id or classes carry a read-only marker (e.g. code viewers), since web engines ignore aria-readonly when reporting settability.
+- Anchor (live feedback: "near the caret, not at the start of the text box"): use the caret rect whenever it resolves; an empty field anchors to its first line (top-leading) instead of the element's middle-left.
+- Soften: per-element repeat guard 60 s → 30 s.
+- Suppress (live feedback): no reminder while a meeting recording is starting or running; the focus observer detaches and any visible seed is dismissed, then resumes after the meeting.
+- Node: `glass-success-13` (behavioural follow-up, no new visual artifact).
