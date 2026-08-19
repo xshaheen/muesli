@@ -135,6 +135,31 @@ struct MeetingRecordingPanelLifecycleTests {
         controller.close()
     }
 
+    @Test("panel activation preserves the meeting chat and notes context")
+    func preservesMeetingContext() {
+        let now = Date(timeIntervalSinceReferenceDate: 35_000)
+        let controller = makeController(now: { now })
+        let context = FloatingMeetingChatContext(
+            meetingID: 42,
+            priorTranscript: "Earlier transcript",
+            currentConfig: { AppConfig() },
+            isReady: { true },
+            manualNotes: { "Existing notes" },
+            saveManualNotes: { _ in }
+        )
+
+        controller.showRecording(
+            ownerID: UUID(),
+            startedAt: now,
+            powerProvider: { -160 },
+            chatContext: context,
+            showTranscript: false
+        )
+
+        #expect(controller.hasMeetingContextForTesting)
+        controller.close()
+    }
+
     @Test("dictation presentation changes cannot mutate the meeting panel")
     func dictationPresentationIsIndependent() {
         let now = Date(timeIntervalSinceReferenceDate: 40_000)

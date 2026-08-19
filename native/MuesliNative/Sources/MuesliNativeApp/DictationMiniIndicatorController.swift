@@ -37,7 +37,7 @@ final class DictationMiniIndicatorController: NSObject {
     private var powerProvider: (() -> Float)?
     private var animationTimer: Timer?
     private var dismissTask: Task<Void, Never>?
-    private var pointerWorkItem: DispatchWorkItem?
+    private var pointerDebounceSource: DispatchSourceTimer?
     private var globalPointerMonitor: Any?
     private var localPointerMonitor: Any?
     private var accessibilityObserver: NSObjectProtocol?
@@ -113,7 +113,7 @@ final class DictationMiniIndicatorController: NSObject {
         stopAnimation(clearPowerProvider: true)
         anchorPointer = pointer ?? pointerProvider()
         anchorScreen = nil
-        present(.preparing, generation: token, followsPointer: true, announce: nil)
+        present(.preparing, generation: token, followsPointer: true)
         return token
     }
 
@@ -123,7 +123,7 @@ final class DictationMiniIndicatorController: NSObject {
     ) {
         guard accepts(token) else { return }
         self.powerProvider = powerProvider
-        present(.recording, generation: token, followsPointer: true, announce: "Recording dictation")
+        present(.recording, generation: token, followsPointer: true)
         startAnimation()
     }
 
@@ -137,16 +137,42 @@ final class DictationMiniIndicatorController: NSObject {
 
     func showProcessing(generation token: Generation) {
         guard accepts(token) else { return }
-        present(.processing, generation: token, followsPointer: false, announce: "Generating transcription")
+        present(.processing, generation: token, followsPointer: false)
         startAnimation()
     }
 
     func showSuccess(generation token: Generation, duration: TimeInterval = 0.35) {
-        showTerminal(.success, generation: token, duration: duration, announcement: "Dictation complete")
+        showTerminal(.success, generation: token, duration: duration)
     }
 
     func showFailure(generation token: Generation, duration: TimeInterval = 1.2) {
-        showTerminal(.failure, generation: token, duration: duration, announcement: "Dictation failed")
+        showTerminal(.failure, generation: token, duration: duration)
+    }
+
+    func showRecoveryWarningAfterFailure(
+        _ message: String,
+        failureDuration: TimeInterval = 1.2,
+        warningDuration: TimeInterval = 3
+    ) {
+        guard presentation == .failure,
+              let token = activeGeneration,
+              accepts(token) else { return }
+        let normalized = Self.normalizedWarning(message)
+        dismissTask?.cancel()
+        dismissTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(failureDuration, 0)))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.accepts(token), self.presentation == .failure else { return }
+                self.present(.warning(normalized), generation: token, followsPointer: false)
+            }
+            try? await Task.sleep(for: .seconds(max(warningDuration, 0)))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.accepts(token), self.presentation == .warning(normalized) else { return }
+                self.hide(invalidateGeneration: true)
+            }
+        }
     }
 
     @discardableResult
@@ -164,7 +190,7 @@ final class DictationMiniIndicatorController: NSObject {
         anchorPointer = pointer ?? pointerProvider()
         anchorScreen = nil
         let normalized = Self.normalizedWarning(message)
-        present(.warning(normalized), generation: token, followsPointer: false, announce: normalized)
+        present(.warning(normalized), generation: token, followsPointer: false)
         scheduleDismissal(generation: token, duration: duration)
         return token
     }
@@ -195,13 +221,6 @@ final class DictationMiniIndicatorController: NSObject {
     var isFollowingPointerForTesting: Bool {
         globalPointerMonitor != nil || localPointerMonitor != nil
     }
-    var usesContinuousProcessingAnimationForTesting: Bool {
-        presentation == .processing
-            && Self.processingAnimationIsContinuous(
-                reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            )
-    }
-
     static func processingAnimationIsContinuous(reduceMotion: Bool) -> Bool { !reduceMotion }
 
     static func surfaceSize(for presentation: Presentation) -> CGSize {
@@ -232,19 +251,17 @@ final class DictationMiniIndicatorController: NSObject {
     private func showTerminal(
         _ terminal: Presentation,
         generation token: Generation,
-        duration: TimeInterval,
-        announcement: String
+        duration: TimeInterval
     ) {
         guard accepts(token) else { return }
-        present(terminal, generation: token, followsPointer: false, announce: announcement)
+        present(terminal, generation: token, followsPointer: false)
         scheduleDismissal(generation: token, duration: duration)
     }
 
     private func present(
         _ newPresentation: Presentation,
         generation token: Generation,
-        followsPointer: Bool,
-        announce announcement: String?
+        followsPointer: Bool
     ) {
         guard accepts(token) else { return }
         let oldPresentation = presentation
@@ -269,7 +286,8 @@ final class DictationMiniIndicatorController: NSObject {
         }
         panel.orderFrontRegardless()
 
-        if oldPresentation != newPresentation, let announcement {
+        if oldPresentation != newPresentation,
+           let announcement = Self.accessibilityAnnouncement(for: newPresentation) {
             accessibilitySink(announcement)
         }
     }
@@ -330,18 +348,23 @@ final class DictationMiniIndicatorController: NSObject {
     private func startPointerMonitoring() {
         guard globalPointerMonitor == nil, localPointerMonitor == nil else { return }
         let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
-        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.schedulePointerReacquisition() }
+        let debounceSource = DispatchSource.makeTimerSource(queue: .main)
+        debounceSource.setEventHandler { [weak self] in
+            self?.reacquirePointerIfNeeded()
         }
-        localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-            Task { @MainActor [weak self] in self?.schedulePointerReacquisition() }
+        debounceSource.activate()
+        pointerDebounceSource = debounceSource
+        let delay = movementCoalescingDelay
+        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { _ in
+            debounceSource.schedule(deadline: .now() + delay)
+        }
+        localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { event in
+            debounceSource.schedule(deadline: .now() + delay)
             return event
         }
     }
 
     private func stopPointerMonitoring() {
-        pointerWorkItem?.cancel()
-        pointerWorkItem = nil
         if let globalPointerMonitor {
             NSEvent.removeMonitor(globalPointerMonitor)
             self.globalPointerMonitor = nil
@@ -350,16 +373,8 @@ final class DictationMiniIndicatorController: NSObject {
             NSEvent.removeMonitor(localPointerMonitor)
             self.localPointerMonitor = nil
         }
-    }
-
-    private func schedulePointerReacquisition() {
-        guard presentation == .preparing || presentation == .recording else { return }
-        pointerWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            Task { @MainActor [weak self] in self?.reacquirePointerIfNeeded() }
-        }
-        pointerWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + movementCoalescingDelay, execute: workItem)
+        pointerDebounceSource?.cancel()
+        pointerDebounceSource = nil
     }
 
     private func reacquirePointerIfNeeded() {
@@ -368,21 +383,21 @@ final class DictationMiniIndicatorController: NSObject {
               let previousScreen = anchorScreen else { return }
         let pointer = pointerProvider()
         let screens = screenProvider()
-        guard let currentScreen = DictationMiniPlacement.place(
+        guard let placement = DictationMiniPlacement.place(
             near: pointer,
-            size: CGSize(width: 1, height: 1),
+            size: Self.surfaceSize(for: presentation),
             screens: screens,
-            clearance: DictationMiniPlacement.minimumPointerClearance
-        )?.screen,
+            clearance: pointerClearanceProvider()
+        ),
         DictationMiniPlacement.shouldReacquire(
             from: previousPointer,
             on: previousScreen,
             to: pointer,
-            on: currentScreen
+            on: placement.screen
         ) else { return }
         anchorPointer = pointer
-        anchorScreen = currentScreen
-        placeFollowingSurface(size: Self.surfaceSize(for: presentation))
+        anchorScreen = placement.screen
+        currentFrame = placement.frame
         if let currentFrame {
             panel?.setFrame(currentFrame, display: true, animate: true)
         }
@@ -488,6 +503,17 @@ final class DictationMiniIndicatorController: NSObject {
     private static func normalizedWarning(_ message: String) -> String {
         let normalized = message.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         return normalized.isEmpty ? "Dictation unavailable" : normalized
+    }
+
+    private static func accessibilityAnnouncement(for presentation: Presentation) -> String? {
+        switch presentation {
+        case .hidden, .preparing:
+            return nil
+        case .warning(let message):
+            return message
+        case .recording, .processing, .success, .failure:
+            return accessibilityLabel(for: presentation)
+        }
     }
 }
 

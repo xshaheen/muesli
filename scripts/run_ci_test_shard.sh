@@ -30,9 +30,9 @@ case "${shard}" in
       MuesliCLITests
       ChatGPTAuthTests
       ChatGPTTokenStorageTests
-      FloatingIndicatorVisibilityTests
+      ComputerUseCursorOverlayTests
       FloatingMeetingPanelStyleTests
-      IndicatorFrameSizeTests
+      DictationMiniPlacementTests
       OpenAILogoShapeTests
       MeetingChunkCollectorTests
       AppConfigTests
@@ -45,10 +45,8 @@ case "${shard}" in
       WordCountTests
       ChatGPTResponsesMessagesTests
       ChatGPTResponsesTruncationTests
-      FloatingIndicatorAnchorRestoreTests
-      FloatingIndicatorDragTests
-      FloatingIndicatorPlacementTests
       FloatingIndicatorStyleTests
+      LegacyIndicatorConfigurationTests
       FloatingMeetingChatTests
       FloatingMeetingTranscriptPlacementTests
       MarkdownRichTextEditorTests
@@ -89,6 +87,9 @@ case "${shard}" in
       HotkeyConfigTests
       DictationStateIdleTests
       DictationCorrectionMonitorTests
+      DictationLifecycleFeedbackTests
+      DictationMiniIndicatorTests
+      DictationTerminalFeedbackEligibilityTests
       DictationStyleSessionTests
       AsrVocabularyPromptTests
       WhisperBiasingManualReproTests
@@ -117,6 +118,9 @@ case "${shard}" in
       MeetingDetectorTests
       MeetingActivityDetectionPolicyTests
       MeetingRecordingWriterTests
+      MeetingRecordingElapsedClockTests
+      MeetingRecordingPanelGeometryTests
+      MeetingRecordingPanelLifecycleTests
       MeetingResumePolicyTests
       MeetingSessionDiagnosticsTests
       MeetingStreamingPartialSessionTests

@@ -129,8 +129,10 @@ final class MeetingRecordingPanelController: NSObject {
         set { transcriptPanel.onUserMovedPanel = newValue }
     }
 
-    private let configStore: ConfigStore
     private let now: () -> Date
+    private var savedControlCenter: CGPoint?
+    private var savedTranscriptOrigin: CGPoint?
+    private var showsTranscriptOnHover: Bool
     private var state: MeetingRecordingPanelState = .hidden
     private var ownerID: UUID?
     private var elapsedClock = MeetingRecordingElapsedClock()
@@ -148,6 +150,7 @@ final class MeetingRecordingPanelController: NSObject {
     private var statusLabel: NSTextField?
     private var waveformLayers: [CALayer] = []
     private var animationTimer: Timer?
+    private var lastElapsedText: String?
     private var smoothedAmplitude: CGFloat = 0
     private var dragWindowOrigin: NSPoint?
     private var dragPointerOrigin: NSPoint?
@@ -165,12 +168,19 @@ final class MeetingRecordingPanelController: NSObject {
         }
     )
 
-    init(configStore: ConfigStore, now: @escaping () -> Date = Date.init) {
-        self.configStore = configStore
+    init(
+        configStore: ConfigStore,
+        configuration: AppConfig? = nil,
+        now: @escaping () -> Date = Date.init
+    ) {
+        let configuration = configuration ?? configStore.load()
         self.now = now
+        self.savedControlCenter = configuration.meetingRecordingPanelCenter.map { CGPoint(x: $0.x, y: $0.y) }
+        self.savedTranscriptOrigin = configuration.meetingPanelOrigin.map { CGPoint(x: $0.x, y: $0.y) }
+        self.showsTranscriptOnHover = configuration.showMeetingTranscriptOnRecordingPanelHover
         super.init()
         transcriptPanel.savedOriginProvider = { [weak self] in
-            self?.configStore.load().meetingPanelOrigin.map { CGPoint(x: $0.x, y: $0.y) }
+            self?.savedTranscriptOrigin
         }
 
         let screenObserver = NotificationCenter.default.addObserver(
@@ -199,7 +209,6 @@ final class MeetingRecordingPanelController: NSObject {
         }
     }
 
-    var presentationWindow: NSPanel? { panel }
     var isVisible: Bool { panel?.isVisible == true }
     var isTranscriptPanelVisible: Bool { transcriptPanel.isVisible }
     var stateForTesting: MeetingRecordingPanelState { state }
@@ -211,11 +220,19 @@ final class MeetingRecordingPanelController: NSObject {
     var controlAccessibilityLabelsForTesting: [String] {
         [transcriptButton, pauseButton, stopButton].compactMap { $0?.accessibilityLabel() }
     }
+    var hasMeetingContextForTesting: Bool { transcriptPanel.hasMeetingContextForTesting }
+
+    func applyConfiguration(_ configuration: AppConfig) {
+        savedControlCenter = configuration.meetingRecordingPanelCenter.map { CGPoint(x: $0.x, y: $0.y) }
+        savedTranscriptOrigin = configuration.meetingPanelOrigin.map { CGPoint(x: $0.x, y: $0.y) }
+        showsTranscriptOnHover = configuration.showMeetingTranscriptOnRecordingPanelHover
+    }
 
     func showRecording(
         ownerID: UUID,
         startedAt: Date,
         powerProvider: @escaping () -> Float,
+        chatContext: FloatingMeetingChatContext? = nil,
         showTranscript: Bool
     ) {
         self.ownerID = ownerID
@@ -224,14 +241,14 @@ final class MeetingRecordingPanelController: NSObject {
         elapsedClock.start(at: startedAt)
         isTranscriptManuallyDismissed = false
         transcriptPanel.reset()
+        transcriptPanel.setChatContext(chatContext)
         transcriptPanel.setPaused(false)
         transcriptPanel.setSelectionAccentHex(MuesliTheme.resolvedAccentDarkHex)
 
         let panel = panel ?? makePanel()
         self.panel = panel
-        let savedCenter = configStore.load().meetingRecordingPanelCenter.map { CGPoint(x: $0.x, y: $0.y) }
         let frame = Self.resolvedFrame(
-            savedCenter: savedCenter,
+            savedCenter: savedControlCenter,
             size: Self.panelSize,
             screens: NSScreen.screens.map(\.visibleFrame)
         )
@@ -303,6 +320,7 @@ final class MeetingRecordingPanelController: NSObject {
         elapsedLabel = nil
         statusLabel = nil
         waveformLayers.removeAll()
+        lastElapsedText = nil
         powerProvider = nil
         ownerID = nil
         state = .hidden
@@ -344,7 +362,7 @@ final class MeetingRecordingPanelController: NSObject {
     func pointerEntered() {
         guard state == .recording || state == .paused else { return }
         guard !isTranscriptManuallyDismissed else { return }
-        guard configStore.load().showMeetingTranscriptOnRecordingPanelHover else { return }
+        guard showsTranscriptOnHover else { return }
         showTranscript()
     }
 
@@ -520,8 +538,7 @@ final class MeetingRecordingPanelController: NSObject {
         button.isBordered = false
         button.imagePosition = .imageOnly
         button.imageScaling = .scaleProportionallyDown
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: accessibilityLabel)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
+        button.image = configuredSymbol(symbol, description: accessibilityLabel)
         button.contentTintColor = .white.withAlphaComponent(0.86)
         button.focusRingType = .default
         button.target = self
@@ -572,7 +589,7 @@ final class MeetingRecordingPanelController: NSObject {
 
     private func updateChrome() {
         guard contentView != nil else { return }
-        elapsedLabel?.stringValue = Self.formattedElapsed(elapsedClock.elapsed(at: now()))
+        updateElapsedLabelIfNeeded()
         let controlsEnabled: Bool
         switch state {
         case .hidden:
@@ -599,6 +616,7 @@ final class MeetingRecordingPanelController: NSObject {
         pauseButton?.alphaValue = controlsEnabled ? 1 : 0.36
         stopButton?.alphaValue = controlsEnabled ? 1 : 0.36
         statusLabel?.setAccessibilityValue(statusLabel?.stringValue ?? "")
+        updateWaveformStyle()
         updateWaveform()
     }
 
@@ -628,8 +646,22 @@ final class MeetingRecordingPanelController: NSObject {
     }
 
     @objc private func animationTimerFired(_ timer: Timer) {
-        elapsedLabel?.stringValue = Self.formattedElapsed(elapsedClock.elapsed(at: now()))
+        updateElapsedLabelIfNeeded()
         updateWaveform()
+    }
+
+    private func updateElapsedLabelIfNeeded() {
+        let text = Self.formattedElapsed(elapsedClock.elapsed(at: now()))
+        guard text != lastElapsedText else { return }
+        lastElapsedText = text
+        elapsedLabel?.stringValue = text
+    }
+
+    private func updateWaveformStyle() {
+        let color = state.isFinalizing
+            ? NSColor.colorWith(hex: MuesliTheme.transcribingHex, alpha: 0.82).cgColor
+            : NSColor.white.withAlphaComponent(state == .paused ? 0.42 : 0.82).cgColor
+        waveformLayers.forEach { $0.backgroundColor = color }
     }
 
     private func updateWaveform() {
@@ -654,9 +686,6 @@ final class MeetingRecordingPanelController: NSObject {
             let height = 4 + 12 * amplitude * multipliers[index]
             bar.frame.size.height = height
             bar.frame.origin.y = (Self.panelSize.height - height) / 2
-            bar.backgroundColor = state.isFinalizing
-                ? NSColor.colorWith(hex: MuesliTheme.transcribingHex, alpha: 0.82).cgColor
-                : NSColor.white.withAlphaComponent(state == .paused ? 0.42 : 0.82).cgColor
         }
         CATransaction.commit()
     }

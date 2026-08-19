@@ -71,6 +71,40 @@ struct DictationMiniIndicatorTests {
         controller.close()
     }
 
+    @Test("accepted warnings normalize, announce, and dismiss")
+    func acceptedWarningLifecycle() async {
+        var announcements: [String] = []
+        let controller = makeController(accessibilitySink: { announcements.append($0) })
+
+        let token = controller.showWarning("  Model   warming  ", duration: 0.01)
+        #expect(token != nil)
+        #expect(controller.presentation == .warning("Model warming"))
+        #expect(announcements == ["Model warming"])
+
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(controller.presentation == .hidden)
+        controller.close()
+    }
+
+    @Test("recoverable failure keeps the failure mark before showing history guidance")
+    func failureRecoveryGuidance() async {
+        let controller = makeController()
+        let token = controller.beginPreparing()
+        controller.showFailure(generation: token, duration: 1)
+        controller.showRecoveryWarningAfterFailure(
+            "Saved in Recent Dictations — target changed",
+            failureDuration: 0.01,
+            warningDuration: 0.04
+        )
+
+        #expect(controller.presentation == .failure)
+        try? await Task.sleep(for: .milliseconds(25))
+        #expect(controller.presentation == .warning("Saved in Recent Dictations — target changed"))
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(controller.presentation == .hidden)
+        controller.close()
+    }
+
     @Test("Reduce Motion replaces continuous processing animation with a static field")
     func reducedMotionPolicy() {
         #expect(DictationMiniIndicatorController.processingAnimationIsContinuous(reduceMotion: false))

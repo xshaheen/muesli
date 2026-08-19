@@ -44,25 +44,25 @@ final class ComputerUseCursorOverlay: NSObject {
     }
 
     func showAcquiring() {
-        showBase(.acquiring, interactive: false)
+        showBase(.acquiring)
     }
 
     func showRecording(powerProvider: @escaping () -> Float) {
         self.powerProvider = powerProvider
-        showBase(.recording, interactive: true)
+        showBase(.recording)
         startAmplitudeTimer()
     }
 
     func showProcessing(_ status: String) {
-        showBase(.processing(status), interactive: false)
+        showBase(.processing(status))
     }
 
     func showTranscript(_ transcript: String) {
-        showBase(.transcript(Self.normalizedText(transcript)), interactive: false)
+        showBase(.transcript(Self.normalizedText(transcript)))
     }
 
     func showStatus(_ status: String) {
-        showBase(.status(Self.normalizedText(status)), interactive: false)
+        showBase(.status(Self.normalizedText(status)))
     }
 
     func showTarget(at quartzPoint: CGPoint, label: String?) {
@@ -89,18 +89,13 @@ final class ComputerUseCursorOverlay: NSObject {
         panel.orderFrontRegardless()
     }
 
-    /// Compatibility entry point used by executor actions.
-    func show(at quartzPoint: CGPoint, label: String?) {
-        showTarget(at: quartzPoint, label: label)
-    }
-
     func hideTarget() {
         guard case .target = presentation else { return }
         applyBasePresentation()
     }
 
     func showTerminal(_ message: String, kind: TerminalKind, duration: TimeInterval = 3) {
-        showBase(.terminal(Self.normalizedText(message), kind), interactive: false)
+        showBase(.terminal(Self.normalizedText(message), kind))
         let terminalGeneration = generation
         dismissTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(duration))
@@ -134,7 +129,7 @@ final class ComputerUseCursorOverlay: NSObject {
         }
     }
 
-    private func showBase(_ presentation: Presentation, interactive: Bool) {
+    private func showBase(_ presentation: Presentation) {
         generation &+= 1
         dismissTask?.cancel()
         dismissTask = nil
@@ -146,10 +141,9 @@ final class ComputerUseCursorOverlay: NSObject {
         if anchorPoint == nil { anchorPoint = NSEvent.mouseLocation }
         let size = Self.surfaceSize(for: presentation)
         let panel = ensurePanel(size: size)
-        panel.ignoresMouseEvents = !interactive
-        panel.level = interactive ? .floating : .statusBar
+        panel.ignoresMouseEvents = !presentation.isInteractive
+        panel.level = presentation.isInteractive ? .floating : .statusBar
         contentView?.presentation = presentation
-        contentView?.isInteractive = interactive
         contentView?.needsDisplay = true
         panel.setFrame(
             Self.surfaceFrame(
@@ -165,13 +159,11 @@ final class ComputerUseCursorOverlay: NSObject {
     private func applyBasePresentation() {
         guard basePresentation != .hidden else { hide(); return }
         presentation = basePresentation
-        let interactive = basePresentation == .recording
         let size = Self.surfaceSize(for: basePresentation)
         let panel = ensurePanel(size: size)
-        panel.ignoresMouseEvents = !interactive
-        panel.level = interactive ? .floating : .statusBar
+        panel.ignoresMouseEvents = !basePresentation.isInteractive
+        panel.level = basePresentation.isInteractive ? .floating : .statusBar
         contentView?.presentation = basePresentation
-        contentView?.isInteractive = interactive
         contentView?.needsDisplay = true
         panel.setFrame(
             Self.surfaceFrame(
@@ -182,7 +174,7 @@ final class ComputerUseCursorOverlay: NSObject {
             display: true
         )
         panel.orderFrontRegardless()
-        if interactive { startAmplitudeTimer() }
+        if basePresentation.isInteractive { startAmplitudeTimer() }
     }
 
     private func ensurePanel(size: CGSize) -> NSPanel {
@@ -307,12 +299,11 @@ private final class ComputerUseOverlayView: NSView {
     weak var owner: ComputerUseCursorOverlay?
     var presentation: ComputerUseCursorOverlay.Presentation = .hidden
     var power: CGFloat = 0
-    var isInteractive = false
 
     override var isOpaque: Bool { false }
 
     override func mouseUp(with event: NSEvent) {
-        guard isInteractive else { return }
+        guard presentation.isInteractive else { return }
         owner?.handleClick(at: convert(event.locationInWindow, from: nil))
     }
 
@@ -325,9 +316,9 @@ private final class ComputerUseOverlayView: NSView {
             increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         )
         let surface = bounds.insetBy(dx: 1, dy: 1)
-        computerUseColor(hex: style.tintHex, alpha: style.tintAlpha).setFill()
+        NSColor.colorWith(hexString: style.tintHex, alpha: style.tintAlpha).setFill()
         NSBezierPath(roundedRect: surface, xRadius: surface.height / 2, yRadius: surface.height / 2).fill()
-        computerUseColor(hex: style.borderHex, alpha: style.borderAlpha).setStroke()
+        NSColor.colorWith(hexString: style.borderHex, alpha: style.borderAlpha).setStroke()
         let border = NSBezierPath(roundedRect: surface, xRadius: surface.height / 2, yRadius: surface.height / 2)
         border.lineWidth = style.borderWidth
         border.stroke()
@@ -350,11 +341,11 @@ private final class ComputerUseOverlayView: NSView {
 
     private func drawWaveform(style: FloatingIndicatorSurfaceStyle) {
         let available = CGRect(x: 14, y: 7, width: bounds.width - 88, height: bounds.height - 14)
+        NSColor.colorWith(hexString: style.glyphHex, alpha: style.glyphAlpha).setFill()
         for index in 0..<7 {
             let phase = CGFloat(index) / 6
             let height = max(3, available.height * (0.2 + power * (0.35 + 0.45 * sin(phase * .pi))))
             let rect = CGRect(x: available.minX + phase * available.width - 1.5, y: available.midY - height / 2, width: 3, height: height)
-            computerUseColor(hex: style.glyphHex, alpha: style.glyphAlpha).setFill()
             NSBezierPath(roundedRect: rect, xRadius: 1.5, yRadius: 1.5).fill()
         }
     }
@@ -378,23 +369,14 @@ private final class ComputerUseOverlayView: NSView {
         paragraph.lineBreakMode = wraps ? .byWordWrapping : .byTruncatingTail
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
-            .foregroundColor: color ?? computerUseColor(hex: style.glyphHex, alpha: style.glyphAlpha),
+            .foregroundColor: color ?? NSColor.colorWith(hexString: style.glyphHex, alpha: style.glyphAlpha),
             .paragraphStyle: paragraph,
         ]
         (text as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attributes)
     }
 
-    private func computerUseColor(hex: String, alpha: CGFloat) -> NSColor {
-        var value = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.hasPrefix("#") { value.removeFirst() }
-        guard value.count == 6, let rgb = UInt64(value, radix: 16) else {
-            return NSColor.white.withAlphaComponent(alpha)
-        }
-        return NSColor(
-            red: CGFloat((rgb >> 16) & 0xff) / 255,
-            green: CGFloat((rgb >> 8) & 0xff) / 255,
-            blue: CGFloat(rgb & 0xff) / 255,
-            alpha: alpha
-        )
-    }
+}
+
+private extension ComputerUseCursorOverlay.Presentation {
+    var isInteractive: Bool { self == .recording }
 }

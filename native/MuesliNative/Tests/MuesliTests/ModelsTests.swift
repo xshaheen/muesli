@@ -2484,6 +2484,28 @@ struct HotkeyMonitorTests {
         #expect(toggleStopCount == 0)
     }
 
+    @Test("external toggle stop resets and fires one stop")
+    @MainActor
+    func externalToggleStopResetsAndFires() {
+        let scheduler = ManualHotkeyScheduler()
+        let monitor = scheduler.makeMonitor(startDelay: 0.03)
+        monitor.configure(HotkeyConfig.combination(modifiers: [.command, .shift], keyCode: 15))
+        var toggleStopCount = 0
+        monitor.onToggleStart = {}
+        monitor.onToggleStop = { toggleStopCount += 1 }
+
+        monitor.handleCombinationForTests(type: .keyDown, keyCode: 15, flags: [.command, .shift])
+        scheduler.advance(by: 0.05)
+        #expect(monitor.isToggleRecording)
+
+        monitor.stopToggleMode()
+
+        #expect(!monitor.isToggleRecording)
+        #expect(toggleStopCount == 1)
+        monitor.stopToggleMode()
+        #expect(toggleStopCount == 1)
+    }
+
     @Test("combination shortcut cancels when modifiers release before threshold")
     @MainActor
     func combinationShortcutCancelsWhenModifiersReleaseBeforeThreshold() {
