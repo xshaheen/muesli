@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muesli Mini Indicator — Original Glass, Vector Signal</title>
+  <style>
+    :root { color-scheme:dark; --orange:#ff7043; --amber:#ffb04d; --green:#62d691; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0c0c0b; color:#f3f2ef; font-family:-apple-system,BlinkMacSystemFont,sans-serif; }
+    main { width:min(1080px,calc(100% - 48px)); }
+    header { display:flex; align-items:end; justify-content:space-between; gap:40px; margin-bottom:28px; }
+    h1 { max-width:680px; margin:0; font-size:46px; line-height:.96; letter-spacing:-.045em; }
+    header p { max-width:330px; margin:0; color:#9d9993; line-height:1.55; }
+    .stage { position:relative; height:490px; overflow:hidden; border:1px solid rgba(255,255,255,.11); border-radius:28px; background:linear-gradient(135deg,#242a30,#171514 48%,#30231e); box-shadow:0 30px 90px rgba(0,0,0,.42); }
+    .document { position:absolute; inset:56px; padding:42px 48px; border-radius:18px; background:rgba(8,9,10,.78); border:1px solid rgba(255,255,255,.1); }
+    .document span { display:block; width:54%; height:11px; margin:0 0 17px; border-radius:8px; background:rgba(255,255,255,.12); }
+    .document span:nth-child(2){width:74%}.document span:nth-child(3){width:64%}.document span:nth-child(4){width:45%}
+    .caret { position:absolute; left:43%; top:188px; width:2px; height:28px; background:#e9e8e4; }
+    .mini { position:absolute; left:calc(43% - 13px); top:231px; display:grid; place-items:center; width:28px; height:28px; border:1px solid rgba(255,255,255,.16); border-radius:50%; background:rgba(33,31,30,.44); backdrop-filter:blur(22px) saturate(135%); box-shadow:inset 0 1px rgba(255,255,255,.08),0 8px 24px rgba(0,0,0,.48); }
+    .mini svg { width:22px; height:22px; overflow:visible; filter:drop-shadow(0 0 3px rgba(255,112,67,.28)); }
+    .mini circle { fill:var(--orange); transform-box:fill-box; transform-origin:center; animation:pulse 1.5s ease-in-out infinite; }
+    .mini circle:nth-child(3n){fill:var(--amber);animation-delay:-.45s}.mini circle:nth-child(4n){animation-delay:-.9s}.mini circle:nth-child(5n){opacity:.48}
+    @keyframes pulse { 50% { opacity:.35; transform:scale(.88); } }
+    .detail { position:absolute; right:54px; bottom:52px; display:flex; align-items:center; gap:18px; padding:16px 20px; border:1px solid rgba(255,255,255,.1); border-radius:16px; background:rgba(10,10,9,.62); }
+    .detail .zoom { display:grid; place-items:center; width:84px; height:84px; border-radius:18px; background:rgba(255,255,255,.04); }
+    .detail svg { width:66px; height:66px; }
+    .detail strong { display:block; font-size:13px; margin-bottom:4px; }.detail small{display:block;color:#8e8a84;max-width:175px;line-height:1.45}
+    .label { position:absolute; left:56px; bottom:52px; color:#aaa6a0; font:600 10px/1.4 ui-monospace,SFMono-Regular,monospace; letter-spacing:.1em; text-transform:uppercase; }
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1>The original glass recipe.<br>None of the original pixels.</h1><p>Dark Aqua HUD material, one 44% warm tint, one fine highlight edge, and compositor-backed vector circles aligned to the active display scale.</p></header>
+    <section class="stage">
+      <div class="document"><span></span><span></span><span></span><span></span><i class="caret"></i></div>
+      <div class="mini">
+        <svg viewBox="0 0 22 22" aria-label="Processing">
+          <circle cx="7.5" cy="4" r="1.25"/><circle cx="11" cy="4" r="1.15"/><circle cx="14.5" cy="4" r="1.25"/>
+          <circle cx="4" cy="7.5" r="1.25"/><circle cx="7.5" cy="7.5" r="1.15"/><circle cx="11" cy="7.5" r="1.35"/><circle cx="14.5" cy="7.5" r="1.15"/><circle cx="18" cy="7.5" r="1.25"/>
+          <circle cx="4" cy="11" r="1.15"/><circle cx="7.5" cy="11" r="1.35"/><circle cx="11" cy="11" r="1.4"/><circle cx="14.5" cy="11" r="1.35"/><circle cx="18" cy="11" r="1.15"/>
+          <circle cx="4" cy="14.5" r="1.25"/><circle cx="7.5" cy="14.5" r="1.15"/><circle cx="11" cy="14.5" r="1.35"/><circle cx="14.5" cy="14.5" r="1.15"/><circle cx="18" cy="14.5" r="1.25"/>
+          <circle cx="7.5" cy="18" r="1.25"/><circle cx="11" cy="18" r="1.15"/><circle cx="14.5" cy="18" r="1.25"/>
+        </svg>
+      </div>
+      <div class="label">Native size · 28 × 28 pt<br>Shown beside insertion caret</div>
+      <div class="detail">
+        <div class="zoom"><svg viewBox="0 0 22 22"><circle fill="#ff7043" cx="7.5" cy="4" r="1.25"/><circle fill="#ffb04d" cx="11" cy="4" r="1.15"/><circle fill="#ff7043" cx="14.5" cy="4" r="1.25"/><circle fill="#ff7043" cx="4" cy="7.5" r="1.25"/><circle fill="#ffb04d" cx="7.5" cy="7.5" r="1.15"/><circle fill="#ff7043" cx="11" cy="7.5" r="1.35"/><circle fill="#ff7043" cx="14.5" cy="7.5" r="1.15"/><circle fill="#ffb04d" cx="18" cy="7.5" r="1.25"/><circle fill="#ff7043" cx="4" cy="11" r="1.15"/><circle fill="#ff7043" cx="7.5" cy="11" r="1.35"/><circle fill="#ffb04d" cx="11" cy="11" r="1.4"/><circle fill="#ff7043" cx="14.5" cy="11" r="1.35"/><circle fill="#ff7043" cx="18" cy="11" r="1.15"/></svg></div>
+        <div><strong>Vector at every scale</strong><small>Shape layers replace per-frame bitmap-like path painting. The display scale owns the final alignment.</small></div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

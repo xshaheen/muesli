@@ -669,6 +669,29 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.terminalCaptures.isEmpty)
     }
 
+    @Test("tap discard drops the capture even under a retaining save policy")
+    func tapDiscardDropsCaptureUnderRetainingPolicy() {
+        for policy in [DictationRecordingSavePolicy.always, .prompt] {
+            let harness = Harness(routeKind: .speakerLike)
+            harness.recorder.stopURL = URL(fileURLWithPath: "/tmp/tap-discard-dictation.wav")
+
+            harness.manager.beginRecording(
+                mode: "hold-start",
+                duckingEnabled: false,
+                mediaPauseEnabled: false,
+                recordingSavePolicy: policy
+            )
+            harness.wait()
+            harness.manager.cancel(reason: "tap-discard", retainCapture: false)
+            harness.wait()
+
+            #expect(harness.recorder.stopCalls == 0)
+            #expect(harness.recorder.cancelCalls == 1)
+            #expect(harness.terminalCaptures.isEmpty)
+            #expect(!harness.manager.hasActiveSession)
+        }
+    }
+
     @Test("retained cancellation finalizes one capture before teardown")
     func retainedCancellationFinalizesCapture() {
         let harness = Harness(routeKind: .speakerLike)

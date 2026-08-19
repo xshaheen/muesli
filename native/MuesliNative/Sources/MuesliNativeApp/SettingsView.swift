@@ -1552,6 +1552,13 @@ struct SettingsView: View {
                     }
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Floating Record button") {
+                    settingsSwitch(isOn: appState.config.showMeetingRecordButton) { newValue in
+                        controller.updateConfig { $0.showMeetingRecordButton = newValue }
+                    }
+                }
+                settingsDescription("Shows a small Record pill while a meeting app is active. One click starts recording; drag to move. Requires meeting detection.")
+                Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Save meeting recording") {
                     settingsMenu(
                         selection: recordingSaveLabel(for: appState.config.meetingRecordingSavePolicy),
@@ -1728,6 +1735,13 @@ struct SettingsView: View {
                         controller.updateConfig { $0.soundEnabled = newValue }
                     }
                 }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Idle dot near your text") {
+                    settingsSwitch(isOn: appState.config.showDictationIdleDot) { newValue in
+                        controller.updateConfig { $0.showDictationIdleDot = newValue }
+                    }
+                }
+                settingsDescription("Keep the Mini's dot near your text context when you're not dictating. It hides while you type or scroll; press Escape to hide it until you move to another field. Turn off to only show the Mini while recording or processing.")
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Show next meeting in menu bar") {
                     settingsSwitch(isOn: appState.config.showNextMeetingInMenuBar) { newValue in

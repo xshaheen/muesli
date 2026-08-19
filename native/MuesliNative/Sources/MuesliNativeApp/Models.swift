@@ -1743,6 +1743,10 @@ struct AppConfig: Codable {
     var launchAtLogin: Bool = false
     var openDashboardOnLaunch: Bool = true
     var showFloatingIndicator: Bool = true
+    /// Keeps the Dictation Mini's idle dot near the focused text context while not dictating.
+    var showDictationIdleDot: Bool = true
+    /// Floating Record pill shown while a meeting app is active (requires meeting detection).
+    var showMeetingRecordButton: Bool = true
     var showHotkeyOnFloatingIndicator: Bool = false
     var indicatorAnchor: IndicatorAnchor = .midTrailing
     var dashboardWindowFrame: WindowFrame? = nil
@@ -1900,6 +1904,8 @@ struct AppConfig: Codable {
         case launchAtLogin = "launch_at_login"
         case openDashboardOnLaunch = "open_dashboard_on_launch"
         case showFloatingIndicator = "show_floating_indicator"
+        case showDictationIdleDot = "show_dictation_idle_dot"
+        case showMeetingRecordButton = "show_meeting_record_button"
         case showHotkeyOnFloatingIndicator = "show_hotkey_on_floating_indicator"
         case indicatorAnchor = "indicator_anchor"
         case dashboardWindowFrame = "dashboard_window_frame"
@@ -1993,6 +1999,7 @@ struct AppConfig: Codable {
         case dictationStyleAppRules = "dictation_style_app_rules"
         case dictationStyleDomainRules = "dictation_style_domain_rules"
         case showMeetingTranscriptOnIndicatorHover = "show_meeting_transcript_on_indicator_hover"
+        case showDictationFocusReminder = "show_dictation_focus_reminder"
     }
 
     init() {}
@@ -2094,6 +2101,13 @@ struct AppConfig: Codable {
         launchAtLogin = (try? c.decode(Bool.self, forKey: .launchAtLogin)) ?? defaults.launchAtLogin
         openDashboardOnLaunch = (try? c.decode(Bool.self, forKey: .openDashboardOnLaunch)) ?? defaults.openDashboardOnLaunch
         showFloatingIndicator = (try? c.decode(Bool.self, forKey: .showFloatingIndicator)) ?? defaults.showFloatingIndicator
+        showDictationIdleDot =
+            (try? c.decode(Bool.self, forKey: .showDictationIdleDot))
+            ?? (try? legacy.decode(Bool.self, forKey: .showDictationFocusReminder))
+            ?? defaults.showDictationIdleDot
+        showMeetingRecordButton =
+            (try? c.decode(Bool.self, forKey: .showMeetingRecordButton))
+            ?? defaults.showMeetingRecordButton
         showHotkeyOnFloatingIndicator =
             (try? c.decode(Bool.self, forKey: .showHotkeyOnFloatingIndicator))
             ?? defaults.showHotkeyOnFloatingIndicator

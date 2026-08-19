@@ -4,6 +4,12 @@ import Testing
 
 @Suite("Dictation lifecycle feedback")
 struct DictationLifecycleFeedbackTests {
+    @Test("sound preference remains authoritative on every output route")
+    func soundPreferencePolicy() {
+        #expect(DictationLifecycleFeedback.soundAllowed(preferenceEnabled: true))
+        #expect(!DictationLifecycleFeedback.soundAllowed(preferenceEnabled: false))
+    }
+
     @Test("each lifecycle transition is emitted once")
     func deduplicatesTransitions() {
         var feedback = DictationLifecycleFeedback()

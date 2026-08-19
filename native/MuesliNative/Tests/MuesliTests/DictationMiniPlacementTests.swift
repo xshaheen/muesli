@@ -9,40 +9,14 @@ struct DictationMiniPlacementTests {
         visibleFrame: CGRect(x: 0, y: 24, width: 300, height: 216)
     )
 
-    @Test("quadrants are tried in lower-right, lower-left, upper-right, upper-left order")
-    func orderedQuadrants() {
-        let size = CGSize(width: 58, height: 22)
-
-        let lowerRight = DictationMiniPlacement.place(
-            near: CGPoint(x: 100, y: 140), size: size, screens: [primary]
-        )
-        let lowerLeft = DictationMiniPlacement.place(
-            near: CGPoint(x: 270, y: 140), size: size, screens: [primary]
-        )
-        let upperRight = DictationMiniPlacement.place(
-            near: CGPoint(x: 100, y: 40), size: size, screens: [primary]
-        )
-        let upperLeft = DictationMiniPlacement.place(
-            near: CGPoint(x: 270, y: 40), size: size, screens: [primary]
-        )
-
-        #expect(lowerRight?.quadrant == .lowerRight)
-        #expect(lowerLeft?.quadrant == .lowerLeft)
-        #expect(upperRight?.quadrant == .upperRight)
-        #expect(upperLeft?.quadrant == .upperLeft)
-        for result in [lowerRight, lowerLeft, upperRight, upperLeft].compactMap({ $0 }) {
-            #expect(primary.visibleFrame.contains(result.frame))
-        }
-    }
-
     @Test("placement selects negative-origin and vertically offset displays")
     func multiDisplayCoordinates() {
         let negative = DictationMiniPlacement.Screen(
             frame: CGRect(x: -1_280, y: -180, width: 1_280, height: 800),
             visibleFrame: CGRect(x: -1_280, y: -180, width: 1_280, height: 776)
         )
-        let result = DictationMiniPlacement.place(
-            near: CGPoint(x: -1_100, y: 200),
+        let result = DictationMiniPlacement.placeBelowCaret(
+            CGPoint(x: -1_100, y: 200),
             size: CGSize(width: 58, height: 22),
             screens: [primary, negative]
         )
@@ -51,10 +25,10 @@ struct DictationMiniPlacementTests {
         #expect(result.map { negative.visibleFrame.contains($0.frame) } == true)
     }
 
-    @Test("a pointer in the full screen frame still selects that screen")
-    func pointerOutsideVisibleFrame() {
-        let result = DictationMiniPlacement.place(
-            near: CGPoint(x: 100, y: 10),
+    @Test("a caret in the full screen frame still selects that screen")
+    func caretOutsideVisibleFrame() {
+        let result = DictationMiniPlacement.placeBelowCaret(
+            CGPoint(x: 100, y: 10),
             size: CGSize(width: 58, height: 22),
             screens: [primary]
         )
@@ -65,8 +39,8 @@ struct DictationMiniPlacementTests {
 
     @Test("oversized surfaces remain centered and vertically reachable")
     func oversizedSurface() {
-        let result = DictationMiniPlacement.place(
-            near: CGPoint(x: 150, y: 120),
+        let result = DictationMiniPlacement.placeBelowCaret(
+            CGPoint(x: 150, y: 120),
             size: CGSize(width: 400, height: 22),
             screens: [primary]
         )
@@ -85,17 +59,17 @@ struct DictationMiniPlacementTests {
         let origin = CGPoint(x: 100, y: 100)
 
         #expect(!DictationMiniPlacement.shouldReacquire(
-            from: origin, on: primary, to: CGPoint(x: 147, y: 100), on: primary
+            from: origin, on: primary, to: CGPoint(x: 103, y: 100), on: primary
         ))
         #expect(DictationMiniPlacement.shouldReacquire(
-            from: origin, on: primary, to: CGPoint(x: 148, y: 100), on: primary
+            from: origin, on: primary, to: CGPoint(x: 104, y: 100), on: primary
         ))
         #expect(DictationMiniPlacement.shouldReacquire(
             from: origin, on: primary, to: CGPoint(x: 101, y: 100), on: other
         ))
     }
 
-    @Test("a disconnected frozen anchor is rehomed without following the pointer")
+    @Test("a disconnected frozen anchor is rehomed without following the caret")
     func frozenFrameRehoming() {
         let surviving = DictationMiniPlacement.Screen(
             frame: CGRect(x: 500, y: 100, width: 200, height: 140),
@@ -107,5 +81,28 @@ struct DictationMiniPlacementTests {
         )
 
         #expect(rehomed.map { surviving.visibleFrame.contains($0) } == true)
+    }
+
+    @Test("below-caret placement centres under the caret, flips above at the bottom edge, and clamps")
+    func belowCaret() {
+        let screen = DictationMiniPlacement.Screen(
+            frame: CGRect(x: 0, y: 0, width: 800, height: 600),
+            visibleFrame: CGRect(x: 0, y: 24, width: 800, height: 576)
+        )
+        let size = CGSize(width: 20, height: 20)
+        let below = DictationMiniPlacement.placeBelowCaret(CGPoint(x: 400, y: 300), size: size, screens: [screen])
+        #expect(below?.quadrant == .below)
+        #expect(below?.frame == CGRect(x: 386, y: 274, width: 20, height: 20))
+        let seed = DictationMiniPlacement.placeBelowCaret(CGPoint(x: 400, y: 300), size: size, screens: [screen], visualInset: 5)
+        #expect(seed?.frame.maxY == 299)
+        #expect(seed?.frame.midX == 400 + DictationMiniPlacement.caretHorizontalBias)
+
+        let nearBottom = DictationMiniPlacement.placeBelowCaret(CGPoint(x: 400, y: 40), size: size, screens: [screen])
+        #expect(nearBottom?.quadrant == .above)
+        #expect(nearBottom?.frame.minY == 40 + DictationMiniPlacement.caretLiftAbove)
+
+        let corner = DictationMiniPlacement.placeBelowCaret(CGPoint(x: 2, y: 598), size: size, screens: [screen])
+        #expect(corner?.frame.minX == 4)
+        #expect((corner?.frame.maxY ?? 0) <= 596)
     }
 }

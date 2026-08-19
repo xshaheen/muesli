@@ -1291,6 +1291,8 @@ struct AppConfigTests {
         config.showScheduledMeetingNotifications = false
         config.scheduledMeetingNotificationLeadTime = .threeMinutes
         config.showMeetingDetectionNotification = false
+        config.showDictationIdleDot = false
+        config.showMeetingRecordButton = false
         config.mutedMeetingDetectionAppBundleIDs = ["com.google.Chrome", "com.tinyspeck.slackmacgap"]
         config.computerUseHotkey = HotkeyConfig(keyCode: 62, label: "Right Ctrl")
         config.enableComputerUseHotkey = false
@@ -1373,6 +1375,8 @@ struct AppConfigTests {
         #expect(decoded.showScheduledMeetingNotifications == false)
         #expect(decoded.scheduledMeetingNotificationLeadTime == .threeMinutes)
         #expect(decoded.showMeetingDetectionNotification == false)
+        #expect(decoded.showDictationIdleDot == false)
+        #expect(decoded.showMeetingRecordButton == false)
         #expect(decoded.mutedMeetingDetectionAppBundleIDs == ["com.google.Chrome", "com.tinyspeck.slackmacgap"])
         #expect(decoded.meetingTranscriptionBackend == config.meetingTranscriptionBackend)
         #expect(decoded.indicatorAnchor == config.indicatorAnchor)
@@ -1463,6 +1467,8 @@ struct AppConfigTests {
         #expect(json["meeting_recording_save_policy"] != nil)
         #expect(json["meeting_recording_file_format"] != nil)
         #expect(json["show_scheduled_meeting_notifications"] != nil)
+        #expect(json["show_dictation_idle_dot"] != nil)
+        #expect(json["show_meeting_record_button"] != nil)
         #expect(json["show_meeting_detection_notification"] != nil)
         #expect(json["muted_meeting_detection_app_bundle_ids"] != nil)
         #expect(json["custom_meeting_templates"] != nil)
@@ -1793,6 +1799,34 @@ struct AppConfigTests {
             #expect(config.resolvedOnboardingUseCase == .dictationAndMeetings)
             #expect(config.resolvedOnboardingUseCase.includesMeetings)
         }
+    }
+
+    @Test("legacy show_dictation_focus_reminder carries forward as showDictationIdleDot")
+    func legacyDictationFocusReminderMigratesToIdleDot() throws {
+        let legacyOnly = """
+        { "show_dictation_focus_reminder": false }
+        """
+        let legacyOnlyConfig = try JSONDecoder().decode(AppConfig.self, from: Data(legacyOnly.utf8))
+        #expect(legacyOnlyConfig.showDictationIdleDot == false)
+
+        let bothKeys = """
+        {
+          "show_dictation_idle_dot": true,
+          "show_dictation_focus_reminder": false
+        }
+        """
+        let bothKeysConfig = try JSONDecoder().decode(AppConfig.self, from: Data(bothKeys.utf8))
+        #expect(bothKeysConfig.showDictationIdleDot == true)
+
+        let neitherConfig = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        #expect(neitherConfig.showDictationIdleDot == AppConfig().showDictationIdleDot)
+
+        // The legacy key is read-only: encoding never re-emits it.
+        let encoded = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(legacyOnlyConfig)
+        ) as! [String: Any]
+        #expect(encoded["show_dictation_focus_reminder"] == nil)
+        #expect(encoded["show_dictation_idle_dot"] as? Bool == false)
     }
 
     @Test("incomplete onboarding defaults malformed use case to dictation")
@@ -2245,6 +2279,150 @@ struct HotkeyMonitorTests {
         #expect(HotkeyTriggerTiming.startDelay(forThresholdMilliseconds: 250) == 0.25)
         #expect(HotkeyTriggerTiming.prepareDelay(forThresholdMilliseconds: 250) == 0.15)
         #expect(HotkeyTriggerTiming.prepareDelay(forThresholdMilliseconds: 100) == 0)
+    }
+
+    @Test("eager start records at key-down, stops on a real hold, and discards taps silently")
+    @MainActor
+    func eagerStartHoldAndTap() {
+        let scheduler = ManualHotkeyScheduler()
+        let monitor = scheduler.makeMonitor(doubleTapWindow: 0.35)
+        monitor.eagerStart = true
+        var prepareCount = 0, startCount = 0, stopCount = 0, cancelCount = 0, toggleStartCount = 0
+        monitor.onPrepare = { prepareCount += 1 }
+        monitor.onStart = { startCount += 1 }
+        monitor.onStop = { stopCount += 1 }
+        monitor.onCancel = { cancelCount += 1 }
+        monitor.onToggleStart = { toggleStartCount += 1 }
+
+        // Hold: prepare at key-down, start after the eager delay, stop on release.
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        #expect(prepareCount == 1)
+        #expect(startCount == 0)
+        scheduler.advance(by: HotkeyTriggerTiming.eagerStartDelay + 0.01)
+        #expect(startCount == 1)
+        scheduler.advance(by: 0.5)
+        monitor.handleFlagsChanged(keyCode: 55, flags: [])
+        #expect(stopCount == 1)
+        #expect(cancelCount == 0)
+
+        // Tap: the started recording is discarded, never stopped.
+        scheduler.advance(by: 1)
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        scheduler.advance(by: 0.10)
+        #expect(startCount == 2)
+        monitor.handleFlagsChanged(keyCode: 55, flags: [])
+        #expect(stopCount == 1)
+        #expect(cancelCount == 1)
+
+        // Second tap inside the window goes hands-free.
+        scheduler.advance(by: 0.10)
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        #expect(toggleStartCount == 1)
+        #expect(startCount == 2)
+    }
+
+    @Test("eager start treats a chord inside the tap guard as a discard, not a stop")
+    @MainActor
+    func eagerStartChordDiscards() {
+        let scheduler = ManualHotkeyScheduler()
+        let monitor = scheduler.makeMonitor(doubleTapWindow: 0.35)
+        monitor.eagerStart = true
+        var stopCount = 0, cancelCount = 0
+        monitor.onStop = { stopCount += 1 }
+        monitor.onCancel = { cancelCount += 1 }
+
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        scheduler.advance(by: 0.08)
+        monitor.handleFlagsChanged(keyCode: 56, flags: [.command, .shift])
+        #expect(cancelCount == 1)
+        #expect(stopCount == 0)
+    }
+
+    @Test("eager tap routes to onTapDiscard instead of onCancel; holds still stop")
+    @MainActor
+    func eagerTapFiresTapDiscardNotCancel() {
+        let scheduler = ManualHotkeyScheduler()
+        let monitor = scheduler.makeMonitor(doubleTapWindow: 0.35)
+        monitor.eagerStart = true
+        var startCount = 0, stopCount = 0, cancelCount = 0, tapDiscardCount = 0
+        monitor.onStart = { startCount += 1 }
+        monitor.onStop = { stopCount += 1 }
+        monitor.onCancel = { cancelCount += 1 }
+        monitor.onTapDiscard = { tapDiscardCount += 1 }
+
+        // Tap after recording started: discard, never cancel, never stop.
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        scheduler.advance(by: 0.10)
+        #expect(startCount == 1)
+        monitor.handleFlagsChanged(keyCode: 55, flags: [])
+        #expect(tapDiscardCount == 1)
+        #expect(cancelCount == 0)
+        #expect(stopCount == 0)
+
+        // Tap released before the eager start fired: still a discard.
+        scheduler.advance(by: 1)
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        scheduler.advance(by: 0.03)
+        #expect(startCount == 1)
+        monitor.handleFlagsChanged(keyCode: 55, flags: [])
+        #expect(tapDiscardCount == 2)
+        #expect(cancelCount == 0)
+
+        // Hold past the tap guard: stop, no discard.
+        scheduler.advance(by: 1)
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        scheduler.advance(by: 0.5)
+        #expect(startCount == 2)
+        monitor.handleFlagsChanged(keyCode: 55, flags: [])
+        #expect(stopCount == 1)
+        #expect(tapDiscardCount == 2)
+        #expect(cancelCount == 0)
+    }
+
+    @Test("eager chord inside the tap guard routes to onTapDiscard")
+    @MainActor
+    func eagerChordInsideTapGuardFiresTapDiscard() {
+        let scheduler = ManualHotkeyScheduler()
+        let monitor = scheduler.makeMonitor(doubleTapWindow: 0.35)
+        monitor.eagerStart = true
+        var stopCount = 0, cancelCount = 0, tapDiscardCount = 0
+        monitor.onStop = { stopCount += 1 }
+        monitor.onCancel = { cancelCount += 1 }
+        monitor.onTapDiscard = { tapDiscardCount += 1 }
+
+        // Modifier chord while recording inside the guard.
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        scheduler.advance(by: 0.08)
+        monitor.handleFlagsChanged(keyCode: 56, flags: [.command, .shift])
+        #expect(tapDiscardCount == 1)
+        #expect(cancelCount == 0)
+        #expect(stopCount == 0)
+        monitor.handleFlagsChanged(keyCode: 56, flags: .command)
+        monitor.handleFlagsChanged(keyCode: 55, flags: [])
+
+        // Regular key chord while recording inside the guard.
+        scheduler.advance(by: 1)
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        scheduler.advance(by: 0.08)
+        monitor.handleKeyDown(keyCode: 0)
+        #expect(tapDiscardCount == 2)
+        #expect(cancelCount == 0)
+        #expect(stopCount == 0)
+    }
+
+    @Test("eager tap falls back to onCancel when onTapDiscard is unset")
+    @MainActor
+    func eagerTapFallsBackToCancelWithoutTapDiscard() {
+        let scheduler = ManualHotkeyScheduler()
+        let monitor = scheduler.makeMonitor(doubleTapWindow: 0.35)
+        monitor.eagerStart = true
+        var cancelCount = 0
+        monitor.onCancel = { cancelCount += 1 }
+
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        scheduler.advance(by: 0.10)
+        monitor.handleFlagsChanged(keyCode: 55, flags: [])
+        #expect(cancelCount == 1)
     }
 
     @Test("low trigger threshold still allows double-tap toggle")

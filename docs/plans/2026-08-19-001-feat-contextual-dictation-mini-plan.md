@@ -13,11 +13,11 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** Replace the persistent, fixed dictation pill with an idle-hidden contextual Mini beside the pointer, while extracting meeting recording controls into an independently positioned interactive panel.
+- **Objective:** Replace the persistent, fixed dictation pill with an idle-hidden contextual Mini beside the focused text insertion caret, while extracting meeting recording controls into an independently positioned interactive panel.
 - **Product authority:** The session-settled visual direction under `docs/art-direction/muesli-mini-indicator/` governs state silhouettes, lifecycle sounds, contextual placement, and surface ownership.
-- **Open blockers:** None. Pointer reacquisition distances and terminal-state dwell times are tuning constants, not product forks.
+- **Open blockers:** None. Caret polling, movement threshold, and terminal-state dwell times are tuning constants, not product forks.
 - **Execution profile:** Seven dependency-ordered units covering characterization, surface extraction, contextual geometry, animation, lifecycle feedback, configuration migration, and macOS visual QA.
-- **Stop conditions:** Stop if the split cannot preserve meeting stop/pause/transcript safety, if the active dictation target cannot remain mouse-accessible, or if truthful success/failure feedback would require claiming delivery the app cannot observe.
+- **Stop conditions:** Stop if the split cannot preserve meeting stop/pause/transcript safety, if the active dictation target cannot remain keyboard-accessible, or if truthful success/failure feedback would require claiming delivery the app cannot observe.
 - **Tail ownership:** The implementation owner carries the work through focused and full native tests, live AppKit validation, code review, PR delivery, and CI resolution.
 
 ---
@@ -28,7 +28,7 @@ execution: code
 
 ### Summary
 
-Muesli will use two unrelated floating surfaces for two different jobs. Dictation gets a small, temporary, non-interactive Mini near the user's pointer. Meeting recording keeps durable, draggable controls in a separate panel that appears only for a real active recording.
+Muesli will use two unrelated floating surfaces for two different jobs. Dictation gets a small, temporary, non-interactive Mini beside the focused insertion caret. Meeting recording keeps durable, draggable controls in a separate panel that appears only for a real active recording.
 
 ### Problem Frame
 
@@ -41,7 +41,7 @@ The current `FloatingIndicatorController` combines a persistent dictation afford
 
 ### Key Decisions
 
-- **Dictation uses a contextual Mini and has no fixed/classic presentation.** (session-settled: user-directed — chosen over preserving the fixed pill as an option: feedback should stay near the user's active pointer context and leave no idle chrome.) Governs R1, R2, R3, R9.
+- **Dictation uses a contextual Mini and has no fixed/classic presentation.** (session-settled: user-directed — chosen over preserving the fixed pill as an option: feedback should stay near the active text insertion context and leave no idle chrome.) Governs R1, R2, R3, R9.
 - **Processing is an animated point-field orb.** (session-settled: user-directed — chosen over a generic spinner or three-dot capsule: transcription generation needs a distinct computational silhouette.) Governs R4.
 - **Start, stop, success, and failure have distinct truthful sounds.** (session-settled: user-directed — chosen over reusing one completion cue: users should understand the lifecycle without looking.) Governs R5, R6.
 - **Dictation Mini and Meeting Recording Panel are independent concepts.** (session-settled: user-directed — chosen over one controller with modes: their visibility, positioning, interaction, and lifetime requirements conflict.) Governs R7, R8, R10.
@@ -54,9 +54,9 @@ The current `FloatingIndicatorController` combines a persistent dictation afford
 **Dictation Mini**
 
 - R1. Idle dictation must create no visible panel; preparing, recording, processing, success, failure, and pre-session dictation readiness warnings may show the Mini. A warning never replaces active recording or processing.
-- R2. The Mini must appear beside the pointer sampled at dictation activation, choose an edge-safe quadrant, reacquire only after meaningful pointer movement, and freeze its anchor through processing and terminal feedback.
+- R2. The Mini must appear beside the focused text insertion caret, choose an edge-safe quadrant, follow meaningful caret movement while preparing or recording, freeze through processing, and reacquire the post-insertion caret once for terminal feedback.
 - R3. The Mini must be a non-activating, normally mouse-transparent surface with no drag, hover expansion, stop button, mode menu, or focus transfer.
-- R4. Preparing uses a small accent seed, recording uses a compact live waveform, processing uses an animated circular point field, success uses a brief completion spark, failure uses a distinct red terminal mark, and a nonterminal readiness warning uses a compact labeled capsule with a non-color warning glyph.
+- R4. Preparing uses an orange seed, recording uses an orange-to-amber waveform on warm charcoal glass, processing uses an orange-to-amber point field on a darker charcoal orb, success uses a `#62d691` completion spark, failure uses a `#ff6961` terminal mark, and a nonterminal readiness warning uses a compact labeled capsule with a non-color warning glyph. Dictation Mini does not inherit the shared panel palette or app-wide accent.
 
 **Lifecycle audio and outcomes**
 
@@ -76,7 +76,7 @@ The current `FloatingIndicatorController` combines a persistent dictation afford
 
 ### Key Flows
 
-- F1. **Successful paste dictation:** hotkey prepares audio → Mini appears near pointer → stream-active starts waveform and Start cue → stop hands capture to processing and plays Stop → orb animates at the frozen anchor → non-empty paste transaction completes → Success cue/spark → Mini disappears.
+- F1. **Successful paste dictation:** hotkey prepares audio → Mini appears beside the focused caret → stream-active starts waveform and Start cue → stop hands capture to processing and plays Stop → orb animates at the frozen anchor → non-empty paste transaction completes → Mini reacquires the post-insertion caret once → Success cue/spark → Mini disappears.
 - F2. **Voice note:** dictation follows F1 through processing → non-empty history row is durably created without paste → Success cue/spark → Mini disappears.
 - F3. **Neutral or failed dictation:** cancel, discard, stale work, test mode, and empty/no-speech hide without terminal sound; the first terminal recording/transcription/delivery failure wins Failure cue/mark and later nested handlers cannot replay it.
 - F4. **Meeting recording:** detection may prompt elsewhere but shows no panel → explicit/automatic start completes capture setup → Meeting Recording Panel appears at its saved stable position → pause/resume, duration, waveform, transcript, and stop remain meeting-owned → stop closes the expanded transcript and changes the compact panel to non-interactive finalizing status → terminal success/failure/discard closes the compact panel.
@@ -87,14 +87,14 @@ The current `FloatingIndicatorController` combines a persistent dictation afford
 - AE1. **Idle-hidden contextual start**
   - **Covers R1, R2, R3.**
   - **Given:** Muesli is idle and no floating dictation surface is visible.
-  - **When:** The user starts dictation with the pointer near any edge on any attached display.
-  - **Then:** A mouse-transparent preparing seed appears in the first fitting quadrant with pointer clearance and never steals focus.
+  - **When:** The user starts dictation with the focused insertion caret near any edge on any attached display.
+  - **Then:** A mouse-transparent preparing seed appears in the first fitting quadrant with caret clearance and never steals focus.
 
 - AE2. **Stable recording-to-processing transition**
   - **Covers R2, R4, R5.**
-  - **Given:** Dictation is recording and the Mini has reacquired after a meaningful pointer move.
+  - **Given:** Dictation is recording and the Mini has reacquired after a meaningful caret move.
   - **When:** Capture stops and transcription begins.
-  - **Then:** Stop sounds once, the waveform morphs to the point-field orb at the same anchor, and further pointer movement cannot move it.
+  - **Then:** Stop sounds once, the waveform morphs to the point-field orb at the same anchor, and further caret movement cannot move it.
 
 - AE3. **Truthful success**
   - **Covers R4, R5, R6.**
@@ -122,7 +122,7 @@ The current `FloatingIndicatorController` combines a persistent dictation afford
 
 ### Success Criteria
 
-- Idle has zero dictation chrome, and active dictation feedback is immediately findable near the pointer without blocking the pointer hotspot.
+- Idle has zero dictation chrome, and active dictation feedback is immediately findable beside the focused caret without blocking the insertion point or upcoming text.
 - Recording and processing have unmistakably different motion and silhouette at 1x and 2x scale.
 - Lifecycle audio can be understood eyes-free and never lies about cancellation, empty output, stale work, or undelivered text.
 - Meeting controls remain stable and fully usable across dictation state changes, pointer movement, display changes, pause/resume, and transcript toggling.
@@ -139,7 +139,7 @@ The current `FloatingIndicatorController` combines a persistent dictation afford
 
 #### Deferred to Follow-Up Work
 
-- Dogfood-driven tuning beyond the initial pointer threshold, coalescing delay, and terminal dwell constants.
+- Dogfood-driven tuning beyond the initial caret polling interval, movement threshold, and terminal dwell constants.
 - A broader routed/per-event sound configuration system anticipated by `docs/plans/2026-08-14-001-feat-multilingual-transcription-quality-plan.md`.
 
 #### Outside This Product Slice
@@ -166,7 +166,7 @@ The current `FloatingIndicatorController` combines a persistent dictation afford
 ### Key Technical Decisions
 
 - KTD1. **Give every floating surface one owner and one window.** `MuesliController` will coordinate a `DictationMiniIndicatorController`, a `MeetingRecordingPanelController`, and the existing computer-use overlay; no facade may share their position, visibility, hover, drag, power-provider, timer, or transcript state. Governs R7, R8, R9, R11.
-- KTD2. **Keep contextual placement pure and event sampling bounded.** A pure placement policy selects lower-right, lower-left, upper-right, then upper-left with clearance derived from the current cursor bounds and never less than 28 points; a follower samples mouse movement only while preparing/recording, reacquires after 48 points with a short coalescing delay, and freezes on processing. Display removal may rehome the frozen frame to a surviving display without resuming pointer following. Pointer-relative placement is the first-release policy even when a hotkey-started session finds the pointer parked away from typing focus; live QA must measure that explicit hypothesis before legacy presentation controls are removed. Governs R2, R3.
+- KTD2. **Keep contextual placement pure and Accessibility sampling bounded.** A pure placement policy selects lower-left, lower-right, upper-left, then upper-right with 10 points of caret clearance. An Accessibility provider resolves the focused element's selected-range bounds, converts Quartz coordinates to AppKit coordinates, and polls at roughly 10 Hz only while preparing or recording; movement below 4 points is ignored and processing freezes the last anchor. Terminal feedback reacquires the post-insertion caret once. The focused element frame is the fallback when range bounds are unavailable, and the Mini stays hidden when neither anchor resolves. Display removal may rehome a frozen frame to a surviving display without resuming caret following. Governs R2, R3.
 - KTD3. **Model terminal Mini feedback explicitly.** Mini presentation extends beyond `DictationState` with success, failure, and neutral terminal outcomes; a terminal hold cannot be erased by the queue's immediate idle reconciliation, but a newer active session may supersede it. Governs R1, R4, R6.
 - KTD4. **Use a delivery-aware foreground feedback arbiter without rewriting trace semantics.** A small pure policy records Start, Stop, and one terminal Mini/audio result per session ID. It serializes cues inside the foreground session and, when a newer session starts, consumes but suppresses older unresolved terminal audio so sound cannot be misattributed. Existing winning trace failures feed Failure eligibility, while observable paste completion, durable voice-note storage, target mismatch, and missing persistence independently resolve feedback after the pipeline outcome. Governs R5, R6.
 - KTD5. **Migrate positions only across equivalent semantics.** Add a meeting-control center with a stable meeting-specific default; tolerate the retired dictation-position keys without applying them. `meetingPanelOrigin` remains the live transcript window's bottom-left origin and is never conflated with either center. Governs R7, R10.
@@ -263,7 +263,7 @@ flowchart TD
 - **Terminal feedback races:** Queue reconciliation can request idle immediately after a job completes. Give terminal presentations generation tokens and explicit holds; newer active work wins, stale dismissals do nothing.
 - **Duplicate failure sounds:** Nested audio, pipeline, storage, and delivery handlers may all observe one failure. Route them through the per-session arbiter and test first-winner behavior.
 - **Misleading success:** Play success only after the observable paste completion or a created voice-note history row. Treat target mismatch and missing voice-note storage as failure, not success.
-- **Pointer distraction:** Do not follow every mouse event. Centralize clearance, threshold, coalescing, and animation constants so dogfooding can tune them without controller rewrites.
+- **Caret jitter and Accessibility cost:** Poll only during preparing/recording, ignore sub-threshold movement, and centralize clearance, threshold, polling, and animation constants so dogfooding can tune them without controller rewrites.
 - **Coordinate-system bugs:** Keep Quartz-to-AppKit conversion and display selection in pure helpers; test negative-origin, vertically offset, and disconnected displays.
 - **Config semantic collision:** Keep meeting control center and transcript-panel origin as different keys and value meanings; tolerate but ignore retired dictation positions, and pin precedence/idempotence in tests.
 - **Accessibility regression:** Give every visual state a non-color silhouette, freeze or reduce motion when requested, and refresh glass/contrast on accessibility display notifications.
@@ -357,7 +357,7 @@ flowchart TD
 
 ### U4. Build contextual placement and Mini presentation
 
-- **Goal:** Implement the idle-hidden, pointer-relative, feedback-only Dictation Mini and its full visual state vocabulary.
+- **Goal:** Implement the idle-hidden, caret-relative, feedback-only Dictation Mini and its full visual state vocabulary.
 - **Requirements:** R1, R2, R3, R4, R9, R11; AE1, AE2, AE3, AE4; KTD2, KTD3.
 - **Dependencies:** U2, U3.
 - **Files:**
@@ -370,24 +370,24 @@ flowchart TD
   - `native/MuesliNative/Tests/MuesliTests/FloatingIndicatorStyleTests.swift`
 - **Approach:**
   1. Implement pure screen selection, ordered quadrant placement, clamping, threshold, and processing-anchor freeze policies.
-  2. Sample the pointer at activation; monitor/coalesce meaningful moves only during preparing/recording and remove monitors at processing/terminal/idle.
-  3. Reuse Muesli's glass/accent and waveform vocabulary for the seed and recording capsule; add a deterministic circular point-field layer for processing and compact success/failure terminal visuals.
+  2. Resolve the focused insertion caret through macOS Accessibility; poll meaningful moves only during preparing/recording and stop polling at processing/terminal/idle.
+  3. Reuse Muesli's glass and waveform vocabulary while applying the approved Contextual Spark tokens (`#32312f` → `#181817`, `#ff7043`, `#ffb04d`, `#62d691`, `#ff6961`); add a deterministic circular point-field layer for processing and compact success/failure terminal visuals.
   4. Add the compact labeled readiness warning only when no capture/job owns the Mini; it keeps the contextual anchor, announces once, and dismisses or yields to a newer active session deterministically.
   5. Make the panel non-activating and mouse-transparent, with generation-safe animations and terminal holds.
-  6. Let screen removal rehome a frozen processing/terminal frame to a fitting surviving display without restarting pointer following.
+  6. Let screen removal rehome a frozen processing/terminal frame to a fitting surviving display without restarting caret following.
   7. Honor Reduce Motion, Reduce Transparency, Increase Contrast, scale changes, and non-focus-dependent accessibility announcements without adding interaction. Announce recording active, processing, warning, terminal success, and terminal failure once per accepted transition; neutral dismissal stays silent.
 - **Test scenarios:**
-  - All four pointer quadrants are selected in order and remain inside each display's visible frame, including negative origins and an indicator wider than the display.
-  - Pointer travel below threshold does not move the Mini; travel above threshold coalesces to one reacquisition; display changes select the new screen.
-  - Processing and terminal states keep the last recording anchor despite pointer movement.
-  - Removing the anchor's display rehomes the frozen frame once to a surviving display and keeps pointer following disabled.
-  - Idle closes the panel and removes event monitors; stale animation/dismiss callbacks cannot close a newer session.
+  - All four caret-relative quadrants are selected in order and remain inside each display's visible frame, including negative origins and an indicator wider than the display.
+  - Caret travel below threshold does not move the Mini; travel at or above threshold reacquires; display changes select the new screen.
+  - Processing keeps the last recording anchor despite caret movement; terminal states reacquire the current caret once and then freeze.
+  - Removing the anchor's display rehomes the frozen frame once to a surviving display and keeps caret following disabled.
+  - Idle closes the panel and stops caret polling; stale animation/dismiss callbacks cannot close a newer session.
   - Preparing, recording, processing, readiness warning, success, and failure resolve to distinct dimensions, accessibility labels, and non-color silhouettes.
   - An injected accessibility sink receives each eligible transition once, with no neutral/cancel announcement.
   - Reduce Motion preserves mutually distinct preparing, reduced-amplitude recording, static/restrained processing, static success, and failure silhouettes; contrast/transparency fallbacks remain legible.
-  - A hotkey-started session remains findable when the pointer has been parked for minutes on another display or opposite corner from typing focus; record the outcome rather than silently changing the pointer-relative policy.
-  - Default and enlarged accessibility cursor sizes retain sufficient hotspot clearance.
-- **Verification:** New Mini placement/presentation suites and existing surface-style tests pass; no legacy fixed-anchor or drag helper remains reachable from dictation. Before U6 removes any legacy presentation controls, run a live AppKit checkpoint covering all Mini states, parked-pointer typing, multiple displays, 1x/2x scale, enlarged cursor, and Reduce Motion; stop and retain the reversible fallback if this checkpoint fails.
+  - A hotkey-started session remains findable when the mouse pointer is parked on another display because placement is derived only from the focused insertion caret.
+  - Focused controls without selected-range bounds use their element frame; controls without either geometry keep the Mini hidden.
+- **Verification:** New Mini placement/presentation suites and existing surface-style tests pass; no legacy fixed-anchor, drag helper, or mouse-location follower remains reachable from dictation. Before U6 removes any legacy presentation controls, run a live AppKit checkpoint covering all Mini states, typing and selection changes, multiple displays, 1x/2x scale, unsupported Accessibility controls, and Reduce Motion; stop and retain the reversible fallback if this checkpoint fails.
 
 ### U5. Route lifecycle audio, delivery, and terminal visuals
 
@@ -489,7 +489,7 @@ Use the repository's shared SwiftPM scratch-path resolver and a unique lane/chan
 4. Run the complete native test suite through `./scripts/dev-test.sh --lane A`. If packaging again fails only because the known LocalVQE runtime is unavailable, record the successful compile/test evidence separately and do not delete or replace external runtime state without approval.
 5. Live dictation QA in at least TextEdit and one browser/editor: hold, toggle, voice note, target switch, empty speech, cancel, audio failure, transcription failure, rapid repeated sessions, and queued dictations.
 6. Live meeting QA: detected app without recording, manual start, startup failure, active/pause/resume, drag, transcript show/hide, stop, discard, and relaunch position restore.
-7. Geometry/accessibility QA: primary and negative-origin secondary displays, pointer at every screen corner, pointer parked away from typing focus for a hotkey start, pointer movement across displays, default/enlarged pointer size, full-screen Space, 1x/2x scale, Reduce Motion, Reduce Transparency, Increase Contrast, and VoiceOver labels/announcements.
+7. Geometry/accessibility QA: primary and negative-origin secondary displays, caret at every screen edge, caret movement across displays, pointer parked away from typing focus, controls with and without selected-range bounds, full-screen Space, 1x/2x scale, Reduce Motion, Reduce Transparency, Increase Contrast, and VoiceOver labels/announcements.
 8. Capture screenshots or a short visual demo covering preparing, recording, processing orb, success, failure, and the independent meeting panel for PR review.
 
 ---
@@ -506,4 +506,4 @@ Use the repository's shared SwiftPM scratch-path resolver and a unique lane/chan
 - Focused tests, Linux-parity checks, the full native suite, named-lane build, and live multi-display/accessibility QA are complete with exact outcomes recorded.
 - The diff contains no unrelated user work, abandoned compatibility facade, copied competitor assets, secret, or broad redesign of meeting/transcript surfaces.
 - Code review findings are resolved or recorded durably, the branch is pushed, a PR is opened or updated, and CI/review reaches a decided merge-ready state.
-- The shipping release notes describe the retired fixed/idle indicator controls and the new idle-hidden pointer-contextual Mini.
+- The shipping release notes describe the retired fixed/idle indicator controls and the new idle-hidden caret-contextual Mini.

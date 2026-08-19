@@ -3,6 +3,10 @@ import Foundation
 /// Resolves one coherent visual and audible lifecycle for each dictation session.
 /// The controller owns effects; this value owns ordering, deduplication, and foreground arbitration.
 struct DictationLifecycleFeedback {
+    static func soundAllowed(preferenceEnabled: Bool) -> Bool {
+        preferenceEnabled
+    }
+
     enum Outcome: Equatable {
         case success
         case failure(recovery: Recovery)

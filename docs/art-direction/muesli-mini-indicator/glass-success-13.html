@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muesli Mini Indicator — Glass Success and Quiet Reminder</title>
+  <style>
+    :root { color-scheme:dark; --coral:#ff7043; --green:#48e57b; --ink:#f3f2ef; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0b0b0a; color:#f3f2ef; font-family:-apple-system,BlinkMacSystemFont,sans-serif; }
+    main { width:min(1040px,calc(100% - 48px)); padding:40px 0; }
+    h1 { margin:0 0 14px; font-size:44px; line-height:1; letter-spacing:-.04em; }
+    .lede { max-width:760px; margin:0 0 30px; color:#99958f; line-height:1.55; }
+    .stage { display:grid; grid-template-columns:1.1fr 1fr; gap:1px; overflow:hidden; border:1px solid rgba(255,255,255,.11); border-radius:28px; background:rgba(255,255,255,.11); box-shadow:0 32px 90px rgba(0,0,0,.46); }
+    article { padding:34px; background:linear-gradient(145deg,#171716,#0f0f0e); }
+    .index { color:#6f6c67; font:700 12px ui-monospace,SFMono-Regular,monospace; letter-spacing:.16em; }
+    h2 { margin:10px 0 18px; font-size:27px; }
+    .foot { color:#85817c; font:600 13px ui-monospace,SFMono-Regular,monospace; margin-top:18px; }
+    .foot strong { color:#d4d1cb; } .foot span { display:block; margin-top:6px; font:400 13px/1.45 -apple-system,BlinkMacSystemFont,sans-serif; }
+    .pair { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .cell { position:relative; height:150px; border-radius:14px; display:grid; place-items:center; overflow:hidden; }
+    .cell.dark { background:linear-gradient(#232325,#19191b); } .cell.light { background:linear-gradient(#f4f2ee,#e6e3dd); }
+    .cell small { position:absolute; left:12px; bottom:10px; color:#85817c; font:600 11px ui-monospace,SFMono-Regular,monospace; }
+    .cell.light small { color:#6f6c67; }
+    .done { position:relative; width:20px; height:20px; border-radius:50%; transform:scale(4);
+      background:radial-gradient(circle at 50% 28%, rgba(255,255,255,.34), rgba(255,255,255,.06) 55%, rgba(0,0,0,.10) 100%), rgba(72,229,123,.82);
+      -webkit-backdrop-filter:blur(14px) saturate(1.3); backdrop-filter:blur(14px) saturate(1.3); }
+    .done svg { position:absolute; inset:0; width:20px; height:20px; }
+    .done.popin { animation:pop .26s cubic-bezier(.2,.8,.2,1) both; }
+    @keyframes pop { 0% { transform:scale(2.2); opacity:0; } 70% { transform:scale(4.24); opacity:1; } 100% { transform:scale(4); } }
+    table { width:100%; border-collapse:collapse; font:12px/1.5 ui-monospace,SFMono-Regular,monospace; color:#b9b5ae; }
+    td { padding:3px 0; border-bottom:1px solid rgba(255,255,255,.07); vertical-align:top; } td:first-child { color:#7f7b75; width:40%; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Glass success.<br>Quieter reminder.</h1>
+    <p class="lede">Completion becomes a 20 pt glass disk: light material, vivid green tint at 82 %, a gel highlight, a small white check — no solid fill, no edge, and no compositor shadow (the dark ring you saw on light pages). Every signal now pops in (fade + slight overshoot; fade only under Reduce Motion) and fades out. The focus reminder only fires for empty, genuinely editable fields.</p>
+    <section class="stage">
+      <article>
+        <div class="index">05</div><h2>Complete · 4×</h2>
+        <div class="pair">
+          <div class="cell dark"><div class="done popin"><svg viewBox="0 0 20 20"><path d="M6.3 9.9 9 12.7 14 7.5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div><small>dark page</small></div>
+          <div class="cell light"><div class="done popin" style="animation-delay:.2s"><svg viewBox="0 0 20 20"><path d="M6.3 9.9 9 12.7 14 7.5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div><small>light page · no dark ring</small></div>
+        </div>
+        <div class="foot"><strong>20 pt glass disk · #48e57b @ 82 % · popover material · white 1.8 pt check</strong><span>Gel gradient: white 34 % at the crown → 6 % mid → black 10 % at the base. Pop: 0.55 → 1.06 → 1.0 over 0.26 s with a 0.14 s fade; dismiss fades 0.14 s.</span></div>
+      </article>
+      <article>
+        <div class="index">Δ</div><h2>What changed</h2>
+        <table>
+          <tr><td>Success green</td><td>#62d691 → #48e57b, solid disk → tinted glass, dark check → small white check, glow/edge removed</td></tr>
+          <tr><td>Compositor shadow</td><td>off for reminder/preparing/success (bright signals); on for the dark capsules</td></tr>
+          <tr><td>Appearance</td><td>pop-in on every presentation change; fade-out on dismissal; Reduce Motion → fade only</td></tr>
+          <tr><td>Reminder trigger</td><td>editable role (AXTextField/AXTextArea/AXComboBox) + settable value + selected range + <b>0 characters</b>; empty fields fall back to the element frame for the anchor</td></tr>
+          <tr><td>Reminder cadence</td><td>one per focused element, 1.5 s global cooldown, 60 s per-element repeat guard</td></tr>
+          <tr><td>Rejected on the way</td><td>range-only trigger (fired on web areas / code viewers), caret-only trigger (missed empty fields)</td></tr>
+        </table>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

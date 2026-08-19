@@ -10,36 +10,222 @@ struct DictationMiniIndicatorTests {
         visibleFrame: CGRect(x: 0, y: 24, width: 800, height: 576)
     )
 
-    @Test("idle owns no visible surface and every state has a distinct silhouette")
+    @Test("idle owns no visible surface and states use the approved footprints")
     func stateVocabulary() {
         #expect(DictationMiniIndicatorController.surfaceSize(for: .hidden) == .zero)
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .preparing) == CGSize(width: 14, height: 14))
+        let signal = CGSize(width: 20, height: 20)
+        let disc = CGSize(width: 14, height: 14)
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .idle) == disc)
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .preparing) == disc)
         #expect(DictationMiniIndicatorController.surfaceSize(for: .recording) == CGSize(width: 58, height: 22))
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .processing) == CGSize(width: 38, height: 38))
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .success) == CGSize(width: 12, height: 12))
-        #expect(DictationMiniIndicatorController.surfaceSize(for: .failure) == CGSize(width: 22, height: 22))
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .processing) == signal)
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .success) == signal)
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .failure) == signal)
         #expect(DictationMiniIndicatorController.accessibilityLabel(for: .recording) == "Recording dictation")
         #expect(DictationMiniIndicatorController.accessibilityLabel(for: .processing) == "Generating transcription")
         #expect(DictationMiniIndicatorController.accessibilityLabel(for: .success) == "Dictation complete")
         #expect(DictationMiniIndicatorController.accessibilityLabel(for: .failure) == "Dictation failed")
     }
 
-    @Test("recording is mouse-transparent and processing freezes the recording anchor")
+    @Test("palette matches the approved contextual spark direction")
+    func contextualSparkPalette() {
+        #expect(DictationMiniPalette.glassTintHex == 0x211F1E)
+        #expect(DictationMiniPalette.surfaceTopHex == 0x32312F)
+        #expect(DictationMiniPalette.surfaceBottomHex == 0x181817)
+        #expect(DictationMiniPalette.orbTopHex == 0x272725)
+        #expect(DictationMiniPalette.orbBottomHex == 0x0E0E0D)
+        #expect(DictationMiniPalette.accentHex == 0xFF7043)
+        #expect(DictationMiniPalette.accentHighlightHex == 0xFFB04D)
+        #expect(DictationMiniPalette.successHex == 0x48E57B)
+        #expect(DictationMiniPalette.successHighlightHex == 0xB6FFCF)
+        #expect(DictationMiniRendering.successGlassTintAlpha == 0.82)
+        #expect(DictationMiniRendering.successCheckLineWidth == 1.8)
+        #expect(DictationMiniPalette.failureHex == 0xFF6961)
+        #expect(DictationMiniRendering.glassTintAlpha == 0.44)
+        #expect(DictationMiniRendering.idleCoreDiameter == 3)
+        #expect(DictationMiniRendering.preparingCoreDiameter == 5)
+        #expect(DictationMiniRendering.discGlassTintHex == 0x000000)
+        #expect(DictationMiniRendering.discGlassTintAlpha == 0.80)
+        #expect(DictationMiniRendering.completionDiameter == 20)
+        // The processing field and the completion glow must stay inside the shared 20 pt window.
+        let fieldExtent = 2 * DictationMiniRendering.processingPointSpacing
+            + DictationMiniRendering.processingPointMaxDiameter
+        #expect(fieldExtent * 2 < DictationMiniIndicatorController.signalWindowSide)
+        #expect(DictationMiniRendering.completionDiameter == DictationMiniIndicatorController.signalWindowSide)
+        // Bright signals carry no compositor shadow (it reads as a dark ring); glass capsules do.
+        #expect(!DictationMiniIndicatorController.usesCompositorShadow(.success))
+        #expect(DictationMiniIndicatorController.usesCompositorShadow(.preparing))
+        #expect(DictationMiniIndicatorController.usesCompositorShadow(.idle))
+        #expect(DictationMiniIndicatorController.usesCompositorShadow(.recording))
+        #expect(DictationMiniIndicatorController.usesCompositorShadow(.processing))
+        #expect(DictationMiniRendering.preparingCoreDiameter < DictationMiniIndicatorController.discSide)
+        #expect(DictationMiniIndicatorController.morphs(from: .idle, to: .preparing))
+        #expect(DictationMiniIndicatorController.morphs(from: .preparing, to: .recording))
+        #expect(DictationMiniIndicatorController.morphs(from: .recording, to: .processing))
+        #expect(!DictationMiniIndicatorController.morphs(from: .hidden, to: .preparing))
+        #expect(!DictationMiniIndicatorController.morphs(from: .success, to: .hidden))
+    }
+
+    @Test("recording keeps the compact capsule and renders a dense one-point history field")
+    func recordingWaveGeometry() {
+        #expect(DictationMiniRendering.recordingGlassTintAlpha == 0.62)
+        #expect(DictationMiniRendering.recordingBarCount == 24)
+        #expect(DictationMiniRendering.recordingBarWidth == 1)
+        #expect(DictationMiniRendering.recordingBarPitch == 2)
+        #expect(DictationMiniRendering.recordingBarMinHeight == 1)
+        #expect(DictationMiniRendering.recordingBarMaxHeight == 12)
+        #expect(DictationMiniRendering.recordingQuietAlpha == 0.48)
+
+        // The bar field must clear the 11-point rounded ends of the 58 x 22 capsule.
+        let fieldWidth = CGFloat(DictationMiniRendering.recordingBarCount - 1)
+            * DictationMiniRendering.recordingBarPitch
+            + DictationMiniRendering.recordingBarWidth
+        let capsule = DictationMiniIndicatorController.surfaceSize(for: .recording)
+        #expect(fieldWidth == 47)
+        #expect((capsule.width - fieldWidth) / 2 >= 5)
+        #expect(DictationMiniRendering.recordingBarMaxHeight <= capsule.height - 8)
+    }
+
+    @Test("microphone power maps to a clamped, monotonic bar level with fast attack and slow release")
+    func recordingLevelMapping() {
+        #expect(DictationMiniRendering.recordingLevel(decibels: -160) == 0)
+        #expect(DictationMiniRendering.recordingLevel(decibels: -58) == 0)
+        #expect(DictationMiniRendering.recordingLevel(decibels: 0) == 1)
+        #expect(DictationMiniRendering.recordingLevel(decibels: -18) == 1)
+        let quiet = DictationMiniRendering.recordingLevel(decibels: -50)
+        let speech = DictationMiniRendering.recordingLevel(decibels: -32)
+        let loud = DictationMiniRendering.recordingLevel(decibels: -20)
+        #expect(quiet > 0.2 && quiet < speech && speech < loud && loud < 1)
+        #expect(speech > 0.6 && speech < 0.9)
+
+        let attack = DictationMiniRendering.recordingEnvelope(current: 0, target: 1)
+        let release = DictationMiniRendering.recordingEnvelope(current: 1, target: 0)
+        #expect(attack > 0.5)
+        #expect(release > 0.6)
+        #expect(attack > 1 - release)
+    }
+
+    @Test("the spike engine is deterministic, bounded, quiet in silence and lively under voice")
+    func spikeEngine() {
+        var a = DictationMiniSpikeEngine(count: 24, seed: 7)
+        var b = DictationMiniSpikeEngine(count: 24, seed: 7)
+        for _ in 0..<40 { a.advance(level: 0.8); b.advance(level: 0.8) }
+        #expect(a == b)
+        #expect(a.bars.allSatisfy { $0 >= 0 && $0 <= 1 })
+        #expect(!a.isQuiet)
+        let loudMean = a.bars.reduce(0, +) / CGFloat(a.bars.count)
+        #expect(loudMean > 0.15)
+
+        var quiet = DictationMiniSpikeEngine(count: 24, seed: 7)
+        for _ in 0..<40 { quiet.advance(level: 0) }
+        #expect(quiet.isQuiet)
+        #expect(quiet.sparks.isEmpty)
+        let quietMax = quiet.bars.max() ?? 1
+        #expect(quietMax <= DictationMiniSpikeEngine.quietShimmer + 0.001)
+
+        // Release: after the voice stops the field decays instead of snapping.
+        var decaying = a
+        decaying.advance(level: 0)
+        let afterOneFrame = decaying.bars.reduce(0, +) / CGFloat(decaying.bars.count)
+        #expect(afterOneFrame < loudMean && afterOneFrame > quietMax)
+        for _ in 0..<120 { decaying.advance(level: 0) }
+        #expect(decaying.bars.max() ?? 1 < 0.1)
+        decaying.reset()
+        #expect(decaying.bars.allSatisfy { $0 == 0 })
+    }
+
+    @Test("Reduce Motion uses a symmetric static envelope")
+    func staticEnvelope() {
+        let envelope = (0..<24).map {
+            DictationMiniRendering.recordingStaticEnvelope(index: $0, count: 24)
+        }
+        #expect(envelope == envelope.reversed())
+        #expect(envelope.allSatisfy { $0 > 0.3 && $0 <= 1 })
+        #expect(envelope[11] > envelope[0])
+    }
+
+    @Test("vector geometry aligns to the active backing scale")
+    func pixelAlignment() {
+        #expect(DictationMiniRendering.pixelAligned(5.24, scale: 2) == 5)
+        #expect(DictationMiniRendering.pixelAligned(5.26, scale: 2) == 5.5)
+        #expect(DictationMiniRendering.pixelAligned(5.4, scale: 1) == 5)
+        #expect(DictationMiniRendering.pixelAligned(5.4, scale: 0) == 5.4)
+    }
+
+    @Test("recording follows the caret and processing freezes the recording anchor")
     func frozenProcessingAnchor() {
-        var pointer = CGPoint(x: 220, y: 320)
-        let controller = makeController(pointer: { pointer })
+        var caret = CGPoint(x: 220, y: 320)
+        let controller = makeController(caret: { caret })
         let token = controller.beginPreparing()
         controller.showRecording(generation: token) { -24 }
-        let recordingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+        let initialCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
 
-        pointer = CGPoint(x: 700, y: 100)
+        caret = CGPoint(x: 245, y: 320)
+        controller.refreshCaretAnchorForTesting()
+        let recordingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+        #expect(recordingCenter != initialCenter)
+
+        let recordingFrame = controller.currentFrame
+        caret = CGPoint(x: 700, y: 100)
         controller.showProcessing(generation: token)
-        let processingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+        let processingFrame = controller.currentFrame
 
         #expect(controller.presentation == .processing)
         #expect(controller.isMouseTransparentForTesting)
-        #expect(!controller.isFollowingPointerForTesting)
-        #expect(recordingCenter == processingCenter)
+        #expect(!controller.isFollowingCaretForTesting)
+        // Processing hangs under the same caret anchor as the recording capsule did (shared
+        // centre line and top edge), and ignores the caret that moved after recording ended.
+        #expect(processingFrame?.midX == recordingFrame?.midX)
+        #expect(processingFrame?.maxY == recordingFrame?.maxY)
+        #expect(recordingFrame?.midX == 245 + DictationMiniPlacement.caretHorizontalBias)
+        #expect(processingFrame?.size == CGSize(width: 20, height: 20))
+        controller.close()
+    }
+
+    @Test("without caret or pointer the Mini homes to the screen bottom, then snaps to the caret once it resolves")
+    func fallsBackThenSnapsToCaret() {
+        var caret: CGPoint?
+        let controller = makeController(caret: { caret })
+        let token = controller.beginPreparing()
+
+        #expect(controller.presentation == .preparing)
+        #expect(controller.isVisibleForTesting)
+        #expect(controller.isFollowingCaretForTesting)
+        let fallbackFrame = controller.currentFrame
+        #expect((fallbackFrame?.minY ?? 999) < 100)
+
+        caret = CGPoint(x: 220, y: 320)
+        controller.refreshCaretAnchorForTesting()
+
+        #expect(controller.isVisibleForTesting)
+        #expect(controller.currentFrame != fallbackFrame)
+        // Under the caret (with the follower's small leftward bias); the seed's visible top keeps the gap.
+        #expect(controller.currentFrame?.midX == 220 + DictationMiniPlacement.caretHorizontalBias)
+        #expect(controller.currentFrame?.maxY == 320 - DictationMiniPlacement.caretGap)
+        controller.dismiss(generation: token)
+        controller.close()
+    }
+
+    @Test("terminal feedback holds the session anchor instead of chasing the post-insertion caret")
+    func terminalHoldsSessionAnchor() {
+        var caret = CGPoint(x: 220, y: 320)
+        let controller = makeController(caret: { caret })
+        let token = controller.beginPreparing()
+        let preparingFrame = controller.currentFrame
+        controller.showRecording(generation: token) { -24 }
+        controller.showProcessing(generation: token)
+        let processingFrame = controller.currentFrame
+
+        caret = CGPoint(x: 500, y: 320)
+        controller.showSuccess(generation: token, duration: 10)
+        let successFrame = controller.currentFrame
+
+        // Same caret anchor, same centre line and top edge; the moved caret is ignored.
+        #expect(preparingFrame != nil)
+        #expect(processingFrame?.midX == preparingFrame?.midX)
+        #expect(processingFrame?.maxY == preparingFrame?.maxY)
+        #expect(successFrame == processingFrame)
+        #expect(!controller.isFollowingCaretForTesting)
         controller.close()
     }
 
@@ -111,14 +297,205 @@ struct DictationMiniIndicatorTests {
         #expect(!DictationMiniIndicatorController.processingAnimationIsContinuous(reduceMotion: true))
     }
 
+    @Test("the idle dot follows the text context, hides on activity and Escape, and yields to a session")
+    func idleDotFollower() {
+        var announcements: [String] = []
+        let controller = makeController(accessibilitySink: { announcements.append($0) })
+        #expect(DictationMiniIndicatorController.surfaceSize(for: .idle) == CGSize(width: 14, height: 14))
+        #expect(DictationMiniIndicatorController.accessibilityLabel(for: .idle) == "Dictation ready")
+        let token = AXElementToken(element: AXUIElementCreateSystemWide())
+        func sample(_ x: CGFloat, selection: Bool = false) -> DictationTextContextSample {
+            DictationTextContextSample(anchor: CGPoint(x: x, y: 300), processIdentifier: 1, hasSelection: selection, element: token)
+        }
+
+        // Not allowed yet: samples arrive but nothing shows.
+        controller.updateIdleContext(sample(200))
+        #expect(!controller.isIdleDotVisibleForTesting)
+
+        controller.isIdleDotAllowed = true
+        #expect(controller.isIdleDotVisibleForTesting)
+        #expect(announcements.isEmpty)
+        let first = controller.currentFrame
+
+        // Follows the caret once it moves past the jitter threshold.
+        controller.updateIdleContext(sample(260, selection: true))
+        #expect(controller.currentFrame != first)
+        #expect(controller.idleHasSelectionForTesting)
+
+        // Brief misses hold the last caret; a streak withdraws it.
+        controller.updateIdleContext(nil)
+        controller.updateIdleContext(nil)
+        #expect(controller.presentation == .idle)
+        controller.updateIdleContext(nil)
+        #expect(controller.presentation == .hidden)
+
+        // Typing hides it briefly; it returns on the next sample once the hold lapses.
+        controller.updateIdleContext(sample(200))
+        #expect(controller.presentation == .idle)
+        controller.setIdleActivity(DictationFollowerActivity(isTyping: true))
+        #expect(controller.presentation == .hidden)
+        #expect(DictationFollowerActivity.typingHold < 1)
+        controller.setIdleActivity(DictationFollowerActivity())
+        controller.updateIdleContext(sample(200))
+        #expect(controller.presentation == .idle)
+
+        // Escape hides until the focused element changes.
+        controller.hideIdleDotUntilFocusChanges()
+        #expect(controller.presentation == .hidden)
+        controller.updateIdleContext(sample(205))
+        #expect(controller.presentation == .hidden)
+        controller.idleFocusDidChange()
+        #expect(controller.presentation == .idle)
+
+        // A real session takes over in place and the dot returns after it ends.
+        let session = controller.beginPreparing()
+        #expect(controller.presentation == .preparing)
+        controller.updateIdleContext(sample(200))
+        #expect(controller.presentation == .preparing)
+        controller.dismiss(generation: session)
+        controller.updateIdleContext(sample(200))
+        #expect(controller.presentation == .idle)
+
+        // Snooze.
+        controller.snoozeIdleDot(for: 60)
+        #expect(controller.presentation == .hidden)
+        controller.close()
+    }
+
+    @Test("the idle dot shows hover keycaps, a selection hint, and toasts")
+    func idleExtras() async {
+        let controller = makeController()
+        controller.hotkeyLabelProvider = { "Right Cmd" }
+        controller.isIdleDotAllowed = true
+        let token = AXElementToken(element: AXUIElementCreateSystemWide())
+        controller.updateIdleContext(DictationTextContextSample(
+            anchor: CGPoint(x: 220, y: 320), processIdentifier: 42, hasSelection: false, element: token))
+        #expect(controller.presentation == .idle)
+
+        controller.idleHoverChanged(true)
+        #expect(controller.hintTextForTesting == "Hold Right Cmd to dictate")
+        controller.idleHoverChanged(false)
+        #expect(controller.hintTextForTesting == nil)
+
+        controller.updateIdleContext(DictationTextContextSample(
+            anchor: CGPoint(x: 220, y: 320), processIdentifier: 42, hasSelection: true, element: token))
+        #expect(controller.hintTextForTesting == "Hold Right Cmd to replace the selection")
+
+        controller.showToast("Hands-free — tap Right Cmd to stop", duration: 10)
+        #expect(controller.hintTextForTesting == "Hands-free — tap Right Cmd to stop")
+
+        // A toast with no visible Mini waits for the next presentation.
+        controller.close()
+        let fresh = makeController()
+        fresh.showToast("Hands-free", duration: 10)
+        #expect(fresh.hintTextForTesting == nil)
+        _ = fresh.beginPreparing()
+        #expect(fresh.hintTextForTesting == "Hands-free")
+        fresh.close()
+    }
+
+    @Test("clearing the idle context withdraws the dot at once and no stale anchor survives a re-enable")
+    func idleContextClear() {
+        let controller = makeController()
+        controller.isIdleDotAllowed = true
+        let token = AXElementToken(element: AXUIElementCreateSystemWide())
+        let sample = DictationTextContextSample(
+            anchor: CGPoint(x: 200, y: 300), processIdentifier: 1, hasSelection: true, element: token)
+        controller.updateIdleContext(sample)
+        #expect(controller.presentation == .idle)
+        #expect(controller.idleHasSelectionForTesting)
+
+        // A single miss would merely start the hysteresis streak; a clear is immediate.
+        controller.clearIdleContext()
+        #expect(controller.presentation == .hidden)
+        #expect(!controller.idleHasSelectionForTesting)
+
+        // Re-enabling shows nothing until a fresh sample arrives, then the dot returns.
+        controller.isIdleDotAllowed = false
+        controller.isIdleDotAllowed = true
+        #expect(controller.presentation == .hidden)
+        controller.updateIdleContext(sample)
+        #expect(controller.presentation == .idle)
+        controller.close()
+    }
+
+    @Test("follower hysteresis holds through two misses and withdraws on the third")
+    func followerHysteresis() {
+        var hysteresis = DictationFollowerHysteresis()
+        let anchor = CGPoint(x: 10, y: 10)
+        #expect(hysteresis.observe(anchor) == anchor)
+        #expect(hysteresis.observe(nil) == anchor)
+        #expect(hysteresis.observe(nil) == anchor)
+        #expect(hysteresis.observe(nil) == nil)
+        #expect(hysteresis.observe(nil) == nil)
+        #expect(hysteresis.observe(anchor) == anchor)
+        #expect(hysteresis.missStreak == 0)
+        #expect(DictationFollowerActivity(isScrolling: true).isSuppressing)
+        #expect(!DictationFollowerActivity().isSuppressing)
+        #expect(DictationCaretAnchorProvider.editableTextRoles == ["AXTextField", "AXTextArea", "AXComboBox"])
+    }
+
+    @Test("active states fall back to the pointer, then the screen bottom, and the idle dot never does")
+    func activeFallbackLadder() {
+        var pointer: CGPoint? = CGPoint(x: 400, y: 100)
+        let controller = DictationMiniIndicatorController(
+            screenProvider: { [screen] },
+            caretAnchorProvider: { nil },
+            caretPollingInterval: 60,
+            pointerProvider: { pointer }
+        )
+        let token = controller.beginPreparing()
+        #expect(controller.isVisibleForTesting)
+        let pointerFrame = controller.currentFrame
+        #expect(pointerFrame?.midX == 400 + DictationMiniPlacement.caretHorizontalBias)
+        controller.dismiss(generation: token)
+
+        pointer = nil
+        _ = controller.beginPreparing()
+        #expect(controller.isVisibleForTesting)
+        #expect(controller.currentFrame?.midX == 400 + DictationMiniPlacement.caretHorizontalBias)
+        #expect(controller.currentFrame?.minY ?? 0 < 100)
+        controller.close()
+
+        let idle = DictationMiniIndicatorController(
+            screenProvider: { [screen] },
+            caretAnchorProvider: { nil },
+            caretPollingInterval: 60,
+            pointerProvider: { CGPoint(x: 400, y: 100) }
+        )
+        idle.isIdleDotAllowed = true
+        idle.updateIdleContext(nil)
+        #expect(!idle.isIdleDotVisibleForTesting)
+        idle.close()
+    }
+
+    @Test("accessibility caret rectangles convert into AppKit screen coordinates")
+    func caretCoordinateConversion() {
+        let accessibilityRect = CGRect(x: 120, y: 200, width: 2, height: 20)
+        let converted = DictationCaretAnchorProvider.appKitRect(
+            fromAccessibilityRect: accessibilityRect,
+            primaryMaxY: 900
+        )
+        let anchor = DictationCaretAnchorProvider.appKitAnchor(
+            fromAccessibilityRect: accessibilityRect,
+            primaryMaxY: 900
+        )
+
+        #expect(converted == CGRect(x: 120, y: 680, width: 2, height: 20))
+        // Bottom-centre of the caret, so the Mini hangs directly under it.
+        #expect(anchor == CGPoint(x: 121, y: 680))
+        let field = CGRect(x: 10, y: 100, width: 300, height: 200)
+        #expect(DictationCaretAnchorProvider.firstLineAnchor(inAppKitRect: field) == CGPoint(x: 18, y: 282))
+    }
+
     private func makeController(
-        pointer: @escaping () -> CGPoint = { CGPoint(x: 220, y: 320) },
+        caret: @escaping () -> CGPoint? = { CGPoint(x: 220, y: 320) },
         accessibilitySink: @escaping DictationMiniIndicatorController.AccessibilitySink = { _ in }
     ) -> DictationMiniIndicatorController {
         DictationMiniIndicatorController(
             screenProvider: { [screen] },
-            pointerProvider: pointer,
-            movementCoalescingDelay: 0,
+            caretAnchorProvider: caret,
+            caretPollingInterval: 60,
             accessibilitySink: accessibilitySink
         )
     }

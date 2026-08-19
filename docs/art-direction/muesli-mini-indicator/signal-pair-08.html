@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muesli Mini Indicator — Preparing and Complete Signal Pair</title>
+  <style>
+    :root { color-scheme:dark; --coral:#ff7043; --green:#62d691; --ink:#0e0e0d; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0b0b0a; color:#f3f2ef; font-family:-apple-system,BlinkMacSystemFont,sans-serif; }
+    main { width:min(980px,calc(100% - 48px)); }
+    h1 { margin:0 0 14px; font-size:44px; line-height:1; letter-spacing:-.04em; }
+    .lede { max-width:680px; margin:0 0 30px; color:#99958f; line-height:1.55; }
+    .stage { display:grid; grid-template-columns:1fr 1fr; gap:1px; overflow:hidden; border:1px solid rgba(255,255,255,.11); border-radius:28px; background:rgba(255,255,255,.11); box-shadow:0 32px 90px rgba(0,0,0,.46); }
+    article { min-height:390px; padding:34px; background:linear-gradient(145deg,#171716,#0f0f0e); }
+    .index { color:#6f6c67; font:700 12px ui-monospace,SFMono-Regular,monospace; letter-spacing:.16em; }
+    h2 { margin:10px 0 0; font-size:27px; }
+    .field { height:224px; display:grid; place-items:center; }
+    .foot { color:#85817c; font:600 13px ui-monospace,SFMono-Regular,monospace; }
+    .foot strong { color:#d4d1cb; }
+    .foot span { display:block; margin-top:6px; font:400 13px/1.45 -apple-system,BlinkMacSystemFont,sans-serif; }
+    .window { position:relative; display:grid; place-items:center; width:24px; height:24px; }
+    .prepare { width:14px; height:14px; border-radius:50%; background:var(--coral); box-shadow:0 0 5px 3px rgba(255,112,67,.32); }
+    .complete { position:relative; width:20px; height:20px; border-radius:50%; background:var(--green); box-shadow:0 0 4px 2px rgba(98,214,145,.28); }
+    .complete svg { position:absolute; inset:0; width:20px; height:20px; overflow:visible; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>One signal language.<br>Two semantic colors.</h1>
+    <p class="lede">Preparing is the exact 14 pt coral seed from the reference. Completion answers it with a compact green circle and an inset check. Both use transparent 24 pt windows so their compositor glows remain smooth and unclipped.</p>
+    <section class="stage">
+      <article>
+        <div class="index">01</div><h2>Preparing</h2>
+        <div class="field"><div class="window"><div class="prepare" aria-label="Preparing dictation"></div></div></div>
+        <div class="foot"><strong>14 pt seed · 24 pt window</strong><span>Solid coral center, restrained warm halo, no glass capsule.</span></div>
+      </article>
+      <article>
+        <div class="index">05</div><h2>Complete</h2>
+        <div class="field"><div class="window"><div class="complete" aria-label="Dictation complete"><svg viewBox="0 0 20 20"><path d="M5.1 10.1 8.7 6.4 15.3 13.3" fill="none" stroke="var(--ink)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div></div>
+        <div class="foot"><strong>20 pt disk · 24 pt window</strong><span>Semantic green completion disk with a crisp dark vector check.</span></div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

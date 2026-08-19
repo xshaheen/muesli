@@ -60,12 +60,11 @@
     .doc p { color: #aaa9a3; font-size: 18px; line-height: 1.65; margin: 0; }
     .caret { display: inline-block; width: 2px; height: 1.08em; background: var(--orange); vertical-align: -.15em; margin-left: 2px; box-shadow: 0 0 9px rgba(255,112,67,.45); }
     .pointer {
-      position: absolute; left: 62%; top: 61%; width: 19px; height: 25px;
-      filter: drop-shadow(0 2px 3px rgba(0,0,0,.8)); transform: rotate(-8deg);
+      position: absolute; left: 62%; top: 61%; width: 2px; height: 25px;
+      background: #f6f6f2; box-shadow: 0 0 8px rgba(255,112,67,.45);
     }
-    .pointer svg { display:block; }
     .indicator {
-      position: absolute; left: calc(62% + 24px); top: calc(61% + 24px);
+      position: absolute; left: calc(62% - 68px); top: calc(61% + 35px);
       height: 22px; width: 58px; border-radius: 999px;
       background: linear-gradient(180deg, rgba(49,48,46,.96), rgba(20,20,19,.97));
       border: 1px solid rgba(255,255,255,.16);
@@ -119,12 +118,12 @@
     .quadrants::before { width:1px; top:0; bottom:0; left:50%; }
     .quadrants::after { height:1px; left:0; right:0; top:50%; }
     .q-pointer { position:absolute; left:calc(50% - 7px); top:calc(50% - 9px); color:white; font-size:24px; z-index:2; }
-    .q-pill { position:absolute; width:58px; height:22px; border-radius:99px; background:var(--orange); right:27px; bottom:35px; box-shadow:0 0 22px rgba(255,112,67,.35); }
+    .q-pill { position:absolute; width:58px; height:22px; border-radius:99px; background:var(--orange); left:27px; bottom:35px; box-shadow:0 0 22px rgba(255,112,67,.35); }
     .q-order { position:absolute; font:600 10px/1 ui-monospace,monospace; color:#696963; }
-    .q-order.a { right:12px; bottom:12px; color:#d8a18d; }
-    .q-order.b { left:12px; bottom:12px; }
-    .q-order.c { right:12px; top:12px; }
-    .q-order.d { left:12px; top:12px; }
+    .q-order.a { left:12px; bottom:12px; color:#d8a18d; }
+    .q-order.b { right:12px; bottom:12px; }
+    .q-order.c { left:12px; top:12px; }
+    .q-order.d { right:12px; top:12px; }
     .behavior { list-style:none; padding:0; margin:22px 0 0; }
     .behavior li { display:grid; grid-template-columns:34px 1fr; gap:12px; padding:14px 0; border-top:1px solid var(--line); color:#b7b7b1; font-size:14px; line-height:1.45; }
     .behavior li span { color:var(--orange); font:600 11px/1.5 ui-monospace,monospace; }
@@ -151,7 +150,7 @@
       <div class="eyebrow">Muesli / Indicator direction 01</div>
       <h1>Contextual spark.</h1>
     </div>
-    <p class="summary">Invisible until dictation matters. Then a small, unmistakable signal appears beside the pointer—where attention already is.</p>
+    <p class="summary">Invisible until dictation matters. Then a small, unmistakable signal appears beside the text insertion caret—where attention already is.</p>
   </header>
 
   <div class="rule"></div>
@@ -166,11 +165,9 @@
           <p>The indicator belongs to the act of dictation, not to a corner of the screen. It arrives in context, confirms that Muesli is listening, and leaves when the work is done<span class="caret"></span></p>
         </div>
       </div>
-      <div class="pointer" aria-label="mouse pointer">
-        <svg viewBox="0 0 24 30" width="19" height="25" aria-hidden="true"><path d="M2 1.7v23.1l6.2-5.7 4.2 9.2 4.1-1.9-4.1-8.8H21L2 1.7Z" fill="#f6f6f2" stroke="#111" stroke-width="1.8" stroke-linejoin="round"/></svg>
-      </div>
+      <div class="pointer" aria-label="text insertion caret"></div>
       <div class="indicator" aria-label="recording indicator"><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
-      <div class="callout"><b>14 pt pointer clearance</b><br>lower-right preference · edge aware</div>
+      <div class="callout"><b>10 pt caret clearance</b><br>lower-left preference · edge aware</div>
     </div>
 
     <aside class="spec">
@@ -179,8 +176,8 @@
         <h3>Present when useful.<br>Absent when silent.</h3>
         <div class="spec-list">
           <div class="spec-row"><div class="label">Idle</div><div>No window, no dot, no reserved place.</div></div>
-          <div class="spec-row"><div class="label">Anchor</div><div>Pointer at activation; reacquire after a meaningful move.</div></div>
-          <div class="spec-row"><div class="label">Surface</div><div>22 pt dark glass capsule with the user's Muesli accent.</div></div>
+          <div class="spec-row"><div class="label">Anchor</div><div>Focused insertion caret; follows while preparing and recording.</div></div>
+          <div class="spec-row"><div class="label">Surface</div><div>22 pt warm charcoal glass with the orange-to-amber Contextual Spark signal.</div></div>
           <div class="spec-row"><div class="label">Input</div><div>Non-activating and mouse-transparent until a control is intentionally revealed.</div></div>
         </div>
       </div>
@@ -206,17 +203,17 @@
       <article class="placement-card">
         <div class="label">Quadrant resolution</div>
         <div class="quadrants">
-          <div class="q-pointer">↖</div><div class="q-pill"></div>
-          <div class="q-order a">1 · lower right</div><div class="q-order b">2 · lower left</div><div class="q-order c">3 · upper right</div><div class="q-order d">4 · upper left</div>
+          <div class="q-pointer">│</div><div class="q-pill"></div>
+          <div class="q-order a">1 · lower left</div><div class="q-order b">2 · lower right</div><div class="q-order c">3 · upper left</div><div class="q-order d">4 · upper right</div>
         </div>
       </article>
       <article class="placement-card">
         <div class="label">Motion policy</div>
         <ul class="behavior">
-          <li><span>01</span><div>Snapshot the pointer on hotkey-down; clamp to the pointer's visible display.</div></li>
-          <li><span>02</span><div>Ignore micro-movement. Reacquire only after crossing a distance threshold or entering another display.</div></li>
-          <li><span>03</span><div>Freeze during scroll and window movement, then settle once the geometry is stable.</div></li>
-          <li><span>04</span><div>Flip quadrants before clamping so the capsule never covers the pointer hotspot.</div></li>
+          <li><span>01</span><div>Resolve the focused insertion caret through macOS Accessibility geometry.</div></li>
+          <li><span>02</span><div>Poll while preparing or recording; ignore movement below four points.</div></li>
+          <li><span>03</span><div>Freeze during processing, then reacquire the post-insertion caret once for terminal feedback.</div></li>
+          <li><span>04</span><div>Flip quadrants before clamping so the capsule does not cover upcoming text.</div></li>
         </ul>
       </article>
     </div>
