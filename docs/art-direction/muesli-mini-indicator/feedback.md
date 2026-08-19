@@ -75,3 +75,12 @@
 - Replace: the glowing green success dot with the check mark alone.
 - Fix: lifecycle audio follows the enabled sound preference on AirPods and other headphone-like outputs instead of being silently suppressed.
 - Resulting node: `glass-compact-states-06`.
+
+## 19-08-2026 08:01 UTC — original glass and vector rendering
+
+- Keep: the 28-point processing size, warm Contextual Spark palette, and check-only success.
+- Reuse: the original floating button's clipped Dark Aqua HUD material, dark tint, continuous radius, compositor shadow, and single fine border.
+- Drop: the 64–76% painted gradient that obscured the blur and made the Mini look opaque.
+- Replace: per-frame `NSBezierPath` waveform bars and processing dots with scale-aware Core Animation gradient and shape layers.
+- Align: vector layer positions to the active window backing scale for clean 1× and 2× edges.
+- Resulting node: `original-glass-vector-07`.

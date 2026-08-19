@@ -473,7 +473,7 @@ final class DictationMiniIndicatorController: NSObject {
     }
 
     private func refreshAccessibilityPresentation() {
-        contentView?.needsDisplay = true
+        contentView?.refreshAccessibilityPresentation()
         if presentation == .processing { startAnimation() }
     }
 
@@ -508,6 +508,7 @@ final class DictationMiniIndicatorController: NSObject {
 }
 
 enum DictationMiniPalette {
+    static let glassTintHex = 0x211F1E
     static let surfaceTopHex = 0x32312F
     static let surfaceBottomHex = 0x181817
     static let orbTopHex = 0x272725
@@ -519,23 +520,37 @@ enum DictationMiniPalette {
     static let inkHex = 0xF3F2EF
 }
 
+enum DictationMiniRendering {
+    static let glassTintAlpha: CGFloat = 0.44
+
+    static func pixelAligned(_ value: CGFloat, scale: CGFloat) -> CGFloat {
+        guard scale > 0 else { return value }
+        return (value * scale).rounded() / scale
+    }
+}
+
 private final class DictationMiniView: NSView {
     private let glassView = NSVisualEffectView()
+    private let tintView = NSView()
+    private let waveformView = DictationMiniWaveformView()
+    private let pointFieldView = DictationMiniPointFieldView()
     private let artworkView = DictationMiniArtworkView()
 
     var presentation: DictationMiniIndicatorController.Presentation = .hidden {
         didSet {
             artworkView.presentation = presentation
-            updateGlass()
+            waveformView.isHidden = presentation != .recording
+            pointFieldView.isHidden = presentation != .processing
+            updateSurface()
         }
     }
     var power: CGFloat {
-        get { artworkView.power }
-        set { artworkView.power = newValue }
+        get { waveformView.power }
+        set { waveformView.power = newValue }
     }
     var animationPhase: CGFloat {
-        get { artworkView.animationPhase }
-        set { artworkView.animationPhase = newValue }
+        get { pointFieldView.phase }
+        set { pointFieldView.phase = newValue }
     }
 
     override var isOpaque: Bool { false }
@@ -543,13 +558,22 @@ private final class DictationMiniView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        layer?.cornerCurve = .continuous
         glassView.material = .hudWindow
         glassView.blendingMode = .behindWindow
         glassView.state = .active
+        glassView.appearance = NSAppearance(named: .darkAqua)
         glassView.wantsLayer = true
+        glassView.autoresizingMask = [.width, .height]
+        tintView.wantsLayer = true
         artworkView.wantsLayer = true
         addSubview(glassView)
+        addSubview(tintView)
+        addSubview(waveformView)
+        addSubview(pointFieldView)
         addSubview(artworkView)
+        waveformView.isHidden = true
+        pointFieldView.isHidden = true
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
     }
@@ -561,11 +585,21 @@ private final class DictationMiniView: NSView {
         setAccessibilityLabel(label)
     }
 
+    func refreshAccessibilityPresentation() {
+        updateSurface()
+        waveformView.refreshAccessibilityPresentation()
+        pointFieldView.refreshAccessibilityPresentation()
+        artworkView.needsDisplay = true
+    }
+
     override func layout() {
         super.layout()
         glassView.frame = bounds
+        tintView.frame = bounds
+        waveformView.frame = bounds
+        pointFieldView.frame = bounds
         artworkView.frame = bounds
-        updateGlass()
+        updateSurface()
     }
 
     override func viewDidChangeBackingProperties() {
@@ -573,6 +607,9 @@ private final class DictationMiniView: NSView {
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         layer?.contentsScale = scale
         glassView.layer?.contentsScale = scale
+        tintView.layer?.contentsScale = scale
+        waveformView.updateBackingScale(scale)
+        pointFieldView.updateBackingScale(scale)
         artworkView.layer?.contentsScale = scale
     }
 
@@ -581,16 +618,17 @@ private final class DictationMiniView: NSView {
         set { artworkView.needsDisplay = newValue }
     }
 
-    private func updateGlass() {
+    private func updateSurface() {
         let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
-        let usesGlass: Bool
+        let usesSurface: Bool
         switch presentation {
         case .recording, .processing, .failure, .warning:
-            usesGlass = !reduceTransparency
+            usesSurface = true
         case .hidden, .preparing, .success:
-            usesGlass = false
+            usesSurface = false
         }
-        glassView.isHidden = !usesGlass
+        glassView.isHidden = !usesSurface || reduceTransparency
+        tintView.isHidden = !usesSurface
         let radius: CGFloat
         switch presentation {
         case .processing, .failure:
@@ -598,16 +636,200 @@ private final class DictationMiniView: NSView {
         default:
             radius = min(bounds.height / 2, 11)
         }
+        layer?.masksToBounds = usesSurface
+        layer?.cornerRadius = radius
+        layer?.borderWidth = usesSurface
+            ? (NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 2 : 1)
+            : 0
+        layer?.borderColor = NSColor.white.withAlphaComponent(
+            NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0.82 : 0.16
+        ).cgColor
         glassView.layer?.cornerRadius = radius
         glassView.layer?.cornerCurve = .continuous
         glassView.layer?.masksToBounds = true
+        tintView.layer?.cornerRadius = radius
+        tintView.layer?.cornerCurve = .continuous
+        tintView.layer?.backgroundColor = NSColor.colorWith(
+            hex: DictationMiniPalette.glassTintHex,
+            alpha: reduceTransparency ? 1 : DictationMiniRendering.glassTintAlpha
+        ).cgColor
+    }
+}
+
+private final class DictationMiniWaveformView: NSView {
+    private let multipliers: [CGFloat] = [0.6, 0.85, 1, 0.85, 0.6]
+    private var bars: [CAGradientLayer] = []
+    private var backingScale: CGFloat = 2
+    var power: CGFloat = 0 { didSet { updateBars() } }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        for _ in multipliers {
+            let bar = CAGradientLayer()
+            bar.colors = [
+                NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1).cgColor,
+                NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1).cgColor,
+            ]
+            bar.startPoint = CGPoint(x: 0.5, y: 1)
+            bar.endPoint = CGPoint(x: 0.5, y: 0)
+            bar.shadowColor = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 0.48).cgColor
+            bar.shadowOpacity = 1
+            bar.shadowRadius = 3
+            bar.shadowOffset = .zero
+            layer?.addSublayer(bar)
+            bars.append(bar)
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        updateBars()
+    }
+
+    func updateBackingScale(_ scale: CGFloat) {
+        backingScale = max(scale, 1)
+        bars.forEach { $0.contentsScale = backingScale }
+        updateBars()
+    }
+
+    func refreshAccessibilityPresentation() {
+        updateBars()
+    }
+
+    private func updateBars() {
+        guard !bars.isEmpty else { return }
+        let barWidth: CGFloat = 2
+        let spacing: CGFloat = 3
+        let totalWidth = CGFloat(bars.count) * barWidth + CGFloat(bars.count - 1) * spacing
+        let startX = bounds.midX - totalWidth / 2
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let motionScale: CGFloat = reduceMotion ? 0.55 : 1
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (index, bar) in bars.enumerated() {
+            let height = max(3, min(14, 3 + 11 * power * multipliers[index] * motionScale))
+            bar.frame = CGRect(
+                x: DictationMiniRendering.pixelAligned(startX + CGFloat(index) * (barWidth + spacing), scale: backingScale),
+                y: DictationMiniRendering.pixelAligned(bounds.midY - height / 2, scale: backingScale),
+                width: barWidth,
+                height: DictationMiniRendering.pixelAligned(height, scale: backingScale)
+            )
+            bar.cornerRadius = barWidth / 2
+        }
+        CATransaction.commit()
+    }
+}
+
+private final class DictationMiniPointFieldView: NSView {
+    private struct PointDefinition {
+        let row: Int
+        let column: Int
+        let distance: CGFloat
+        let angularOffset: CGFloat
+    }
+
+    private let points: [PointDefinition]
+    private var dots: [CAShapeLayer] = []
+    private var backingScale: CGFloat = 2
+    var phase: CGFloat = 0 { didSet { updateDots() } }
+
+    override init(frame frameRect: NSRect) {
+        var definitions: [PointDefinition] = []
+        for row in -2...2 {
+            for column in -2...2 {
+                let distance = hypot(CGFloat(column), CGFloat(row))
+                guard distance <= 2.35 else { continue }
+                definitions.append(PointDefinition(
+                    row: row,
+                    column: column,
+                    distance: distance,
+                    angularOffset: atan2(CGFloat(row), CGFloat(column))
+                ))
+            }
+        }
+        points = definitions
+        super.init(frame: frameRect)
+        wantsLayer = true
+        for point in points {
+            let dot = CAShapeLayer()
+            let warmth = max(0, min(1, 0.58 - point.distance * 0.14))
+            let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
+            let highlight = NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1)
+            dot.fillColor = (accent.blended(withFraction: warmth, of: highlight) ?? accent).cgColor
+            dot.shadowColor = accent.withAlphaComponent(0.34).cgColor
+            dot.shadowOpacity = 1
+            dot.shadowRadius = 2
+            dot.shadowOffset = .zero
+            layer?.addSublayer(dot)
+            dots.append(dot)
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        updateDotGeometry()
+        updateDots()
+    }
+
+    func updateBackingScale(_ scale: CGFloat) {
+        backingScale = max(scale, 1)
+        dots.forEach { $0.contentsScale = backingScale }
+        updateDotGeometry()
+        updateDots()
+    }
+
+    func refreshAccessibilityPresentation() {
+        updateDots()
+    }
+
+    private func updateDotGeometry() {
+        let spacing: CGFloat = 3.5
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (definition, dot) in zip(points, dots) {
+            let diameter = max(2, 2.7 - definition.distance * 0.16)
+            let size = CGSize(width: diameter, height: diameter)
+            dot.bounds = CGRect(origin: .zero, size: size)
+            dot.position = CGPoint(
+                x: DictationMiniRendering.pixelAligned(
+                    bounds.midX + CGFloat(definition.column) * spacing,
+                    scale: backingScale
+                ),
+                y: DictationMiniRendering.pixelAligned(
+                    bounds.midY + CGFloat(definition.row) * spacing,
+                    scale: backingScale
+                )
+            )
+            dot.path = CGPath(ellipseIn: CGRect(origin: .zero, size: size), transform: nil)
+        }
+        CATransaction.commit()
+    }
+
+    private func updateDots() {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (definition, dot) in zip(points, dots) {
+            let wave = reduceMotion
+                ? 0.82
+                : 0.74 + 0.26 * sin(phase - definition.distance * 0.9 + definition.angularOffset * 0.22)
+            dot.opacity = Float(max(0.34, (1 - definition.distance / 3.4) * wave))
+            let scale = reduceMotion ? 1 : 0.92 + 0.08 * wave
+            dot.transform = CATransform3DMakeScale(scale, scale, 1)
+        }
+        CATransaction.commit()
     }
 }
 
 private final class DictationMiniArtworkView: NSView {
     var presentation: DictationMiniIndicatorController.Presentation = .hidden
-    var power: CGFloat = 0
-    var animationPhase: CGFloat = 0
 
     override var isOpaque: Bool { false }
 
@@ -627,67 +849,22 @@ private final class DictationMiniArtworkView: NSView {
             context.setAllowsAntialiasing(true)
             context.interpolationQuality = .high
         }
-        let workspace = NSWorkspace.shared
-        let reduceTransparency = workspace.accessibilityDisplayShouldReduceTransparency
-        let increaseContrast = workspace.accessibilityDisplayShouldIncreaseContrast
         switch presentation {
         case .preparing:
             drawPreparing()
         case .recording:
-            drawSurface(
-                reduceTransparency: reduceTransparency,
-                increaseContrast: increaseContrast
-            )
-            drawWaveform(reduceMotion: workspace.accessibilityDisplayShouldReduceMotion)
+            break
         case .processing:
-            drawSurface(
-                circular: true,
-                usesOrbPalette: true,
-                reduceTransparency: reduceTransparency,
-                increaseContrast: increaseContrast
-            )
-            drawPointField(reduceMotion: workspace.accessibilityDisplayShouldReduceMotion)
+            break
         case .success:
             drawSuccess()
         case .failure:
-            drawSurface(
-                circular: true,
-                reduceTransparency: reduceTransparency,
-                increaseContrast: increaseContrast
-            )
             drawFailure()
         case .warning(let message):
-            drawSurface(
-                reduceTransparency: reduceTransparency,
-                increaseContrast: increaseContrast
-            )
             drawWarning(message)
         case .hidden:
             break
         }
-    }
-
-    private func drawSurface(
-        circular: Bool = false,
-        usesOrbPalette: Bool = false,
-        reduceTransparency: Bool,
-        increaseContrast: Bool
-    ) {
-        let surface = bounds.insetBy(dx: 1, dy: 1)
-        let radius = circular ? surface.height / 2 : min(surface.height / 2, 11)
-        let path = NSBezierPath(roundedRect: surface, xRadius: radius, yRadius: radius)
-
-        let topHex = usesOrbPalette ? DictationMiniPalette.orbTopHex : DictationMiniPalette.surfaceTopHex
-        let bottomHex = usesOrbPalette ? DictationMiniPalette.orbBottomHex : DictationMiniPalette.surfaceBottomHex
-        let topAlpha: CGFloat = reduceTransparency ? 1 : 0.64
-        let bottomAlpha: CGFloat = reduceTransparency ? 1 : 0.76
-        let top = NSColor.colorWith(hex: topHex, alpha: topAlpha)
-        let bottom = NSColor.colorWith(hex: bottomHex, alpha: bottomAlpha)
-        NSGradient(starting: top, ending: bottom)?.draw(in: path, angle: -90)
-
-        NSColor.white.withAlphaComponent(increaseContrast ? 0.82 : 0.18).setStroke()
-        path.lineWidth = increaseContrast ? 2 : 1
-        path.stroke()
     }
 
     private func drawPreparing() {
@@ -696,68 +873,6 @@ private final class DictationMiniArtworkView: NSView {
         NSBezierPath(ovalIn: bounds).fill()
         accent.setFill()
         NSBezierPath(ovalIn: bounds.insetBy(dx: 4, dy: 4)).fill()
-    }
-
-    private func drawWaveform(reduceMotion: Bool) {
-        let multipliers: [CGFloat] = [0.6, 0.85, 1, 0.85, 0.6]
-        let barWidth: CGFloat = 2
-        let spacing: CGFloat = 3
-        let totalWidth = CGFloat(multipliers.count) * barWidth + CGFloat(multipliers.count - 1) * spacing
-        let startX = bounds.midX - totalWidth / 2
-        let motionScale: CGFloat = reduceMotion ? 0.55 : 1
-        let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
-        let highlight = NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1)
-        for (index, multiplier) in multipliers.enumerated() {
-            let height = max(3, min(14, 3 + 11 * power * multiplier * motionScale))
-            let rect = CGRect(
-                x: startX + CGFloat(index) * (barWidth + spacing),
-                y: bounds.midY - height / 2,
-                width: barWidth,
-                height: height
-            )
-            let path = NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1)
-            NSGraphicsContext.saveGraphicsState()
-            let shadow = NSShadow()
-            shadow.shadowColor = accent.withAlphaComponent(0.55)
-            shadow.shadowBlurRadius = 5
-            shadow.shadowOffset = .zero
-            shadow.set()
-            accent.setFill()
-            path.fill()
-            NSGraphicsContext.restoreGraphicsState()
-
-            NSGraphicsContext.saveGraphicsState()
-            path.addClip()
-            NSGradient(starting: highlight, ending: accent)?.draw(in: rect, angle: -90)
-            NSGraphicsContext.restoreGraphicsState()
-        }
-    }
-
-    private func drawPointField(reduceMotion: Bool) {
-        let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
-        let highlight = NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1)
-        let center = CGPoint(x: bounds.midX, y: bounds.midY)
-        let spacing: CGFloat = 3.5
-        for row in -2...2 {
-            for column in -2...2 {
-                let distance = hypot(CGFloat(column), CGFloat(row))
-                guard distance <= 2.35 else { continue }
-                let angularOffset = atan2(CGFloat(row), CGFloat(column))
-                let wave = reduceMotion ? 0.78 : 0.70 + 0.30 * sin(animationPhase - distance * 0.9 + angularOffset * 0.22)
-                let alpha = max(0.28, (1 - distance / 3.2) * wave)
-                let diameter = max(1.8, 2.4 - distance * 0.18)
-                let point = CGRect(
-                    x: center.x + CGFloat(column) * spacing - diameter / 2,
-                    y: center.y + CGFloat(row) * spacing - diameter / 2,
-                    width: diameter,
-                    height: diameter
-                )
-                let warmth = max(0, min(1, 0.58 - distance * 0.14))
-                let color = accent.blended(withFraction: warmth, of: highlight) ?? accent
-                color.withAlphaComponent(alpha).setFill()
-                NSBezierPath(ovalIn: point).fill()
-            }
-        }
     }
 
     private func drawSuccess() {

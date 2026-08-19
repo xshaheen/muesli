@@ -199,6 +199,35 @@
         "generated_at_utc": "2026-08-19T07:29:12Z",
         "remote_service_disclosure": "none"
       }
+    },
+    {
+      "id": "original-glass-vector-07",
+      "parents": [
+        "glass-compact-states-06"
+      ],
+      "round": 7,
+      "mode": "iterate",
+      "thesis": "The Mini should directly reuse the original floating button's material stack while moving every animated micro-shape onto backing-scale-aware vector layers.",
+      "anchors": [
+        "user-selected original floating button glass quality",
+        "Dark Aqua HUD material and clipped continuous surface",
+        "approved warm Contextual Spark signals",
+        "Core Animation vector circles and gradient bars"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/original-glass-vector-07.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T08:01:37Z",
+      "generation": {
+        "capability": "manual-html-css-svg",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML with inline SVG",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T08:01:37Z",
+        "remote_service_disclosure": "none"
+      }
     }
   ],
   "decisions": [
@@ -243,6 +272,13 @@
       "operation": "preserve the warm palette; replace painted opacity with native glass; shrink and smooth processing; reduce success to a standalone check; restore cues on headphone routes",
       "feedback_ref": "feedback.md#19-08-2026-0729-utc--true-glass-and-compact-terminal-states",
       "decided_at_utc": "2026-08-19T07:29:12Z"
+    },
+    {
+      "from": "glass-compact-states-06",
+      "to": "original-glass-vector-07",
+      "operation": "reuse the original floating button material stack; reduce the warm tint to 44 percent; replace tiny path painting with backing-scale-aware vector layers",
+      "feedback_ref": "feedback.md#19-08-2026-0801-utc--original-glass-and-vector-rendering",
+      "decided_at_utc": "2026-08-19T08:01:37Z"
     }
   ]
 }

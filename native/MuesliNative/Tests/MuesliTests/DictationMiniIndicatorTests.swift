@@ -26,6 +26,7 @@ struct DictationMiniIndicatorTests {
 
     @Test("palette matches the approved contextual spark direction")
     func contextualSparkPalette() {
+        #expect(DictationMiniPalette.glassTintHex == 0x211F1E)
         #expect(DictationMiniPalette.surfaceTopHex == 0x32312F)
         #expect(DictationMiniPalette.surfaceBottomHex == 0x181817)
         #expect(DictationMiniPalette.orbTopHex == 0x272725)
@@ -34,6 +35,15 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniPalette.accentHighlightHex == 0xFFB04D)
         #expect(DictationMiniPalette.successHex == 0x62D691)
         #expect(DictationMiniPalette.failureHex == 0xFF6961)
+        #expect(DictationMiniRendering.glassTintAlpha == 0.44)
+    }
+
+    @Test("vector geometry aligns to the active backing scale")
+    func pixelAlignment() {
+        #expect(DictationMiniRendering.pixelAligned(5.24, scale: 2) == 5)
+        #expect(DictationMiniRendering.pixelAligned(5.26, scale: 2) == 5.5)
+        #expect(DictationMiniRendering.pixelAligned(5.4, scale: 1) == 5)
+        #expect(DictationMiniRendering.pixelAligned(5.4, scale: 0) == 5.4)
     }
 
     @Test("recording follows the caret and processing freezes the recording anchor")
