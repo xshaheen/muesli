@@ -36,6 +36,7 @@ final class DictationMiniIndicatorController: NSObject {
     private var anchorScreen: DictationMiniPlacement.Screen?
     private var powerProvider: (() -> Float)?
     private var animationTimer: Timer?
+    private var animationStartedAt: TimeInterval?
     private var dismissTask: Task<Void, Never>?
     private var caretPollingTimer: Timer?
     private var accessibilityObserver: NSObjectProtocol?
@@ -219,8 +220,8 @@ final class DictationMiniIndicatorController: NSObject {
         case .hidden: return .zero
         case .preparing: return CGSize(width: 14, height: 14)
         case .recording: return CGSize(width: 58, height: 22)
-        case .processing: return CGSize(width: 38, height: 38)
-        case .success: return CGSize(width: 12, height: 12)
+        case .processing: return CGSize(width: 28, height: 28)
+        case .success: return CGSize(width: 18, height: 14)
         case .failure: return CGSize(width: 22, height: 22)
         case .warning(let text):
             return CGSize(width: min(max(CGFloat(text.count) * 6.4 + 34, 96), 320), height: 26)
@@ -406,12 +407,16 @@ final class DictationMiniIndicatorController: NSObject {
         guard presentation == .recording
                 || (presentation == .processing && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         else {
+            animationStartedAt = nil
             contentView?.needsDisplay = true
             return
         }
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 1 / 30, repeats: true) { [weak self] _ in
+        animationStartedAt = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: 1 / 60, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.advanceAnimation() }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        animationTimer = timer
     }
 
     private func advanceAnimation() {
@@ -425,8 +430,8 @@ final class DictationMiniIndicatorController: NSObject {
             let current = contentView?.power ?? 0
             contentView?.power = current * 0.52 + normalized * 0.48
         } else {
-            contentView?.animationPhase.formTruncatingRemainder(dividingBy: .pi * 2)
-            contentView?.animationPhase += 0.11
+            let elapsed = ProcessInfo.processInfo.systemUptime - (animationStartedAt ?? 0)
+            contentView?.animationPhase = CGFloat(elapsed * 3.2).truncatingRemainder(dividingBy: .pi * 2)
         }
         contentView?.needsDisplay = true
     }
@@ -434,6 +439,7 @@ final class DictationMiniIndicatorController: NSObject {
     private func stopAnimation(clearPowerProvider: Bool) {
         animationTimer?.invalidate()
         animationTimer = nil
+        animationStartedAt = nil
         contentView?.power = 0
         if clearPowerProvider { powerProvider = nil }
     }
@@ -514,14 +520,36 @@ enum DictationMiniPalette {
 }
 
 private final class DictationMiniView: NSView {
-    var presentation: DictationMiniIndicatorController.Presentation = .hidden
-    var power: CGFloat = 0
-    var animationPhase: CGFloat = 0
+    private let glassView = NSVisualEffectView()
+    private let artworkView = DictationMiniArtworkView()
+
+    var presentation: DictationMiniIndicatorController.Presentation = .hidden {
+        didSet {
+            artworkView.presentation = presentation
+            updateGlass()
+        }
+    }
+    var power: CGFloat {
+        get { artworkView.power }
+        set { artworkView.power = newValue }
+    }
+    var animationPhase: CGFloat {
+        get { artworkView.animationPhase }
+        set { artworkView.animationPhase = newValue }
+    }
 
     override var isOpaque: Bool { false }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        wantsLayer = true
+        glassView.material = .hudWindow
+        glassView.blendingMode = .behindWindow
+        glassView.state = .active
+        glassView.wantsLayer = true
+        artworkView.wantsLayer = true
+        addSubview(glassView)
+        addSubview(artworkView)
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
     }
@@ -533,9 +561,72 @@ private final class DictationMiniView: NSView {
         setAccessibilityLabel(label)
     }
 
+    override func layout() {
+        super.layout()
+        glassView.frame = bounds
+        artworkView.frame = bounds
+        updateGlass()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        layer?.contentsScale = scale
+        glassView.layer?.contentsScale = scale
+        artworkView.layer?.contentsScale = scale
+    }
+
+    override var needsDisplay: Bool {
+        get { artworkView.needsDisplay }
+        set { artworkView.needsDisplay = newValue }
+    }
+
+    private func updateGlass() {
+        let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        let usesGlass: Bool
+        switch presentation {
+        case .recording, .processing, .failure, .warning:
+            usesGlass = !reduceTransparency
+        case .hidden, .preparing, .success:
+            usesGlass = false
+        }
+        glassView.isHidden = !usesGlass
+        let radius: CGFloat
+        switch presentation {
+        case .processing, .failure:
+            radius = bounds.height / 2
+        default:
+            radius = min(bounds.height / 2, 11)
+        }
+        glassView.layer?.cornerRadius = radius
+        glassView.layer?.cornerCurve = .continuous
+        glassView.layer?.masksToBounds = true
+    }
+}
+
+private final class DictationMiniArtworkView: NSView {
+    var presentation: DictationMiniIndicatorController.Presentation = .hidden
+    var power: CGFloat = 0
+    var animationPhase: CGFloat = 0
+
+    override var isOpaque: Bool { false }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard presentation != .hidden else { return }
+        if let context = NSGraphicsContext.current?.cgContext {
+            context.setShouldAntialias(true)
+            context.setAllowsAntialiasing(true)
+            context.interpolationQuality = .high
+        }
         let workspace = NSWorkspace.shared
         let reduceTransparency = workspace.accessibilityDisplayShouldReduceTransparency
         let increaseContrast = workspace.accessibilityDisplayShouldIncreaseContrast
@@ -588,15 +679,13 @@ private final class DictationMiniView: NSView {
 
         let topHex = usesOrbPalette ? DictationMiniPalette.orbTopHex : DictationMiniPalette.surfaceTopHex
         let bottomHex = usesOrbPalette ? DictationMiniPalette.orbBottomHex : DictationMiniPalette.surfaceBottomHex
-        let surfaceAlpha: CGFloat = reduceTransparency ? 1 : 0.98
-        let top = NSColor.colorWith(hex: topHex, alpha: surfaceAlpha)
-        let bottom = NSColor.colorWith(hex: bottomHex, alpha: surfaceAlpha)
+        let topAlpha: CGFloat = reduceTransparency ? 1 : 0.64
+        let bottomAlpha: CGFloat = reduceTransparency ? 1 : 0.76
+        let top = NSColor.colorWith(hex: topHex, alpha: topAlpha)
+        let bottom = NSColor.colorWith(hex: bottomHex, alpha: bottomAlpha)
         NSGradient(starting: top, ending: bottom)?.draw(in: path, angle: -90)
 
-        NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 0.08).setStroke()
-        path.lineWidth = increaseContrast ? 3 : 2
-        path.stroke()
-        NSColor.white.withAlphaComponent(increaseContrast ? 0.80 : 0.14).setStroke()
+        NSColor.white.withAlphaComponent(increaseContrast ? 0.82 : 0.18).setStroke()
         path.lineWidth = increaseContrast ? 2 : 1
         path.stroke()
     }
@@ -648,21 +737,22 @@ private final class DictationMiniView: NSView {
         let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
         let highlight = NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1)
         let center = CGPoint(x: bounds.midX, y: bounds.midY)
-        let spacing: CGFloat = 4
-        for row in -3...3 {
-            for column in -3...3 {
+        let spacing: CGFloat = 3.5
+        for row in -2...2 {
+            for column in -2...2 {
                 let distance = hypot(CGFloat(column), CGFloat(row))
-                guard distance <= 3.25 else { continue }
-                let wave = reduceMotion ? 0.75 : 0.68 + 0.32 * sin(animationPhase - distance * 0.8)
-                let alpha = max(0.18, (1 - distance / 4) * wave)
-                let diameter = max(1.2, 2.3 - distance * 0.22)
+                guard distance <= 2.35 else { continue }
+                let angularOffset = atan2(CGFloat(row), CGFloat(column))
+                let wave = reduceMotion ? 0.78 : 0.70 + 0.30 * sin(animationPhase - distance * 0.9 + angularOffset * 0.22)
+                let alpha = max(0.28, (1 - distance / 3.2) * wave)
+                let diameter = max(1.8, 2.4 - distance * 0.18)
                 let point = CGRect(
                     x: center.x + CGFloat(column) * spacing - diameter / 2,
                     y: center.y + CGFloat(row) * spacing - diameter / 2,
                     width: diameter,
                     height: diameter
                 )
-                let warmth = max(0, min(1, 0.55 - distance * 0.12))
+                let warmth = max(0, min(1, 0.58 - distance * 0.14))
                 let color = accent.blended(withFraction: warmth, of: highlight) ?? accent
                 color.withAlphaComponent(alpha).setFill()
                 NSBezierPath(ovalIn: point).fill()
@@ -672,17 +762,22 @@ private final class DictationMiniView: NSView {
 
     private func drawSuccess() {
         let color = NSColor.colorWith(hex: DictationMiniPalette.successHex, alpha: 1)
-        color.withAlphaComponent(0.22).setFill()
-        NSBezierPath(ovalIn: bounds).fill()
-        color.setStroke()
         let check = NSBezierPath()
-        check.move(to: CGPoint(x: 3, y: 6))
-        check.line(to: CGPoint(x: 5.2, y: 3.8))
-        check.line(to: CGPoint(x: 9.3, y: 8.5))
-        check.lineWidth = 1.7
+        check.move(to: CGPoint(x: 1.5, y: 7))
+        check.line(to: CGPoint(x: 6.2, y: 2.8))
+        check.line(to: CGPoint(x: 16.5, y: 12))
+        check.lineWidth = 2.4
         check.lineCapStyle = .round
         check.lineJoinStyle = .round
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowColor = color.withAlphaComponent(0.42)
+        shadow.shadowBlurRadius = 4
+        shadow.shadowOffset = .zero
+        shadow.set()
+        color.setStroke()
         check.stroke()
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func drawFailure() {

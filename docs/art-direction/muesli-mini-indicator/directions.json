@@ -170,6 +170,35 @@
         "generated_at_utc": "2026-08-18T19:31:12Z",
         "remote_service_disclosure": "none"
       }
+    },
+    {
+      "id": "glass-compact-states-06",
+      "parents": [
+        "split-surfaces-05"
+      ],
+      "round": 6,
+      "mode": "iterate",
+      "thesis": "The Mini should feel like a native glass signal rather than a painted badge, with compact smooth computation and a success mark stripped to its essential check.",
+      "anchors": [
+        "user correction for true glass and smooth rendering",
+        "approved Contextual Spark warm palette",
+        "28 point processing field",
+        "check-only success state"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/glass-compact-states-06.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T07:29:12Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T07:29:12Z",
+        "remote_service_disclosure": "none"
+      }
     }
   ],
   "decisions": [
@@ -207,6 +236,13 @@
       "operation": "replace shared floating-indicator concept with independent dictation Mini and meeting-recording panel lifecycles",
       "feedback_ref": "feedback.md#18-08-2026-1931-utc--split-dictation-mini-from-meeting-panel",
       "decided_at_utc": "2026-08-18T19:31:12Z"
+    },
+    {
+      "from": "split-surfaces-05",
+      "to": "glass-compact-states-06",
+      "operation": "preserve the warm palette; replace painted opacity with native glass; shrink and smooth processing; reduce success to a standalone check; restore cues on headphone routes",
+      "feedback_ref": "feedback.md#19-08-2026-0729-utc--true-glass-and-compact-terminal-states",
+      "decided_at_utc": "2026-08-19T07:29:12Z"
     }
   ]
 }

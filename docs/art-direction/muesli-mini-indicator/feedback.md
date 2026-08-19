@@ -65,3 +65,13 @@
 - Use: orange `#ff7043` with amber `#ffb04d` for preparing, recording, and processing activity.
 - Preserve: semantic green `#62d691` for success and coral-red `#ff6961` for failure.
 - Separate: Dictation Mini color ownership from the Meeting Recording Panel and the app-wide accent setting.
+
+## 19-08-2026 07:29 UTC — true glass and compact terminal states
+
+- Keep: the approved warm charcoal, orange, amber, green, and coral palette.
+- Replace: the nearly opaque painted gradient and doubled border with a clipped macOS material, translucent warm tint, and one fine highlight edge.
+- Smooth: render at the window backing scale with antialiasing and time-based 60 Hz animation.
+- Reduce: processing from 38 to 28 points and simplify its point field from seven to five columns.
+- Replace: the glowing green success dot with the check mark alone.
+- Fix: lifecycle audio follows the enabled sound preference on AirPods and other headphone-like outputs instead of being silently suppressed.
+- Resulting node: `glass-compact-states-06`.
