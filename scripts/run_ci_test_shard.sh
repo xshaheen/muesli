@@ -119,6 +119,7 @@ case "${shard}" in
       MeetingActivityDetectionPolicyTests
       MeetingRecordingWriterTests
       MeetingRecordingElapsedClockTests
+      MeetingRecordButtonTests
       MeetingRecordingPanelGeometryTests
       MeetingRecordingPanelLifecycleTests
       MeetingResumePolicyTests

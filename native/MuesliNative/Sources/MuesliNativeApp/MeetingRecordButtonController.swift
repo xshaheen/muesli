@@ -28,6 +28,8 @@ enum MeetingRecordButtonPalette {
     static let inkHex = DictationMiniPalette.inkHex
     static let glassTintAlpha: CGFloat = 0.62
     static let hoverGlassTintAlpha: CGFloat = 0.50
+    /// The edge itself is drawn by `ContextualSparkGlassSurfaceView`; this records the value
+    /// the shared surface resolves to at default contrast.
     static let edgeAlpha: CGFloat = 0.16
 }
 
@@ -107,11 +109,7 @@ final class MeetingRecordButtonController: NSObject {
     private var savedCenter: CGPoint?
     private var panel: InteractiveFloatingPanel?
     private var contentView: MeetingRecordButtonContentView?
-    private var glassView: NSVisualEffectView?
-    /// Hosts the tint and record-dot layers above the glass: AppKit keeps subview layers
-    /// above hand-added sublayers, so decor must live in its own layer-backed view.
-    private let decorView = NSView()
-    private let tintLayer = CALayer()
+    private var surfaceView: ContextualSparkGlassSurfaceView?
     private let dotLayer = CAShapeLayer()
     private let coreLayer = CAShapeLayer()
     private var label: NSTextField?
@@ -173,7 +171,7 @@ final class MeetingRecordButtonController: NSObject {
         panel?.contentView = nil
         panel = nil
         contentView = nil
-        glassView = nil
+        surfaceView = nil
         label = nil
     }
 
@@ -260,23 +258,15 @@ final class MeetingRecordButtonController: NSObject {
         panel.contentView = content
         contentView = content
 
-        let glass = NSVisualEffectView(frame: content.bounds)
-        glass.autoresizingMask = [.width, .height]
-        glass.material = .hudWindow
-        glass.blendingMode = .behindWindow
-        glass.state = .active
-        glass.appearance = NSAppearance(named: .darkAqua)
-        content.addSubview(glass)
-        glassView = glass
-
-        decorView.frame = content.bounds
-        decorView.autoresizingMask = [.width, .height]
-        decorView.wantsLayer = true
-        content.addSubview(decorView)
-        tintLayer.frame = content.bounds
-        tintLayer.cornerRadius = Self.pillSize.height / 2
-        tintLayer.cornerCurve = .continuous
-        decorView.layer?.addSublayer(tintLayer)
+        let surface = ContextualSparkGlassSurfaceView(
+            cornerRadius: Self.pillSize.height / 2,
+            tintHex: MeetingRecordButtonPalette.glassTintHex,
+            tintAlpha: MeetingRecordButtonPalette.glassTintAlpha
+        )
+        surface.frame = content.bounds
+        surface.autoresizingMask = [.width, .height]
+        content.addSubview(surface)
+        surfaceView = surface
 
         let dotDiameter = Self.recordDotDiameter
         let dotRect = CGRect(
@@ -288,9 +278,9 @@ final class MeetingRecordButtonController: NSObject {
         dotLayer.path = CGPath(ellipseIn: dotRect, transform: nil)
         dotLayer.shadowOffset = .zero
         dotLayer.shadowRadius = 3
-        decorView.layer?.addSublayer(dotLayer)
+        surface.decorLayer.addSublayer(dotLayer)
         coreLayer.path = CGPath(ellipseIn: dotRect.insetBy(dx: 2.5, dy: 2.5).offsetBy(dx: -0.4, dy: 0.4), transform: nil)
-        decorView.layer?.addSublayer(coreLayer)
+        surface.decorLayer.addSublayer(coreLayer)
 
         let text = NSTextField(labelWithString: "Record")
         text.font = .systemFont(ofSize: 11, weight: .semibold)
@@ -304,27 +294,20 @@ final class MeetingRecordButtonController: NSObject {
 
     private func applyChrome() {
         guard let contentView else { return }
-        let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
         let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-        glassView?.isHidden = reduceTransparency
 
         // Pressed darkens the ground slightly; hover lifts it. No transform, so the
         // view-backed layer's (0,0) anchor never shifts the content.
         let restingAlpha = isHovered
             ? MeetingRecordButtonPalette.hoverGlassTintAlpha
             : MeetingRecordButtonPalette.glassTintAlpha
-        let tintAlpha = reduceTransparency ? 1 : (isPressed ? restingAlpha + 0.16 : restingAlpha)
+        surfaceView?.apply(tintAlpha: isPressed ? restingAlpha + 0.16 : restingAlpha)
+        // Re-resolve unconditionally: this also runs on accessibility-display changes, where
+        // the tint alpha is unchanged but the material and the edge are not.
+        surfaceView?.refreshAccessibilityPresentation()
+
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        tintLayer.backgroundColor = NSColor.colorWith(
-            hex: MeetingRecordButtonPalette.glassTintHex,
-            alpha: tintAlpha
-        ).cgColor
-        contentView.layer?.borderWidth = increaseContrast ? 2 : 1
-        contentView.layer?.borderColor = NSColor.white.withAlphaComponent(
-            increaseContrast ? 0.82 : MeetingRecordButtonPalette.edgeAlpha
-        ).cgColor
-
         let record = NSColor.colorWith(hex: MeetingRecordButtonPalette.recordHex, alpha: 1)
         let highlight = NSColor.colorWith(hex: MeetingRecordButtonPalette.recordHighlightHex, alpha: 1)
         dotLayer.fillColor = record.cgColor
