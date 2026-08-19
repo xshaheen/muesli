@@ -879,7 +879,9 @@ final class MuesliController: NSObject {
         syncDictationIdleDot()
         syncDictationRecorderWarmup(intent: .idlePrewarm(.startup))
         meetingRecordingPanel.onStop = { [weak self] in self?.stopMeetingRecording() }
-        meetingRecordingPanel.onDiscard = { [weak self] in self?.discardMeetingWithConfirmation() }
+        meetingRecordingPanel.onDiscard = { [weak self] ownerID in
+            self?.confirmDiscardMeeting(ownerID: ownerID)
+        }
         meetingRecordingPanel.onTogglePause = { [weak self] in self?.toggleMeetingRecordingPause() }
         meetingRecordingPanel.onOpenNotes = { [weak self] in self?.openActiveMeetingNotes() }
         ComputerUseCursorOverlay.shared.onStop = { [weak self] in
@@ -6917,6 +6919,12 @@ final class MuesliController: NSObject {
     }
 
     @objc func discardMeetingWithConfirmation() {
+        confirmDiscardMeeting(ownerID: activeMeetingPanelOwnerID)
+    }
+
+    /// The floating object passes the owner it was showing: a confirmation the user leaves open
+    /// while that meeting stops must never discard the recording that replaced it.
+    func confirmDiscardMeeting(ownerID: UUID?) {
         NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
@@ -6944,7 +6952,7 @@ final class MuesliController: NSObject {
             alert.addButton(withTitle: "Cancel")
             alert.buttons.first?.hasDestructiveAction = true
         }
-        presentDiscardMeetingAlert(alert, manualNotesCheckbox: manualNotesCheckbox)
+        presentDiscardMeetingAlert(alert, manualNotesCheckbox: manualNotesCheckbox, ownerID: ownerID)
     }
 
     private static func makeDiscardMeetingAccessoryView() -> MeetingDiscardAccessory {
@@ -6970,16 +6978,21 @@ final class MuesliController: NSObject {
         return MeetingDiscardAccessory(view: container, manualNotesCheckbox: notesCheckbox)
     }
 
-    private func presentDiscardMeetingAlert(_ alert: NSAlert, manualNotesCheckbox: NSButton?, attempt: Int = 0) {
+    private func presentDiscardMeetingAlert(
+        _ alert: NSAlert,
+        manualNotesCheckbox: NSButton?,
+        ownerID: UUID?,
+        attempt: Int = 0
+    ) {
         if let window = confirmationAnchorWindow() {
-            beginDiscardMeetingAlert(alert, for: window, manualNotesCheckbox: manualNotesCheckbox)
+            beginDiscardMeetingAlert(alert, for: window, manualNotesCheckbox: manualNotesCheckbox, ownerID: ownerID)
             return
         }
 
         showActiveMeetingDocumentIfNeeded()
         historyWindowController?.show()
         if let window = confirmationAnchorWindow() {
-            beginDiscardMeetingAlert(alert, for: window, manualNotesCheckbox: manualNotesCheckbox)
+            beginDiscardMeetingAlert(alert, for: window, manualNotesCheckbox: manualNotesCheckbox, ownerID: ownerID)
             return
         }
 
@@ -6990,18 +7003,31 @@ final class MuesliController: NSObject {
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self, alert] in
-            self?.presentDiscardMeetingAlert(alert, manualNotesCheckbox: manualNotesCheckbox, attempt: attempt + 1)
+            self?.presentDiscardMeetingAlert(
+                alert,
+                manualNotesCheckbox: manualNotesCheckbox,
+                ownerID: ownerID,
+                attempt: attempt + 1
+            )
         }
     }
 
-    private func beginDiscardMeetingAlert(_ alert: NSAlert, for window: NSWindow, manualNotesCheckbox: NSButton?) {
+    private func beginDiscardMeetingAlert(
+        _ alert: NSAlert,
+        for window: NSWindow,
+        manualNotesCheckbox: NSButton?,
+        ownerID: UUID?
+    ) {
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let resolution = Self.discardResolution(
                 for: response,
                 deleteManualNotes: manualNotesCheckbox.map { $0.state == .on }
             ) else { return }
             Task { @MainActor [weak self] in
-                self?.discardMeetingRecording(resolution: resolution)
+                guard let self else { return }
+                // The recording the confirmation was raised for must still be the live one.
+                guard ownerID == nil || ownerID == self.activeMeetingPanelOwnerID else { return }
+                self.discardMeetingRecording(resolution: resolution)
             }
         }
     }

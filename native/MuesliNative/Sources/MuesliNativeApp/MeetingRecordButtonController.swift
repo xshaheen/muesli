@@ -98,7 +98,8 @@ private final class MeetingRecordButtonContentView: NSView {
 @MainActor
 final class MeetingRecordButtonController: NSObject {
     /// Matches the Dictation Mini's 22 pt capsule height; "● Record" at 11 pt fits in 72 pt.
-    nonisolated static let pillSize = NSSize(width: 72, height: 22)
+    /// One constant with the recording object's base pill, so the hand-off never changes size.
+    nonisolated static let pillSize = MeetingRecordingPanelController.basePillSize
     nonisolated static let recordDotDiameter: CGFloat = 8
 
     var onRecord: (() -> Void)?
