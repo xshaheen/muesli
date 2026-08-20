@@ -24,6 +24,17 @@ public struct MuesliQwen3Transcription: Sendable, Equatable {
     /// Mean log-softmax over emitted lexical tokens only. `nil` means the
     /// result has no comparable finite lexical-token score.
     public let normalizedLexicalTokenConfidence: Double?
+    public let lexicalTokenCount: Int
+
+    public init(
+        text: String,
+        normalizedLexicalTokenConfidence: Double?,
+        lexicalTokenCount: Int
+    ) {
+        self.text = text
+        self.normalizedLexicalTokenConfidence = normalizedLexicalTokenConfidence
+        self.lexicalTokenCount = lexicalTokenCount
+    }
 }
 
 @available(macOS 15, iOS 18, *)
@@ -120,8 +131,8 @@ public actor MuesliQwen3AsrManager {
         let resolvedLanguage: MuesliQwen3AsrConfig.Language?
         if let lang = language {
             resolvedLanguage = MuesliQwen3AsrConfig.Language(from: lang)
-            if resolvedLanguage == nil {
-                logger.warning("Unknown language '\(lang)', using automatic detection")
+            guard resolvedLanguage != nil else {
+                throw MuesliQwen3AsrError.invalidLanguage(lang)
             }
         } else {
             resolvedLanguage = nil
@@ -170,7 +181,8 @@ public actor MuesliQwen3AsrManager {
 
         return MuesliQwen3Transcription(
             text: text,
-            normalizedLexicalTokenConfidence: confidence
+            normalizedLexicalTokenConfidence: confidence.score,
+            lexicalTokenCount: confidence.tokenCount
         )
     }
 
@@ -364,8 +376,9 @@ public actor MuesliQwen3AsrManager {
 
         let effectiveMaxNew = min(maxNewTokens, MuesliQwen3AsrConfig.maxCacheSeqLen - promptLength)
         guard effectiveMaxNew > 0 else {
-            throw MuesliQwen3AsrError.generationFailed(
-                "Prompt length \(promptLength) exceeds cache capacity \(MuesliQwen3AsrConfig.maxCacheSeqLen)"
+            throw MuesliQwen3AsrError.cacheCapacityExceeded(
+                promptLength: promptLength,
+                capacity: MuesliQwen3AsrConfig.maxCacheSeqLen
             )
         }
 
@@ -569,8 +582,8 @@ public actor MuesliQwen3AsrManager {
         tokenIDs: [Int],
         logProbabilities: [Double],
         vocabulary: [Int: String]
-    ) -> Double? {
-        guard tokenIDs.count == logProbabilities.count else { return nil }
+    ) -> (score: Double?, tokenCount: Int) {
+        guard tokenIDs.count == logProbabilities.count else { return (nil, 0) }
         let start = tokenIDs.firstIndex(of: MuesliQwen3AsrConfig.asrTextTokenId).map { $0 + 1 } ?? 0
         let controls: Set<Int> = [
             MuesliQwen3AsrConfig.asrTextTokenId,
@@ -598,9 +611,9 @@ public actor MuesliQwen3AsrManager {
             sum += score
             count += 1
         }
-        guard count > 0 else { return nil }
+        guard count > 0 else { return (nil, 0) }
         let mean = sum / Double(count)
-        return mean.isFinite ? mean : nil
+        return (mean.isFinite ? mean : nil, count)
     }
 
     private func isLexicalPiece(_ piece: String) -> Bool {

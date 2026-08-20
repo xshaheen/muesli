@@ -120,16 +120,64 @@ actor Qwen3AsrTranscriber {
         fputs("[qwen3-asr] warmup complete, ready\n", stderr)
     }
 
-    /// Transcribe a WAV file URL.
-    /// Returns the transcribed text (no token-level timings available).
-    func transcribe(wavURL: URL) async throws -> (text: String, processingTime: Double) {
+    /// Transcribe through the same bounded runner used by muesli-cli. Candidate
+    /// languages are complete request-level runs; a language never changes at
+    /// a window boundary.
+    func transcribe(
+        wavURL: URL,
+        routingDecision: LanguageRoutingDecision,
+        vadSignal: @escaping Qwen3FailClosedSilenceClassifier.Signal
+    ) async throws -> (text: String, processingTime: Double) {
         guard let manager else { throw TranscriberError.notLoaded }
         let start = CFAbsoluteTimeGetCurrent()
-        let converter = AudioConverter()
-        let samples = try converter.resampleAudioFile(wavURL)
-        let text = try await manager.transcribe(audioSamples: samples)
+        let runner = Qwen3LongAudioRunner(
+            silenceClassifier: Qwen3FailClosedSilenceClassifier(
+                energySignal: Qwen3FailClosedSilenceClassifier.rootMeanSquareSignal(),
+                vadSignal: vadSignal
+            ),
+            inference: { samples, language in
+                try await manager.transcribeWithConfidence(
+                    audioSamples: samples,
+                    language: language?.rawValue
+                )
+            }
+        )
+
+        let result: Qwen3LongAudioResult
+        switch routingDecision {
+        case .automatic:
+            result = try await runner.run(wavURL: wavURL, language: nil)
+        case .pinned(let language), .fixed(let language):
+            result = try await runner.run(wavURL: wavURL, language: language)
+        case .constrainedCandidates(let languages, let dominantLanguage):
+            var candidates: [TranscriptionLanguageCandidate<Qwen3LongAudioResult>] = []
+            for language in languages {
+                try Task.checkCancellation()
+                let candidate = try await runner.run(
+                    wavURL: wavURL,
+                    language: language,
+                    candidateCount: languages.count
+                )
+                guard let score = candidate.normalizedLexicalTokenConfidence else {
+                    throw TranscriptionCandidateSelectionError.invalidScore(language)
+                }
+                candidates.append(TranscriptionLanguageCandidate(
+                    language: language,
+                    value: candidate,
+                    normalizedScore: score
+                ))
+            }
+            result = try TranscriptionLanguageCandidateSelector.select(
+                candidates,
+                expectedLanguages: languages,
+                dominantLanguage: dominantLanguage
+            ).value
+        case .incompatible(let incompatibility):
+            throw incompatibility
+        }
+        try Task.checkCancellation()
         let processingTime = CFAbsoluteTimeGetCurrent() - start
-        return (text, processingTime)
+        return (result.text, processingTime)
     }
 
     func shutdown() {

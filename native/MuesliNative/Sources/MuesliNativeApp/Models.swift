@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import MuesliCore
+import MuesliQwenCoreML
 
 struct BackendOption: Equatable {
     let backend: String
@@ -275,7 +276,7 @@ struct BackendOption: Equatable {
             hasComparableCandidateConfidence: false,
             fixedLanguage: fixedLanguage,
             supportsCodeSwitching: supportsAuto,
-            maximumSafeDuration: backend == "qwen" ? 20 : nil,
+            maximumSafeDuration: backend == "qwen" ? Qwen3LongAudioRunner.maximumDuration : nil,
             supportsStreaming: isStreamingDictationBackend,
             workloads: workloads,
             isAvailable: isAvailable ?? self.isDownloaded

@@ -11039,9 +11039,19 @@ final class MuesliController: NSObject {
                 await Self.recordDictationTraceEvent(event, trace: job.sessionTrace)
             }
             await job.sessionTrace.recordStageStarted("speech_recognition")
+            let frozenLanguageSelection = (try? TranscriptionLanguageSelection(
+                selectedLanguages: job.languageProfile.selectedLanguages,
+                dominantLanguage: job.languageProfile.dominantLanguage
+            )) ?? .automatic
+            let frozenLanguageDecision = TranscriptionLanguageRouter.resolve(
+                selection: frozenLanguageSelection,
+                capabilities: job.backend.languageCapabilities(isAvailable: true),
+                workload: .dictation
+            )
             let result = try await transcriptionCoordinator.transcribeDictationWithCleanupOutcome(
                 at: job.wavURL,
                 backend: job.backend,
+                languageDecision: frozenLanguageDecision,
                 cohereLanguage: job.languageProfile.resolvedCohereLanguage,
                 indicASRLanguage: job.languageProfile.resolvedIndicASRLanguage,
                 nemotron35Language: job.languageProfile.resolvedNemotron35Language,

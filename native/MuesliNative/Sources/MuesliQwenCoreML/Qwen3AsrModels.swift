@@ -240,6 +240,8 @@ public enum MuesliQwen3AsrError: Error, LocalizedError {
     case encoderFailed(String)
     case decoderFailed(String)
     case generationFailed(String)
+    case invalidLanguage(String)
+    case cacheCapacityExceeded(promptLength: Int, capacity: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -253,6 +255,10 @@ public enum MuesliQwen3AsrError: Error, LocalizedError {
             return "Decoder failed: \(detail)"
         case .generationFailed(let detail):
             return "Generation failed: \(detail)"
+        case .invalidLanguage(let language):
+            return "Qwen3-ASR does not support language '\(language)'."
+        case .cacheCapacityExceeded(let promptLength, let capacity):
+            return "Qwen3-ASR prompt length \(promptLength) exceeds cache capacity \(capacity)."
         }
     }
 }

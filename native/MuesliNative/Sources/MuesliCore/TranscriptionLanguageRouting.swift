@@ -239,13 +239,30 @@ public struct TranscriptionBackendCapabilities: Codable, Equatable, Sendable {
     }
 }
 
-public enum LanguageRoutingIncompatibility: Codable, Equatable, Sendable {
+public enum LanguageRoutingIncompatibility: Codable, Equatable, Sendable, LocalizedError {
     case backendUnavailable(TranscriptionBackendID)
     case unsupportedWorkload(TranscriptionWorkload)
     case automaticDetectionUnsupported
     case languageUnsupported(TranscriptionLanguage)
     case constrainedCandidatesUnsupported
     case tooManyLanguages(requested: Int, maximum: Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .backendUnavailable(let backend):
+            "The selected transcription model is unavailable (\(backend.rawValue))."
+        case .unsupportedWorkload(let workload):
+            "The selected transcription model does not support \(workload.rawValue)."
+        case .automaticDetectionUnsupported:
+            "The selected transcription model does not support automatic language detection."
+        case .languageUnsupported(let language):
+            "The selected transcription model does not support \(language.label) (\(language.rawValue))."
+        case .constrainedCandidatesUnsupported:
+            "The selected transcription model cannot reliably choose among the requested languages."
+        case .tooManyLanguages(let requested, let maximum):
+            "The selected transcription model supports at most \(maximum) candidate languages, but \(requested) were requested."
+        }
+    }
 }
 
 public enum LanguageRoutingDecision: Codable, Equatable, Sendable {
@@ -330,5 +347,97 @@ public enum TranscriptionLanguageRouter {
             languages: selection.selectedLanguages,
             dominantLanguage: selection.dominantLanguage
         )
+    }
+}
+
+/// One complete, same-backend transcription candidate. Scores are comparable
+/// only within the request that produced them; callers must never mix backend
+/// families, models, or audio inputs.
+public struct TranscriptionLanguageCandidate<Value: Sendable>: Sendable {
+    public let language: TranscriptionLanguage
+    public let value: Value
+    public let normalizedScore: Double
+
+    public init(language: TranscriptionLanguage, value: Value, normalizedScore: Double) {
+        self.language = language
+        self.value = value
+        self.normalizedScore = normalizedScore
+    }
+}
+
+public enum TranscriptionCandidateSelectionError: Error, LocalizedError, Equatable, Sendable {
+    case noCandidates
+    case duplicateLanguage(TranscriptionLanguage)
+    case invalidScore(TranscriptionLanguage)
+    case incompleteCandidates(expected: [TranscriptionLanguage], received: [TranscriptionLanguage])
+
+    public var errorDescription: String? {
+        switch self {
+        case .noCandidates:
+            "No language candidates completed."
+        case .duplicateLanguage(let language):
+            "The \(language.rawValue) language candidate completed more than once."
+        case .invalidScore(let language):
+            "The \(language.rawValue) language candidate did not produce a finite comparable score."
+        case .incompleteCandidates(let expected, let received):
+            "Candidate transcription was incomplete (expected \(expected.map(\.rawValue).joined(separator: ",")); received \(received.map(\.rawValue).joined(separator: ",")))."
+        }
+    }
+}
+
+/// Deterministic all-or-nothing candidate selection for app and CLI.
+public enum TranscriptionLanguageCandidateSelector {
+    public static let scoreEpsilon = 0.0001
+
+    public static func select<Value: Sendable>(
+        _ candidates: [TranscriptionLanguageCandidate<Value>],
+        expectedLanguages: [TranscriptionLanguage],
+        dominantLanguage: TranscriptionLanguage?,
+        epsilon: Double = scoreEpsilon
+    ) throws -> TranscriptionLanguageCandidate<Value> {
+        guard !candidates.isEmpty else { throw TranscriptionCandidateSelectionError.noCandidates }
+        let expected = Array(Set(expectedLanguages)).sorted { $0.rawValue < $1.rawValue }
+        let received = candidates.map(\.language).sorted { $0.rawValue < $1.rawValue }
+        guard expected == received else {
+            let duplicates = Dictionary(grouping: received, by: { $0 }).first { $0.value.count > 1 }?.key
+            if let duplicates { throw TranscriptionCandidateSelectionError.duplicateLanguage(duplicates) }
+            throw TranscriptionCandidateSelectionError.incompleteCandidates(
+                expected: expected,
+                received: received
+            )
+        }
+        for candidate in candidates where !candidate.normalizedScore.isFinite {
+            throw TranscriptionCandidateSelectionError.invalidScore(candidate.language)
+        }
+
+        let bestScore = candidates.map(\.normalizedScore).max()!
+        let tied = candidates.filter { bestScore - $0.normalizedScore <= epsilon }
+        if let dominantLanguage,
+           let dominant = tied.first(where: { $0.language == dominantLanguage }) {
+            return dominant
+        }
+        return tied.min { $0.language.rawValue < $1.language.rawValue }!
+    }
+}
+
+/// WhisperKit exposes one average log probability per segment. Weighting by
+/// emitted token count makes complete-request scores comparable without giving
+/// short segments disproportionate influence.
+public enum WhisperSegmentConfidenceAdapter {
+    public static func normalizedScore(
+        _ segments: [(averageLogProbability: Double, tokenCount: Int)]
+    ) -> Double? {
+        var weighted = 0.0
+        var totalTokens = 0
+        for segment in segments {
+            guard segment.tokenCount > 0, segment.averageLogProbability.isFinite else {
+                return nil
+            }
+            weighted += segment.averageLogProbability * Double(segment.tokenCount)
+            totalTokens += segment.tokenCount
+        }
+        guard totalTokens > 0 else { return nil }
+        let score = weighted / Double(totalTokens)
+        return score.isFinite ? score : nil
     }
 }

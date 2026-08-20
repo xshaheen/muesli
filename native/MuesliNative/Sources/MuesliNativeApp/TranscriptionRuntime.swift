@@ -1,6 +1,7 @@
 import FluidAudio
 import Foundation
 import MuesliCore
+import MuesliQwenCoreML
 
 struct SpeechSegment: Sendable {
     let start: Double
@@ -1425,6 +1426,7 @@ actor TranscriptionCoordinator {
     func transcribeDictation(
         at url: URL,
         backend: BackendOption,
+        languageDecision: LanguageRoutingDecision? = nil,
         cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
         indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
         nemotron35Language: Nemotron35Language = Nemotron35Language.defaultLanguage,
@@ -1440,6 +1442,7 @@ actor TranscriptionCoordinator {
         try await transcribeDictationWithCleanupOutcome(
             at: url,
             backend: backend,
+            languageDecision: languageDecision,
             cohereLanguage: cohereLanguage,
             indicASRLanguage: indicASRLanguage,
             nemotron35Language: nemotron35Language,
@@ -1457,6 +1460,7 @@ actor TranscriptionCoordinator {
     func transcribeDictationWithCleanupOutcome(
         at url: URL,
         backend: BackendOption,
+        languageDecision: LanguageRoutingDecision? = nil,
         cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
         indicASRLanguage: IndicASRLanguage = IndicASRLanguage.defaultLanguage,
         nemotron35Language: Nemotron35Language = Nemotron35Language.defaultLanguage,
@@ -1520,6 +1524,7 @@ actor TranscriptionCoordinator {
             resultFromRecognizer = try await route(
                 url: url,
                 backend: backend,
+                languageDecision: languageDecision,
                 cohereLanguage: cohereLanguage,
                 indicASRLanguage: indicASRLanguage,
                 nemotron35Language: nemotron35Language,
@@ -2164,6 +2169,7 @@ actor TranscriptionCoordinator {
     private func route(
         url: URL,
         backend: BackendOption,
+        languageDecision: LanguageRoutingDecision? = nil,
         cohereLanguage: CohereTranscribeLanguage,
         indicASRLanguage: IndicASRLanguage,
         nemotron35Language: Nemotron35Language,
@@ -2174,6 +2180,7 @@ actor TranscriptionCoordinator {
             try await routeToBackend(
                 url: url,
                 backend: backend,
+                languageDecision: languageDecision,
                 cohereLanguage: cohereLanguage,
                 indicASRLanguage: indicASRLanguage,
                 nemotron35Language: nemotron35Language,
@@ -2186,38 +2193,131 @@ actor TranscriptionCoordinator {
     private func routeToBackend(
         url: URL,
         backend: BackendOption,
+        languageDecision: LanguageRoutingDecision?,
         cohereLanguage: CohereTranscribeLanguage,
         indicASRLanguage: IndicASRLanguage,
         nemotron35Language: Nemotron35Language,
         whisperLanguage: WhisperKitLanguage,
         vocabulary: AsrVocabularyPrompt?
     ) async throws -> SpeechTranscriptionResult {
+        if case .incompatible(let incompatibility) = languageDecision {
+            throw incompatibility
+        }
         switch backend.backend {
         case "whisper":
-            let language = backend.supportsWhisperLanguageSelection
-                ? whisperLanguage
-                : WhisperKitLanguage.defaultLanguage
+            if case .constrainedCandidates(let languages, let dominantLanguage) = languageDecision {
+                return try await transcribeWithWhisperKitCandidates(
+                    url: url,
+                    vocabulary: vocabulary,
+                    languages: languages,
+                    dominantLanguage: dominantLanguage
+                )
+            }
+            let language: WhisperKitLanguage
+            if let languageDecision {
+                switch languageDecision {
+                case .automatic:
+                    language = .auto
+                case .pinned(let selected), .fixed(let selected):
+                    guard let exact = WhisperKitLanguage(rawValue: selected.rawValue) else {
+                        throw LanguageRoutingIncompatibility.languageUnsupported(selected)
+                    }
+                    language = exact
+                case .constrainedCandidates, .incompatible:
+                    preconditionFailure("handled before backend routing")
+                }
+            } else {
+                language = backend.supportsWhisperLanguageSelection
+                    ? whisperLanguage
+                    : WhisperKitLanguage.defaultLanguage
+            }
             return try await transcribeWithWhisperKit(
                 url: url,
                 vocabulary: vocabulary,
                 language: language
             )
         case "nemotron35":
+            let promptId: Int32
+            if let languageDecision {
+                switch languageDecision {
+                case .automatic:
+                    promptId = Nemotron35Language.defaultLanguage.promptId
+                case .pinned(let selected), .fixed(let selected):
+                    guard let exact = Nemotron35Language(rawValue: selected.rawValue) else {
+                        throw LanguageRoutingIncompatibility.languageUnsupported(selected)
+                    }
+                    promptId = exact.promptId
+                case .constrainedCandidates:
+                    throw LanguageRoutingIncompatibility.constrainedCandidatesUnsupported
+                case .incompatible:
+                    preconditionFailure("handled before backend routing")
+                }
+            } else {
+                promptId = nemotron35Language.promptId
+            }
             return try await transcribeWithNemotron35(
                 url: url,
-                promptId: nemotron35Language.promptId
+                promptId: promptId
             )
         case "qwen":
-            return try await transcribeWithQwen3(url: url)
+            return try await transcribeWithQwen3(
+                url: url,
+                languageDecision: languageDecision ?? .automatic
+            )
         case "cohere":
-            return try await transcribeWithCohere(url: url, language: cohereLanguage)
+            let language: CohereTranscribeLanguage
+            if let languageDecision {
+                switch languageDecision {
+                case .pinned(let selected), .fixed(let selected):
+                    guard let exact = CohereTranscribeLanguage(rawValue: selected.rawValue) else {
+                        throw LanguageRoutingIncompatibility.languageUnsupported(selected)
+                    }
+                    language = exact
+                case .automatic:
+                    throw LanguageRoutingIncompatibility.automaticDetectionUnsupported
+                case .constrainedCandidates:
+                    throw LanguageRoutingIncompatibility.constrainedCandidatesUnsupported
+                case .incompatible:
+                    preconditionFailure("handled before backend routing")
+                }
+            } else {
+                language = cohereLanguage
+            }
+            return try await transcribeWithCohere(url: url, language: language)
         case "indicasr":
-            return try await transcribeWithIndicASR(url: url, language: indicASRLanguage)
+            let language: IndicASRLanguage
+            if let languageDecision {
+                switch languageDecision {
+                case .pinned(let selected), .fixed(let selected):
+                    guard let exact = IndicASRLanguage(rawValue: selected.rawValue) else {
+                        throw LanguageRoutingIncompatibility.languageUnsupported(selected)
+                    }
+                    language = exact
+                case .automatic:
+                    throw LanguageRoutingIncompatibility.automaticDetectionUnsupported
+                case .constrainedCandidates:
+                    throw LanguageRoutingIncompatibility.constrainedCandidatesUnsupported
+                case .incompatible:
+                    preconditionFailure("handled before backend routing")
+                }
+            } else {
+                language = indicASRLanguage
+            }
+            return try await transcribeWithIndicASR(url: url, language: language)
         case "sensevoice":
+            if case .pinned(let language) = languageDecision {
+                throw LanguageRoutingIncompatibility.languageUnsupported(language)
+            }
             return try await transcribeWithSenseVoice(url: url)
         case "gemma4-litert":
+            if case .pinned(let language) = languageDecision {
+                throw LanguageRoutingIncompatibility.languageUnsupported(language)
+            }
             return try await transcribeWithGemma4LiteRT(url: url)
         default:
+            if case .pinned(let language) = languageDecision {
+                throw LanguageRoutingIncompatibility.languageUnsupported(language)
+            }
             return try await transcribeWithFluidAudio(url: url)
         }
     }
@@ -2259,12 +2359,72 @@ actor TranscriptionCoordinator {
         )
     }
 
+    private func transcribeWithWhisperKitCandidates(
+        url: URL,
+        vocabulary: AsrVocabularyPrompt?,
+        languages: [TranscriptionLanguage],
+        dominantLanguage: TranscriptionLanguage?
+    ) async throws -> SpeechTranscriptionResult {
+        var candidates: [TranscriptionLanguageCandidate<SpeechTranscriptionResult>] = []
+        for language in languages {
+            try Task.checkCancellation()
+            guard let whisperLanguage = WhisperKitLanguage(rawValue: language.rawValue) else {
+                throw LanguageRoutingIncompatibility.languageUnsupported(language)
+            }
+            let result = try await whisperTranscriber.transcribeWithConfidence(
+                wavURL: url,
+                vocabulary: vocabulary,
+                language: whisperLanguage
+            )
+            guard let score = result.normalizedScore else {
+                throw TranscriptionCandidateSelectionError.invalidScore(language)
+            }
+            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            candidates.append(TranscriptionLanguageCandidate(
+                language: language,
+                value: SpeechTranscriptionResult(
+                    text: text,
+                    segments: text.isEmpty ? [] : [SpeechSegment(start: 0, end: 0, text: text)]
+                ),
+                normalizedScore: score
+            ))
+        }
+        try Task.checkCancellation()
+        return try TranscriptionLanguageCandidateSelector.select(
+            candidates,
+            expectedLanguages: languages,
+            dominantLanguage: dominantLanguage
+        ).value
+    }
+
     // MARK: - Qwen3 ASR (Autoregressive CoreML on ANE)
 
-    private func transcribeWithQwen3(url: URL) async throws -> SpeechTranscriptionResult {
+    private func transcribeWithQwen3(
+        url: URL,
+        languageDecision: LanguageRoutingDecision
+    ) async throws -> SpeechTranscriptionResult {
         if #available(macOS 15, *) {
             fputs("[muesli-native] transcribing with Qwen3 ASR: \(url.lastPathComponent)\n", stderr)
-            let result = try await qwen3Transcriber.transcribe(wavURL: url)
+            let vadManager = self.vadManager
+            let result = try await qwen3Transcriber.transcribe(
+                wavURL: url,
+                routingDecision: languageDecision,
+                vadSignal: { samples in
+                    guard let vadManager else { return .indeterminate }
+                    do {
+                        let segments = try await vadManager.segmentSpeech(
+                            samples,
+                            config: VadSegmentationConfig(
+                                maxSpeechDuration: 20.0,
+                                speechPadding: 0
+                            )
+                        )
+                        return segments.isEmpty ? .silence : .speech
+                    } catch {
+                        return .indeterminate
+                    }
+                }
+            )
             fputs("[muesli-native] Qwen3 ASR result: \(result.text.prefix(80)) (took \(String(format: "%.3f", result.processingTime))s)\n", stderr)
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             return SpeechTranscriptionResult(

@@ -2,6 +2,13 @@ import Foundation
 import WhisperKit
 import MuesliCore
 
+struct WhisperKitScoredTranscription: Sendable {
+    let text: String
+    let processingTime: Double
+    let normalizedScore: Double?
+    let tokenCount: Int
+}
+
 /// Native Swift transcription backend using WhisperKit (CoreML on ANE/GPU).
 actor WhisperKitTranscriber {
     private var whisperKit: WhisperKit?
@@ -75,6 +82,19 @@ actor WhisperKitTranscriber {
         vocabulary: AsrVocabularyPrompt? = nil,
         language: WhisperKitLanguage = .defaultLanguage
     ) async throws -> (text: String, processingTime: Double) {
+        let result = try await transcribeWithConfidence(
+            wavURL: wavURL,
+            vocabulary: vocabulary,
+            language: language
+        )
+        return (result.text, result.processingTime)
+    }
+
+    func transcribeWithConfidence(
+        wavURL: URL,
+        vocabulary: AsrVocabularyPrompt? = nil,
+        language: WhisperKitLanguage = .defaultLanguage
+    ) async throws -> WhisperKitScoredTranscription {
         guard let whisperKit else { throw TranscriberError.notLoaded }
         guard let loadedModel else { throw TranscriberError.notLoaded }
 
@@ -92,7 +112,16 @@ actor WhisperKitTranscriber {
 
         let text = results.map(\.text).joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (text: text, processingTime: elapsed)
+        let segments = results.flatMap(\.segments)
+        let scoreInputs = segments.map {
+            (averageLogProbability: Double($0.avgLogprob), tokenCount: $0.tokens.count)
+        }
+        return WhisperKitScoredTranscription(
+            text: text,
+            processingTime: elapsed,
+            normalizedScore: WhisperSegmentConfidenceAdapter.normalizedScore(scoreInputs),
+            tokenCount: scoreInputs.reduce(0) { $0 + $1.tokenCount }
+        )
     }
 
     private func decodeOptions(
