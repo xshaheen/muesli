@@ -153,7 +153,7 @@ struct MeetingRecordingPanelGeometryTests {
 
         #expect(row.maxX == pill.maxX)
         #expect(row.minY == pill.minY)
-        #expect(row.width == 196)
+        #expect(row.width == 212)
         #expect(panel.maxX == pill.maxX)
         #expect(panel.minY == pill.minY)
         #expect(minimized == pill)
@@ -221,8 +221,8 @@ struct MeetingRecordingPanelGeometryTests {
             == NSSize(width: 72, height: 22))
         #expect(MeetingRecordingPanelController.pillSize(for: .clock(hasHours: true))
             == NSSize(width: 86, height: 22))
-        #expect(MeetingRecordingPanelController.size(for: .row, content: .clock(hasHours: false)).width == 196)
-        #expect(MeetingRecordingPanelController.size(for: .row, content: .clock(hasHours: true)).width == 210)
+        #expect(MeetingRecordingPanelController.size(for: .row, content: .clock(hasHours: false)).width == 212)
+        #expect(MeetingRecordingPanelController.size(for: .row, content: .clock(hasHours: true)).width == 226)
 
         let statusFont = NSFont.systemFont(ofSize: 10, weight: .semibold)
         var statusWidths: Set<CGFloat> = []
@@ -235,6 +235,35 @@ struct MeetingRecordingPanelGeometryTests {
             statusWidths.insert(size.width)
         }
         #expect(statusWidths.count == 1)
+    }
+
+    /// The regression net for a row narrower than its own parts: AppKit places absolute
+    /// frames, so a control that does not fit is silently clipped by the window edge rather
+    /// than shrinking the way a flexbox row would.
+    @Test("every row control fits inside the row at both widths and on both corners")
+    func rowControlsFitInsideTheRow() {
+        for content in [MeetingObjectContent.clock(hasHours: false), .clock(hasHours: true)] {
+            let size = MeetingRecordingPanelController.size(for: .row, content: content)
+            let pillWidth = MeetingRecordingPanelController.pillSize(for: content).width
+            for mirrored in [true, false] {
+                let row = MeetingRecordingPanelController.rowLayout(
+                    in: NSRect(origin: .zero, size: size),
+                    pillWidth: pillWidth,
+                    mirrored: mirrored
+                )
+                for part in row.everything {
+                    #expect(part.minX >= 0)
+                    #expect(part.maxX <= size.width)
+                }
+                #expect(row.controls.count == 3)
+                // The controls' outer edge keeps the same 6 pt inset the pill's own text
+                // slot uses, whichever side they unfold on.
+                let outerEdge = mirrored
+                    ? row.controls.map(\.minX).min()
+                    : row.controls.map(\.maxX).max().map { size.width - $0 }
+                #expect(outerEdge == MeetingRecordingPanelController.rowEdgeInset)
+            }
+        }
     }
 
     /// Covers AE10: dragging saves the *base pill's* center, so a dragged panel minimizes and

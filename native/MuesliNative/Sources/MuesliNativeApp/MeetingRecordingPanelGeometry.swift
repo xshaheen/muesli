@@ -23,6 +23,20 @@ enum MeetingObjectCorner: Equatable {
     }
 }
 
+/// Where the hover row's parts sit inside its bounds.
+///
+/// `controls` is in tab order — pause, stop, open panel — not in screen order: at a trailing
+/// corner the cluster mirrors, so pause is the rightmost of the three rather than the
+/// leftmost.
+struct MeetingObjectRowLayout: Equatable {
+    let dot: NSRect
+    let clock: NSRect
+    let wave: NSRect
+    let controls: [NSRect]
+
+    var everything: [NSRect] { [dot, clock, wave] + controls }
+}
+
 /// What the pill's text slot carries, which is also what decides the object's width.
 enum MeetingObjectContent: Equatable {
     case clock(hasHours: Bool)
@@ -95,6 +109,67 @@ extension MeetingRecordingPanelController {
             let widest = (finalizingStatusWords + [word]).map(statusPillWidth(for:)).max() ?? basePillSize.width
             return NSSize(width: max(basePillSize.width, widest.rounded(.up)), height: basePillSize.height)
         }
+    }
+
+    nonisolated static let rowEdgeInset: CGFloat = 6
+    nonisolated static let rowPillGap: CGFloat = 8
+    nonisolated static let rowWaveGap: CGFloat = 6
+
+    /// Places the row's parts, given only its bounds and which corner it holds.
+    ///
+    /// Pure and separate from the views it drives, because the arithmetic is the whole
+    /// story: the pill block is pinned to the held edge so the dot never moves as the row
+    /// unfolds, and everything else is measured back from the opposite edge. Off-by-a-part
+    /// here walks a control off the frame, and AppKit clips it in silence.
+    nonisolated static func rowLayout(
+        in bounds: NSRect,
+        pillWidth: CGFloat,
+        mirrored: Bool
+    ) -> MeetingObjectRowLayout {
+        let pillOriginX = mirrored ? bounds.width - pillWidth : 0
+        let dotX = pillOriginX + dotLeading
+        let clockX = dotX + dotDiameter + dotTextGap
+        let dot = NSRect(x: dotX, y: 0, width: dotDiameter, height: bounds.height)
+        let clock = NSRect(
+            x: clockX,
+            y: (bounds.height - 14) / 2 - 0.5,
+            width: max(0, pillWidth - dotLeading - dotDiameter - dotTextGap),
+            height: 14
+        )
+
+        func control(at x: CGFloat) -> NSRect {
+            NSRect(x: x, y: 0, width: controlWidth, height: bounds.height)
+        }
+
+        let wave: NSRect
+        var controls: [NSRect] = []
+        if mirrored {
+            wave = NSRect(
+                x: pillOriginX - rowPillGap - waveSlotWidth,
+                y: (bounds.height - 14) / 2,
+                width: waveSlotWidth,
+                height: 14
+            )
+            var x = wave.minX - rowWaveGap
+            for _ in 0..<3 {
+                x -= controlWidth
+                controls.append(control(at: x))
+            }
+        } else {
+            var x = bounds.width - rowEdgeInset
+            for _ in 0..<3 {
+                x -= controlWidth
+                // Built right to left but reported in tab order.
+                controls.insert(control(at: x), at: 0)
+            }
+            wave = NSRect(
+                x: x - rowWaveGap - waveSlotWidth,
+                y: (bounds.height - 14) / 2,
+                width: waveSlotWidth,
+                height: 14
+            )
+        }
+        return MeetingObjectRowLayout(dot: dot, clock: clock, wave: wave, controls: controls)
     }
 
     nonisolated static func size(

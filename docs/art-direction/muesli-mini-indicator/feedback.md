@@ -226,3 +226,9 @@
 - Keep: the base pill frame as the sole anchor, with the held corner chosen once per recording.
 - Deviation to review on device: "Starting..." does not fit the fixed 72 pt pill beside the record dot at 11 pt semibold (the string measures 54.1 pt against ~44 pt of room), so it renders at 9 pt semibold with a tighter dot gap. The node shows it at the same weight as "Record". Options if it reads badly at 1x: shorten the word, or let the Starting pill take a one-time fitted width the way the finalizing pill does.
 - Not yet accepted: node 17 stays `active` until the U8 device pass in `.context/visual-qa/meeting-panel/u8-device-qa-checklist.md` is walked; the values above are as-implemented, not as-verified-on-glass.
+
+## 20-08-2026 05:40 UTC — device QA: the feed and the row width
+
+- Replace (device QA on the built panel): the transcript body reused the main window's chat feed — right-aligned bubbles, borders, `You  08:35:18` headers, per-message copy and open buttons — which is not what node 17 draws. The panel now has its own feed: node 17's flat two-column line list, a 44 pt speaker gutter at 10 pt semibold (coral You, 55 % ink Others), an 8 pt gap, the utterance at 11 pt / 1.4 at 90 % ink, 7 pt between lines, in-flight partials italic at 50 %. The main window's bubble feed is untouched.
+- Decide: the per-line affordance is a hover-only open-meeting arrow, overlaid so no line shifts when it appears. No per-line copy button — the tab strip's copy button already copies the visible tab.
+- Correct: the row is 212 × 22 (226 after the hour step), not 196 × 22 (210). The node's own parts never fit 196 — 6 + three 24 pt controls + 6 + the 48 pt wave + 8 + the 72 pt pill block is 212 — and where HTML flexbox absorbed the 16 pt overflow in silence, AppKit's absolute frames put the outermost control at x = -10 and clipped it. The node's `@keyframes demo`, its `.unit.rowcap` and its footprint caption are corrected to 212.

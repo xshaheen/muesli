@@ -96,8 +96,7 @@ struct MeetingTextInteractionTests {
             partialOthers: "",
             horizontalPadding: 16,
             topPadding: 8,
-            bottomPadding: 8,
-            surfacePresentation: .floatingPanel
+            bottomPadding: 8
         ))
         host.frame = NSRect(x: 0, y: 0, width: 360, height: 320)
         let window = NSWindow(
@@ -120,6 +119,34 @@ struct MeetingTextInteractionTests {
         ])
         #expect(fields.allSatisfy { $0.frame.height >= $0.fittingSize.height })
         window.orderOut(nil)
+    }
+
+    /// The merged panel must not fall back to the main window's bubble feed: node 17's
+    /// line list carries the utterance alone, with the speaker in its own gutter and no
+    /// `You  20:02:09` metadata header baked into the body.
+    @Test("the panel feed renders bare utterances, not bubble metadata")
+    @MainActor
+    func panelFeedRendersBareUtterances() {
+        let messages = TranscriptChatMessage.messages(from: """
+        [20:02:09] Others: Let's lock the launch date.
+        [20:02:13] You: Agreed.
+        """)
+        let host = NSHostingView(rootView: MeetingPanelTranscriptFeed(
+            messages: messages,
+            partialYou: "  Sure, I'll send them right after the  ",
+            partialOthers: "",
+            onOpen: {}
+        ))
+        host.frame = NSRect(x: 0, y: 0, width: 360, height: 290)
+        host.layoutSubtreeIfNeeded()
+
+        let fields = Self.selectableFields(in: host)
+        #expect(fields.map(\.stringValue) == [
+            "Let's lock the launch date.",
+            "Agreed.",
+            "Sure, I'll send them right after the",
+        ])
+        #expect(fields.allSatisfy { !$0.stringValue.contains("\n") })
     }
 
     @Test("large meeting notes use a native scroll-backed text view")

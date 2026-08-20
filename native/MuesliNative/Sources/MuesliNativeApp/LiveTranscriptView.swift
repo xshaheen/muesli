@@ -24,18 +24,12 @@ enum LiveTranscriptCopyContent {
     }
 }
 
-enum LiveTranscriptSurfacePresentation: Equatable {
-    case standard
-    case floatingPanel
-}
-
 struct LiveTranscriptBubble: View {
     let speaker: String?
     let timestamp: String?
     let lines: [String]
     let isUser: Bool
     let isPartial: Bool
-    var surfacePresentation: LiveTranscriptSurfacePresentation = .standard
     var onOpen: (() -> Void)? = nil
     @State private var isHovered = false
     @State private var didCopy = false
@@ -57,9 +51,7 @@ struct LiveTranscriptBubble: View {
                 metadata: speaker.map { $0 + (timestamp.map { "  \($0)" } ?? "") },
                 body: lines.joined(separator: "\n"),
                 bodyPointSize: 13,
-                isPartial: isPartial,
-                metadataColor: speakerLabelColor,
-                bodyColor: bodyTextColor
+                isPartial: isPartial
             ))
             .environment(\.layoutDirection, contentDirection.layoutDirection)
             .fixedSize(horizontal: false, vertical: true)
@@ -92,11 +84,7 @@ struct LiveTranscriptBubble: View {
         Button(action: copyMessage) {
             Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
                 .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(
-                    surfacePresentation == .floatingPanel
-                        ? (didCopy ? MuesliTheme.success : Color.white.opacity(0.62))
-                        : (didCopy ? MuesliTheme.success : MuesliTheme.textSecondary)
-                )
+                .foregroundStyle(didCopy ? MuesliTheme.success : MuesliTheme.textSecondary)
                 .frame(width: 18, height: 18)
                 .contentShape(Rectangle())
         }
@@ -112,11 +100,7 @@ struct LiveTranscriptBubble: View {
             Button(action: onOpen) {
                 Image(systemName: "arrow.up.right.square")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(
-                        surfacePresentation == .floatingPanel
-                            ? Color.white.opacity(0.62)
-                            : MuesliTheme.textSecondary
-                    )
+                    .foregroundStyle(MuesliTheme.textSecondary)
                     .frame(width: 18, height: 18)
                     .contentShape(Rectangle())
             }
@@ -138,51 +122,16 @@ struct LiveTranscriptBubble: View {
         }
     }
 
-    /// The floating panel reads on Contextual Spark glass, so the 10 pt speaker label is
-    /// coral for You and dimmed ink for Others; every other surface keeps system labels.
-    private var speakerLabelColor: NSColor {
-        guard surfacePresentation == .floatingPanel else { return .tertiaryLabelColor }
-        return isUser
-            ? NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
-            : NSColor.colorWith(hex: DictationMiniPalette.inkHex, alpha: 0.55)
-    }
-
-    private var bodyTextColor: NSColor? {
-        guard surfacePresentation == .floatingPanel else { return nil }
-        return NSColor.colorWith(hex: DictationMiniPalette.inkHex, alpha: isPartial ? 0.50 : 0.92)
-    }
-
     private var bubbleBackground: Color {
-        if surfacePresentation == .floatingPanel {
-            if isPartial {
-                return Color.white.opacity(isUser ? 0.06 : 0.04)
-            }
-            return Color.white.opacity(
-                isUser
-                    ? FloatingMeetingPanelPalette.strongSurfaceAlpha
-                    : FloatingMeetingPanelPalette.subtleSurfaceAlpha
-            )
-        }
         if isPartial {
             return isUser ? MuesliTheme.accent.opacity(0.06) : MuesliTheme.surfacePrimary.opacity(0.5)
         }
         return isUser ? MuesliTheme.accent.opacity(0.15) : MuesliTheme.surfacePrimary
     }
 
-    private var committedBorder: Color {
-        if surfacePresentation == .floatingPanel {
-            return Color.white.opacity(isUser ? 0.15 : 0.10)
-        }
-        return isUser ? MuesliTheme.accent.opacity(0.2) : MuesliTheme.surfaceBorder
-    }
-
     private var bubbleBorder: Color {
-        if isPartial {
-            return surfacePresentation == .floatingPanel
-                ? Color.white.opacity(FloatingMeetingPanelPalette.strongSurfaceAlpha)
-                : MuesliTheme.surfaceBorder
-        }
-        return committedBorder
+        if isPartial { return MuesliTheme.surfaceBorder }
+        return isUser ? MuesliTheme.accent.opacity(0.2) : MuesliTheme.surfaceBorder
     }
 }
 
@@ -242,7 +191,6 @@ struct LiveTranscriptFeedView: View {
     var horizontalPadding: CGFloat
     var topPadding: CGFloat
     var bottomPadding: CGFloat
-    var surfacePresentation: LiveTranscriptSurfacePresentation = .standard
     var onOpen: (() -> Void)? = nil
 
     private var trimmedPartialYou: String {
@@ -269,7 +217,6 @@ struct LiveTranscriptFeedView: View {
                         lines: [message.text],
                         isUser: message.isUser,
                         isPartial: false,
-                        surfacePresentation: surfacePresentation,
                         onOpen: onOpen
                     )
                 }
@@ -280,7 +227,6 @@ struct LiveTranscriptFeedView: View {
                         lines: [trimmedPartialOthers],
                         isUser: false,
                         isPartial: true,
-                        surfacePresentation: surfacePresentation,
                         onOpen: onOpen
                     )
                 }
@@ -291,7 +237,6 @@ struct LiveTranscriptFeedView: View {
                         lines: [trimmedPartialYou],
                         isUser: true,
                         isPartial: true,
-                        surfacePresentation: surfacePresentation,
                         onOpen: onOpen
                     )
                 }

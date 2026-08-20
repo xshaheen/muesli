@@ -168,14 +168,10 @@ struct MeetingPanelBody: View {
 
     private var transcript: some View {
         ScrollView {
-            LiveTranscriptFeedView(
+            MeetingPanelTranscriptFeed(
                 messages: model.presentation.messages,
                 partialYou: partialYou,
                 partialOthers: partialOthers,
-                horizontalPadding: MuesliTheme.spacing12,
-                topPadding: MuesliTheme.spacing8,
-                bottomPadding: MuesliTheme.spacing8,
-                surfacePresentation: .floatingPanel,
                 onOpen: onOpenNotes
             )
         }

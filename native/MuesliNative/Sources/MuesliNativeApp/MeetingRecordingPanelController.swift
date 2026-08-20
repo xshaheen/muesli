@@ -152,8 +152,11 @@ final class MeetingRecordingPanelController: NSObject {
     /// `meeting_recording_panel_center` always stores *its* center.
     nonisolated static let basePillSize = NSSize(width: 72, height: 22)
     nonisolated static let widePillSize = NSSize(width: 86, height: 22)
-    nonisolated static let rowSize = NSSize(width: 196, height: 22)
-    nonisolated static let wideRowSize = NSSize(width: 210, height: 22)
+    /// 6 + 3×24 controls + 6 + 48 wave + 8 + the 72 pt pill block. The row is exactly what
+    /// its parts need: anything narrower pushes the outermost control off the edge, which
+    /// AppKit clips rather than absorbs.
+    nonisolated static let rowSize = NSSize(width: 212, height: 22)
+    nonisolated static let wideRowSize = NSSize(width: 226, height: 22)
     nonisolated static let defaultPanelSize = NSSize(width: 360, height: 320)
     nonisolated static let minimumPanelSize = NSSize(width: 360, height: 240)
     nonisolated static let panelHeaderHeight: CGFloat = 30
@@ -166,8 +169,8 @@ final class MeetingRecordingPanelController: NSObject {
     ]
     nonisolated static let hoverGraceInterval: TimeInterval = 0.4
 
-    nonisolated private static let waveSlotWidth: CGFloat = 48
-    nonisolated private static let controlWidth: CGFloat = 24
+    nonisolated static let waveSlotWidth: CGFloat = 48
+    nonisolated static let controlWidth: CGFloat = 24
 
     var onStop: (() -> Void)?
     /// Carries the owner the object was showing, so a confirmation the user leaves open while
@@ -1034,41 +1037,21 @@ final class MeetingRecordingPanelController: NSObject {
     }
 
     private func layoutRow(in bounds: NSRect) {
-        let pillWidth = Self.pillSize(for: .clock(hasHours: isPastFirstHour)).width
         // The dot and clock never move when the row unfolds: at a trailing corner the row
         // grows leftward, so the pill block sits at its right end and the controls mirror.
-        let mirrored = heldCorner.holdsTrailing
-        let pillOriginX = mirrored ? bounds.width - pillWidth : 0
-        let dotX = pillOriginX + Self.dotLeading
-        let clockX = dotX + Self.dotDiameter + Self.dotTextGap
-        placeDot(centeredIn: NSRect(x: dotX, y: 0, width: Self.dotDiameter, height: bounds.height))
-        elapsedLabel?.frame = NSRect(
-            x: clockX,
-            y: (bounds.height - 14) / 2 - 0.5,
-            width: max(0, pillWidth - Self.dotLeading - Self.dotDiameter - Self.dotTextGap),
-            height: 14
+        let row = Self.rowLayout(
+            in: bounds,
+            pillWidth: Self.pillSize(for: .clock(hasHours: isPastFirstHour)).width,
+            mirrored: heldCorner.holdsTrailing
         )
-
-        let waveRect: NSRect
-        if mirrored {
-            let waveMaxX = pillOriginX - 8
-            waveRect = NSRect(x: waveMaxX - Self.waveSlotWidth, y: (bounds.height - 14) / 2, width: Self.waveSlotWidth, height: 14)
-            var x = waveRect.minX - 6
-            for button in [pauseButton, stopButton, panelButton] {
-                x -= Self.controlWidth
-                button?.frame = NSRect(x: x, y: 0, width: Self.controlWidth, height: bounds.height)
-            }
-        } else {
-            var x = bounds.width - 6
-            for button in [panelButton, stopButton, pauseButton] {
-                x -= Self.controlWidth
-                button?.frame = NSRect(x: x, y: 0, width: Self.controlWidth, height: bounds.height)
-            }
-            waveRect = NSRect(x: x - 6 - Self.waveSlotWidth, y: (bounds.height - 14) / 2, width: Self.waveSlotWidth, height: 14)
+        placeDot(centeredIn: row.dot)
+        elapsedLabel?.frame = row.clock
+        for (button, frame) in zip([pauseButton, stopButton, panelButton], row.controls) {
+            button?.frame = frame
         }
-        placeWave(in: waveRect)
+        placeWave(in: row.wave)
         statusLabel?.alignment = .center
-        statusLabel?.frame = NSRect(x: waveRect.minX, y: waveRect.midY - 7, width: waveRect.width, height: 14)
+        statusLabel?.frame = NSRect(x: row.wave.minX, y: row.wave.midY - 7, width: row.wave.width, height: 14)
         bodyContainerView?.frame = .zero
         clusterSeparatorLayer.isHidden = true
     }
