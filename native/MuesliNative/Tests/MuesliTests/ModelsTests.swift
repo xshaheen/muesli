@@ -1008,7 +1008,6 @@ struct AppConfigTests {
         #expect(config.enableLiveStreamingPartials == false)
         #expect(config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU)
         #expect(config.useLiveMeetingTranscriptAsFinal == true)
-        #expect(config.showMeetingTranscriptOnRecordingPanelHover == true)
         #expect(config.dictationHotkey == .default)
         #expect(config.computerUseHotkey == .computerUseDefault)
         #expect(config.enableComputerUseHotkey == false)
@@ -1333,7 +1332,6 @@ struct AppConfigTests {
         config.enableAutomaticDiagnosticIssuePrompts = true
         config.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
         config.useLiveMeetingTranscriptAsFinal = false
-        config.showMeetingTranscriptOnRecordingPanelHover = false
         config.contributionPromptNextWordCount = 31_000
         config.contributionPromptNextMeetingCount = 75
         config.contributionGitHubStarClicked = true
@@ -1415,7 +1413,6 @@ struct AppConfigTests {
         #expect(decoded.enableAutomaticDiagnosticIssuePrompts == true)
         #expect(decoded.resolvedMeetingLiveCaptionBackend == .nemotron35)
         #expect(decoded.useLiveMeetingTranscriptAsFinal == false)
-        #expect(decoded.showMeetingTranscriptOnRecordingPanelHover == false)
         #expect(decoded.contributionPromptNextWordCount == 31_000)
         #expect(decoded.contributionPromptNextMeetingCount == 75)
         #expect(decoded.contributionGitHubStarClicked == true)
@@ -1512,7 +1509,6 @@ struct AppConfigTests {
         #expect(json["enable_dictation_ocr_context"] != nil)
         #expect(json["enable_live_streaming_partials"] != nil)
         #expect(json["use_live_meeting_transcript_as_final"] != nil)
-        #expect(json["show_meeting_transcript_on_recording_panel_hover"] != nil)
         #expect(json["show_meeting_transcript_on_indicator_hover"] == nil)
     }
 
@@ -1588,7 +1584,6 @@ struct AppConfigTests {
         #expect(config.enableLiveStreamingPartials == false)
         #expect(config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU)
         #expect(config.useLiveMeetingTranscriptAsFinal == true)
-        #expect(config.showMeetingTranscriptOnRecordingPanelHover == true)
     }
 
     @Test("legacy meeting config preserves its transcription model and leaves streaming off")
@@ -2058,15 +2053,75 @@ struct AppConfigTests {
     func legacyIndicatorCoordinatesDoNotSeedMeetingPanel() throws {
         let json = """
         {
-          "indicator_origin": [-640, 320],
-          "meeting_panel_origin": [-900, 180]
+          "indicator_origin": [-640, 320]
         }
         """
         let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
 
         #expect(config.indicatorOrigin?.x == -640)
-        #expect(config.meetingPanelOrigin?.x == -900)
         #expect(config.meetingRecordingPanelCenter == nil)
+    }
+
+    @Test("the remembered meeting panel choice starts absent")
+    func meetingPanelOpenStartsAbsent() throws {
+        #expect(AppConfig().meetingPanelOpen == nil)
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+
+        #expect(decoded.meetingPanelOpen == nil)
+    }
+
+    @Test("an explicit meeting panel choice decodes from snake_case")
+    func meetingPanelOpenDecodesFromSnakeCase() throws {
+        let closed = try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data(#"{"meeting_panel_open": false}"#.utf8)
+        )
+        let open = try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data(#"{"meeting_panel_open": true}"#.utf8)
+        )
+
+        #expect(closed.meetingPanelOpen == false)
+        #expect(open.meetingPanelOpen == true)
+    }
+
+    @Test("the remembered meeting panel choice is encoded only once the user has chosen")
+    func meetingPanelOpenEncodesOnlyWhenChosen() throws {
+        var config = AppConfig()
+        let absent = try JSONSerialization.jsonObject(
+            with: try JSONEncoder().encode(config)
+        ) as! [String: Any]
+
+        #expect(absent["meeting_panel_open"] == nil)
+
+        config.meetingPanelOpen = false
+        let data = try JSONEncoder().encode(config)
+        let present = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+
+        #expect(present["meeting_panel_open"] as? Bool == false)
+        #expect(try JSONDecoder().decode(AppConfig.self, from: data).meetingPanelOpen == false)
+    }
+
+    @Test("retired floating panel keys are ignored and never re-encoded")
+    func retiredFloatingPanelKeysAreIgnored() throws {
+        let json = """
+        {
+          "meeting_panel_origin": [-900, 180],
+          "show_meeting_transcript_on_recording_panel_hover": false,
+          "show_meeting_transcript_on_indicator_hover": false,
+          "meeting_panel_open": true
+        }
+        """
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        let encoded = try JSONSerialization.jsonObject(
+            with: try JSONEncoder().encode(config)
+        ) as! [String: Any]
+
+        #expect(config.meetingPanelOpen == true)
+        #expect(encoded["meeting_panel_origin"] == nil)
+        #expect(encoded["show_meeting_transcript_on_recording_panel_hover"] == nil)
+        #expect(encoded["show_meeting_transcript_on_indicator_hover"] == nil)
     }
 
     @Test("custom words decode missing threshold with default")

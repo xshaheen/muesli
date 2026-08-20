@@ -48,7 +48,6 @@ case "${shard}" in
       FloatingIndicatorStyleTests
       LegacyIndicatorConfigurationTests
       FloatingMeetingChatTests
-      FloatingMeetingTranscriptPlacementTests
       MarkdownRichTextEditorTests
       CustomWordDictionaryTests
       ModelDownloadCoordinatorTests
@@ -119,6 +118,8 @@ case "${shard}" in
       MeetingActivityDetectionPolicyTests
       MeetingRecordingWriterTests
       MeetingRecordingElapsedClockTests
+      MeetingRecordButtonTests
+      MeetingPanelBodyCoordinatorTests
       MeetingRecordingPanelGeometryTests
       MeetingRecordingPanelLifecycleTests
       MeetingResumePolicyTests

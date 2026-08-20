@@ -114,10 +114,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         if controller.isMeetingRecording() {
             let pauseTitle = controller.isMeetingRecordingPaused() ? "Resume Meeting Recording" : "Pause Meeting Recording"
             menu.addItem(actionItem(title: pauseTitle, action: #selector(MuesliController.toggleMeetingRecordingPause)))
-            let transcriptTitle = controller.isMeetingTranscriptPanelVisible()
-                ? "Hide Live Transcript"
-                : "Show Live Transcript"
-            menu.addItem(actionItem(title: transcriptTitle, action: #selector(MuesliController.toggleMeetingTranscriptPanel)))
+            // One object, three sizes: there is no separate transcript window to show or
+            // hide any more, only the panel size of the meeting object.
+            let panelTitle = controller.isMeetingPanelOpen()
+                ? "Minimize Meeting Panel"
+                : "Open Meeting Panel"
+            menu.addItem(actionItem(title: panelTitle, action: #selector(MuesliController.toggleMeetingTranscriptPanel)))
             menu.addItem(actionItem(title: "Stop Meeting Recording", action: #selector(MuesliController.toggleMeetingRecording)))
             menu.addItem(actionItem(title: "Discard Meeting Recording...", action: #selector(MuesliController.discardMeetingWithConfirmation)))
         } else {

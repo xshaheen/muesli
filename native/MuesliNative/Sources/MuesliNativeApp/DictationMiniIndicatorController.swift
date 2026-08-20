@@ -933,6 +933,8 @@ struct DictationMiniSpikeEngine: Equatable {
     static let quietShimmer: CGFloat = 0.06
     static let attack: CGFloat = 0.6
     static let release: CGFloat = 0.28
+    /// Every Contextual Spark wave seeds from the same value so the surfaces look related.
+    static let defaultSeed: UInt64 = 0x4D75_6573_6C69
 
     private(set) var bars: [CGFloat]
     private(set) var sparks: [Spark] = []
@@ -940,7 +942,7 @@ struct DictationMiniSpikeEngine: Equatable {
     private var rng: DictationMiniSplitMix64
     private var shimmerPhase: CGFloat = 0
 
-    init(count: Int = DictationMiniRendering.recordingBarCount, seed: UInt64 = 0x4D75_6573_6C69) {
+    init(count: Int = DictationMiniRendering.recordingBarCount, seed: UInt64 = Self.defaultSeed) {
         bars = Array(repeating: 0, count: max(count, 1))
         rng = DictationMiniSplitMix64(seed: seed)
     }
@@ -1008,7 +1010,7 @@ private final class DictationMiniView: NSView {
     private var mouseDownScreenLocation: NSPoint?
     private let glassView = NSVisualEffectView()
     private let tintView = NSView()
-    private let waveformView = DictationMiniWaveformView()
+    private let waveformView = ContextualSparkWaveformView()
     private let pointFieldView = DictationMiniPointFieldView()
     private let cueView = DictationMiniCueView()
     private let artworkView = DictationMiniArtworkView()
@@ -1380,126 +1382,6 @@ private final class DictationMiniCueView: NSView {
             diskLayer.shadowOpacity = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0.3 : 1
             diskLayer.shadowRadius = presentation == .preparing ? 3.5 : 2
         }
-        CATransaction.commit()
-    }
-}
-
-private final class DictationMiniWaveformView: NSView {
-    private var bars: [CALayer] = []
-    private let haloLayer = CAGradientLayer()
-    private var engine = DictationMiniSpikeEngine()
-    private var backingScale: CGFloat = 2
-    /// Smoothed live level: drives the halo.
-    var power: CGFloat = 0 { didSet { updateBars() } }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
-        haloLayer.type = .radial
-        haloLayer.colors = [
-            accent.withAlphaComponent(0.30).cgColor,
-            accent.withAlphaComponent(0.10).cgColor,
-            accent.withAlphaComponent(0).cgColor,
-        ]
-        haloLayer.locations = [0, 0.45, 1]
-        haloLayer.startPoint = CGPoint(x: 0.5, y: 0.5)
-        haloLayer.endPoint = CGPoint(x: 1, y: 1)
-        haloLayer.opacity = 0
-        layer?.addSublayer(haloLayer)
-        for _ in 0..<DictationMiniRendering.recordingBarCount {
-            let bar = CALayer()
-            bar.cornerRadius = DictationMiniRendering.recordingBarWidth / 2
-            bar.allowsEdgeAntialiasing = true
-            layer?.addSublayer(bar)
-            bars.append(bar)
-        }
-        applyBarColors()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { nil }
-
-    /// Advances the spark engine first so the single `power` redraw sees the fresh bar state.
-    func advance(level: CGFloat) {
-        engine.advance(level: level)
-        power = level
-    }
-
-    func reset() {
-        engine.reset()
-        power = 0
-    }
-
-    override func layout() {
-        super.layout()
-        updateBars()
-    }
-
-    func updateBackingScale(_ scale: CGFloat) {
-        backingScale = max(scale, 1)
-        bars.forEach { $0.contentsScale = backingScale }
-        haloLayer.contentsScale = backingScale
-        updateBars()
-    }
-
-    func refreshAccessibilityPresentation() {
-        applyBarColors()
-        updateBars()
-    }
-
-    private func applyBarColors() {
-        let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
-        let highlight = NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1)
-        let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-        let quietAlpha = increaseContrast ? 0.8 : DictationMiniRendering.recordingQuietAlpha
-        // Lit bars warm toward amber and brighten; quiet bars rest as muted orange.
-        for (index, bar) in bars.enumerated() {
-            let level = engine.bars.indices.contains(index) ? engine.bars[index] : 0
-            let color = accent.blended(withFraction: level * 0.85, of: highlight) ?? accent
-            bar.backgroundColor = color.withAlphaComponent(quietAlpha + (1 - quietAlpha) * min(1, level * 1.6)).cgColor
-        }
-    }
-
-    private func updateBars() {
-        guard !bars.isEmpty else { return }
-        let barWidth = DictationMiniRendering.recordingBarWidth
-        let pitch = DictationMiniRendering.recordingBarPitch
-        let minHeight = DictationMiniRendering.recordingBarMinHeight
-        let maxHeight = DictationMiniRendering.recordingBarMaxHeight
-        let fieldWidth = CGFloat(bars.count - 1) * pitch + barWidth
-        let startX = DictationMiniRendering.pixelAligned(bounds.midX - fieldWidth / 2, scale: backingScale)
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let levels = engine.bars
-        if !reduceMotion { applyBarColors() }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        for (index, bar) in bars.enumerated() {
-            let level: CGFloat
-            if reduceMotion {
-                level = power * 0.55 * DictationMiniRendering.recordingStaticEnvelope(index: index, count: bars.count)
-            } else {
-                level = levels[index]
-            }
-            let height = DictationMiniRendering.pixelAligned(
-                minHeight + (maxHeight - minHeight) * max(0, min(1, level)),
-                scale: backingScale
-            )
-            bar.frame = CGRect(
-                x: DictationMiniRendering.pixelAligned(startX + CGFloat(index) * pitch, scale: backingScale),
-                y: DictationMiniRendering.pixelAligned(bounds.midY - height / 2, scale: backingScale),
-                width: barWidth,
-                height: height
-            )
-        }
-        let haloSize = CGSize(width: min(bounds.width - 8, 44), height: min(bounds.height, 18))
-        haloLayer.frame = CGRect(
-            x: bounds.midX - haloSize.width / 2,
-            y: bounds.midY - haloSize.height / 2,
-            width: haloSize.width,
-            height: haloSize.height
-        )
-        haloLayer.opacity = Float(reduceMotion ? 0.35 : 0.25 + 0.75 * power)
         CATransaction.commit()
     }
 }

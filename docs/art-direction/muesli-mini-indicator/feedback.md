@@ -190,3 +190,45 @@
 - Remove drag-to-pin; a click still opens the menu, a drag does nothing.
 - Never anchor to the pointer: a field without caret bounds shows the disc only when it is empty (its first line is the caret); otherwise the disc stays hidden rather than guessing. Text markers are tried before character tiers so web engines resolve the caret reliably.
 - Node: `glass-disc-15` (tuning).
+
+## 19-08-2026 19:42 UTC — two-state meeting panel
+
+- Request: the Meeting Recording Panel should minimize and expand, keep pause/resume and stop at hand, and always show the recording time.
+- Propose: one 22 pt Contextual Spark glass capsule in two sizes — a minimized pill (the Record pill's 72 × 22 footprint with a pulsing coral dot and a live `mm:ss` clock; `h:mm:ss` steps to 86 pt) and an expanded 216 × 22 row (dot + clock, the Mini's spark wave, pause/resume, stop, transcript toggle, collapse chevron).
+- Propose: clicking the minimized pill expands; only the ‹ chevron collapses (the capsule body is drag-only so a missed pause tap never folds it); the state is remembered across recordings (`meeting_recording_panel_expanded`, default on); the minimized pill frame is the canonical anchor — the capsule extends trailing and clamps into the pill's display, extending leading instead when the transcript panel sits there; drag in both sizes; ⌥/right-click discard unchanged.
+- Propose: the hand-off never leaves an empty spot — the Record pill dims to “Starting…” while capture starts, then becomes the clock; the Record pill stays hidden while the recording pill is on screen, including finalizing; “show transcript on hover” applies to the expanded capsule only.
+- Propose: paused shows an amber still dot, a frozen 70 % clock and "Paused" in the wave slot; finalizing shows an amber pulse with the status word in the wave slot (or in place of the clock when minimized) and dims pause/stop/transcript to 36 %.
+- Replace: the legacy 224 × 46 two-line HUD bar and its blue-black tint.
+- Not adopted: hover-to-expand; a taller two-line panel; controls on the Dictation Mini.
+- Resulting node: `meeting-panel-two-state-16` (proposal; awaiting live feedback).
+
+## 19-08-2026 19:55 UTC — merge the capsule and the transcript panel
+
+- Direction (live feedback on `meeting-panel-two-state-16`): merge the recording capsule and the floating transcript panel into one object with three states — minimized shows the recording time as designed; expanded opens on hover and, instead of the transcript and collapse buttons, carries one button that converts it into the floating panel; that panel has everything the expanded row has plus everything the current transcript panel has, and is redesigned in this phase.
+- Keep: the 72 × 22 pill with the live clock, the 22 pt row (dot + clock, spark wave, pause/resume, stop), the Spark glass, the Record → Starting… → clock hand-off, paused and finalizing presentations.
+- Replace: click-to-expand with hover-to-expand for the row (0.16 s open, 0.4 s grace on leave); the transcript + collapse buttons with one open-panel button; the collapse chevron with a minimize button in the panel header.
+- Add: the panel state — the row as a 30 pt header plus minimize, a 28 pt tab strip (Transcript · Chat · My notes · Live/Paused · copy), and the existing feed/chat/notes body restyled (coral You, 92 % ink Others); resizable, draggable by the header; folds to the pill.
+- Remove: the second window and its saved origin (`meeting_panel_origin`), the "show transcript on hover" switch, the dismiss chevron; status bar "Show/Hide Live Transcript" becomes "Open/Minimize Meeting Panel".
+- Remember: `meeting_panel_open` (`nil` → the entry point decides as today; afterwards the last choice wins).
+- Refine (live feedback: "I just want to enhance this part design" on the panel header): the header becomes dot + clock, the spark wave stretched across the free width (same engine, 88 bars), and one trailing cluster pause · stop ‖ minimize behind a hairline — no floating minimize, no dead space; variants B (meeting title takes the slack) and C (centred controls) recorded in the node for comparison.
+- Resulting node: `merged-panel-three-states-17` (proposal; awaiting live feedback).
+
+## 19-08-2026 20:07 UTC — panel header: variant A
+
+- Decision (live feedback: "A"): the panel header is dot + clock, the spark wave stretched across the free width, and one trailing cluster pause · stop ‖ minimize behind a hairline; variants B (meeting title) and C (centred controls) are not adopted.
+- Node: `merged-panel-three-states-17` (header settled; remaining states await live use).
+
+
+## 20-08-2026 01:20 UTC — node 17 implemented; one deviation pending device review
+
+- Keep: every size, state and interaction of `merged-panel-three-states-17` as drawn — pill 72x22 (86 after the hour step), row 196x22 (210), panel 360x320 resizable from 360x240, radii 11/11/14, header variant A.
+- Keep: hover opens the row and folds back after 0.4 s; only the open-panel button opens the panel; the panel is sticky until minimized.
+- Keep: the base pill frame as the sole anchor, with the held corner chosen once per recording.
+- Deviation to review on device: "Starting..." does not fit the fixed 72 pt pill beside the record dot at 11 pt semibold (the string measures 54.1 pt against ~44 pt of room), so it renders at 9 pt semibold with a tighter dot gap. The node shows it at the same weight as "Record". Options if it reads badly at 1x: shorten the word, or let the Starting pill take a one-time fitted width the way the finalizing pill does.
+- Not yet accepted: node 17 stays `active` until the U8 device pass in `.context/visual-qa/meeting-panel/u8-device-qa-checklist.md` is walked; the values above are as-implemented, not as-verified-on-glass.
+
+## 20-08-2026 05:40 UTC — device QA: the feed and the row width
+
+- Replace (device QA on the built panel): the transcript body reused the main window's chat feed — right-aligned bubbles, borders, `You  08:35:18` headers, per-message copy and open buttons — which is not what node 17 draws. The panel now has its own feed: node 17's flat two-column line list, a 44 pt speaker gutter at 10 pt semibold (coral You, 55 % ink Others), an 8 pt gap, the utterance at 11 pt / 1.4 at 90 % ink, 7 pt between lines, in-flight partials italic at 50 %. The main window's bubble feed is untouched.
+- Decide: the per-line affordance is a hover-only open-meeting arrow, overlaid so no line shifts when it appears. No per-line copy button — the tab strip's copy button already copies the visible tab.
+- Correct: the row is 212 × 22 (226 after the hour step), not 196 × 22 (210). The node's own parts never fit 196 — 6 + three 24 pt controls + 6 + the 48 pt wave + 8 + the 72 pt pill block is 212 — and where HTML flexbox absorbed the 16 pt overflow in silence, AppKit's absolute frames put the outermost control at x = -10 and clipped it. The node's `@keyframes demo`, its `.unit.rowcap` and its footprint caption are corrected to 212.
