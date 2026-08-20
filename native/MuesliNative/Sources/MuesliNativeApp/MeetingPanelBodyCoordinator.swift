@@ -12,6 +12,21 @@ final class MeetingPanelBodyCoordinator {
     /// The merged window the focus rules act on, supplied by the controller that owns it.
     var panelWindowProvider: () -> NSWindow? = { nil }
 
+    /// Where the pointer is when a global click arrives. Injectable for the same reason
+    /// `now` is on the panel controller: a unit test has no live pointer, and the branch
+    /// that keeps a click *on* the object from dismissing it is only reachable through this.
+    var pointerLocationProvider: () -> NSPoint = { NSEvent.mouseLocation }
+
+    /// Installs the global click monitor. Injectable so a test can drive the branch where
+    /// AppKit hands back nil, which a real monitor cannot be made to do on demand.
+    var outsideClickMonitorInstaller: (@escaping (NSEvent) -> Void) -> Any? = { handler in
+        NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: handler)
+    }
+
+    /// Paired with the installer: `NSEvent.removeMonitor` is undefined for a token it did
+    /// not hand out, so a test that injects one has to take it back the same way.
+    var outsideClickMonitorRemover: (Any) -> Void = { NSEvent.removeMonitor($0) }
+
     private var outsideClickMonitor: Any?
     /// Armed state kept separately from the monitor object: `addGlobalMonitorForEvents`
     /// can hand back nil, and the tear-down path must still run exactly once.
@@ -96,14 +111,6 @@ final class MeetingPanelBodyCoordinator {
         beginOutsideClickDismissal()
     }
 
-    func setChatOpen(_ open: Bool) {
-        selectTab(open ? .chat : .transcript)
-    }
-
-    func closeChat() {
-        if model.isChatOpen { selectTab(.transcript) }
-    }
-
     /// Hands the keyboard back and disarms the outside-click rule, *without* changing what
     /// the body is showing. Single place every fold and teardown path goes through, so no
     /// route can skip the resign step.
@@ -144,12 +151,15 @@ final class MeetingPanelBodyCoordinator {
     /// the user is glancing at the call, not done taking notes.
     private func beginOutsideClickDismissal() {
         guard !isOutsideClickDismissalArmed else { return }
-        isOutsideClickDismissalArmed = true
-        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown]
-        ) { [weak self] _ in
+        let monitor = outsideClickMonitorInstaller { [weak self] _ in
             self?.handleOutsideClick()
         }
+        // AppKit hands back nil when the monitor cannot be installed. Claiming armed anyway
+        // would make every later `selectTab` skip the retry, and nothing would ever watch
+        // for the click that closes Chat or hands the keyboard back from My notes.
+        guard let monitor else { return }
+        outsideClickMonitor = monitor
+        isOutsideClickDismissalArmed = true
     }
 
     /// Chat closes outright on an outside click (its old behavior); My notes stays visible
@@ -175,7 +185,7 @@ final class MeetingPanelBodyCoordinator {
 
     private func endOutsideClickDismissal() {
         if let outsideClickMonitor {
-            NSEvent.removeMonitor(outsideClickMonitor)
+            outsideClickMonitorRemover(outsideClickMonitor)
         }
         outsideClickMonitor = nil
         isOutsideClickDismissalArmed = false
@@ -183,7 +193,7 @@ final class MeetingPanelBodyCoordinator {
 
     private func pointerIsInsidePanel() -> Bool {
         guard let window = panelWindowProvider() else { return false }
-        return window.frame.contains(NSEvent.mouseLocation)
+        return window.frame.contains(pointerLocationProvider())
     }
 
     /// Hands key status back without changing what the panel shows.

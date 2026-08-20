@@ -201,6 +201,21 @@ struct MeetingsNavigationTests {
         )
     }
 
+    /// A confirmation the user leaves open while its meeting ends must not discard the
+    /// recording that replaced it — the sheet is modal to a window, not to the meeting.
+    @Test("a discard only applies to the recording its confirmation was raised for")
+    func discardAppliesOnlyToItsOwnRecording() {
+        let owner = UUID()
+        let replacement = UUID()
+
+        #expect(MuesliController.shouldApplyDiscard(alertOwnerID: owner, activeOwnerID: owner))
+        #expect(!MuesliController.shouldApplyDiscard(alertOwnerID: owner, activeOwnerID: replacement))
+        #expect(!MuesliController.shouldApplyDiscard(alertOwnerID: owner, activeOwnerID: nil))
+        // The menu path raises the alert without a panel behind it, so it is not scoped.
+        #expect(MuesliController.shouldApplyDiscard(alertOwnerID: nil, activeOwnerID: replacement))
+        #expect(MuesliController.shouldApplyDiscard(alertOwnerID: nil, activeOwnerID: nil))
+    }
+
     @Test("selectedMeeting requires the full document record")
     func selectedMeetingUsesFullDocumentRecord() {
         let appState = AppState()

@@ -54,6 +54,55 @@ struct MeetingRecordingPanelGeometryTests {
         #expect(frame.midY == center.y)
     }
 
+    /// The drag anchor tracks the pointer 1:1, so it legally leaves every `visibleFrame` —
+    /// the menu-bar strip, the Dock strip, the gap between mismatched displays. Resolving
+    /// those to the default corner teleported the object to the primary display mid-drag and
+    /// then saved the jump as the user's spot.
+    @Test("an anchor outside every visible frame resolves on the nearest display")
+    func anchorOutsideEveryVisibleFrameKeepsItsDisplay() {
+        // The menu-bar strip: inside the display, outside its visible frame.
+        let inMenuBarStrip = CGPoint(x: screen.midX, y: screen.maxY + 20)
+
+        let frame = MeetingRecordingPanelController.basePillFrame(
+            anchorCenter: inMenuBarStrip,
+            screens: [screen]
+        )
+
+        #expect(frame.midX == inMenuBarStrip.x, "the pointer's column is kept")
+        #expect(frame.maxY == screen.maxY - 12, "clamped down into the display, not dropped to its corner")
+        #expect(frame.minY != screen.minY + 12, "the default bottom-trailing corner is not a drag destination")
+    }
+
+    @Test("an anchor in the gap between displays lands on the nearer one")
+    func anchorBetweenDisplaysPicksTheNearestOne() {
+        let secondary = NSRect(x: 1_920, y: 300, width: 1_440, height: 900)
+        let primary = NSRect(x: 0, y: 0, width: 1_920, height: 1_080)
+        // Below the secondary and well right of the primary: outside both visible frames.
+        let inTheGap = CGPoint(x: 2_600, y: 120)
+
+        let frame = MeetingRecordingPanelController.basePillFrame(
+            anchorCenter: inTheGap,
+            screens: [primary, secondary]
+        )
+
+        #expect(frame.midX == inTheGap.x)
+        #expect(frame.minY == secondary.minY + 12, "clamped into the nearer display")
+        #expect(frame.minX >= secondary.minX)
+    }
+
+    @Test("only an absent anchor takes the default corner")
+    func absentAnchorStillTakesTheDefaultCorner() {
+        // `MeetingRecordButtonController.show()` relies on this for a first run.
+        let frame = MeetingRecordingPanelController.resolvedFrame(
+            savedCenter: nil,
+            size: MeetingRecordingPanelController.basePillSize,
+            screens: [screen]
+        )
+
+        #expect(frame.maxX == screen.maxX - 12)
+        #expect(frame.minY == screen.minY + 12)
+    }
+
     @Test("the held corner is the display half the base pill rests in")
     func heldCornerFollowsTheDisplayHalf() {
         let bottomTrailing = MeetingRecordingPanelController.basePillFrame(
@@ -310,6 +359,34 @@ struct MeetingRecordingPanelLifecycleTests {
         controller.close()
     }
 
+    /// Covers R9 and R17: pause, stop and open-panel all no-op while finalizing, so VoiceOver
+    /// must not offer them — an announced action that does nothing reads as broken, not
+    /// disabled.
+    @Test("the finalizing pill offers no custom actions")
+    func finalizingPillDropsItsCustomActions() {
+        let now = Date(timeIntervalSinceReferenceDate: 31_000)
+        let controller = makeController(now: { now })
+        controller.reduceMotionOverrideForTesting = true
+        let owner = UUID()
+        controller.showRecording(
+            ownerID: owner,
+            startedAt: now,
+            powerProvider: { -160 },
+            presentation: .backgroundPill
+        )
+
+        #expect(controller.accessibilityCustomActionNamesForTesting == ["Open panel", "Pause", "Stop"])
+
+        controller.setPaused(true, ownerID: owner)
+        #expect(controller.accessibilityCustomActionNamesForTesting == ["Open panel", "Resume", "Stop"])
+
+        controller.beginFinalizing(ownerID: owner, status: "Summarizing")
+
+        #expect(controller.layoutForTesting == .pill)
+        #expect(controller.accessibilityCustomActionNamesForTesting.isEmpty)
+        controller.close()
+    }
+
     /// Covers AE1: every size grows from the pill's held corner, and minimizing returns the
     /// exact pill frame it left.
     @Test("hover and the panel keep the pill's held corner")
@@ -422,6 +499,146 @@ struct MeetingRecordingPanelLifecycleTests {
         controller.pointerExited()
         controller.pointerEntered()
         #expect(controller.layoutForTesting == .row)
+        controller.close()
+    }
+
+    /// `pointerExited` is the only thing that clears the suppression, and AppKit never fires
+    /// it without a prior `mouseEntered`. Suppressing for a fold the pointer was nowhere near
+    /// — the status bar's Minimize, a Stop from a notification, auto-stop, the 3 h limit —
+    /// therefore killed hover for the rest of the recording.
+    @Test("a fold the pointer was never over does not suppress the next hover")
+    func hoverSurvivesAFoldFromAcrossTheScreen() {
+        let now = Date(timeIntervalSinceReferenceDate: 70_500)
+        let controller = makeController(now: { now })
+        controller.reduceMotionOverrideForTesting = true
+        let owner = UUID()
+        controller.showRecording(
+            ownerID: owner,
+            startedAt: now,
+            powerProvider: { -160 },
+            presentation: .floatingPanel
+        )
+
+        // The status bar's "Minimize Meeting Panel": no pointer ever entered the object.
+        #expect(controller.layoutForTesting == .panel)
+        controller.toggleTranscriptPanel()
+        #expect(controller.layoutForTesting == .pill)
+
+        controller.pointerEntered()
+        #expect(controller.layoutForTesting == .row)
+        controller.pointerExited()
+
+        // The same for the finalizing fold, which a Stop from anywhere can trigger.
+        controller.beginFinalizing(ownerID: owner, status: "Transcribing")
+        #expect(controller.layoutForTesting == .pill)
+
+        controller.pointerEntered()
+        #expect(controller.layoutForTesting == .row)
+        controller.close()
+    }
+
+    /// Option-click is a discard *request*, not an escape from the pointer lifecycle: the
+    /// press it ends is the only thing holding the row open.
+    @Test("an option-click discard still ends the press, so the row can fold")
+    func optionClickDiscardEndsThePress() {
+        var currentTime = Date(timeIntervalSinceReferenceDate: 71_000)
+        let controller = makeController(now: { currentTime })
+        controller.reduceMotionOverrideForTesting = true
+        let owner = UUID()
+        var discarded: [UUID] = []
+        controller.onDiscard = { discarded.append($0) }
+        controller.showRecording(
+            ownerID: owner,
+            startedAt: currentTime,
+            powerProvider: { -160 },
+            presentation: .backgroundPill
+        )
+
+        controller.pointerEntered()
+        #expect(controller.layoutForTesting == .row)
+
+        controller.pointerInteractionBegan(at: NSPoint(x: 100, y: 100))
+        controller.pointerUp(didDrag: false, isDiscardModifier: true)
+
+        #expect(discarded == [owner])
+
+        controller.pointerExited()
+        currentTime.addTimeInterval(0.5)
+        controller.fireHoverGraceForTesting()
+
+        #expect(controller.layoutForTesting == .pill, "a press left down blocks the fold forever")
+        controller.close()
+    }
+
+    /// A morph completion that lands after its recording ended must not touch the one that
+    /// replaced it. The counter is the guard: a stale completion carries the old value and
+    /// returns before clearing `isMorphing` or re-pinning the size limits.
+    @Test("close and a new recording retire any morph left in flight")
+    func morphCompletionsAreScopedToTheirRecording() {
+        let now = Date(timeIntervalSinceReferenceDate: 71_500)
+        let controller = makeController(now: { now })
+        controller.reduceMotionOverrideForTesting = true
+        let first = controller.morphGenerationForTesting
+
+        controller.showRecording(
+            ownerID: UUID(),
+            startedAt: now,
+            powerProvider: { -160 },
+            presentation: .backgroundPill
+        )
+        let started = controller.morphGenerationForTesting
+        #expect(started > first)
+
+        controller.close()
+        let closed = controller.morphGenerationForTesting
+        #expect(closed > started)
+
+        controller.showRecording(
+            ownerID: UUID(),
+            startedAt: now,
+            powerProvider: { -160 },
+            presentation: .backgroundPill
+        )
+        #expect(controller.morphGenerationForTesting > closed)
+        controller.close()
+    }
+
+    /// The body host is deliberately kept alive across minimize and reopen (R12), so SwiftUI
+    /// view state could carry an unsent, private question from the meeting that just ended
+    /// into the one that replaced it — where it is visible and sendable.
+    @Test("an unsent chat draft never survives into the next recording")
+    func chatDraftDoesNotSurviveANewRecording() {
+        let now = Date(timeIntervalSinceReferenceDate: 72_500)
+        let controller = makeController(now: { now })
+        controller.reduceMotionOverrideForTesting = true
+        let context = FloatingMeetingChatContext(
+            meetingID: 31,
+            priorTranscript: "",
+            currentConfig: { AppConfig() },
+            isReady: { true }
+        )
+        controller.showRecording(
+            ownerID: UUID(),
+            startedAt: now,
+            powerProvider: { -160 },
+            chatContext: context,
+            presentation: .backgroundPill
+        )
+
+        controller.toggleTranscriptPanel()
+        controller.panelBodyForTesting.selectTab(.chat)
+        controller.panelBodyForTesting.model.chatDraft = "is my salary being discussed"
+
+        // A new recording while the previous body host is still alive.
+        controller.showRecording(
+            ownerID: UUID(),
+            startedAt: now,
+            powerProvider: { -160 },
+            chatContext: context,
+            presentation: .backgroundPill
+        )
+
+        #expect(controller.panelBodyForTesting.model.chatDraft.isEmpty)
         controller.close()
     }
 
@@ -1105,7 +1322,7 @@ struct MeetingRecordingPanelLifecycleTests {
         )
 
         controller.toggleTranscriptPanel()
-        controller.panelBodyForTesting.setChatOpen(true)
+        controller.panelBodyForTesting.selectTab(.chat)
         controller.toggleTranscriptPanel()
 
         #expect(!controller.isPanelOpen)
@@ -1148,7 +1365,7 @@ struct MeetingRecordingPanelLifecycleTests {
         )
 
         controller.toggleTranscriptPanel()
-        controller.panelBodyForTesting.setChatOpen(true)
+        controller.panelBodyForTesting.selectTab(.chat)
         #expect(controller.panelBodyForTesting.isChatOpen)
 
         controller.toggleTranscriptPanel()

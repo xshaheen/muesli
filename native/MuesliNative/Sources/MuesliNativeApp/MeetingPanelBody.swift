@@ -12,7 +12,6 @@ struct MeetingPanelBody: View {
     let model: FloatingMeetingTranscriptModel
     let onOpenNotes: () -> Void
     var onSelectTab: (FloatingMeetingPanelTab) -> Void = { _ in }
-    @State private var chatDraft = ""
 
     private var ink: Color { Color(hex: DictationMiniPalette.inkHex) }
 
@@ -146,7 +145,13 @@ struct MeetingPanelBody: View {
             // user saw as the chat tab flickering while people spoke.
             MeetingChatView(
                 conversation: MeetingChatConversations.shared.conversation(for: model.chatContext!.meetingID),
-                draft: $chatDraft,
+                // The draft is the model's, not this view's: the host outlives every
+                // minimize, so view state could carry an unsent question from the
+                // meeting that just ended into the one that replaced it.
+                draft: Binding(
+                    get: { model.chatDraft },
+                    set: { model.chatDraft = $0 }
+                ),
                 transcript: { [model] in model.chatTranscript },
                 hasTranscript: model.chatHasTranscript,
                 systemPrompt: MeetingChatSource.systemPrompt(isRecording: true),

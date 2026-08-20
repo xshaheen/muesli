@@ -7055,11 +7055,23 @@ final class MuesliController: NSObject {
             ) else { return }
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                // The recording the confirmation was raised for must still be the live one.
-                guard ownerID == nil || ownerID == self.activeMeetingPanelOwnerID else { return }
+                guard Self.shouldApplyDiscard(
+                    alertOwnerID: ownerID,
+                    activeOwnerID: self.activeMeetingPanelOwnerID
+                ) else { return }
                 self.discardMeetingRecording(resolution: resolution)
             }
         }
+    }
+
+    /// Whether a discard the user confirmed still applies to the recording it was raised for.
+    ///
+    /// A confirmation left open while its meeting ends would otherwise discard whatever
+    /// recording replaced it. An alert raised without an owner (the menu path, which has no
+    /// panel behind it) is not owner-scoped and always applies.
+    static func shouldApplyDiscard(alertOwnerID: UUID?, activeOwnerID: UUID?) -> Bool {
+        guard let alertOwnerID else { return true }
+        return alertOwnerID == activeOwnerID
     }
 
     static func discardResolution(for response: NSApplication.ModalResponse, deleteManualNotes: Bool?) -> MeetingDiscardResolution? {

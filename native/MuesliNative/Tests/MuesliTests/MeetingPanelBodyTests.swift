@@ -186,6 +186,63 @@ struct MeetingPanelBodyCoordinatorTests {
         coordinator.teardown()
     }
 
+    @Test("a monitor AppKit refuses to install leaves the rule unarmed and retryable")
+    func failedMonitorInstallStaysUnarmed() {
+        // Claiming armed on a nil token would make every later tab selection skip the
+        // retry, and nothing would ever close Chat or hand the keyboard back.
+        let coordinator = MeetingPanelBodyCoordinator()
+        var installs = 0
+        var token: Any?
+        coordinator.outsideClickMonitorInstaller = { _ in
+            installs += 1
+            return token
+        }
+        coordinator.outsideClickMonitorRemover = { _ in }
+        coordinator.setChatContext(readyContext())
+
+        coordinator.selectTab(.notes)
+        #expect(installs == 1)
+        #expect(!coordinator.isOutsideClickMonitorArmedForTesting)
+
+        // Tearing down what never armed stays safe, and the next tab selection retries.
+        coordinator.releaseFocus()
+        token = NSObject()
+        coordinator.selectTab(.chat)
+
+        #expect(installs == 2)
+        #expect(coordinator.isOutsideClickMonitorArmedForTesting)
+        coordinator.teardown()
+    }
+
+    @Test("a click on the object itself is not an outside click")
+    func clicksInsideThePanelAreNotDismissals() {
+        // A global monitor only sees clicks outside this app's windows, but the object can
+        // be clicked while another app is frontmost, so the pointer decides.
+        let coordinator = MeetingPanelBodyCoordinator()
+        let window = NSPanel(
+            contentRect: NSRect(x: 200, y: 200, width: 360, height: 320),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        coordinator.panelWindowProvider = { window }
+        coordinator.setChatContext(readyContext())
+
+        coordinator.selectTab(.chat)
+        coordinator.pointerLocationProvider = { NSPoint(x: 300, y: 300) }
+        coordinator.handleOutsideClickForTesting()
+
+        #expect(coordinator.isChatOpen, "the click landed on the object")
+        #expect(coordinator.isOutsideClickMonitorArmedForTesting)
+
+        coordinator.pointerLocationProvider = { NSPoint(x: 900, y: 900) }
+        coordinator.handleOutsideClickForTesting()
+
+        #expect(!coordinator.isChatOpen)
+        #expect(!coordinator.isOutsideClickMonitorArmedForTesting)
+        coordinator.teardown()
+    }
+
     @Test("copy takes the visible tab's payload, not always the transcript")
     func copyFollowsTheVisibleTab() {
         let coordinator = MeetingPanelBodyCoordinator()

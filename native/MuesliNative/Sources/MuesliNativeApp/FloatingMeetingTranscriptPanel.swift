@@ -55,6 +55,13 @@ final class FloatingMeetingTranscriptModel {
     /// window while this tab was away.
     var notesDraft = ""
 
+    /// The unsent chat question. It lives here rather than in the body's SwiftUI state
+    /// because the hosting view survives minimize and reopen for the whole recording, and
+    /// `@State` in a view that is never torn down cannot be cleared when a new meeting
+    /// starts — the previous meeting's private draft would show up, and be sendable, in
+    /// the next one.
+    var chatDraft = ""
+
     var isChatOpen: Bool { selectedTab == .chat }
     var isChatAvailable: Bool { chatContext?.isReady() == true }
     /// Notes need a meeting, not a backend — they are the user's own text.
@@ -159,6 +166,7 @@ final class FloatingMeetingTranscriptModel {
         selectedTab = .transcript
         chatContext = nil
         notesDraft = ""
+        chatDraft = ""
     }
 
     func showCopyConfirmation() {
