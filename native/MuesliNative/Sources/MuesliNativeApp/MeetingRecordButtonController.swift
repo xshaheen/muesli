@@ -1,23 +1,50 @@
 import AppKit
 import QuartzCore
 
-/// Pure visibility policy for the meeting Record pill. It exists only while a meeting app
-/// is actively in use and no meeting recording is running or starting.
+/// What the meeting Record pill renders right now. The hand-off to the recording object never
+/// leaves the spot empty: a start the pill launched keeps holding it as "Starting…".
+enum MeetingRecordButtonPresentation: Equatable {
+    case hidden
+    case record
+    case starting
+}
+
+/// Pure presentation policy for the meeting Record pill. It exists only while a meeting app
+/// is actively in use and the recording object is not on screen.
 enum MeetingRecordButtonPolicy {
-    static func shouldShow(
+    static func presentation(
         enabled: Bool,
         monitorsAllowed: Bool,
         hasActivityCandidate: Bool,
         candidateDismissed: Bool,
         isRecording: Bool,
-        isStartingRecording: Bool
-    ) -> Bool {
-        enabled
+        isStartingRecording: Bool,
+        startOriginatedFromPill: Bool,
+        isRecordingPanelVisible: Bool
+    ) -> MeetingRecordButtonPresentation {
+        // The object owns the spot the moment it is on screen — including while it finalizes,
+        // when the detector can legitimately re-emit the meeting app as a fresh candidate.
+        guard !isRecordingPanelVisible, !isRecording else { return .hidden }
+        if isStartingRecording {
+            // Only the pill's own start has a spot to hold; other entry points carry their own chrome.
+            return startOriginatedFromPill ? .starting : .hidden
+        }
+        let showsRecord = enabled
             && monitorsAllowed
             && hasActivityCandidate
             && !candidateDismissed
-            && !isRecording
-            && !isStartingRecording
+        return showsRecord ? .record : .hidden
+    }
+
+    /// Whether a start that never produced a session may hand the spot straight back to the
+    /// Record pill. The detector's current candidate decides: a meeting that vanished or changed
+    /// during the start is left to the next detection cycle rather than restored from before it.
+    static func restoresCandidateAfterFailedStart(
+        startedCandidateID: String?,
+        detectorCandidateID: String?
+    ) -> Bool {
+        guard let startedCandidateID, let detectorCandidateID else { return false }
+        return startedCandidateID == detectorCandidateID
     }
 }
 
@@ -28,6 +55,10 @@ enum MeetingRecordButtonPalette {
     static let inkHex = DictationMiniPalette.inkHex
     static let glassTintAlpha: CGFloat = 0.62
     static let hoverGlassTintAlpha: CGFloat = 0.50
+    /// "Starting…" keeps the glass and the frame but reads as unavailable, so the ink and the
+    /// record dot drop back instead of the surface moving.
+    static let startingInkAlpha: CGFloat = 0.55
+    static let startingDotAlpha: CGFloat = 0.42
     /// The edge itself is drawn by `ContextualSparkGlassSurfaceView`; this records the value
     /// the shared surface resolves to at default contrast.
     static let edgeAlpha: CGFloat = 0.16
@@ -54,7 +85,15 @@ private final class MeetingRecordButtonContentView: NSView {
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func cursorUpdate(with event: NSEvent) { NSCursor.pointingHand.set() }
+
+    override func cursorUpdate(with event: NSEvent) {
+        if owner?.isStarting == true {
+            NSCursor.arrow.set()
+        } else {
+            NSCursor.pointingHand.set()
+        }
+    }
+
     override func mouseEntered(with event: NSEvent) { owner?.setHovered(true) }
     override func mouseExited(with event: NSEvent) { owner?.setHovered(false) }
 
@@ -107,6 +146,7 @@ final class MeetingRecordButtonController: NSObject {
     var onCenterSaved: ((CGPoint) -> Void)?
 
     private(set) var platformName: String?
+    private(set) var isStarting = false
     private var savedCenter: CGPoint?
     private var panel: InteractiveFloatingPanel?
     private var contentView: MeetingRecordButtonContentView?
@@ -142,13 +182,32 @@ final class MeetingRecordButtonController: NSObject {
     var frameForTesting: NSRect? { panel?.frame }
     var isHoveredForTesting: Bool { isHovered }
     var accessibilityLabelForTesting: String? { contentView?.accessibilityLabel() }
+    var labelTextForTesting: String? { label?.stringValue }
 
     func applySavedCenter(_ center: CGPoint?) {
         savedCenter = center
     }
 
-    func show(platformName: String?) {
+    func apply(_ presentation: MeetingRecordButtonPresentation, platformName: String?) {
+        switch presentation {
+        case .hidden:
+            hide()
+        case .record:
+            show(platformName: platformName, starting: false)
+        case .starting:
+            show(platformName: platformName, starting: true)
+        }
+    }
+
+    private func show(platformName: String?, starting: Bool) {
         self.platformName = platformName
+        if isStarting != starting {
+            isStarting = starting
+            // A pointer state carried into the inert phase would keep a hover tint the user can
+            // no longer clear, so the hand-off resets it.
+            isHovered = false
+            isPressed = false
+        }
         let panel = panel ?? makePanel()
         self.panel = panel
         let frame = MeetingRecordingPanelController.resolvedFrame(
@@ -163,6 +222,7 @@ final class MeetingRecordButtonController: NSObject {
 
     func hide() {
         panel?.orderOut(nil)
+        isStarting = false
         isHovered = false
         isPressed = false
     }
@@ -178,27 +238,29 @@ final class MeetingRecordButtonController: NSObject {
 
     // MARK: Pointer
 
+    /// "Starting…" is inert: the start is already under way, so nothing the pointer does may
+    /// record again, move the shared spot, or tint the pill.
     func setHovered(_ hovered: Bool) {
-        guard isHovered != hovered else { return }
+        guard !isStarting, isHovered != hovered else { return }
         isHovered = hovered
         applyChrome()
     }
 
     func setPressed(_ pressed: Bool) {
-        guard isPressed != pressed else { return }
+        guard !isStarting, isPressed != pressed else { return }
         isPressed = pressed
         applyChrome()
     }
 
     func pointerInteractionBegan(at screenPoint: NSPoint) {
-        guard let panel else { return }
+        guard !isStarting, let panel else { return }
         dragWindowOrigin = panel.frame.origin
         dragPointerOrigin = screenPoint
         dragScreenFrames = NSScreen.screens.map(\.visibleFrame)
     }
 
     func pointerDragged(to screenPoint: NSPoint) {
-        guard let panel, let dragWindowOrigin, let dragPointerOrigin else { return }
+        guard !isStarting, let panel, let dragWindowOrigin, let dragPointerOrigin else { return }
         let proposed = NSPoint(
             x: dragWindowOrigin.x + screenPoint.x - dragPointerOrigin.x,
             y: dragWindowOrigin.y + screenPoint.y - dragPointerOrigin.y
@@ -211,6 +273,7 @@ final class MeetingRecordButtonController: NSObject {
     }
 
     func pointerInteractionEnded(didDrag: Bool) {
+        guard !isStarting else { return }
         defer {
             dragWindowOrigin = nil
             dragPointerOrigin = nil
@@ -227,6 +290,7 @@ final class MeetingRecordButtonController: NSObject {
     }
 
     func dismissRequested() {
+        guard !isStarting else { return }
         onDismiss?()
     }
 
@@ -284,10 +348,8 @@ final class MeetingRecordButtonController: NSObject {
         surface.decorLayer.addSublayer(coreLayer)
 
         let text = NSTextField(labelWithString: "Record")
-        text.font = .systemFont(ofSize: 11, weight: .semibold)
         text.alignment = .left
         text.lineBreakMode = .byClipping
-        text.frame = NSRect(x: 22, y: (Self.pillSize.height - 14) / 2 - 0.5, width: Self.pillSize.width - 28, height: 14)
         content.addSubview(text)
         label = text
         return panel
@@ -298,7 +360,8 @@ final class MeetingRecordButtonController: NSObject {
         let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
 
         // Pressed darkens the ground slightly; hover lifts it. No transform, so the
-        // view-backed layer's (0,0) anchor never shifts the content.
+        // view-backed layer's (0,0) anchor never shifts the content. "Starting…" keeps the
+        // resting ground so only the ink changes across the hand-off.
         let restingAlpha = isHovered
             ? MeetingRecordButtonPalette.hoverGlassTintAlpha
             : MeetingRecordButtonPalette.glassTintAlpha
@@ -311,17 +374,46 @@ final class MeetingRecordButtonController: NSObject {
         CATransaction.setDisableActions(true)
         let record = NSColor.colorWith(hex: MeetingRecordButtonPalette.recordHex, alpha: 1)
         let highlight = NSColor.colorWith(hex: MeetingRecordButtonPalette.recordHighlightHex, alpha: 1)
-        dotLayer.fillColor = record.cgColor
+        let dotAlpha: CGFloat = isStarting ? MeetingRecordButtonPalette.startingDotAlpha : 1
+        dotLayer.fillColor = record.withAlphaComponent(dotAlpha).cgColor
         dotLayer.shadowColor = record.withAlphaComponent(isHovered ? 0.62 : 0.42).cgColor
-        dotLayer.shadowOpacity = increaseContrast ? 0.3 : 1
-        coreLayer.fillColor = highlight.withAlphaComponent(isHovered ? 0.95 : 0.78).cgColor
+        dotLayer.shadowOpacity = isStarting ? 0 : (increaseContrast ? 0.3 : 1)
+        coreLayer.fillColor = highlight.withAlphaComponent(
+            isStarting ? MeetingRecordButtonPalette.startingDotAlpha : (isHovered ? 0.95 : 0.78)
+        ).cgColor
         CATransaction.commit()
 
-        let inkAlpha: CGFloat = isPressed ? 0.8 : (isHovered ? 1 : 0.92)
-        label?.textColor = NSColor.colorWith(hex: MeetingRecordButtonPalette.inkHex, alpha: inkAlpha)
+        applyLabelChrome()
         let platform = platformName.map { "\($0) meeting" } ?? "meeting"
-        contentView.setAccessibilityLabel("Record \(platform)")
-        contentView.setAccessibilityHelp("Click to start recording. Drag to move. Option-click to hide until this meeting ends.")
-        contentView.toolTip = "Record \(platform)"
+        contentView.setAccessibilityLabel(isStarting ? "Starting meeting recording" : "Record \(platform)")
+        contentView.setAccessibilityHelp(
+            isStarting
+                ? "The meeting recording is starting."
+                : "Click to start recording. Drag to move. Option-click to hide until this meeting ends."
+        )
+        contentView.toolTip = isStarting ? "Starting meeting recording" : "Record \(platform)"
+    }
+
+    /// The pill's width is fixed by the hand-off, so the longer "Starting…" gets its own type
+    /// scale and a tighter dot gap rather than widening the frame the recording object inherits.
+    private func applyLabelChrome() {
+        guard let label else { return }
+        label.stringValue = isStarting ? "Starting…" : "Record"
+        label.font = .systemFont(ofSize: isStarting ? 9 : 11, weight: .semibold)
+        // "Starting…" needs every point it can get inside the fixed 72 pt pill: it starts closer
+        // to the dot and clips 3 pt from the trailing edge, where "Record" can afford 6 pt.
+        let textX: CGFloat = isStarting ? 19 : 22
+        let trailingInset: CGFloat = isStarting ? 3 : 6
+        let fitting = label.fittingSize
+        label.frame = NSRect(
+            x: textX,
+            y: (Self.pillSize.height - fitting.height) / 2 - 0.5,
+            width: Self.pillSize.width - textX - trailingInset,
+            height: fitting.height
+        )
+        let inkAlpha: CGFloat = isStarting
+            ? MeetingRecordButtonPalette.startingInkAlpha
+            : (isPressed ? 0.8 : (isHovered ? 1 : 0.92))
+        label.textColor = NSColor.colorWith(hex: MeetingRecordButtonPalette.inkHex, alpha: inkAlpha)
     }
 }

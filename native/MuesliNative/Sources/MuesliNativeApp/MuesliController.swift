@@ -556,7 +556,16 @@ final class MuesliController: NSObject {
     private var dataDidChangeObserver: NSObjectProtocol?
     private var iCloudAppActiveObserver: NSObjectProtocol?
     private var iCloudWakeObserver: NSObjectProtocol?
-    private var isStartingMeetingRecording = false
+    private var isStartingMeetingRecording = false {
+        didSet {
+            // The Record pill only holds the spot for the start it launched; any exit from the
+            // starting state retires the flag so a later start never renders as "Starting…".
+            if !isStartingMeetingRecording { meetingStartOriginatedFromRecordButton = false }
+        }
+    }
+    /// Set while a start launched from the Record pill is in flight, so the pill can hold its
+    /// spot as "Starting…" instead of leaving it empty until capture is live.
+    private var meetingStartOriginatedFromRecordButton = false
     private var meetingStartStatus: String?
     private var isShowingCalendarNotification = false
     private var presentedMeetingCandidate: MeetingCandidate?
@@ -565,6 +574,12 @@ final class MuesliController: NSObject {
     private var meetingDurationStopTimer: Timer?
     private var activeMeetingCalendarEndDate: Date?
     private var latestMeetingActivityCandidate: MeetingCandidate?
+    /// The detector's most recent emission, tracked even while a start is in flight. The cache
+    /// above freezes during a start, so a start that fails needs an unfrozen view of what the
+    /// detector reports right now to decide whether the Record pill may come straight back.
+    private var observedMeetingActivityCandidate: MeetingCandidate?
+    private var observedMeetingActivityCandidateObservedAt: Date?
+    private var observedMeetingActivityCandidateRunID: Int?
     private var dictationIdleDotAllowed = false
     /// When the dictation hotkey went down; gates the start cue so a discarded tap never tinks.
     private var dictationHotkeyPressedAt: Date?
@@ -3522,6 +3537,9 @@ final class MuesliController: NSObject {
         latestMeetingActivityCandidate = nil
         latestMeetingActivityCandidateObservedAt = nil
         latestMeetingActivityCandidateRunID = nil
+        observedMeetingActivityCandidate = nil
+        observedMeetingActivityCandidateObservedAt = nil
+        observedMeetingActivityCandidateRunID = nil
         dismissedMeetingRecordButtonCandidateID = nil
     }
 
@@ -3536,28 +3554,37 @@ final class MuesliController: NSObject {
     private func syncMeetingRecordButton() {
         let candidate = currentRunMeetingActivityCandidate
         let hasCandidate = candidate.map { !isMutedMeetingDetectionCandidate($0) } ?? false
-        let shouldShow = MeetingRecordButtonPolicy.shouldShow(
+        let presentation = MeetingRecordButtonPolicy.presentation(
             enabled: config.showMeetingRecordButton,
             monitorsAllowed: meetingFeatureMonitorsAllowed,
             hasActivityCandidate: hasCandidate,
             candidateDismissed: candidate?.id == dismissedMeetingRecordButtonCandidateID,
             isRecording: isMeetingRecording(),
-            isStartingRecording: isStartingMeetingRecording
+            isStartingRecording: isStartingMeetingRecording,
+            startOriginatedFromPill: meetingStartOriginatedFromRecordButton,
+            isRecordingPanelVisible: meetingRecordingPanel.isVisible
         )
-        if shouldShow {
+        if presentation != .hidden {
             meetingRecordButton.applySavedCenter(
                 config.meetingRecordingPanelCenter.map { CGPoint(x: $0.x, y: $0.y) }
             )
-            meetingRecordButton.show(platformName: candidate?.platform.displayName)
-        } else {
-            meetingRecordButton.hide()
         }
+        meetingRecordButton.apply(presentation, platformName: candidate?.platform.displayName)
+    }
+
+    /// The recording object owns the shared spot while it is on screen, so the Record pill has to
+    /// re-evaluate the moment the object goes away rather than waiting for the next detection tick.
+    private func closeMeetingRecordingPanel(ownerID: UUID) {
+        meetingRecordingPanel.close(ownerID: ownerID)
+        syncMeetingRecordButton()
     }
 
     private func recordFromMeetingRecordButton() {
         guard !isMeetingRecording(), !isStartingMeetingRecording else { return }
         let candidate = currentRunMeetingActivityCandidate
         let title = candidate?.subtitle ?? "Meeting"
+        // Set before the start so every sync it triggers already knows the pill is holding the spot.
+        meetingStartOriginatedFromRecordButton = true
         let didStart = startMeetingRecordingFromEntryPoint(
             title: title,
             autoStopSource: candidate.map { MeetingAutoStopSource(candidate: $0) },
@@ -3568,6 +3595,9 @@ final class MuesliController: NSObject {
             meetingMonitor.markRecordingStarted(candidate)
             presentedMeetingCandidate = nil
             dismissPresentedMeetingDetection()
+        } else if !didStart {
+            // A start refused outright never entered the starting state, so nothing else clears it.
+            meetingStartOriginatedFromRecordButton = false
         }
         syncMeetingRecordButton()
     }
@@ -6022,7 +6052,7 @@ final class MuesliController: NSObject {
                     Task {
                         await trace?.cancel(stage: "meeting_start")
                     }
-                    self.disarmMeetingAutoStop()
+                    self.disarmMeetingAutoStopAfterFailedStart()
                     self.resolveLiveMeetingAfterStartFailure(id: meetingID)
                     self.cancelMeetingRecordingHotkeyToggleAfterFailedStart(meetingID: meetingID)
                     self.meetingMonitor.resumeAfterCooldown()
@@ -6044,7 +6074,7 @@ final class MuesliController: NSObject {
                         backend: meetingBackend,
                         error: error
                     )
-                    self.disarmMeetingAutoStop()
+                    self.disarmMeetingAutoStopAfterFailedStart()
                     self.resolveLiveMeetingAfterStartFailure(id: meetingID)
                     self.cancelMeetingRecordingHotkeyToggleAfterFailedStart(meetingID: meetingID)
                     self.meetingMonitor.resumeAfterCooldown()
@@ -6197,7 +6227,7 @@ final class MuesliController: NSObject {
                     Task {
                         await trace?.cancel(stage: "meeting_resume_start")
                     }
-                    self.disarmMeetingAutoStop()
+                    self.disarmMeetingAutoStopAfterFailedStart()
                     self.resolveLiveMeetingAfterStartFailure(id: meetingID)
                     self.cancelMeetingRecordingHotkeyToggleAfterFailedStart(meetingID: meetingID)
                     self.meetingMonitor.resumeAfterCooldown()
@@ -6213,7 +6243,7 @@ final class MuesliController: NSObject {
                         await trace?.fail(stage: "meeting_resume_start")
                     }
                     fputs("[muesli-native] failed to resume meeting: \(error)\n", stderr)
-                    self.disarmMeetingAutoStop()
+                    self.disarmMeetingAutoStopAfterFailedStart()
                     self.resolveLiveMeetingAfterStartFailure(id: meetingID)
                     self.cancelMeetingRecordingHotkeyToggleAfterFailedStart(meetingID: meetingID)
                     self.meetingMonitor.resumeAfterCooldown()
@@ -6555,7 +6585,7 @@ final class MuesliController: NSObject {
 
         statusBarController?.refresh()
         endMeetingActivity()
-        disarmMeetingAutoStop()
+        disarmMeetingAutoStopAfterFailedStart()
         meetingStartTask = nil
         meetingStartMeetingID = nil
         isStartingMeetingRecording = false
@@ -7064,7 +7094,7 @@ final class MuesliController: NSObject {
             disarmMeetingAutoStop()
             cancelMeetingDurationLimit()
             if let activeMeetingPanelOwnerID {
-                meetingRecordingPanel.close(ownerID: activeMeetingPanelOwnerID)
+                closeMeetingRecordingPanel(ownerID: activeMeetingPanelOwnerID)
                 self.activeMeetingPanelOwnerID = nil
             }
             if let meetingID = activeMeetingID {
@@ -7083,7 +7113,7 @@ final class MuesliController: NSObject {
         cancelMeetingDurationLimit()
         self.activeMeetingSession = nil
         if let activeMeetingPanelOwnerID {
-            meetingRecordingPanel.close(ownerID: activeMeetingPanelOwnerID)
+            closeMeetingRecordingPanel(ownerID: activeMeetingPanelOwnerID)
             self.activeMeetingPanelOwnerID = nil
         }
         if let meetingID = activeMeetingID {
@@ -7363,7 +7393,7 @@ final class MuesliController: NSObject {
                 self.activeMeetingID = nil
             }
             if let activeMeetingPanelOwnerID {
-                meetingRecordingPanel.close(ownerID: activeMeetingPanelOwnerID)
+                closeMeetingRecordingPanel(ownerID: activeMeetingPanelOwnerID)
                 self.activeMeetingPanelOwnerID = nil
             }
             isStoppingMeetingRecording = false
@@ -7561,7 +7591,7 @@ final class MuesliController: NSObject {
             }
             await MainActor.run {
                 if let meetingPanelOwnerID {
-                    self.meetingRecordingPanel.close(ownerID: meetingPanelOwnerID)
+                    self.closeMeetingRecordingPanel(ownerID: meetingPanelOwnerID)
                     if self.activeMeetingPanelOwnerID == meetingPanelOwnerID {
                         self.activeMeetingPanelOwnerID = nil
                     }
@@ -8674,7 +8704,38 @@ final class MuesliController: NSObject {
         syncMeetingDetectionMonitor()
     }
 
+    /// Disarm after a start that never produced a session. Clearing the activity candidate here
+    /// would hide the Record pill until the detector re-emits, so the pill would vanish from a
+    /// meeting that is still on screen. Re-evaluate the detector's current candidate instead and
+    /// keep it only while it is still the meeting the start was launched from.
+    private func disarmMeetingAutoStopAfterFailedStart() {
+        activeMeetingAutoStop.disarm()
+        activeMeetingSignalLossResponse = .none
+        meetingSignalLossPromptState.resetForRecording()
+
+        let detected = observedMeetingActivityCandidateRunID == meetingDetectionRunID
+            ? observedMeetingActivityCandidate
+            : nil
+        let restores = MeetingRecordButtonPolicy.restoresCandidateAfterFailedStart(
+            startedCandidateID: latestMeetingActivityCandidate?.id,
+            detectorCandidateID: detected?.id
+        )
+        if restores, let detected, !isMutedMeetingDetectionCandidate(detected) {
+            latestMeetingActivityCandidate = detected
+            latestMeetingActivityCandidateObservedAt = observedMeetingActivityCandidateObservedAt
+            latestMeetingActivityCandidateRunID = meetingDetectionRunID
+        } else {
+            latestMeetingActivityCandidate = nil
+            latestMeetingActivityCandidateObservedAt = nil
+            latestMeetingActivityCandidateRunID = nil
+        }
+        syncMeetingDetectionMonitor()
+    }
+
     private func handleMeetingActivityCandidate(_ candidate: MeetingCandidate?) {
+        observedMeetingActivityCandidate = candidate
+        observedMeetingActivityCandidateObservedAt = candidate == nil ? nil : Date()
+        observedMeetingActivityCandidateRunID = candidate == nil ? nil : meetingDetectionRunID
         if !activeMeetingAutoStop.isArmed,
            !isMeetingRecording(),
            !isStartingMeetingRecording {
