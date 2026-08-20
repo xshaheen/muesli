@@ -94,11 +94,15 @@ enum MeetingSelectableTextContent {
         )
     }
 
+    /// `metadataColor` and `bodyColor` exist for the floating meeting panel, whose glass
+    /// ground is fixed dark and needs the Spark palette rather than the system label colors.
     static func transcript(
         metadata: String?,
         body: String,
         bodyPointSize: CGFloat,
-        isPartial: Bool
+        isPartial: Bool,
+        metadataColor: NSColor = .tertiaryLabelColor,
+        bodyColor: NSColor? = nil
     ) -> NSAttributedString {
         let result = NSMutableAttributedString()
         if let metadata, !metadata.isEmpty {
@@ -106,7 +110,7 @@ enum MeetingSelectableTextContent {
                 AttributedString(metadata),
                 pointSize: 10,
                 weight: .medium,
-                color: .tertiaryLabelColor,
+                color: metadataColor,
                 direction: NaturalTextDirection.resolve(body)
             ))
             result.append(newline(matching: result))
@@ -114,7 +118,7 @@ enum MeetingSelectableTextContent {
         result.append(attributedLine(
             MeetingMarkdownContent.inline(body),
             pointSize: bodyPointSize,
-            color: isPartial ? .secondaryLabelColor : .labelColor,
+            color: bodyColor ?? (isPartial ? .secondaryLabelColor : .labelColor),
             direction: NaturalTextDirection.resolve(body),
             italic: isPartial,
             lineSpacing: 2

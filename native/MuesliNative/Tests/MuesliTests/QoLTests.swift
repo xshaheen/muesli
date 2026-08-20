@@ -187,66 +187,6 @@ struct FloatingMeetingTranscriptTests {
         #expect(!panel.canBecomeMain)
     }
 
-    @Test("the transcript overlay shows in a window of its own")
-    @MainActor
-    func shownOverlayUsesItsOwnWindow() {
-        // The transcript used to be a subview of the indicator's window, which forced
-        // that window to be the union of both and made every indicator resize a
-        // geometry negotiation. It owns a window now, so showing it cannot move the
-        // pill, and its buttons are ordinary SwiftUI buttons rather than coordinates
-        // matched against a hit-region table.
-        var dismissCount = 0
-        let controller = FloatingMeetingTranscriptPanelController(
-            onOpenNotes: {},
-            onDismiss: { dismissCount += 1 }
-        )
-
-        controller.show(at: NSRect(x: 120, y: 240, width: 360, height: 320))
-
-        #expect(controller.isVisible)
-
-        controller.hide()
-
-        #expect(controller.isVisible == false)
-        #expect(dismissCount == 0)
-    }
-
-    @Test("panel prefers the open side and remains inside the screen")
-    func panelPlacement() {
-        let screen = NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let trailingIndicator = NSRect(x: 1350, y: 440, width: 76, height: 22)
-        let leadingIndicator = NSRect(x: 14, y: 440, width: 76, height: 22)
-
-        let leftFrame = FloatingMeetingTranscriptPlacement.frame(
-            beside: trailingIndicator,
-            visibleFrame: screen
-        )
-        let rightFrame = FloatingMeetingTranscriptPlacement.frame(
-            beside: leadingIndicator,
-            visibleFrame: screen
-        )
-
-        let gap = FloatingMeetingTranscriptPlacement.gap
-        #expect(leftFrame.maxX == trailingIndicator.minX - gap)
-        #expect(rightFrame.minX == leadingIndicator.maxX + gap)
-        #expect(screen.insetBy(dx: 8, dy: 8).contains(leftFrame))
-        #expect(screen.insetBy(dx: 8, dy: 8).contains(rightFrame))
-    }
-
-    @Test("panel clamps vertically on short screens")
-    func verticalPlacementClamp() {
-        let screen = NSRect(x: 100, y: 50, width: 900, height: 360)
-        let indicator = NSRect(x: 950, y: 380, width: 40, height: 22)
-
-        let frame = FloatingMeetingTranscriptPlacement.frame(
-            beside: indicator,
-            visibleFrame: screen
-        )
-
-        #expect(frame.minY >= screen.minY + 8)
-        #expect(frame.maxY == screen.maxY - 8)
-    }
-
     @Test("copy includes committed transcript and current partials")
     func copyTextIncludesLiveTails() {
         let text = LiveTranscriptCopyContent.text(

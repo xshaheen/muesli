@@ -5717,8 +5717,8 @@ final class MuesliController: NSObject {
         activeMeetingSession?.isPaused == true
     }
 
-    func isMeetingTranscriptPanelVisible() -> Bool {
-        meetingRecordingPanel.isTranscriptPanelVisible
+    func isMeetingPanelOpen() -> Bool {
+        meetingRecordingPanel.isPanelOpen
     }
 
     private var meetingTerminationState: MeetingTerminationState {

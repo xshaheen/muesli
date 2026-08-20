@@ -57,7 +57,9 @@ struct LiveTranscriptBubble: View {
                 metadata: speaker.map { $0 + (timestamp.map { "  \($0)" } ?? "") },
                 body: lines.joined(separator: "\n"),
                 bodyPointSize: 13,
-                isPartial: isPartial
+                isPartial: isPartial,
+                metadataColor: speakerLabelColor,
+                bodyColor: bodyTextColor
             ))
             .environment(\.layoutDirection, contentDirection.layoutDirection)
             .fixedSize(horizontal: false, vertical: true)
@@ -134,6 +136,20 @@ struct LiveTranscriptBubble: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             didCopy = false
         }
+    }
+
+    /// The floating panel reads on Contextual Spark glass, so the 10 pt speaker label is
+    /// coral for You and dimmed ink for Others; every other surface keeps system labels.
+    private var speakerLabelColor: NSColor {
+        guard surfacePresentation == .floatingPanel else { return .tertiaryLabelColor }
+        return isUser
+            ? NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
+            : NSColor.colorWith(hex: DictationMiniPalette.inkHex, alpha: 0.55)
+    }
+
+    private var bodyTextColor: NSColor? {
+        guard surfacePresentation == .floatingPanel else { return nil }
+        return NSColor.colorWith(hex: DictationMiniPalette.inkHex, alpha: isPartial ? 0.50 : 0.92)
     }
 
     private var bubbleBackground: Color {

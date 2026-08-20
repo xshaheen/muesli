@@ -281,15 +281,11 @@ final class MeetingRecordingPanelController: NSObject {
     private var announcementsForTesting: [String] = []
     private var notificationObservers: [(center: NotificationCenter, token: NSObjectProtocol)] = []
 
-    private lazy var transcriptPanel = FloatingMeetingTranscriptPanelController(
-        onOpenNotes: { [weak self] in
-            self?.hideTranscript()
-            self?.onOpenNotes?()
-        },
-        onDismiss: { [weak self] in
-            self?.minimizePanel(userInitiated: true)
-        }
-    )
+    /// The panel body's model and focus rules. Held for the whole recording, not just
+    /// while the panel is open, so the transcript keeps arriving into the pill and the
+    /// selected tab, notes draft and chat context survive minimize and reopen.
+    private let bodyCoordinator = MeetingPanelBodyCoordinator()
+    private var bodyHostingView: FirstMouseHostingView<MeetingPanelBody>?
 
     init(
         configStore: ConfigStore,
@@ -301,6 +297,10 @@ final class MeetingRecordingPanelController: NSObject {
         self.savedControlCenter = configuration.meetingRecordingPanelCenter.map { CGPoint(x: $0.x, y: $0.y) }
         self.preferredPanelOpen = configuration.meetingPanelOpen
         super.init()
+
+        // The body lives inside the one merged window, so its focus rules resign and
+        // hit-test against that window rather than one of their own.
+        bodyCoordinator.panelWindowProvider = { [weak self] in self?.panel }
 
         let screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -342,7 +342,7 @@ final class MeetingRecordingPanelController: NSObject {
     var reduceMotionOverrideForTesting: Bool?
 
     var isVisible: Bool { panel?.isVisible == true }
-    var isTranscriptPanelVisible: Bool { layout == .panel }
+    var isPanelOpen: Bool { layout == .panel }
     var stateForTesting: MeetingRecordingPanelState { state }
     var layoutForTesting: MeetingObjectLayout { layout }
     var frameForTesting: NSRect? { panel?.frame }
@@ -364,7 +364,9 @@ final class MeetingRecordingPanelController: NSObject {
         guard layout != .pill else { return [] }
         return [pauseButton, stopButton, panelButton].compactMap { $0?.accessibilityLabel() }
     }
-    var hasMeetingContextForTesting: Bool { transcriptPanel.hasMeetingContextForTesting }
+    var hasMeetingContextForTesting: Bool { bodyCoordinator.hasMeetingContextForTesting }
+    var panelBodyForTesting: MeetingPanelBodyCoordinator { bodyCoordinator }
+    var isPanelBodyHostedForTesting: Bool { bodyHostingView != nil }
     var preferredPanelOpenForTesting: Bool? { preferredPanelOpen }
     var resolvedPanelOpenForTesting: Bool { resolvedPanelOpen }
     var panelOpenSaveCountForTesting: Int { panelOpenSaveCount }
@@ -433,10 +435,10 @@ final class MeetingRecordingPanelController: NSObject {
         appliedContent = nil
         hoverSuppressedUntilExit = false
         elapsedClock.start(at: startedAt)
-        transcriptPanel.reset()
-        transcriptPanel.setChatContext(chatContext)
-        transcriptPanel.setPaused(false)
-        transcriptPanel.setSelectionAccentHex(MuesliTheme.resolvedAccentDarkHex)
+        bodyCoordinator.reset()
+        bodyCoordinator.setChatContext(chatContext)
+        bodyCoordinator.setPaused(false)
+        bodyCoordinator.setSelectionAccentHex(DictationMiniPalette.accentHex)
 
         let panel = panel ?? makePanel()
         self.panel = panel
@@ -478,7 +480,7 @@ final class MeetingRecordingPanelController: NSObject {
         default:
             return
         }
-        transcriptPanel.setPaused(paused)
+        bodyCoordinator.setPaused(paused)
         updateChrome()
     }
 
@@ -490,7 +492,10 @@ final class MeetingRecordingPanelController: NSObject {
         state = .finalizing(status)
         powerProvider = nil
         stopAnimationTimer()
-        hideTranscript(reset: true)
+        // Release focus before the body folds away: a key window the user cannot see keeps
+        // swallowing the keystrokes meant for the call. The body's content is *not* reset —
+        // the transcript and notes stay readable in the panel until the meeting is saved.
+        bodyCoordinator.releaseFocus()
         // The fold is not the user dismissing the panel, so hover must not reopen the row
         // under a pointer that never moved.
         hoverSuppressedUntilExit = true
@@ -513,8 +518,12 @@ final class MeetingRecordingPanelController: NSObject {
     func close() {
         stopAnimationTimer()
         cancelHoverGrace()
-        transcriptPanel.reset()
-        transcriptPanel.close()
+        // Focus first, then content, then the views: a body torn out from under a key
+        // window leaves the keyboard trapped in a window nothing can reach.
+        bodyCoordinator.reset()
+        bodyCoordinator.teardown()
+        bodyHostingView?.removeFromSuperview()
+        bodyHostingView = nil
         panel?.orderOut(nil)
         panel?.contentView = nil
         panel = nil
@@ -547,8 +556,10 @@ final class MeetingRecordingPanelController: NSObject {
         dragScreenFrames.removeAll()
     }
 
+    /// Feeds the body while the object is any size: the pill and the row keep the model
+    /// current so an open lands on a transcript that is already there.
     func updateMeetingTranscript(transcript: String, partialYou: String, partialOthers: String) {
-        transcriptPanel.update(
+        bodyCoordinator.update(
             transcript: transcript,
             partialYou: partialYou,
             partialOthers: partialOthers
@@ -556,11 +567,11 @@ final class MeetingRecordingPanelController: NSObject {
     }
 
     func setMeetingChatContext(_ context: FloatingMeetingChatContext?) {
-        transcriptPanel.setChatContext(context)
+        bodyCoordinator.setChatContext(context)
     }
 
     /// The status bar's "Open/Minimize Meeting Panel" and the header buttons: a user toggle,
-    /// so it writes the remembered choice exactly once. U5 renames it.
+    /// so it writes the remembered choice exactly once.
     func toggleTranscriptPanel() {
         guard state == .recording || state == .paused else { return }
         if layout == .panel {
@@ -997,16 +1008,27 @@ final class MeetingRecordingPanelController: NSObject {
     private func openPanel(userInitiated: Bool, animated: Bool) {
         guard state == .recording || state == .paused else { return }
         guard layout != .panel else { return }
+        // Hosted before the layout change so the first `layoutPanel` already has a body to
+        // size; the host survives minimize and reopen, which is what carries the selected
+        // tab, the chat draft and the notes draft across the fold.
+        installPanelBodyIfNeeded()
         setLayout(.panel, animated: animated)
-        // U5 replaces this window with the body hosted under the header.
-        showTranscript()
+        // The selected tab survives a minimize, so a reopen can land straight on Chat or My
+        // notes; the outside-click rule has to come back with it.
+        bodyCoordinator.resumeFocusRules()
+        // orderFront, never makeKey: an object that takes focus during a call swallows the
+        // keystrokes meant for Zoom. Chat and My notes ask for key themselves when clicked.
+        panel?.orderFront(nil)
         announce("Meeting panel opened")
         if userInitiated { rememberPanelOpen(true) }
     }
 
     private func minimizePanel(userInitiated: Bool) {
         guard layout == .panel else { return }
-        hideTranscript()
+        // Focus is handed back before the body disappears. Folding away a key window without
+        // resigning leaves an invisible window holding the keyboard, so keystrokes meant for
+        // the call vanish into a body the user cannot even see.
+        bodyCoordinator.releaseFocus()
         // The pointer is still over the object after a minimize; the row waits for it to leave.
         hoverSuppressedUntilExit = true
         setLayout(.pill, animated: true)
@@ -1022,20 +1044,37 @@ final class MeetingRecordingPanelController: NSObject {
         onPanelOpenSaved?(isOpen)
     }
 
-    private func showTranscript() {
-        guard let panel else { return }
-        let visibleFrame = NSScreen.screens.first(where: { $0.frame.intersects(panel.frame) })?.visibleFrame
-            ?? NSScreen.screens.first?.visibleFrame
-        guard let visibleFrame else { return }
-        transcriptPanel.show(beside: panel.frame, in: visibleFrame)
-    }
-
-    private func hideTranscript(reset: Bool = false) {
-        if reset {
-            transcriptPanel.reset()
-        } else {
-            transcriptPanel.hide()
-        }
+    private func installPanelBodyIfNeeded() {
+        guard let bodyContainerView, bodyHostingView == nil else { return }
+        let hosting = FirstMouseHostingView(
+            rootView: MeetingPanelBody(
+                model: bodyCoordinator.model,
+                onOpenNotes: { [weak self] in
+                    // The meeting document is about to take the screen; a 360x320 panel
+                    // parked over it helps nobody. Not a user minimize, so it must not
+                    // overwrite the remembered open/minimize choice.
+                    self?.minimizePanel(userInitiated: false)
+                    self?.onOpenNotes?()
+                },
+                // Through the coordinator, never straight to the model: opening a typing
+                // tab has to arm outside-click dismissal and leaving it has to hand
+                // keyboard focus back.
+                onSelectTab: { [weak self] tab in
+                    self?.bodyCoordinator.selectTab(tab)
+                }
+            )
+        )
+        hosting.wantsLayer = true
+        // The controller owns the window's frame; SwiftUI must never drive it. With the
+        // default sizing options the async content pass re-moves the frame the morph just
+        // landed on, from whatever anchor a zero-size host was last given.
+        hosting.sizingOptions = []
+        // `layoutPanel` drives the frame, not an autoresizing mask: the pill and the row
+        // collapse the container to zero, and autoresizing from a zero box back to 360 pt
+        // is where the proportions go to NaN.
+        hosting.frame = bodyContainerView.bounds
+        bodyContainerView.addSubview(hosting)
+        bodyHostingView = hosting
     }
 
     // MARK: Window
@@ -1084,7 +1123,6 @@ final class MeetingRecordingPanelController: NSObject {
         content.addSubview(body)
         content.bodyContainer = body
         bodyContainerView = body
-        // U5 hosts the tab strip and body here.
 
         let elapsed = NSTextField(labelWithString: "00:00")
         elapsed.alignment = .left
@@ -1263,7 +1301,9 @@ final class MeetingRecordingPanelController: NSObject {
         placeWave(in: waveRect)
         statusLabel?.alignment = .center
         statusLabel?.frame = NSRect(x: waveRect.minX, y: waveRect.minY, width: waveRect.width, height: 14)
-        bodyContainerView?.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, headerY))
+        let body = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, headerY))
+        bodyContainerView?.frame = body
+        bodyHostingView?.frame = NSRect(origin: .zero, size: body.size)
     }
 
     private var isPastFirstHour: Bool {

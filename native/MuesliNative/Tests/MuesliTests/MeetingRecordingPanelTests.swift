@@ -275,7 +275,7 @@ struct MeetingRecordingPanelLifecycleTests {
 
         #expect(controller.stateForTesting == .finalizing("Transcribing"))
         #expect(!controller.controlsEnabledForTesting)
-        #expect(!controller.isTranscriptPanelVisible)
+        #expect(!controller.isPanelOpen)
         controller.close()
     }
 
@@ -1008,6 +1008,191 @@ struct MeetingRecordingPanelLifecycleTests {
         #expect(saved.isEmpty)
         #expect(controller.panelOpenSaveCountForTesting == 0)
         #expect(controller.preferredPanelOpenForTesting == true)
+    }
+
+    @Test("the transcript reaches the body while the object is still a pill")
+    func transcriptFeedsTheBodyWithoutOpeningThePanel() {
+        // The panel must open onto a transcript that is already there, so the feed keeps
+        // arriving into the model in every size — without that ever forcing the panel open.
+        let now = Date(timeIntervalSinceReferenceDate: 60_000)
+        let controller = makeController(now: { now })
+        controller.reduceMotionOverrideForTesting = true
+        controller.showRecording(
+            ownerID: UUID(),
+            startedAt: now,
+            powerProvider: { -160 },
+            presentation: .backgroundPill
+        )
+
+        controller.updateMeetingTranscript(
+            transcript: "[10:00:00] You: spoken while minimized",
+            partialYou: "still talking",
+            partialOthers: ""
+        )
+
+        #expect(controller.layoutForTesting == .pill)
+        #expect(!controller.isPanelOpen)
+        #expect(controller.panelBodyForTesting.model.presentation.transcript.contains("spoken while minimized"))
+        #expect(controller.panelBodyForTesting.model.presentation.partialYou == "still talking")
+        controller.close()
+    }
+
+    @Test("the body's content survives open, minimize and reopen within one recording")
+    func bodyContentSurvivesTheFold() {
+        let now = Date(timeIntervalSinceReferenceDate: 61_000)
+        let controller = makeController(now: { now })
+        controller.reduceMotionOverrideForTesting = true
+        var cachedNotes = "carried across"
+        let context = FloatingMeetingChatContext(
+            meetingID: 91,
+            priorTranscript: "Earlier half",
+            currentConfig: { AppConfig() },
+            isReady: { true },
+            manualNotes: { cachedNotes },
+            saveManualNotes: { cachedNotes = $0 }
+        )
+        controller.showRecording(
+            ownerID: UUID(),
+            startedAt: now,
+            powerProvider: { -160 },
+            chatContext: context,
+            presentation: .backgroundPill
+        )
+        controller.updateMeetingTranscript(
+            transcript: "[10:00:00] You: before the fold",
+            partialYou: "",
+            partialOthers: ""
+        )
+
+        controller.toggleTranscriptPanel()
+        #expect(controller.isPanelOpen)
+        #expect(controller.isPanelBodyHostedForTesting)
+        controller.panelBodyForTesting.selectTab(.notes)
+        controller.panelBodyForTesting.model.notesEdited("typed in the panel")
+
+        controller.toggleTranscriptPanel()
+        #expect(!controller.isPanelOpen)
+        controller.toggleTranscriptPanel()
+
+        let model = controller.panelBodyForTesting.model
+        #expect(controller.isPanelOpen)
+        // R12: the tab the user was working in is part of what survives the fold.
+        #expect(model.selectedTab == .notes)
+        #expect(controller.panelBodyForTesting.isOutsideClickMonitorArmedForTesting)
+        #expect(model.presentation.transcript.contains("before the fold"))
+        #expect(model.notesDraft == "typed in the panel")
+        #expect(model.chatContext?.meetingID == 91)
+        #expect(controller.hasMeetingContextForTesting)
+        controller.close()
+    }
+
+    @Test("a minimize from chat reopens on chat with its context intact")
+    func chatTabSurvivesTheFold() {
+        let now = Date(timeIntervalSinceReferenceDate: 61_500)
+        let controller = makeController(now: { now })
+        controller.reduceMotionOverrideForTesting = true
+        controller.showRecording(
+            ownerID: UUID(),
+            startedAt: now,
+            powerProvider: { -160 },
+            chatContext: FloatingMeetingChatContext(
+                meetingID: 77,
+                priorTranscript: "Earlier half",
+                currentConfig: { AppConfig() },
+                isReady: { true }
+            ),
+            presentation: .backgroundPill
+        )
+
+        controller.toggleTranscriptPanel()
+        controller.panelBodyForTesting.setChatOpen(true)
+        controller.toggleTranscriptPanel()
+
+        #expect(!controller.isPanelOpen)
+        #expect(controller.panelBodyForTesting.isChatOpen, "minimizing is not leaving chat")
+
+        controller.toggleTranscriptPanel()
+
+        #expect(controller.isPanelOpen)
+        #expect(controller.panelBodyForTesting.isChatOpen)
+        #expect(controller.panelBodyForTesting.model.chatContext?.meetingID == 77)
+        #expect(controller.panelBodyForTesting.isOutsideClickMonitorArmedForTesting)
+        controller.close()
+    }
+
+    /// Covers R13: focus is handed back before the body disappears, so no invisible window
+    /// is left holding keystrokes meant for the call — while R12's surviving tab is left
+    /// alone, because a fold is not the user leaving Chat or My notes.
+    @Test("minimizing and finalizing release focus before the body folds away")
+    func foldingReleasesFocusFirst() {
+        let now = Date(timeIntervalSinceReferenceDate: 62_000)
+        let controller = makeController(now: { now })
+        controller.reduceMotionOverrideForTesting = true
+        let owner = UUID()
+        controller.showRecording(
+            ownerID: owner,
+            startedAt: now,
+            powerProvider: { -160 },
+            chatContext: FloatingMeetingChatContext(
+                meetingID: 92,
+                priorTranscript: "",
+                currentConfig: { AppConfig() },
+                isReady: { true }
+            ),
+            presentation: .backgroundPill
+        )
+        controller.updateMeetingTranscript(
+            transcript: "[10:00:00] You: said before finalizing",
+            partialYou: "",
+            partialOthers: ""
+        )
+
+        controller.toggleTranscriptPanel()
+        controller.panelBodyForTesting.setChatOpen(true)
+        #expect(controller.panelBodyForTesting.isChatOpen)
+
+        controller.toggleTranscriptPanel()
+
+        // The keyboard is handed back and nothing is left listening, but the tab stands.
+        #expect(!controller.panelBodyForTesting.isOutsideClickMonitorArmedForTesting)
+        #expect(controller.panelBodyForTesting.isChatOpen)
+
+        controller.toggleTranscriptPanel()
+        controller.panelBodyForTesting.selectTab(.notes)
+        controller.beginFinalizing(ownerID: owner, status: "Summarizing")
+
+        #expect(controller.layoutForTesting == .pill)
+        #expect(!controller.panelBodyForTesting.isOutsideClickMonitorArmedForTesting)
+        // The fold is not the end of the meeting: what was captured stays readable until
+        // the recording is saved and the object closes, and so does the tab it was on.
+        #expect(controller.panelBodyForTesting.model.selectedTab == .notes)
+        #expect(controller.panelBodyForTesting.model.presentation.transcript.contains("said before finalizing"))
+        #expect(controller.hasMeetingContextForTesting)
+
+        controller.close(ownerID: owner)
+        #expect(!controller.hasMeetingContextForTesting)
+    }
+
+    @Test("the status bar reads the panel size, not a separate transcript window")
+    func statusBarTitleFollowsTheLayout() {
+        let now = Date(timeIntervalSinceReferenceDate: 63_000)
+        let controller = makeController(now: { now })
+        controller.reduceMotionOverrideForTesting = true
+        controller.showRecording(
+            ownerID: UUID(),
+            startedAt: now,
+            powerProvider: { -160 },
+            presentation: .backgroundPill
+        )
+
+        #expect(!controller.isPanelOpen, "pill: the item offers Open Meeting Panel")
+
+        controller.toggleTranscriptPanel()
+        #expect(controller.isPanelOpen, "panel: the item offers Minimize Meeting Panel")
+
+        controller.toggleTranscriptPanel()
+        #expect(!controller.isPanelOpen)
+        controller.close()
     }
 
     private func makeController(
