@@ -218,3 +218,11 @@
 - Decision (live feedback: "A"): the panel header is dot + clock, the spark wave stretched across the free width, and one trailing cluster pause · stop ‖ minimize behind a hairline; variants B (meeting title) and C (centred controls) are not adopted.
 - Node: `merged-panel-three-states-17` (header settled; remaining states await live use).
 
+
+## 20-08-2026 01:20 UTC — node 17 implemented; one deviation pending device review
+
+- Keep: every size, state and interaction of `merged-panel-three-states-17` as drawn — pill 72x22 (86 after the hour step), row 196x22 (210), panel 360x320 resizable from 360x240, radii 11/11/14, header variant A.
+- Keep: hover opens the row and folds back after 0.4 s; only the open-panel button opens the panel; the panel is sticky until minimized.
+- Keep: the base pill frame as the sole anchor, with the held corner chosen once per recording.
+- Deviation to review on device: "Starting..." does not fit the fixed 72 pt pill beside the record dot at 11 pt semibold (the string measures 54.1 pt against ~44 pt of room), so it renders at 9 pt semibold with a tighter dot gap. The node shows it at the same weight as "Record". Options if it reads badly at 1x: shorten the word, or let the Starting pill take a one-time fitted width the way the finalizing pill does.
+- Not yet accepted: node 17 stays `active` until the U8 device pass in `.context/visual-qa/meeting-panel/u8-device-qa-checklist.md` is walked; the values above are as-implemented, not as-verified-on-glass.
