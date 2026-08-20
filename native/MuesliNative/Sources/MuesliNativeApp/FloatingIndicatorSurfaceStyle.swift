@@ -67,30 +67,6 @@ struct FloatingIndicatorSurfaceStyle: Equatable {
     }
 }
 
-/// The large live-meeting panel shares the indicator's material recipe while
-/// retaining a readable panel radius and slightly layered neutral controls.
-struct FloatingMeetingPanelSurfaceStyle: Equatable {
-    let glass: FloatingIndicatorSurfaceStyle
-    let cornerRadius: CGFloat
-    let selectedControlAlpha: CGFloat
-
-    static func resolve(
-        reduceTransparency: Bool = false,
-        increaseContrast: Bool = false
-    ) -> Self {
-        let indicator = FloatingIndicatorSurfaceStyle.resolve(
-            role: .recording,
-            reduceTransparency: reduceTransparency,
-            increaseContrast: increaseContrast
-        )
-        return Self(
-            glass: indicator,
-            cornerRadius: MuesliTheme.cornerXL,
-            selectedControlAlpha: 0.14
-        )
-    }
-}
-
 enum FloatingMeetingPanelPalette {
     static let subtleSurfaceAlpha: CGFloat = 0.07
     static let controlSurfaceAlpha: CGFloat = 0.08

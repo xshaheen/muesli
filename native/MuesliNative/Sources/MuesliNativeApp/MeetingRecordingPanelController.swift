@@ -233,7 +233,6 @@ final class MeetingRecordingPanelController: NSObject {
     private let now: () -> Date
     private var savedControlCenter: CGPoint?
     private var preferredPanelOpen: Bool?
-    private var resolvedPanelOpen = false
     private var panelOpenSaveCount = 0
     private var lastSavedPanelOpen: Bool?
     private var state: MeetingRecordingPanelState = .hidden
@@ -368,7 +367,9 @@ final class MeetingRecordingPanelController: NSObject {
     var panelBodyForTesting: MeetingPanelBodyCoordinator { bodyCoordinator }
     var isPanelBodyHostedForTesting: Bool { bodyHostingView != nil }
     var preferredPanelOpenForTesting: Bool? { preferredPanelOpen }
-    var resolvedPanelOpenForTesting: Bool { resolvedPanelOpen }
+    /// Derived, never stored: the live layout is the only authority on whether the panel is
+    /// open, so a fold (finalizing) cannot leave a second copy of that fact reading stale.
+    var resolvedPanelOpenForTesting: Bool { layout == .panel }
     var panelOpenSaveCountForTesting: Int { panelOpenSaveCount }
     var lastSavedPanelOpenForTesting: Bool? { lastSavedPanelOpen }
     /// The dot and the clock must not move when the row unfolds, so both are asserted in
@@ -455,11 +456,7 @@ final class MeetingRecordingPanelController: NSObject {
         waveformView?.updateBackingScale(panel.backingScaleFactor)
         startAnimationTimer()
 
-        resolvedPanelOpen = Self.resolvesPanelOpen(
-            preferred: preferredPanelOpen,
-            presentation: presentation
-        )
-        if resolvedPanelOpen {
+        if Self.resolvesPanelOpen(preferred: preferredPanelOpen, presentation: presentation) {
             openPanel(userInitiated: false, animated: false)
         }
     }
@@ -544,7 +541,6 @@ final class MeetingRecordingPanelController: NSObject {
         layout = .pill
         appliedContent = nil
         elapsedClock.reset()
-        resolvedPanelOpen = false
         isPointerInside = false
         isPointerDown = false
         isDragging = false
@@ -579,12 +575,6 @@ final class MeetingRecordingPanelController: NSObject {
         } else {
             openPanel(userInitiated: true, animated: true)
         }
-    }
-
-    /// A programmatic open (the start-time resolution): the panel appears without writing
-    /// the remembered choice.
-    func showTranscriptPanel() {
-        openPanel(userInitiated: false, animated: true)
     }
 
     // MARK: Hover
@@ -1038,7 +1028,6 @@ final class MeetingRecordingPanelController: NSObject {
 
     private func rememberPanelOpen(_ isOpen: Bool) {
         preferredPanelOpen = isOpen
-        resolvedPanelOpen = isOpen
         panelOpenSaveCount += 1
         lastSavedPanelOpen = isOpen
         onPanelOpenSaved?(isOpen)

@@ -8694,13 +8694,23 @@ final class MuesliController: NSObject {
         config.mutedMeetingDetectionAppBundleIDs.contains(bundleID)
     }
 
-    private func disarmMeetingAutoStop() {
+    /// The part every disarm shares: stop the auto-stop machinery and reset the signal-loss
+    /// prompt. What happens to the activity candidate is what the two callers disagree about.
+    private func resetMeetingAutoStopState() {
         activeMeetingAutoStop.disarm()
         activeMeetingSignalLossResponse = .none
         meetingSignalLossPromptState.resetForRecording()
+    }
+
+    private func clearLatestMeetingActivityCandidate() {
         latestMeetingActivityCandidate = nil
         latestMeetingActivityCandidateObservedAt = nil
         latestMeetingActivityCandidateRunID = nil
+    }
+
+    private func disarmMeetingAutoStop() {
+        resetMeetingAutoStopState()
+        clearLatestMeetingActivityCandidate()
         syncMeetingDetectionMonitor()
     }
 
@@ -8709,9 +8719,7 @@ final class MuesliController: NSObject {
     /// meeting that is still on screen. Re-evaluate the detector's current candidate instead and
     /// keep it only while it is still the meeting the start was launched from.
     private func disarmMeetingAutoStopAfterFailedStart() {
-        activeMeetingAutoStop.disarm()
-        activeMeetingSignalLossResponse = .none
-        meetingSignalLossPromptState.resetForRecording()
+        resetMeetingAutoStopState()
 
         let detected = observedMeetingActivityCandidateRunID == meetingDetectionRunID
             ? observedMeetingActivityCandidate
@@ -8725,9 +8733,7 @@ final class MuesliController: NSObject {
             latestMeetingActivityCandidateObservedAt = observedMeetingActivityCandidateObservedAt
             latestMeetingActivityCandidateRunID = meetingDetectionRunID
         } else {
-            latestMeetingActivityCandidate = nil
-            latestMeetingActivityCandidateObservedAt = nil
-            latestMeetingActivityCandidateRunID = nil
+            clearLatestMeetingActivityCandidate()
         }
         syncMeetingDetectionMonitor()
     }

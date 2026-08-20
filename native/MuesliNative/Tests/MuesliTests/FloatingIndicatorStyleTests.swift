@@ -72,16 +72,6 @@ struct FloatingIndicatorStyleTests {
 
 @Suite("Floating meeting panel surface style")
 struct FloatingMeetingPanelStyleTests {
-    @Test("panel keeps neutral glass while reserving a subtle selected-control fill")
-    func panelUsesNeutralGlassSurface() {
-        let panel = FloatingMeetingPanelSurfaceStyle.resolve()
-        let indicator = FloatingIndicatorSurfaceStyle.resolve(role: .recording)
-
-        #expect(panel.glass == indicator)
-        #expect(panel.cornerRadius == MuesliTheme.cornerXL)
-        #expect(panel.selectedControlAlpha == 0.14)
-    }
-
     @Test("semantic accents stay limited to the established state palette")
     func semanticAccentPalette() {
         #expect(MuesliTheme.defaultAccentDarkHex == 0x6BA3F7)
@@ -105,16 +95,4 @@ struct FloatingMeetingPanelStyleTests {
         #expect(model.selectionAccentHex == 0x89B4FA)
     }
 
-    @Test("panel preserves accessible opaque and high-contrast fallbacks")
-    func panelAccessibilityFallbacks() {
-        let panel = FloatingMeetingPanelSurfaceStyle.resolve(
-            reduceTransparency: true,
-            increaseContrast: true
-        )
-
-        #expect(panel.glass.tintAlpha == 1)
-        #expect(!panel.glass.usesGlassEffect)
-        #expect(panel.glass.borderAlpha == 0.80)
-        #expect(panel.glass.borderWidth == 2)
-    }
 }

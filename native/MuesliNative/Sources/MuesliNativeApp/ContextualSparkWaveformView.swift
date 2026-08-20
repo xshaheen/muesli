@@ -13,6 +13,15 @@ final class ContextualSparkWaveformView: NSView {
     private let minHeight: CGFloat
     private let maxHeight: CGFloat
     private var backingScale: CGFloat = 2
+    /// The accessibility flags and the palette colours are read once and cached rather than per
+    /// frame: this view redraws 30 times a second for the whole length of a meeting, and both
+    /// `NSWorkspace` reads and `NSColor` construction are far from free at that cadence.
+    /// `refreshAccessibilityPresentation()` is the single refresh point, and every owner already
+    /// calls it from `NSWorkspace.accessibilityDisplayOptionsDidChangeNotification`.
+    private var reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    private var increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+    private let accentColor = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
+    private let highlightColor = NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1)
     /// Smoothed live level: drives the halo.
     var power: CGFloat = 0 { didSet { updateBars() } }
 
@@ -83,19 +92,18 @@ final class ContextualSparkWaveformView: NSView {
     }
 
     func refreshAccessibilityPresentation() {
+        reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         applyBarColors()
         updateBars()
     }
 
     private func applyBarColors() {
-        let accent = NSColor.colorWith(hex: DictationMiniPalette.accentHex, alpha: 1)
-        let highlight = NSColor.colorWith(hex: DictationMiniPalette.accentHighlightHex, alpha: 1)
-        let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         let quietAlpha = increaseContrast ? 0.8 : DictationMiniRendering.recordingQuietAlpha
         // Lit bars warm toward amber and brighten; quiet bars rest as muted orange.
         for (index, bar) in bars.enumerated() {
             let level = engine.bars.indices.contains(index) ? engine.bars[index] : 0
-            let color = accent.blended(withFraction: level * 0.85, of: highlight) ?? accent
+            let color = accentColor.blended(withFraction: level * 0.85, of: highlightColor) ?? accentColor
             bar.backgroundColor = color.withAlphaComponent(quietAlpha + (1 - quietAlpha) * min(1, level * 1.6)).cgColor
         }
     }
@@ -104,7 +112,6 @@ final class ContextualSparkWaveformView: NSView {
         guard !bars.isEmpty else { return }
         let fieldWidth = CGFloat(bars.count - 1) * barPitch + barWidth
         let startX = DictationMiniRendering.pixelAligned(bounds.midX - fieldWidth / 2, scale: backingScale)
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let levels = engine.bars
         if !reduceMotion { applyBarColors() }
         CATransaction.begin()

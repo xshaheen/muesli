@@ -24,16 +24,14 @@ struct MeetingPanelBody: View {
         model.presentation.partialOthers.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var copyText: String {
-        LiveTranscriptCopyContent.text(
-            transcript: model.presentation.transcript,
-            partialYou: model.presentation.partialYou,
-            partialOthers: model.presentation.partialOthers
-        )
-    }
-
     /// The copy button must enable off the visible tab's payload: notes written
     /// before any speech exists are copyable even though the transcript is empty.
+    ///
+    /// The transcript branch asks the model's `hasContent` flag rather than building the
+    /// copy payload: the tab strip is in every render, so materialising the whole growing
+    /// transcript here would re-join it on every chunk just to test it for emptiness.
+    /// `hasContent` is exactly `LiveTranscriptCopyContent.text`'s committed section, and the
+    /// two partials complete it — the same condition, without the string.
     private var copyPayloadIsEmpty: Bool {
         switch model.selectedTab {
         case .notes:
@@ -44,7 +42,7 @@ struct MeetingPanelBody: View {
                 .transcriptForCopying()
                 .isEmpty
         default:
-            return copyText.isEmpty
+            return !model.presentation.hasContent && partialOthers.isEmpty && partialYou.isEmpty
         }
     }
 
