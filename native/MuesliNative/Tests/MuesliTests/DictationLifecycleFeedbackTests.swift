@@ -4,6 +4,12 @@ import Testing
 
 @Suite("Dictation lifecycle feedback")
 struct DictationLifecycleFeedbackTests {
+    @Test("sound preference remains authoritative on every output route")
+    func soundPreferencePolicy() {
+        #expect(DictationLifecycleFeedback.soundAllowed(preferenceEnabled: true))
+        #expect(!DictationLifecycleFeedback.soundAllowed(preferenceEnabled: false))
+    }
+
     @Test("each lifecycle transition is emitted once")
     func deduplicatesTransitions() {
         var feedback = DictationLifecycleFeedback()
@@ -87,12 +93,28 @@ struct DictationLifecycleFeedbackTests {
 
         #expect(feedback.finish(
             sessionID: sessionID,
-            outcome: .failure(recovery: .retainedHistory),
+            outcome: .failure(recovery: .targetChangedWithRetainedHistory),
             soundAllowed: true
         ) == [
             .mini(sessionID: sessionID, .failure),
             .cue(.failure),
-            .showRetainedHistoryRecovery,
+            .showTargetChangedWithRetainedHistoryRecovery,
+        ])
+    }
+
+    @Test("unavailable failure emits only the terminal failure feedback")
+    func unavailableFailure() {
+        var feedback = DictationLifecycleFeedback()
+        let sessionID = UUID()
+        _ = feedback.begin(sessionID: sessionID, isTestMode: false)
+
+        #expect(feedback.finish(
+            sessionID: sessionID,
+            outcome: .failure(recovery: .unavailable),
+            soundAllowed: true
+        ) == [
+            .mini(sessionID: sessionID, .failure),
+            .cue(.failure),
         ])
     }
 }

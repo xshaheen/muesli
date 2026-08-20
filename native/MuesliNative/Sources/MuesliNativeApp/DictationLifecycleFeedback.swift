@@ -3,6 +3,10 @@ import Foundation
 /// Resolves one coherent visual and audible lifecycle for each dictation session.
 /// The controller owns effects; this value owns ordering, deduplication, and foreground arbitration.
 struct DictationLifecycleFeedback {
+    static func soundAllowed(preferenceEnabled: Bool) -> Bool {
+        preferenceEnabled
+    }
+
     enum Outcome: Equatable {
         case success
         case failure(recovery: Recovery)
@@ -11,7 +15,7 @@ struct DictationLifecycleFeedback {
 
     enum Recovery: Equatable {
         case unavailable
-        case retainedHistory
+        case targetChangedWithRetainedHistory
     }
 
     enum Cue: Equatable {
@@ -33,7 +37,7 @@ struct DictationLifecycleFeedback {
     enum Action: Equatable {
         case cue(Cue)
         case mini(sessionID: UUID, MiniPresentation)
-        case showRetainedHistoryRecovery
+        case showTargetChangedWithRetainedHistoryRecovery
     }
 
     private struct Session {
@@ -49,6 +53,13 @@ struct DictationLifecycleFeedback {
     private(set) var foregroundSessionID: UUID?
 
     mutating func begin(sessionID: UUID, isTestMode: Bool) -> [Action] {
+        if let foregroundSessionID,
+           foregroundSessionID != sessionID,
+           var superseded = sessions[foregroundSessionID],
+           superseded.outcome == nil {
+            superseded.outcome = .neutral
+            sessions[foregroundSessionID] = superseded
+        }
         sessions[sessionID] = Session(isTestMode: isTestMode)
         sessionOrder.removeAll { $0 == sessionID }
         sessionOrder.append(sessionID)
@@ -104,8 +115,8 @@ struct DictationLifecycleFeedback {
                 cue: .failure,
                 soundAllowed: soundAllowed
             )
-            if recovery == .retainedHistory {
-                failureActions.append(.showRetainedHistoryRecovery)
+            if recovery == .targetChangedWithRetainedHistory {
+                failureActions.append(.showTargetChangedWithRetainedHistoryRecovery)
             }
             actions = failureActions
         case .neutral:

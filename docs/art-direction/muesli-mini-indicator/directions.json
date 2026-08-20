@@ -33,9 +33,9 @@
       ],
       "round": 1,
       "mode": "iterate",
-      "thesis": "Dictation feedback should materialize beside the pointer only when it has information to convey, then disappear completely.",
+      "thesis": "Dictation feedback should materialize beside the focused text insertion caret only when it has information to convey, then disappear completely.",
       "anchors": [
-        "user-corrected near-pointer behavior",
+        "user-corrected caret-context behavior",
         "hidden idle default",
         "Muesli waveform language",
         "22 point active capsule height"
@@ -67,7 +67,7 @@
         "user-annotated processing screenshot",
         "animated circular point field",
         "distinct recording and processing silhouettes",
-        "Muesli warm accent"
+        "approved orange and amber Contextual Spark palette"
       ],
       "artifact": "docs/art-direction/muesli-mini-indicator/transcription-orb-02.html",
       "status": "candidate",
@@ -170,20 +170,393 @@
         "generated_at_utc": "2026-08-18T19:31:12Z",
         "remote_service_disclosure": "none"
       }
+    },
+    {
+      "id": "glass-compact-states-06",
+      "parents": [
+        "split-surfaces-05"
+      ],
+      "round": 6,
+      "mode": "iterate",
+      "thesis": "The Mini should feel like a native glass signal rather than a painted badge, with compact smooth computation and a success mark stripped to its essential check.",
+      "anchors": [
+        "user correction for true glass and smooth rendering",
+        "approved Contextual Spark warm palette",
+        "28 point processing field",
+        "check-only success state"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/glass-compact-states-06.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T07:29:12Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T07:29:12Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "original-glass-vector-07",
+      "parents": [
+        "glass-compact-states-06"
+      ],
+      "round": 7,
+      "mode": "iterate",
+      "thesis": "The Mini should directly reuse the original floating button's material stack while moving every animated micro-shape onto backing-scale-aware vector layers.",
+      "anchors": [
+        "user-selected original floating button glass quality",
+        "Dark Aqua HUD material and clipped continuous surface",
+        "approved warm Contextual Spark signals",
+        "Core Animation vector circles and gradient bars"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/original-glass-vector-07.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T08:01:37Z",
+      "generation": {
+        "capability": "manual-html-css-svg",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML with inline SVG",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T08:01:37Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "signal-pair-08",
+      "parents": [
+        "original-glass-vector-07"
+      ],
+      "round": 8,
+      "mode": "iterate",
+      "thesis": "Preparing and completion should read as one circular signal language: a 14-point coral seed followed by a compact green checked disk.",
+      "anchors": [
+        "user-provided 14-point Preparing reference",
+        "user-requested circular completion state",
+        "approved Contextual Spark coral and semantic green",
+        "Core Animation vector geometry with unclipped compositor glow"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/signal-pair-08.html",
+      "status": "rejected",
+      "created_at_utc": "2026-08-19T08:08:09Z",
+      "generation": {
+        "capability": "manual-html-css-svg",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML with inline SVG",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T08:08:09Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "signal-pair-09",
+      "parents": [
+        "signal-pair-08"
+      ],
+      "round": 9,
+      "mode": "iterate",
+      "thesis": "The approved circular signal pair should be previewed in the browser with the completion check oriented correctly for SVG's top-left coordinate system.",
+      "anchors": [
+        "signal-pair-08 geometry and palette",
+        "Quick Look visual QA",
+        "correct descending-then-rising check silhouette"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/signal-pair-09.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T08:11:17Z",
+      "generation": {
+        "capability": "manual-html-css-svg",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML with inline SVG",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T08:11:17Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "wide-warm-field-rejected",
+      "parents": [
+        "signal-pair-09"
+      ],
+      "round": 10,
+      "mode": "iterate",
+      "thesis": "A much wider 104 by 32 point capsule with 31 warm bars and a lighter tint would read as a richer recording surface.",
+      "anchors": [
+        "user-provided dark capsule reference",
+        "uncommitted native experiment without a preview artifact"
+      ],
+      "artifact": "discarded — uncommitted native Swift experiment, no preview retained",
+      "status": "rejected",
+      "created_at_utc": "unknown",
+      "generation": {
+        "capability": "native-swift-experiment",
+        "provider": "Codex",
+        "model_or_version": "unknown",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "unknown",
+        "seed": "unknown",
+        "generated_at_utc": "unknown",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "recording-wave-10",
+      "parents": [
+        "signal-pair-09"
+      ],
+      "round": 10,
+      "mode": "iterate",
+      "thesis": "Recording should stay the accepted 58 by 22 point capsule but become a low dark glass ground carrying a dense, crisp one-point scrolling history of the voice, with one ambient halo instead of per-bar glow.",
+      "anchors": [
+        "user-provided dark capsule reference measured at about 53 by 23 points with one-point bars at about 1.75 point pitch",
+        "accepted Contextual Spark palette and HUD glass recipe from signal-pair-09",
+        "AVAudioRecorder average power with the recorder's -58 dB speech threshold as the floor",
+        "backing-scale-aligned Core Animation layers with no implicit animations"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/recording-wave-10.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T09:19:12Z",
+      "generation": {
+        "capability": "manual-html-css-canvas",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML with a canvas mirror of the native waveform mechanics",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T09:19:12Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "compact-signal-11",
+      "parents": [
+        "recording-wave-10"
+      ],
+      "round": 11,
+      "mode": "iterate",
+      "thesis": "Preparing, processing, completion and failure should share one compact 20 pt footprint anchored to the same caret position, and the Preparing seed should double as a brief focus reminder that dictation is available.",
+      "anchors": [
+        "user request for a smaller Preparing seed and equal-size processing/success at the Preparing position",
+        "user request to show the Preparing signal for three seconds when a caret gains focus",
+        "recording-wave-10 palette, glass and placement rules",
+        "Accessibility focused-element change notifications"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/compact-signal-11.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T09:54:39Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T09:54:39Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "meeting-record-pill-12",
+      "parents": [
+        "split-surfaces-05",
+        "recording-wave-10"
+      ],
+      "round": 12,
+      "mode": "iterate",
+      "thesis": "The floating button returns for meetings only: a compact Contextual Spark Record pill that appears while a meeting app is active, starts recording with one click, and hands off in place to the Meeting Recording Panel.",
+      "anchors": [
+        "user request to bring back the floating button for meetings only with a better look and colors",
+        "split-surfaces-05 boundary: meeting chrome never shares state with the dictation Mini",
+        "existing MeetingMonitor activity candidate and Meeting Recording Panel saved center",
+        "recording-wave-10 glass and palette"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/meeting-record-pill-12.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T09:54:39Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T09:54:39Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "glass-success-13",
+      "parents": [
+        "compact-signal-11"
+      ],
+      "round": 13,
+      "mode": "iterate",
+      "thesis": "Completion should read as a bright green glass disk with a small white check and no dark ring, every signal should pop in and fade out, and the focus reminder should fire only for empty, genuinely editable fields.",
+      "anchors": [
+        "user feedback: brighter green, glassy, small check, no dark border",
+        "user feedback: reminder fired on GitHub code views and non-inputs; wants a small appearance animation",
+        "compact-signal-11 footprint and anchor rules"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/glass-success-13.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T11:00:01Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T11:00:01Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "follower-14",
+      "parents": [
+        "glass-success-13",
+        "recording-wave-10"
+      ],
+      "round": 14,
+      "mode": "iterate",
+      "thesis": "The Mini should behave as a follower: a persistent idle seed near the text context that steps aside during activity, with hover keycaps, a selection hint, toasts, window pinning, tiered caret resolution with active fallbacks, and a spark-lit recording wave.",
+      "anchors": [
+        "user decision: adopt the Monologue follower approach in all five reviewed aspects",
+        "monologue-followerkit-notes.md",
+        "glass-success-13 and recording-wave-10 visuals"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/follower-14.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T13:34:37Z",
+      "generation": {
+        "capability": "manual-html-css-canvas",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T13:34:37Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "glass-disc-15",
+      "parents": [
+        "follower-14"
+      ],
+      "round": 15,
+      "mode": "iterate",
+      "thesis": "Idle and Preparing should be the same glass object as the recording capsule — an 18 pt dark disc with a coral core that brightens and then stretches into the wave — and the hotkey should record from key-down with taps discarded.",
+      "anchors": [
+        "user decisions 19-08-2026: disc look, keep hover affordances and selection hint, pointer only for recording without a field, eager start, keep pinning",
+        "side-by-side measurements of the reference follower",
+        "follower-14"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/glass-disc-15.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T16:48:54Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T16:48:54Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "meeting-panel-two-state-16",
+      "parents": [
+        "meeting-record-pill-12",
+        "glass-disc-15"
+      ],
+      "round": 16,
+      "mode": "iterate",
+      "thesis": "The Meeting Recording Panel should be the same 22 pt Contextual Spark glass capsule as the Record pill and the Mini: minimized it is the Record pill with a live clock; expanded it unfolds in place into one low row with the wave, pause/resume, stop, transcript and collapse; the choice is remembered and the legacy 224 x 46 HUD bar goes away.",
+      "anchors": [
+        "user request 19-08-2026: minimize/expand the meeting panel, pause/resume + stop, visible recording time",
+        "meeting-record-pill-12 footprint and hand-off",
+        "glass-disc-15 disc-to-capsule morph",
+        "current MeetingRecordingPanelController states and controls"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/meeting-panel-two-state-16.html",
+      "status": "parent",
+      "created_at_utc": "2026-08-19T19:42:00Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T19:42:00Z",
+        "remote_service_disclosure": "none"
+      }
+    },
+    {
+      "id": "merged-panel-three-states-17",
+      "parents": [
+        "meeting-panel-two-state-16"
+      ],
+      "round": 17,
+      "mode": "iterate",
+      "thesis": "The recording capsule and the floating transcript panel should be one glass object with three sizes: a pill with the live clock, a hover row with the wave, pause/resume, stop and an open-panel button, and a sticky panel whose header is that row and whose body is the transcript, chat and notes.",
+      "anchors": [
+        "user direction 19-08-2026: merge the capsule and the panel; minimized shows the clock; expanded on hover; an icon converts the row into the floating panel; redesign the panel in this phase",
+        "meeting-panel-two-state-16",
+        "current FloatingMeetingTranscriptPanel tabs, copy, notes and chat features"
+      ],
+      "artifact": "docs/art-direction/muesli-mini-indicator/merged-panel-three-states-17.html",
+      "status": "candidate",
+      "created_at_utc": "2026-08-19T19:55:00Z",
+      "generation": {
+        "capability": "manual-html-css",
+        "provider": "Claude Fable 5",
+        "model_or_version": "claude-fable-5",
+        "prompt_hash": "unknown",
+        "prompt_path": "unknown",
+        "settings": "self-contained local HTML",
+        "seed": "none",
+        "generated_at_utc": "2026-08-19T19:55:00Z",
+        "remote_service_disclosure": "none"
+      }
     }
   ],
   "decisions": [
     {
       "from": "current-fixed-pill",
       "to": "contextual-spark-01",
-      "operation": "keep waveform and glass; drop fixed persistent idle; intensify contextual pointer placement",
+      "operation": "keep waveform and glass; drop fixed persistent idle; intensify contextual insertion-caret placement",
       "feedback_ref": "feedback.md#18-08-2026-1859-utc--contextual-placement-correction",
       "decided_at_utc": "2026-08-18T18:59:21Z"
     },
     {
       "from": "contextual-spark-01",
       "to": "transcription-orb-02",
-      "operation": "replace generic processing ellipsis with animated transcription point field; preserve contextual placement and Muesli color identity",
+      "operation": "replace generic processing ellipsis with an orange and amber animated transcription point field; preserve contextual placement and Contextual Spark color identity",
       "feedback_ref": "feedback.md#18-08-2026-1923-utc--processing-is-an-animated-transcription-orb",
       "decided_at_utc": "2026-08-18T19:23:46Z"
     },
@@ -207,6 +580,104 @@
       "operation": "replace shared floating-indicator concept with independent dictation Mini and meeting-recording panel lifecycles",
       "feedback_ref": "feedback.md#18-08-2026-1931-utc--split-dictation-mini-from-meeting-panel",
       "decided_at_utc": "2026-08-18T19:31:12Z"
+    },
+    {
+      "from": "split-surfaces-05",
+      "to": "glass-compact-states-06",
+      "operation": "preserve the warm palette; replace painted opacity with native glass; shrink and smooth processing; reduce success to a standalone check; restore cues on headphone routes",
+      "feedback_ref": "feedback.md#19-08-2026-0729-utc--true-glass-and-compact-terminal-states",
+      "decided_at_utc": "2026-08-19T07:29:12Z"
+    },
+    {
+      "from": "glass-compact-states-06",
+      "to": "original-glass-vector-07",
+      "operation": "reuse the original floating button material stack; reduce the warm tint to 44 percent; replace tiny path painting with backing-scale-aware vector layers",
+      "feedback_ref": "feedback.md#19-08-2026-0801-utc--original-glass-and-vector-rendering",
+      "decided_at_utc": "2026-08-19T08:01:37Z"
+    },
+    {
+      "from": "original-glass-vector-07",
+      "to": "signal-pair-08",
+      "operation": "match Preparing to the 14-point coral reference and replace the standalone completion check with a checked green circle",
+      "feedback_ref": "feedback.md#19-08-2026-0808-utc--paired-circular-preparing-and-completion-signals",
+      "decided_at_utc": "2026-08-19T08:08:09Z"
+    },
+    {
+      "from": "signal-pair-08",
+      "to": "signal-pair-09",
+      "operation": "preserve the approved signal pair and correct only the HTML preview check orientation",
+      "feedback_ref": "feedback.md#19-08-2026-0811-utc--preview-coordinate-correction",
+      "decided_at_utc": "2026-08-19T08:11:17Z"
+    },
+    {
+      "from": "signal-pair-09",
+      "to": "wide-warm-field-rejected",
+      "operation": "widen recording to 104 by 32 points with 31 warm bars and a lighter tint",
+      "feedback_ref": "feedback.md#19-08-2026-0919-utc--recording-wave-on-a-low-dark-glass",
+      "decided_at_utc": "2026-08-19T09:19:12Z"
+    },
+    {
+      "from": "signal-pair-09",
+      "to": "recording-wave-10",
+      "operation": "keep the 58 by 22 footprint and glass recipe; darken the recording tint to 62 percent; replace five glowing 2-point bars with twenty-four crisp 1-point bars scrolling as a 30 Hz history with an amber live edge, muted tail, and one ambient halo",
+      "feedback_ref": "feedback.md#19-08-2026-0919-utc--recording-wave-on-a-low-dark-glass",
+      "decided_at_utc": "2026-08-19T09:19:12Z"
+    },
+    {
+      "from": "recording-wave-10",
+      "to": "compact-signal-11",
+      "operation": "shrink Preparing to 10 pt; unify processing/success/failure in a shared 20 pt window placed against the held caret anchor; add a 3 s focus reminder using the Preparing seed",
+      "feedback_ref": "feedback.md#19-08-2026-0954-utc--compact-signal-reminder-and-meeting-record-pill",
+      "decided_at_utc": "2026-08-19T09:54:39Z"
+    },
+    {
+      "from": "split-surfaces-05",
+      "to": "meeting-record-pill-12",
+      "operation": "reintroduce a meeting-only floating Record pill shown during detected meeting activity, restyled in the Contextual Spark glass palette, handing off to the Meeting Recording Panel",
+      "feedback_ref": "feedback.md#19-08-2026-0954-utc--compact-signal-reminder-and-meeting-record-pill",
+      "decided_at_utc": "2026-08-19T09:54:39Z"
+    },
+    {
+      "from": "compact-signal-11",
+      "to": "glass-success-13",
+      "operation": "replace the solid green completion disk with a tinted glass disk and small white check; drop compositor shadows on bright signals; add pop-in/fade-out; restrict the reminder to empty editable fields with a 60 s repeat guard",
+      "feedback_ref": "feedback.md#19-08-2026-1100-utc--glass-success-and-quiet-reminder",
+      "decided_at_utc": "2026-08-19T11:00:01Z"
+    },
+    {
+      "from": "glass-success-13",
+      "to": "follower-14",
+      "operation": "replace the timed reminder with a persistent idle follower (hysteresis, activity suppression, Escape, snooze, pinning, hover keycaps, selection hint, toasts), add pointer/screen-bottom fallbacks for active states and child drilling, and light the recording wave with seeded sparks",
+      "feedback_ref": "feedback.md#19-08-2026-1334-utc--adopt-the-follower-approach",
+      "decided_at_utc": "2026-08-19T13:34:37Z"
+    },
+    {
+      "from": "follower-14",
+      "to": "glass-disc-15",
+      "operation": "replace the naked seed with an 18 pt glass disc and coral core for idle/preparing, morph disc↔capsule↔orb, eager hotkey start with tap discard and gated start cue",
+      "feedback_ref": "feedback.md#19-08-2026-1648-utc--design-review-decisions",
+      "decided_at_utc": "2026-08-19T16:48:54Z"
+    },
+    {
+      "from": "meeting-record-pill-12",
+      "to": "meeting-panel-two-state-16",
+      "operation": "fold the Meeting Recording Panel into a two-state 22 pt glass capsule: minimized Record-pill footprint with a live clock, expanded single-row controls; click toggles, state remembered, legacy HUD bar retired",
+      "feedback_ref": "feedback.md#19-08-2026-1942-utc--two-state-meeting-panel",
+      "decided_at_utc": "2026-08-19T19:42:00Z"
+    },
+    {
+      "from": "meeting-panel-two-state-16",
+      "to": "merged-panel-three-states-17",
+      "operation": "merge the recording capsule and the floating transcript panel into one three-size object: pill, hover row with an open-panel button, sticky panel with the row as header and transcript/chat/notes body; one anchor, one remembered choice, transcript panel redesigned in the Spark glass",
+      "feedback_ref": "feedback.md#19-08-2026-1955-utc--merge-the-capsule-and-the-transcript-panel",
+      "decided_at_utc": "2026-08-19T19:55:00Z"
+    },
+    {
+      "from": "merged-panel-three-states-17",
+      "to": "merged-panel-three-states-17",
+      "operation": "panel header settled on variant A: stretched spark wave between the clock and a trailing pause · stop ‖ minimize cluster",
+      "feedback_ref": "feedback.md#19-08-2026-2007-utc--panel-header-variant-a",
+      "decided_at_utc": "2026-08-19T20:07:00Z"
     }
   ]
 }

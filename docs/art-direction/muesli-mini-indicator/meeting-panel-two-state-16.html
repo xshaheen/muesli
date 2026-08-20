@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muesli Meeting Panel — Two States</title>
+  <style>
+    :root { color-scheme:dark; --coral:#ff7043; --amber:#ffb04d; --ink:#f3f2ef; --glass:rgba(33,31,30,.62); --edge:rgba(255,255,255,.16); }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0b0b0a; color:#f3f2ef; font-family:-apple-system,BlinkMacSystemFont,sans-serif; }
+    main { width:min(1120px,calc(100% - 48px)); padding:40px 0 60px; }
+    h1 { margin:0 0 14px; font-size:44px; line-height:1; letter-spacing:-.04em; }
+    .lede { max-width:780px; margin:0 0 30px; color:#99958f; line-height:1.55; }
+    .stage { display:grid; grid-template-columns:1.25fr 1fr; gap:1px; overflow:hidden; border:1px solid rgba(255,255,255,.11); border-radius:28px; background:rgba(255,255,255,.11); box-shadow:0 32px 90px rgba(0,0,0,.46); }
+    .stage.single { grid-template-columns:1fr; }
+    .stage + .stage { margin-top:18px; }
+    .stage.two { grid-template-columns:1fr 1fr; }
+    article { padding:34px; background:linear-gradient(145deg,#171716,#0f0f0e); }
+    .index { color:#6f6c67; font:700 12px ui-monospace,SFMono-Regular,monospace; letter-spacing:.16em; }
+    h2 { margin:10px 0 18px; font-size:27px; }
+    h3 { margin:22px 0 8px; font-size:14px; color:#d4d1cb; letter-spacing:.02em; }
+    .foot { color:#85817c; font:600 13px ui-monospace,SFMono-Regular,monospace; margin-top:18px; }
+    .foot strong { color:#d4d1cb; }
+    .foot span { display:block; margin-top:6px; font:400 13px/1.45 -apple-system,BlinkMacSystemFont,sans-serif; }
+    .host { position:relative; border-radius:16px; overflow:hidden; display:grid; place-items:center; background:
+      radial-gradient(220px 120px at 25% 20%, #2c3f63 0%, transparent 70%),
+      radial-gradient(260px 140px at 80% 90%, #4a2f26 0%, transparent 70%),
+      linear-gradient(#2a2a2c,#1a1a1c); }
+    .host.zoom { height:240px; }
+    .host.real { height:90px; margin-top:12px; }
+    .host::after { content:"Zoom Meeting — Weekly sync"; position:absolute; left:14px; top:12px; color:#d8d6d0; font:13px/1.3 -apple-system,BlinkMacSystemFont,sans-serif; opacity:.7; }
+    .host.quiet::after { content:none; }
+    .zoom .unit { transform:scale(3); }
+    .row { display:grid; gap:10px; margin-top:12px; }
+    .row.two { grid-template-columns:1fr 1fr; }
+    .row.three { grid-template-columns:1fr 1fr 1fr; }
+    .row.four { grid-template-columns:1fr 1fr 1fr 1fr; }
+    .cell { position:relative; border-radius:14px; background:linear-gradient(#232325,#19191b); display:flex; flex-direction:column; align-items:center; padding:14px 12px 10px; overflow:hidden; }
+    .cell .art { width:100%; display:grid; place-items:center; height:44px; }
+    .cell small { display:block; width:100%; margin-top:10px; color:#85817c; font:600 11px/1.35 ui-monospace,SFMono-Regular,monospace; }
+    .cell .unit { transform:scale(1.75); }
+    .cell.x24 .art { height:64px; } .cell.x24 .unit { transform:scale(2.4); } .cell.x24 .unit.status { transform:scale(2.1); }
+    .cell.x3 .art { height:80px; } .cell.x3 .unit { transform:scale(3); }
+    .cell.x2 .art { height:54px; } .cell.x2 .unit { transform:scale(2); }
+    .cell.x15 .art { height:40px; } .cell.x15 .unit { transform:scale(1.5); }
+    .cell.x1 .art { height:30px; } .cell.x1 .unit { transform:none; }
+    .arrow { position:absolute; right:-9px; top:30px; color:#c9c5be; font-size:22px; z-index:2; }
+
+    /* ---- The object: one 22 pt glass capsule ---- */
+    .unit { position:relative; display:flex; align-items:center; height:22px; border-radius:11px; padding:0 9px;
+      background:var(--glass); -webkit-backdrop-filter:blur(22px) saturate(1.2); backdrop-filter:blur(22px) saturate(1.2);
+      box-shadow:inset 0 0 0 1px var(--edge), 0 6px 16px rgba(0,0,0,.45); color:var(--ink); font:600 11px/1 -apple-system,BlinkMacSystemFont,sans-serif; cursor:pointer; white-space:nowrap; }
+    .unit.pill { width:72px; }
+    .unit.pill.long { width:86px; }
+    .unit.pill.status { width:auto; padding-right:11px; }
+    .unit.cap { width:216px; padding-right:6px; }
+    .unit.hover { background:rgba(33,31,30,.50); }
+    .unit.pressed { background:rgba(33,31,30,.78); }
+    .unit.contrast { box-shadow:inset 0 0 0 2px rgba(255,255,255,.82), 0 6px 16px rgba(0,0,0,.45); }
+    .unit.opaque { background:#211f1e; -webkit-backdrop-filter:none; backdrop-filter:none; }
+    .unit.starting { cursor:default; } .unit.starting .dot { opacity:.55; box-shadow:none; } .unit.starting .label { opacity:.55; }
+
+    .dot { position:relative; width:8px; height:8px; border-radius:50%; background:var(--coral); flex:none; margin-right:5px;
+      box-shadow:0 0 3px 2px rgba(255,112,67,.42); animation:pulse 1.6s ease-in-out infinite; }
+    .dot::after { content:""; position:absolute; left:2px; top:2px; width:3px; height:3px; border-radius:50%; background:rgba(255,176,77,.78); }
+    .dot.still { animation:none; }
+    .dot.paused { background:var(--amber); box-shadow:none; animation:none; }
+    .dot.paused::after { background:rgba(255,255,255,.55); }
+    .dot.busy { background:var(--amber); box-shadow:0 0 3px 2px rgba(255,176,77,.42); animation:pulse-fast .9s ease-in-out infinite; }
+    .dot.busy::after { background:rgba(255,255,255,.6); }
+    @keyframes pulse { 0%,100% { box-shadow:0 0 3px 2px rgba(255,112,67,.36); } 50% { box-shadow:0 0 5px 3px rgba(255,112,67,.70); } }
+    @keyframes pulse-fast { 0%,100% { box-shadow:0 0 2px 1px rgba(255,176,77,.30); } 50% { box-shadow:0 0 5px 3px rgba(255,176,77,.72); } }
+
+    .time { font-family:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace; font-variant-numeric:tabular-nums; font-weight:600; opacity:.92; letter-spacing:.01em; }
+    .time.dim { opacity:.70; }
+    .label { opacity:.92; }
+    .status { color:var(--amber); opacity:.92; font-size:10px; }
+
+    .wave { display:flex; align-items:center; gap:1px; height:14px; width:48px; margin:0 6px 0 8px; flex:none; }
+    .wave i { display:block; width:1px; border-radius:.5px; background:#ff7043; opacity:.48; height:1px; }
+    .wave i.l { background:#ffb04d; opacity:1; }
+    .wave.live i { animation:bar 1.1s ease-in-out infinite; }
+    .wave.live i:nth-child(3n) { animation-duration:.8s; } .wave.live i:nth-child(3n+1) { animation-duration:1.4s; animation-delay:-.3s; } .wave.live i:nth-child(5n) { animation-duration:.95s; animation-delay:-.6s; }
+    @keyframes bar { 0%,100% { height:2px; } 50% { height:11px; } }
+    .wave.flat i { height:1px; opacity:.30; }
+    .slot { width:48px; margin:0 6px 0 8px; flex:none; display:grid; place-items:center; }
+
+    .btn { width:24px; height:22px; display:grid; place-items:center; flex:none; color:var(--ink); opacity:.86; }
+    .btn svg { width:10px; height:10px; fill:currentColor; }
+    .btn.sel { color:var(--coral); opacity:.95; }
+    .btn.off { opacity:.36; }
+    .btn.chev { width:20px; }
+    .btn.chev svg { width:7px; height:9px; }
+
+    /* ---- Morph demo: the same object folding and unfolding (0.16 s ease-out) ---- */
+    .morph-box { width:216px; height:22px; display:flex; justify-content:flex-start; transform:scale(3); transform-origin:center center; }
+    .unit.cap.morph { width:72px; padding-right:9px; animation:morph 6s ease-out -3s infinite; overflow:hidden; transform:none !important; }
+    .morph .ctl { display:flex; align-items:center; opacity:0; animation:ctl 6s linear -3s infinite; }
+    @keyframes morph { 0%,34% { width:72px; padding-right:9px; } 37%,80% { width:216px; padding-right:6px; } 83%,100% { width:72px; padding-right:9px; } }
+    @keyframes ctl { 0%,35% { opacity:0; } 38%,80% { opacity:1; } 82%,100% { opacity:0; } }
+    .caption { position:absolute; left:14px; bottom:12px; color:#85817c; font:600 11px ui-monospace,SFMono-Regular,monospace; }
+
+    table { width:100%; border-collapse:collapse; font:12px/1.5 ui-monospace,SFMono-Regular,monospace; color:#b9b5ae; }
+    td { padding:4px 0; border-bottom:1px solid rgba(255,255,255,.07); vertical-align:top; }
+    td:first-child { color:#7f7b75; width:15%; padding-right:12px; }
+    .legacy { position:relative; width:224px; height:46px; border-radius:23px; background:rgba(30,30,46,.60); box-shadow:inset 0 0 0 1px rgba(255,255,255,.16); display:flex; align-items:center; gap:10px; padding:0 14px; color:#eee; font:600 12px -apple-system,BlinkMacSystemFont,sans-serif; opacity:.7; }
+    .legacy i { display:inline-block; width:3px; height:10px; background:#fff; border-radius:1.5px; margin:0 1.5px; opacity:.82; }
+    .legacy small { font-size:8px; opacity:.62; display:block; text-align:center; }
+    @media (prefers-reduced-motion: reduce) { .dot, .wave i, .morph, .morph .ctl { animation:none !important; } .morph { width:216px; padding-right:6px; } .morph .ctl { opacity:1; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>One capsule, two sizes:<br>the meeting panel folds into its timer.</h1>
+    <p class="lede">The Meeting Recording Panel becomes the same 22 pt Contextual Spark glass object as the Record pill and the Mini's capsule. <strong style="color:#d4d1cb">Minimized</strong> it is the Record pill with a live clock: a pulsing coral dot and <code>mm:ss</code>. <strong style="color:#d4d1cb">Expanded</strong> it unfolds in place into one low row — dot + clock, live wave, pause/resume, stop, transcript, collapse. Click the pill to expand, ‹ to collapse; the choice sticks across recordings; drag moves it in either size. The legacy 224 × 46 two‑line HUD bar goes away.</p>
+
+    <section class="stage single">
+      <article>
+        <div class="index">P1</div><h2>Minimized ↔ Expanded · 3× and 1×</h2>
+        <div class="host zoom">
+          <div class="morph-box"><div class="unit cap morph" role="group" aria-label="Meeting recording, 12:34, recording">
+            <div class="dot"></div><span class="time">12:34</span>
+            <div class="ctl"><div class="wave live"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="l"></i></div><div class="btn" title="Pause"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn" title="Stop"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><div class="btn" title="Live transcript"><svg viewBox="0 0 10 10"><path d="M1.5 1.2h7a1 1 0 0 1 1 1v4.3a1 1 0 0 1-1 1H5.2L3 9.2V7.5H1.5a1 1 0 0 1-1-1V2.2a1 1 0 0 1 1-1z"/><rect x="2.4" y="3.1" width="5.2" height=".9" fill="#211f1e"/><rect x="2.4" y="4.8" width="3.4" height=".9" fill="#211f1e"/></svg></div><div class="btn chev" title="Collapse"><svg viewBox="0 0 7 9"><path d="M5.6 1 1.6 4.5 5.6 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div>
+          </div>
+          </div>
+          <div class="caption">click the pill → unfolds 0.16 s ease‑out, controls fade in · only ‹ folds it back (the body is drag‑only, so a missed pause tap never collapses it)</div>
+        </div>
+        <div class="host real quiet">
+          <div style="display:flex;gap:36px;align-items:center"><div class="unit pill"><div class="dot"></div><span class="time">12:34</span></div><div class="unit cap"><div class="dot"></div><span class="time">12:34</span><div class="wave live"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="l"></i></div><div class="btn" title="Pause"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn" title="Stop"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><div class="btn" title="Live transcript"><svg viewBox="0 0 10 10"><path d="M1.5 1.2h7a1 1 0 0 1 1 1v4.3a1 1 0 0 1-1 1H5.2L3 9.2V7.5H1.5a1 1 0 0 1-1-1V2.2a1 1 0 0 1 1-1z"/><rect x="2.4" y="3.1" width="5.2" height=".9" fill="#211f1e"/><rect x="2.4" y="4.8" width="3.4" height=".9" fill="#211f1e"/></svg></div><div class="btn chev" title="Collapse"><svg viewBox="0 0 7 9"><path d="M5.6 1 1.6 4.5 5.6 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div></div>
+        </div>
+        <div class="foot"><strong>72 × 22 pt pill · 216 × 22 pt capsule · HUD glass #211f1e @ 62 % · 1 pt 16 % edge · radius 11</strong><span>8 pt coral dot (3 pt amber core, halo breathing 1.6 s) · clock 11 pt semibold tabular digits, ink 92 % · 24 × 1 pt spark wave at 2 pt pitch (the Mini's engine, amber live edge) · SF Symbols 10 pt semibold, ink 86 %, 24 pt hit boxes · collapse chevron 20 pt. Same height as the Record pill and the Mini's recording capsule.</span></div>
+        <h3>Hand‑off in place</h3>
+        <div class="row four">
+          <div class="cell x15"><div class="art"><div class="unit pill"><div class="dot still"></div><span class="label">Record</span></div></div><small>meeting app active · the Record pill at the saved spot</small><div class="arrow">→</div></div>
+          <div class="cell x15"><div class="art"><div class="unit pill starting"><div class="dot still"></div><span class="label">Starting…</span></div></div><small>click · capture starting · same pill, dimmed, not clickable · never an empty spot</small><div class="arrow">→</div></div>
+          <div class="cell x15"><div class="art"><div class="unit pill"><div class="dot"></div><span class="time">00:00</span></div></div><small>capture live · label becomes the clock, dot breathes</small><div class="arrow">→</div></div>
+          <div class="cell x1"><div class="art"><div class="unit cap" style="transform:scale(.9)"><div class="dot"></div><span class="time">00:01</span><div class="wave live"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="l"></i></div><div class="btn" title="Pause"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn" title="Stop"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><div class="btn" title="Live transcript"><svg viewBox="0 0 10 10"><path d="M1.5 1.2h7a1 1 0 0 1 1 1v4.3a1 1 0 0 1-1 1H5.2L3 9.2V7.5H1.5a1 1 0 0 1-1-1V2.2a1 1 0 0 1 1-1z"/><rect x="2.4" y="3.1" width="5.2" height=".9" fill="#211f1e"/><rect x="2.4" y="4.8" width="3.4" height=".9" fill="#211f1e"/></svg></div><div class="btn chev" title="Collapse"><svg viewBox="0 0 7 9"><path d="M5.6 1 1.6 4.5 5.6 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div></div><small>if the remembered state is expanded, it unfolds right away</small></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="stage two">
+      <article>
+        <div class="index">P2</div><h2>Pill states · 2.4×</h2>
+        <div class="row two">
+          <div class="cell x24"><div class="art"><div class="unit pill"><div class="dot paused"></div><span class="time dim">12:34</span></div></div><small>paused · amber dot, no halo · clock 70 % · frozen</small></div>
+          <div class="cell x24"><div class="art"><div class="unit pill status"><div class="dot busy"></div><span class="status">Transcribing</span></div></div><small>finalizing · amber pulse · status replaces the clock · widens to fit</small></div>
+        </div>
+        <div class="row two">
+          <div class="cell x24"><div class="art"><div class="unit pill long"><div class="dot"></div><span class="time">1:02:07</span></div></div><small>past 59:59 · h:mm:ss · 86 pt, one step, no jitter</small></div>
+          <div class="cell x24"><div class="art"><div class="unit pill hover"><div class="dot"></div><span class="time">12:34</span></div></div><small>hover · tint 62 → 50 % · pointing hand · no transcript pop while minimized</small></div>
+        </div>
+        <h3>Accessibility · 2×</h3>
+        <div class="row two">
+          <div class="cell x2"><div class="art"><div class="unit pill contrast"><div class="dot"></div><span class="time">12:34</span></div></div><small>Increase Contrast · 2 pt 82 % edge</small></div>
+          <div class="cell x2"><div class="art"><div class="unit pill opaque"><div class="dot still"></div><span class="time">12:34</span></div></div><small>Reduce Transparency / Reduce Motion · opaque, no pulse, no morph</small></div>
+        </div>
+      </article>
+      <article>
+        <div class="index">P3</div><h2>Capsule states · 1.75×</h2>
+        <div class="row">
+          <div class="cell "><div class="art"><div class="unit cap"><div class="dot"></div><span class="time">12:34</span><div class="wave live"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="l"></i></div><div class="btn" title="Pause"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn" title="Stop"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><div class="btn" title="Live transcript"><svg viewBox="0 0 10 10"><path d="M1.5 1.2h7a1 1 0 0 1 1 1v4.3a1 1 0 0 1-1 1H5.2L3 9.2V7.5H1.5a1 1 0 0 1-1-1V2.2a1 1 0 0 1 1-1z"/><rect x="2.4" y="3.1" width="5.2" height=".9" fill="#211f1e"/><rect x="2.4" y="4.8" width="3.4" height=".9" fill="#211f1e"/></svg></div><div class="btn chev" title="Collapse"><svg viewBox="0 0 7 9"><path d="M5.6 1 1.6 4.5 5.6 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div></div><small>recording · live spark wave · pause · stop · transcript · collapse</small></div>
+          <div class="cell "><div class="art"><div class="unit cap"><div class="dot paused"></div><span class="time dim">12:34</span><div class="slot"><span class="status">Paused</span></div><div class="btn" title="Resume"><svg viewBox="0 0 10 10"><path d="M2.2 1.2v7.6L8.4 5z"/></svg></div><div class="btn" title="Stop"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><div class="btn sel" title="Live transcript"><svg viewBox="0 0 10 10"><path d="M1.5 1.2h7a1 1 0 0 1 1 1v4.3a1 1 0 0 1-1 1H5.2L3 9.2V7.5H1.5a1 1 0 0 1-1-1V2.2a1 1 0 0 1 1-1z"/><rect x="2.4" y="3.1" width="5.2" height=".9" fill="#211f1e"/><rect x="2.4" y="4.8" width="3.4" height=".9" fill="#211f1e"/></svg></div><div class="btn chev" title="Collapse"><svg viewBox="0 0 7 9"><path d="M5.6 1 1.6 4.5 5.6 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div></div><small>paused · the wave slot reads “Paused” · play glyph · transcript shown = coral</small></div>
+          <div class="cell "><div class="art"><div class="unit cap"><div class="dot busy"></div><span class="time dim">12:34</span><div class="slot"><span class="status">Summarizing</span></div><div class="btn off" title="Pause"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn off" title="Stop"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><div class="btn off" title="Live transcript"><svg viewBox="0 0 10 10"><path d="M1.5 1.2h7a1 1 0 0 1 1 1v4.3a1 1 0 0 1-1 1H5.2L3 9.2V7.5H1.5a1 1 0 0 1-1-1V2.2a1 1 0 0 1 1-1z"/><rect x="2.4" y="3.1" width="5.2" height=".9" fill="#211f1e"/><rect x="2.4" y="4.8" width="3.4" height=".9" fill="#211f1e"/></svg></div><div class="btn chev" title="Collapse"><svg viewBox="0 0 7 9"><path d="M5.6 1 1.6 4.5 5.6 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div></div><small>finalizing · status in the wave slot · pause/stop/transcript 36 % · collapse stays live · closes when saved</small></div>
+          <div class="cell "><div class="art"><div class="unit cap hover"><div class="dot"></div><span class="time">12:34</span><div class="wave live"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="l"></i></div><div class="btn" title="Pause"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.6" height="8" rx=".6"/><rect x="5.9" y="1" width="2.6" height="8" rx=".6"/></svg></div><div class="btn" title="Stop"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2"/></svg></div><div class="btn" title="Live transcript"><svg viewBox="0 0 10 10"><path d="M1.5 1.2h7a1 1 0 0 1 1 1v4.3a1 1 0 0 1-1 1H5.2L3 9.2V7.5H1.5a1 1 0 0 1-1-1V2.2a1 1 0 0 1 1-1z"/><rect x="2.4" y="3.1" width="5.2" height=".9" fill="#211f1e"/><rect x="2.4" y="4.8" width="3.4" height=".9" fill="#211f1e"/></svg></div><div class="btn chev" title="Collapse"><svg viewBox="0 0 7 9"><path d="M5.6 1 1.6 4.5 5.6 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div></div><small>hover · tint 62 → 50 % · drag from the clock or wave · transcript peeks here if the setting is on</small></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="stage single">
+      <article>
+        <div class="index">Δ</div><h2>Decisions</h2>
+        <table>
+          <tr><td>Replaces</td><td>the 224 × 46 HUD bar (transcript · pause · bars · clock/status · stop) — <span style="display:inline-flex;vertical-align:middle;transform:scale(.55);transform-origin:left center;margin-right:-90px"><span class="legacy"><span>❚❚</span><i></i><i style="height:6px"></i><i style="height:14px"></i><i style="height:8px"></i><i></i><span style="text-align:center">00:00<small>Meeting recording</small></span><span style="margin-left:auto">■</span></span></span></td></tr>
+          <tr><td>Toggle</td><td>minimized: click anywhere on the pill expands; expanded: only the ‹ chevron collapses — the body is drag‑only so a missed pause tap never folds it; 6 pt drag threshold unchanged; ⌥‑click / right‑click still asks to discard</td></tr>
+          <tr><td>Remembered</td><td>new config key <code>meeting_recording_panel_expanded</code> (default true → the first recording opens expanded); saved on every toggle; a new recording opens in the last state</td></tr>
+          <tr><td>Anchor on resize</td><td>the minimized pill frame is the canonical anchor and its center is what <code>meeting_recording_panel_center</code> stores; the capsule extends trailing from that frame and clamps 12 pt inside the pill's display (so a right‑edge pill unfolds leftwards); if the visible transcript panel sits on the trailing side it extends leading instead; dragging the capsule moves the anchor by the pointer delta; collapse returns to the anchor</td></tr>
+          <tr><td>Clock</td><td><code>mm:ss</code> in 72 pt; <code>h:mm:ss</code> steps to 86 pt once and stays; tabular digits; paused freezes it at 70 % ink</td></tr>
+          <tr><td>Paused</td><td>amber dot without halo; wave slot reads “Paused”; play glyph; pill shows the amber dot + frozen clock; status‑bar and hotkey pause mirror here</td></tr>
+          <tr><td>Finalizing</td><td>amber 0.9 s pulse; Finalizing / Transcribing / Cleaning / Titling / Summarizing in the wave slot (expanded) or in place of the clock (pill, widens to fit); pause/stop/transcript at 36 %; collapse stays live; closes on completion</td></tr>
+          <tr><td>Transcript</td><td>same toggle button (coral when shown); “show transcript on hover” applies to the expanded capsule only — hovering the minimized pill never pops the transcript; collapsing leaves a shown transcript where it is</td></tr>
+          <tr><td>Record pill</td><td>identical footprint and chrome, so the hand‑off is a label swap: “● Record” → “● Starting…” (dimmed, inert, while capture starts) → “● 00:00”; shared saved center unchanged; the Record pill stays hidden while the recording pill is on screen, including finalizing</td></tr>
+          <tr><td>Motion</td><td>0.16 s ease‑out width morph with controls fading in after; dot halo breathes 1.6 s; Reduce Motion → instant size change, static dot; Reduce Transparency → opaque #211f1e; Increase Contrast → 2 pt 82 % edge</td></tr>
+          <tr><td>Accessibility</td><td>pill = one element, role button, label “Meeting recording, 12:34, recording/paused”, custom actions Expand · Pause/Resume · Stop; expanded = group with labelled buttons, key chain pause → stop → transcript → collapse; state changes announced once</td></tr>
+          <tr><td>Not adopted</td><td>hover‑to‑expand (fights drag and the transcript hover); click‑on‑body collapse (mis‑click risk during calls); a taller two‑line panel; a second saved position; controls on the Dictation Mini</td></tr>
+        </table>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

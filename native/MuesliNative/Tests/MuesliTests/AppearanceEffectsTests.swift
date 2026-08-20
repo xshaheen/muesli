@@ -6,6 +6,18 @@ import AppKit
 @MainActor
 struct SoundControllerTests {
 
+    @Test("lifecycle sounds remain serialized by playback completion")
+    func serialPlaybackQueue() {
+        var queue = SerialSoundPlaybackQueue<Int>()
+
+        #expect(queue.enqueue(1) == 1)
+        #expect(queue.enqueue(2) == nil)
+        #expect(queue.enqueue(3) == nil)
+        #expect(queue.didFinishPlaying() == 2)
+        #expect(queue.didFinishPlaying() == 3)
+        #expect(queue.didFinishPlaying() == nil)
+    }
+
     @Test("playDictationStart with enabled=false does not throw")
     func playStartDisabled() {
         // NSSound.play() is a no-op in the test runner (no audio device required)

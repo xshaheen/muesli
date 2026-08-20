@@ -1,6 +1,6 @@
 import CoreGraphics
 
-/// Pure AppKit-coordinate placement for the pointer-contextual dictation Mini.
+/// Pure AppKit-coordinate placement for the caret-contextual dictation Mini.
 struct DictationMiniPlacement {
     struct Screen: Equatable {
         let frame: CGRect
@@ -8,10 +8,10 @@ struct DictationMiniPlacement {
     }
 
     enum Quadrant: CaseIterable, Equatable {
-        case lowerRight
-        case lowerLeft
-        case upperRight
-        case upperLeft
+        /// Centred under the caret (the Mini's home position).
+        case below
+        /// Centred above the caret when there is no room below.
+        case above
     }
 
     struct Result: Equatable {
@@ -20,58 +20,53 @@ struct DictationMiniPlacement {
         let screen: Screen
     }
 
-    static let minimumPointerClearance: CGFloat = 28
-    static let movementThreshold: CGFloat = 48
+    static let movementThreshold: CGFloat = 4
     static let screenEdgeInset: CGFloat = 4
+    /// Gap between the caret's bottom edge and the Mini's visible top edge.
+    static let caretGap: CGFloat = 6
+    /// Lift used when the Mini must sit above the caret (caret bottom → Mini bottom).
+    static let caretLiftAbove: CGFloat = 22
+    /// The follower sits a touch left of the caret so it reads as "under the insertion point",
+    /// not under the next character (measured against the reference follower).
+    static let caretHorizontalBias: CGFloat = -4
 
-    static func place(
-        near pointer: CGPoint,
+    /// Places the Mini centred directly under a caret anchor (the caret's bottom-centre point),
+    /// flipping above it when the screen runs out, and clamping as a last resort.
+    /// `visualInset` is the transparent margin between the window edge and the visible glyph
+    /// (e.g. the seed's glow margin), so the glyph — not the window — keeps the caret gap.
+    static func placeBelowCaret(
+        _ anchor: CGPoint,
         size: CGSize,
         screens: [Screen],
-        clearance: CGFloat = minimumPointerClearance
+        visualInset: CGFloat = 0
     ) -> Result? {
         guard size.width > 0, size.height > 0,
-              let screen = selectedScreen(containingOrNearestTo: pointer, screens: screens)
+              let screen = selectedScreen(containingOrNearestTo: anchor, screens: screens)
         else { return nil }
-
-        let safeClearance = max(clearance, minimumPointerClearance)
         let visibleFrame = insetVisibleFrame(screen.visibleFrame, by: screenEdgeInset)
-        for quadrant in Quadrant.allCases {
-            let frame = proposedFrame(
-                near: pointer,
-                size: size,
-                clearance: safeClearance,
-                quadrant: quadrant
-            )
-            if contains(frame, in: visibleFrame) {
-                return Result(frame: frame, quadrant: quadrant, screen: screen)
-            }
+        let clearance = caretGap - visualInset
+        let below = proposedFrame(near: anchor, size: size, clearance: clearance, quadrant: .below)
+        if visibleFrame.contains(below) {
+            return Result(frame: below, quadrant: .below, screen: screen)
         }
-
-        let preferred = proposedFrame(
-            near: pointer,
-            size: size,
-            clearance: safeClearance,
-            quadrant: .lowerRight
-        )
-        return Result(
-            frame: clamped(preferred, to: visibleFrame),
-            quadrant: .lowerRight,
-            screen: screen
-        )
+        let above = proposedFrame(near: anchor, size: size, clearance: clearance, quadrant: .above)
+        if visibleFrame.contains(above) {
+            return Result(frame: above, quadrant: .above, screen: screen)
+        }
+        return Result(frame: clamped(below, to: visibleFrame), quadrant: .below, screen: screen)
     }
 
     static func shouldReacquire(
-        from previousPointer: CGPoint,
+        from previousAnchor: CGPoint,
         on previousScreen: Screen,
-        to currentPointer: CGPoint,
+        to currentAnchor: CGPoint,
         on currentScreen: Screen,
         threshold: CGFloat = movementThreshold
     ) -> Bool {
         guard previousScreen == currentScreen else { return true }
         let distance = hypot(
-            currentPointer.x - previousPointer.x,
-            currentPointer.y - previousPointer.y
+            currentAnchor.x - previousAnchor.x,
+            currentAnchor.y - previousAnchor.y
         )
         return distance >= max(threshold, 0)
     }
@@ -98,7 +93,7 @@ struct DictationMiniPlacement {
     }
 
     private static func proposedFrame(
-        near pointer: CGPoint,
+        near anchor: CGPoint,
         size: CGSize,
         clearance: CGFloat,
         quadrant: Quadrant
@@ -106,27 +101,14 @@ struct DictationMiniPlacement {
         let x: CGFloat
         let y: CGFloat
         switch quadrant {
-        case .lowerRight:
-            x = pointer.x + clearance
-            y = pointer.y - clearance - size.height
-        case .lowerLeft:
-            x = pointer.x - clearance - size.width
-            y = pointer.y - clearance - size.height
-        case .upperRight:
-            x = pointer.x + clearance
-            y = pointer.y + clearance
-        case .upperLeft:
-            x = pointer.x - clearance - size.width
-            y = pointer.y + clearance
+        case .below:
+            x = anchor.x + caretHorizontalBias - size.width / 2
+            y = anchor.y - clearance - size.height
+        case .above:
+            x = anchor.x + caretHorizontalBias - size.width / 2
+            y = anchor.y + caretLiftAbove
         }
         return CGRect(origin: CGPoint(x: x, y: y), size: size)
-    }
-
-    private static func contains(_ frame: CGRect, in bounds: CGRect) -> Bool {
-        frame.minX >= bounds.minX
-            && frame.maxX <= bounds.maxX
-            && frame.minY >= bounds.minY
-            && frame.maxY <= bounds.maxY
     }
 
     private static func clamped(_ frame: CGRect, to bounds: CGRect) -> CGRect {

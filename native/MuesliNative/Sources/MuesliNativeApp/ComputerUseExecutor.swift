@@ -344,7 +344,7 @@ enum ComputerUseToolExecutor {
             }
         }
         if let rect = rect(of: element) {
-            ComputerUseCursorOverlay.shared.show(at: CGPoint(x: rect.midX, y: rect.midY), label: label)
+            ComputerUseCursorOverlay.shared.showTarget(at: CGPoint(x: rect.midX, y: rect.midY), label: label)
         }
         return .executed("Scrolled element \(direction.rawValue)")
     }
@@ -429,7 +429,7 @@ enum ComputerUseToolExecutor {
             return .unsupported("Element does not advertise \(actionName) (actions: \(actions)). Run get_app_state again if the target changed.")
         }
         if let rect = rect(of: element) {
-            ComputerUseCursorOverlay.shared.show(at: CGPoint(x: rect.midX, y: rect.midY), label: toolCall.label)
+            ComputerUseCursorOverlay.shared.showTarget(at: CGPoint(x: rect.midX, y: rect.midY), label: toolCall.label)
         }
         guard AXUIElementPerformAction(element, actionName as CFString) == .success else {
             return .failed("Could not perform \(actionName) on \(elementTargetLabel(toolCall))")
@@ -651,7 +651,7 @@ enum ComputerUseToolExecutor {
 
         _ = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, true as CFTypeRef)
         if let rect = rect(of: element) {
-            ComputerUseCursorOverlay.shared.show(at: CGPoint(x: rect.midX, y: rect.midY), label: toolCall.label)
+            ComputerUseCursorOverlay.shared.showTarget(at: CGPoint(x: rect.midX, y: rect.midY), label: toolCall.label)
         }
         _ = clickCenter(of: element)
         do {
@@ -695,7 +695,7 @@ enum ComputerUseToolExecutor {
         fallbackLabel: String
     ) -> ComputerUseExecutionResult {
         if let rect = rect(of: element) {
-            ComputerUseCursorOverlay.shared.show(
+            ComputerUseCursorOverlay.shared.showTarget(
                 at: CGPoint(x: rect.midX, y: rect.midY),
                 label: fallbackLabel
             )
@@ -739,7 +739,7 @@ enum ComputerUseToolExecutor {
             return .failed("No current screenshot for point click")
         }
 
-        ComputerUseCursorOverlay.shared.show(at: point, label: toolCall.label)
+        ComputerUseCursorOverlay.shared.showTarget(at: point, label: toolCall.label)
         CGWarpMouseCursorPosition(point)
         guard postClick(
             at: point,
@@ -760,7 +760,7 @@ enum ComputerUseToolExecutor {
             return .failed("No current screenshot for cursor move")
         }
         CGWarpMouseCursorPosition(point)
-        ComputerUseCursorOverlay.shared.show(at: point, label: toolCall.label)
+        ComputerUseCursorOverlay.shared.showTarget(at: point, label: toolCall.label)
         return .executed("Moved cursor to \(Int(point.x.rounded())),\(Int(point.y.rounded()))")
     }
 
@@ -795,7 +795,7 @@ enum ComputerUseToolExecutor {
             return .failed("Could not create drag event")
         }
 
-        ComputerUseCursorOverlay.shared.show(at: start, label: toolCall.label)
+        ComputerUseCursorOverlay.shared.showTarget(at: start, label: toolCall.label)
         mouseDown.post(tap: .cghidEventTap)
         for step in 1...12 {
             let progress = CGFloat(step) / 12
@@ -811,7 +811,7 @@ enum ComputerUseToolExecutor {
             )?.post(tap: .cghidEventTap)
         }
         mouseUp.post(tap: .cghidEventTap)
-        ComputerUseCursorOverlay.shared.show(at: end, label: toolCall.label)
+        ComputerUseCursorOverlay.shared.showTarget(at: end, label: toolCall.label)
         return .executed("Dragged pointer")
     }
 

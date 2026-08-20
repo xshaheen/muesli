@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muesli Mini Indicator — Glass Compact States</title>
+  <style>
+    :root { color-scheme: dark; --orange:#ff7043; --amber:#ffb04d; --green:#62d691; --red:#ff6961; }
+    * { box-sizing: border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:radial-gradient(circle at 70% 20%,#302825,#0d0d0d 58%); color:#f3f2ef; font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif; }
+    main { width:min(980px,calc(100% - 48px)); }
+    h1 { margin:0 0 8px; font-size:42px; letter-spacing:-.04em; }
+    p { margin:0 0 32px; color:#aaa7a2; max-width:680px; }
+    .states { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+    .card { min-height:220px; display:grid; place-items:center; padding:24px; border:1px solid rgba(255,255,255,.1); border-radius:22px; background:rgba(255,255,255,.035); box-shadow:0 24px 70px rgba(0,0,0,.28); }
+    .card small { align-self:end; color:#87847f; font:600 10px/1 ui-monospace,monospace; letter-spacing:.12em; text-transform:uppercase; }
+    .glass { position:relative; display:grid; place-items:center; overflow:hidden; border:1px solid rgba(255,255,255,.18); background:linear-gradient(rgba(50,49,47,.64),rgba(24,24,23,.76)); box-shadow:inset 0 1px rgba(255,255,255,.09),0 9px 28px rgba(0,0,0,.48); backdrop-filter:blur(18px) saturate(125%); }
+    .recording { width:116px; height:44px; border-radius:22px; display:flex; gap:6px; }
+    .bar { width:4px; border-radius:3px; background:linear-gradient(var(--amber),var(--orange)); box-shadow:0 0 8px rgba(255,112,67,.45); animation:wave .72s ease-in-out infinite alternate; }
+    .bar:nth-child(1),.bar:nth-child(5){height:10px}.bar:nth-child(2),.bar:nth-child(4){height:22px}.bar:nth-child(3){height:28px}
+    .bar:nth-child(2){animation-delay:-.3s}.bar:nth-child(3){animation-delay:-.55s}.bar:nth-child(4){animation-delay:-.18s}.bar:nth-child(5){animation-delay:-.44s}
+    @keyframes wave { to { transform:scaleY(.45); opacity:.65; } }
+    .processing { width:56px; height:56px; border-radius:50%; grid-template-columns:repeat(5,4px); gap:3px; }
+    .dot { width:4px; height:4px; border-radius:50%; background:var(--orange); animation:pulse 1.6s ease-in-out infinite; box-shadow:0 0 4px rgba(255,112,67,.35); }
+    .dot:nth-child(3n){background:var(--amber);animation-delay:-.5s}.dot:nth-child(4n){animation-delay:-1s}.dot:nth-child(5n){opacity:.42}
+    @keyframes pulse { 50% { opacity:.28; transform:scale(.78); } }
+    .check { width:36px; height:28px; overflow:visible; filter:drop-shadow(0 0 5px rgba(98,214,145,.4)); }
+    .check path { fill:none; stroke:var(--green); stroke-width:4.8; stroke-linecap:round; stroke-linejoin:round; }
+    .failure { width:44px; height:44px; border-radius:50%; }
+    .failure::before,.failure::after { content:""; position:absolute; width:18px; height:3px; border-radius:2px; background:var(--red); box-shadow:0 0 5px rgba(255,105,97,.35); }
+    .failure::before{transform:rotate(45deg)}.failure::after{transform:rotate(-45deg)}
+    @media(max-width:760px){.states{grid-template-columns:1fr 1fr}}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Glass, not painted plastic.</h1>
+    <p>Warm material-backed surfaces, a smaller and smoother processing field, and terminal success reduced to the check itself. Shown at 2× for inspection; native sizes are 58×22, 28×28, 18×14, and 22×22 points.</p>
+    <section class="states">
+      <article class="card"><div class="glass recording"><i class="bar"></i><i class="bar"></i><i class="bar"></i><i class="bar"></i><i class="bar"></i></div><small>Recording · glass</small></article>
+      <article class="card"><div class="glass processing">
+        <i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+        <i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+        <i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+        <i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+        <i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      </div><small>Processing · 28 pt</small></article>
+      <article class="card"><svg class="check" viewBox="0 0 36 28" aria-label="Success"><path d="M3 14 L12.4 22.4 L33 4"/></svg><small>Success · mark only</small></article>
+      <article class="card"><div class="glass failure"></div><small>Failure · restrained</small></article>
+    </section>
+  </main>
+</body>
+</html>

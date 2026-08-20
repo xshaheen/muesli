@@ -31,9 +31,11 @@ upstream `main`.
 - Added asynchronous model deletion after unloading the resident model.
 - Added test-shard assignments for the expanded native test suite.
 - Added placement diagnostics for the floating pill and panel.
+- Replaced the fixed, idle-visible dictation button and its placement controls with an idle-hidden, warm-charcoal Contextual Spark Mini that appears beside the focused text insertion caret, shows distinct preparing, recording, processing, success, and failure states, and plays separate lifecycle sounds; meeting recording controls now use an independent panel.
 - Added first-strong bidirectional text presentation for meeting titles, notes, transcripts, and chat, with per-block Arabic, Hebrew, and LTR alignment that leaves application chrome and speaker-role placement unchanged.
 - Added Arabic-aware meeting output so Arabic-dominant transcripts generate Arabic titles, summaries, section headings, fallback notes, and retained-note labels across every summary backend.
 - Added trusted macOS microphone-attribution evidence for Teams and other dedicated meeting apps when CoreAudio does not expose an output stream.
+- Merged the meeting recording bar and the floating transcript panel into one three-size Contextual Spark object: a 72 pt pill with the live recording time, a hover row carrying the spark wave, pause/resume, stop and an open-panel button, and a resizable 360x320 panel whose header is that same row and whose body keeps the Transcript, Chat and My notes tabs. All three sizes share one anchor and one window, the open/minimized choice is remembered in `meeting_panel_open`, and the Record pill hands off in place.
 
 #### Changes and fixes
 
@@ -119,6 +121,11 @@ upstream `main`.
 
 ##### Floating pill and panel
 
+- Fixed the Record pill leaving its spot empty between the click and the first clock tick; a pill-originated start now reads "Starting..." in the same frame until capture is live, and a failed start restores the Record pill immediately instead of waiting out the detector's cooldown.
+- Fixed the Record pill reappearing over a finalizing recording.
+- Fixed a discard confirmation left open across the end of a meeting being applied to the recording that replaced it.
+- Retired the separate transcript window along with the `meeting_panel_origin` position and the "Show transcript on hover" setting; both legacy config keys are ignored on load and are not migrated, and the first panel after upgrading derives its position from the pill's saved anchor.
+- Renamed the menu-bar item "Show/Hide Live Transcript" to "Open/Minimize Meeting Panel".
 - Fixed indicator resizes collapsing the expanded panel's union frame, which caused torn silhouettes, stray borders, and malformed pill corners.
 - Fixed inline Markdown inside list items and headings rendering literal formatting markers.
 - Fixed the pill drifting inward after hover expansion near a screen edge.

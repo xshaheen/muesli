@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muesli Mini Indicator — Compact Signal and Reminder</title>
+  <style>
+    :root { color-scheme:dark; --coral:#ff7043; --amber:#ffb04d; --green:#62d691; --red:#ff6961; --ink:#0e0e0d; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0b0b0a; color:#f3f2ef; font-family:-apple-system,BlinkMacSystemFont,sans-serif; }
+    main { width:min(1040px,calc(100% - 48px)); padding:40px 0; }
+    h1 { margin:0 0 14px; font-size:44px; line-height:1; letter-spacing:-.04em; }
+    .lede { max-width:740px; margin:0 0 30px; color:#99958f; line-height:1.55; }
+    .stage { display:grid; grid-template-columns:1.2fr 1fr; gap:1px; overflow:hidden; border:1px solid rgba(255,255,255,.11); border-radius:28px; background:rgba(255,255,255,.11); box-shadow:0 32px 90px rgba(0,0,0,.46); }
+    article { padding:34px; background:linear-gradient(145deg,#171716,#0f0f0e); }
+    .index { color:#6f6c67; font:700 12px ui-monospace,SFMono-Regular,monospace; letter-spacing:.16em; }
+    h2 { margin:10px 0 18px; font-size:27px; }
+    .foot { color:#85817c; font:600 13px ui-monospace,SFMono-Regular,monospace; margin-top:18px; }
+    .foot strong { color:#d4d1cb; }
+    .foot span { display:block; margin-top:6px; font:400 13px/1.45 -apple-system,BlinkMacSystemFont,sans-serif; }
+    /* Editor host with a caret; every signal hangs lower-left of the same caret anchor. */
+    .host { position:relative; height:150px; border-radius:16px; background:linear-gradient(#232325,#19191b); overflow:hidden; }
+    .host .text { position:absolute; left:18px; top:22px; color:#d8d6d0; font:14px/1.4 ui-monospace,SFMono-Regular,monospace; }
+    .host .caret { position:absolute; left:214px; top:21px; width:2px; height:18px; background:#6fa3ff; }
+    .row { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:10px; }
+    .cell { position:relative; height:120px; border-radius:14px; background:linear-gradient(#232325,#19191b); display:grid; place-items:center; }
+    .cell small { position:absolute; left:12px; bottom:10px; color:#85817c; font:600 11px ui-monospace,SFMono-Regular,monospace; }
+    .win { position:relative; width:20px; height:20px; display:grid; place-items:center; outline:1px dashed rgba(255,255,255,.12); outline-offset:0; }
+    .z4 .win { transform:scale(4); }
+    .seed { width:10px; height:10px; border-radius:50%; background:var(--coral); box-shadow:0 0 4px 2px rgba(255,112,67,.32); }
+    .orb { width:20px; height:20px; border-radius:50%; background:rgba(33,31,30,.62); box-shadow:inset 0 0 0 1px rgba(255,255,255,.16); position:relative; }
+    .orb i { position:absolute; width:2.2px; height:2.2px; border-radius:50%; background:var(--amber); opacity:.8; }
+    .done { width:18px; height:18px; border-radius:50%; background:var(--green); box-shadow:0 0 3px 1px rgba(98,214,145,.28); position:relative; }
+    .done svg { position:absolute; inset:0; width:18px; height:18px; }
+    .fail { width:20px; height:20px; border-radius:50%; background:rgba(33,31,30,.62); box-shadow:inset 0 0 0 1px rgba(255,255,255,.16); position:relative; }
+    .fail svg { position:absolute; inset:0; width:20px; height:20px; }
+    .timeline { margin-top:16px; display:grid; grid-template-columns:auto 1fr; gap:8px 14px; font:12px/1.5 ui-monospace,SFMono-Regular,monospace; color:#b9b5ae; }
+    .timeline b { color:#d4d1cb; font-weight:600; }
+    table { width:100%; border-collapse:collapse; font:12px/1.5 ui-monospace,SFMono-Regular,monospace; color:#b9b5ae; }
+    td { padding:3px 0; border-bottom:1px solid rgba(255,255,255,.07); vertical-align:top; }
+    td:first-child { color:#7f7b75; width:44%; }
+    .reminder-demo { position:absolute; left:184px; top:41px; }
+    @keyframes remind { 0%,4% { opacity:0; } 6%,70% { opacity:1; } 74%,100% { opacity:0; } }
+    .reminder-demo .seed { animation:remind 4.2s linear infinite; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>One footprint.<br>One anchor.</h1>
+    <p class="lede">Preparing shrinks to a 10 pt seed; Processing, Complete and Failure join it in a shared 20 pt window. Every non‑recording state is placed against the same caret anchor, so the session never hops: the orb and the check land exactly where the seed appeared. The same seed doubles as a three‑second reminder when a text field gains focus.</p>
+    <section class="stage">
+      <article>
+        <div class="index">01 · 03 · 05 · 06</div><h2>Shared 20 pt signal window</h2>
+        <div class="row z4">
+          <div class="cell"><div class="win"><div class="seed"></div></div><small>Preparing · 10 pt</small></div>
+          <div class="cell"><div class="win"><div class="orb"><i style="left:8.9px;top:3.3px"></i><i style="left:6.1px;top:6.1px"></i><i style="left:8.9px;top:6.1px"></i><i style="left:11.7px;top:6.1px"></i><i style="left:3.3px;top:8.9px"></i><i style="left:6.1px;top:8.9px"></i><i style="left:8.9px;top:8.9px"></i><i style="left:11.7px;top:8.9px"></i><i style="left:14.5px;top:8.9px"></i><i style="left:6.1px;top:11.7px"></i><i style="left:8.9px;top:11.7px"></i><i style="left:11.7px;top:11.7px"></i><i style="left:8.9px;top:14.5px"></i></div></div><small>Processing · 20 pt</small></div>
+          <div class="cell"><div class="win"><div class="done"><svg viewBox="0 0 18 18"><path d="M4.6 9.1 7.8 12.2 13.8 6" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div></div><small>Complete · 18 pt</small></div>
+          <div class="cell"><div class="win"><div class="fail"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7" fill="rgba(255,105,97,.2)"/><path d="M6.4 6.4 13.6 13.6 M13.6 6.4 6.4 13.6" stroke="var(--red)" stroke-width="1.8" stroke-linecap="round"/></svg></div></div><small>Failure · 20 pt</small></div>
+        </div>
+        <div class="host" style="margin-top:16px">
+          <div class="text">Hello there, the quick brown fox jumps over</div>
+          <div class="caret"></div>
+          <div class="reminder-demo"><div class="seed" aria-label="Dictation ready"></div></div>
+        </div>
+        <div class="foot"><strong>Reminder · focus → 3 s → gone</strong><span>When an editable caret gains focus the 10 pt seed appears lower‑left of it for three seconds, then disappears. One reminder per focused field, a 1.5 s global cooldown, never inside Muesli, never during a session, never announced to VoiceOver.</span></div>
+      </article>
+      <article>
+        <div class="index">Δ</div><h2>What changed</h2>
+        <table>
+          <tr><td>Preparing</td><td>14 → 10 pt seed, 24 → 20 pt window, glow radius 5 → 4</td></tr>
+          <tr><td>Processing</td><td>28 → 20 pt orb, point spacing 3.5 → 2.8, dots 2.7/2.0 → 2.3/1.7 pt</td></tr>
+          <tr><td>Complete</td><td>20 → 18 pt disk, 24 → 20 pt window, check scales with the disk</td></tr>
+          <tr><td>Failure</td><td>22 → 20 pt, X and fill expressed as fractions of the disk</td></tr>
+          <tr><td>Position</td><td>Processing/Complete/Failure placed against the held caret anchor (same quadrant rule as Preparing) — no post‑insertion caret reacquire</td></tr>
+          <tr><td>Recording</td><td>unchanged (recording‑wave‑10); still follows the caret</td></tr>
+          <tr><td>Reminder</td><td>new `.reminder` presentation, AX `kAXFocusedUIElementChanged` observer on the frontmost app, setting “Dictation reminder in text fields” (on by default)</td></tr>
+        </table>
+        <div class="timeline">
+          <b>t = 0</b><span>field focused → seed appears (no sound)</span>
+          <b>t = 3 s</b><span>seed dismisses itself</span>
+          <b>any t</b><span>hotkey → Preparing takes over in place; focus change → seed withdraws</span>
+        </div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

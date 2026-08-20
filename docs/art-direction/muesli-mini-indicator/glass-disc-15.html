@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muesli Mini Indicator — Glass Disc</title>
+  <style>
+    :root { color-scheme:dark; --coral:#ff7043; --amber:#ffb04d; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0b0b0a; color:#f3f2ef; font-family:-apple-system,BlinkMacSystemFont,sans-serif; }
+    main { width:min(1040px,calc(100% - 48px)); padding:40px 0; }
+    h1 { margin:0 0 14px; font-size:44px; line-height:1; letter-spacing:-.04em; }
+    .lede { max-width:780px; margin:0 0 30px; color:#99958f; line-height:1.55; }
+    .stage { display:grid; grid-template-columns:1.2fr 1fr; gap:1px; overflow:hidden; border:1px solid rgba(255,255,255,.11); border-radius:28px; background:rgba(255,255,255,.11); box-shadow:0 32px 90px rgba(0,0,0,.46); }
+    article { padding:34px; background:linear-gradient(145deg,#171716,#0f0f0e); }
+    .index { color:#6f6c67; font:700 12px ui-monospace,SFMono-Regular,monospace; letter-spacing:.16em; }
+    h2 { margin:10px 0 18px; font-size:27px; }
+    .row { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+    .cell { position:relative; height:130px; border-radius:14px; background:linear-gradient(#232325,#19191b); display:grid; place-items:center; }
+    .cell small { position:absolute; left:12px; bottom:10px; color:#85817c; font:600 11px ui-monospace,SFMono-Regular,monospace; }
+    .z { transform:scale(3.5); }
+    .disc { position:relative; width:18px; height:18px; border-radius:9px; background:rgba(33,31,30,.62); box-shadow:inset 0 0 0 1px rgba(255,255,255,.16), 0 4px 10px rgba(0,0,0,.4); display:grid; place-items:center; }
+    .core { width:4px; height:4px; border-radius:50%; background:var(--coral); box-shadow:0 0 2.5px 1px rgba(255,112,67,.45); }
+    .core.prep { width:6px; height:6px; background:#ff8e47; box-shadow:0 0 4px 2px rgba(255,112,67,.7); }
+    .cap { position:relative; width:58px; height:22px; border-radius:11px; background:rgba(33,31,30,.62); box-shadow:inset 0 0 0 1px rgba(255,255,255,.16), 0 4px 10px rgba(0,0,0,.4); display:flex; align-items:center; justify-content:center; gap:1px; }
+    .cap i { display:block; width:1px; border-radius:.5px; background:var(--coral); opacity:.7; }
+    .orb { width:20px; height:20px; border-radius:10px; background:rgba(33,31,30,.44); box-shadow:inset 0 0 0 1px rgba(255,255,255,.16); position:relative; }
+    .orb b { position:absolute; width:2.2px; height:2.2px; border-radius:50%; background:var(--amber); opacity:.8; }
+    @keyframes morph { 0%,25% { width:18px; height:18px; border-radius:9px; } 45%,100% { width:58px; height:22px; border-radius:11px; } }
+    .morph { position:relative; height:22px; border-radius:11px; background:rgba(33,31,30,.62); box-shadow:inset 0 0 0 1px rgba(255,255,255,.16), 0 4px 10px rgba(0,0,0,.4); animation:morph 2.4s cubic-bezier(.2,.8,.2,1) infinite alternate; }
+    table { width:100%; border-collapse:collapse; font:12px/1.5 ui-monospace,SFMono-Regular,monospace; color:#b9b5ae; }
+    td { padding:3px 0; border-bottom:1px solid rgba(255,255,255,.07); vertical-align:top; } td:first-child { color:#7f7b75; width:38%; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>One glass object.</h1>
+    <p class="lede">Idle and Preparing are an 18 pt dark glass disc with a small coral core — the same capsule that will stretch into the 58 × 22 pt recording wave. Idle: a quiet 4 pt core. Preparing: the core brightens to 6 pt amber‑warm with a glow. Recording: the disc grows into the capsule (0.16 s). Processing shrinks it back to the 20 pt orb; Complete is the green glass disk.</p>
+    <section class="stage">
+      <article>
+        <div class="index">0 → 1 → 2 → 3</div><h2>Idle · Preparing · Recording · Processing</h2>
+        <div class="row">
+          <div class="cell"><div class="z"><div class="disc"><div class="core"></div></div></div><small>idle · 18 pt disc · 4 pt core</small></div>
+          <div class="cell"><div class="z"><div class="disc"><div class="core prep"></div></div></div><small>preparing · 6 pt bright core</small></div>
+          <div class="cell"><div style="transform:scale(1.6)"><div class="cap"><i style="height:3px"></i><i style="height:5px"></i><i style="height:9px"></i><i style="height:12px"></i><i style="height:7px"></i><i style="height:4px"></i><i style="height:8px"></i><i style="height:11px"></i><i style="height:6px"></i><i style="height:3px"></i><i style="height:5px"></i><i style="height:9px"></i></div></div><small>recording · 58 × 22 capsule</small></div>
+          <div class="cell"><div class="z"><div class="orb"><b style="left:8.9px;top:3.3px"></b><b style="left:6.1px;top:6.1px"></b><b style="left:8.9px;top:6.1px"></b><b style="left:11.7px;top:6.1px"></b><b style="left:3.3px;top:8.9px"></b><b style="left:6.1px;top:8.9px"></b><b style="left:8.9px;top:8.9px"></b><b style="left:11.7px;top:8.9px"></b><b style="left:14.5px;top:8.9px"></b><b style="left:6.1px;top:11.7px"></b><b style="left:8.9px;top:11.7px"></b><b style="left:11.7px;top:11.7px"></b><b style="left:8.9px;top:14.5px"></b></div></div><small>processing · 20 pt orb</small></div>
+        </div>
+        <div class="cell" style="margin-top:10px;height:110px"><div style="transform:scale(2)"><div class="morph"></div></div><small>morph · disc ↔ capsule · 0.16 s ease‑out</small></div>
+      </article>
+      <article>
+        <div class="index">Δ</div><h2>Decisions</h2>
+        <table>
+          <tr><td>Idle / Preparing look</td><td>18 pt dark glass disc (#211f1e @ 62 %, 1 pt 16 % edge, soft shadow) with a coral core 4 pt → 6 pt</td></tr>
+          <tr><td>Placement</td><td>centred under the caret, −4 pt bias, 3 pt gap (measured against the reference); line‑aware; pointer tier inside caret‑less fields</td></tr>
+          <tr><td>Hover</td><td>keycap, selection hint (kept for a future rewrite‑selection mode), click menu, drag‑to‑pin</td></tr>
+          <tr><td>No text field</td><td>idle hidden; recording with no field → pointer, then screen bottom</td></tr>
+          <tr><td>Hotkey</td><td>eager start: record at key‑down (+60 ms), taps (&lt; 180 ms) discarded silently with the start cue gated until the tap guard passes; holds stop normally; double‑tap still goes hands‑free</td></tr>
+          <tr><td>Typing</td><td>dot hides while typing, back 0.7 s after the last key</td></tr>
+        </table>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
