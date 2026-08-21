@@ -106,6 +106,10 @@ case "${shard}" in
       SessionTraceRuntimeTests
       SessionTracePerformanceTests
       TranscriptionQualityFixtureContractTests
+      TranscriptionQualityScoringTests
+      TranscriptionCorpusStoreTests
+      TranscriptionQualityRunnerTests
+      TranscriptionQualityHarnessTests
     )
     ;;
   meetings)
