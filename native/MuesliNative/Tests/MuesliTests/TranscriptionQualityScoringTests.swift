@@ -2,6 +2,10 @@ import Foundation
 import MuesliCore
 import Testing
 
+private typealias Cohort = TranscriptionQuality.Cohort
+private typealias Stage = TranscriptionQuality.Stage
+private typealias Threshold = TranscriptionQuality.Threshold
+
 /// Hand-computed cases for the scoring primitives behind the frozen baseline. The fixture
 /// contract test only proves the whole pipeline reproduces; these pin each piece individually
 /// so a regression names the function that broke.
@@ -144,9 +148,9 @@ struct TranscriptionQualityScoringTests {
     // MARK: - Metric
 
     @Test("word and character error rates count one substitution against the reference length")
-    func metricSingleSample() throws {
+    func metricSingleSample() {
         let metric = TranscriptionQualityScoring.Metric(
-            samples: [try Self.sample(cohort: "english", reference: "the quick brown fox", output: "the quick brown box")],
+            samples: [Self.sample(cohort: .english, reference: "the quick brown fox", rawASR: "the quick brown box")],
             output: \.rawASR
         )
         // One wrong word of four; one wrong character of the sixteen in "thequickbrownfox".
@@ -157,11 +161,11 @@ struct TranscriptionQualityScoringTests {
     /// Errors and reference lengths pool across the cohort rather than averaging per-sample rates,
     /// so a long sample weighs more than a short one.
     @Test("error rates pool across samples instead of averaging per-sample rates")
-    func metricPoolsAcrossSamples() throws {
+    func metricPoolsAcrossSamples() {
         let metric = TranscriptionQualityScoring.Metric(
             samples: [
-                try Self.sample(cohort: "english", reference: "the quick brown fox", output: "the quick brown box"),
-                try Self.sample(cohort: "english", reference: "hello", output: "hello"),
+                Self.sample(cohort: .english, reference: "the quick brown fox", rawASR: "the quick brown box"),
+                Self.sample(cohort: .english, reference: "hello", rawASR: "hello"),
             ],
             output: \.rawASR
         )
@@ -170,10 +174,14 @@ struct TranscriptionQualityScoringTests {
     }
 
     @Test("non-English cohorts score against Arabic-normalized text")
-    func metricAppliesArabicNormalization() throws {
+    func metricAppliesArabicNormalization() {
         // أمس vs امس differ only by the alef form, which the cohort's normalization folds away.
         let metric = TranscriptionQualityScoring.Metric(
-            samples: [try Self.sample(cohort: "arabic", reference: "\u{0623}\u{0645}\u{0633}", output: "\u{0627}\u{0645}\u{0633}")],
+            samples: [Self.sample(
+                cohort: .egyptianArabic,
+                reference: "\u{0623}\u{0645}\u{0633}",
+                rawASR: "\u{0627}\u{0645}\u{0633}"
+            )],
             output: \.rawASR
         )
         #expect(metric.wer == 0)
@@ -183,12 +191,12 @@ struct TranscriptionQualityScoringTests {
     // MARK: - Token preservation
 
     @Test("token preservation scores each script against its own reference tokens")
-    func tokenPreservationPerScript() throws {
+    func tokenPreservationPerScript() {
         // "deploy اليوم now" heard as "deploy اليوم know": the Arabic survives, one Latin word does not.
-        let samples = [try Self.sample(
-            cohort: "arabic-english",
+        let samples = [Self.sample(
+            cohort: .arabicEnglish,
             reference: "deploy \u{0627}\u{0644}\u{064A}\u{0648}\u{0645} now",
-            output: "deploy \u{0627}\u{0644}\u{064A}\u{0648}\u{0645} know"
+            rawASR: "deploy \u{0627}\u{0644}\u{064A}\u{0648}\u{0645} know"
         )]
         #expect(
             TranscriptionQualityScoring.tokenPreservation(samples: samples, output: \.rawASR, script: .latin) == 0.5
@@ -199,44 +207,373 @@ struct TranscriptionQualityScoringTests {
     }
 
     @Test("token preservation consumes each matched hypothesis token once")
-    func tokenPreservationMatchesWithoutReplacement() throws {
-        let samples = [try Self.sample(cohort: "arabic-english", reference: "go go", output: "go")]
+    func tokenPreservationMatchesWithoutReplacement() {
+        let samples = [Self.sample(cohort: .arabicEnglish, reference: "go go", rawASR: "go")]
         #expect(
             TranscriptionQualityScoring.tokenPreservation(samples: samples, output: \.rawASR, script: .latin) == 0.5
         )
     }
 
     @Test("token preservation compares normalized forms, not raw orthography")
-    func tokenPreservationNormalizes() throws {
-        let samples = [try Self.sample(
-            cohort: "arabic-english",
+    func tokenPreservationNormalizes() {
+        let samples = [Self.sample(
+            cohort: .arabicEnglish,
             reference: "\u{0623}\u{0645}\u{0633}",
-            output: "\u{0627}\u{0645}\u{0633}!"
+            rawASR: "\u{0627}\u{0645}\u{0633}!"
         )]
         #expect(
             TranscriptionQualityScoring.tokenPreservation(samples: samples, output: \.rawASR, script: .arabic) == 1.0
         )
     }
 
-    /// Samples carry no memberwise initializer, so tests build them the way the corpus does.
-    private static func sample(cohort: String, reference: String, output: String) throws -> TranscriptionQualitySample {
-        let fields: [String: Any] = [
-            "id": "test",
-            "cohort": cohort,
-            "reference": reference,
-            "rawASR": output,
-            "finalOutput": output,
-            "audioBytes": 1,
-            "audioSHA256": String(repeating: "0", count: 64),
-            "audioDurationSeconds": 1.0,
-            "asrSeconds": 0.5,
-            "endToEndSeconds": 1.0,
-            "backend": "whisperkit",
-            "model": "whisper-tiny",
-            "languageConfiguration": "automatic",
-            "provenanceID": "test",
+    // MARK: - Script distribution
+
+    @Test("script distribution counts each script and ignores tokens belonging to neither")
+    func scriptDistributionCounts() {
+        let distribution = TranscriptionQualityScoring.scriptDistribution("deploy \(Arabic.today) please")
+        #expect(distribution.arabicTokens == 1)
+        #expect(distribution.latinTokens == 2)
+        #expect(distribution.scriptBearingTokens == 3)
+        #expect(distribution.arabicShare == 1.0 / 3.0)
+    }
+
+    /// A share with no denominator is not-applicable. Reporting zero would claim "all Latin",
+    /// which is a measurement the text does not support.
+    @Test("a text with no script-bearing tokens reports no Arabic share rather than zero")
+    func scriptDistributionWithoutScriptBearingTokens() {
+        let distribution = TranscriptionQualityScoring.scriptDistribution("   !!!   ")
+        #expect(distribution.scriptBearingTokens == 0)
+        #expect(distribution.arabicShare == nil)
+    }
+
+    // MARK: - Faithfulness
+
+    /// The discrimination this metric exists for: mistranscription is not translation. A recognizer
+    /// that heard Arabic and produced wrong Arabic words preserved the language; one that produced
+    /// fluent English did not — and both are equally wrong on WER, so WER cannot tell them apart.
+    @Test("faithfulness is independent of accuracy: garbled Arabic stays faithful at maximal WER")
+    func faithfulnessIsIndependentOfAccuracy() {
+        let garbled = TranscriptionQuality.StageScore(
+            stage: .rawASR,
+            cohort: .egyptianArabic,
+            reference: Arabic.reference,
+            hypothesis: Arabic.garbled
+        )
+        let translated = TranscriptionQuality.StageScore(
+            stage: .rawASR,
+            cohort: .egyptianArabic,
+            reference: Arabic.reference,
+            hypothesis: Arabic.translated
+        )
+
+        // Both are wrong to exactly the same degree.
+        #expect(garbled.normalized.wer == 1.0)
+        #expect(translated.normalized.wer == 1.0)
+        // Only faithfulness separates them.
+        #expect(garbled.faithfulness == 1.0)
+        #expect(translated.faithfulness == 0.0)
+        #expect(garbled.faithfulness >= Threshold.faithfulnessGate)
+        #expect(translated.faithfulness < Threshold.faithfulnessGate)
+    }
+
+    @Test("faithfulness is unchanged when only word accuracy varies at constant script composition")
+    func faithfulnessIgnoresWordAccuracy() {
+        let reference = "deploy \(Arabic.today) please"
+        let perfect = TranscriptionQuality.StageScore(
+            stage: .rawASR,
+            cohort: .arabicEnglish,
+            reference: reference,
+            hypothesis: reference
+        )
+        // Two Latin tokens and one Arabic token again, but not one word right.
+        let inaccurate = TranscriptionQuality.StageScore(
+            stage: .rawASR,
+            cohort: .arabicEnglish,
+            reference: reference,
+            hypothesis: "deployed \(Arabic.report) peace"
+        )
+
+        #expect(perfect.normalized.wer == 0)
+        #expect(inaccurate.normalized.wer == 1.0)
+        #expect(inaccurate.faithfulness == perfect.faithfulness)
+        #expect(inaccurate.faithfulness == 1.0)
+    }
+
+    // MARK: - Stages
+
+    /// AE4. The recognizer heard Arabic and kept it; cleanup translated it into English. Both
+    /// stages score the same WER against the Arabic reference, so only the faithfulness delta
+    /// distinguishes a cleanup defect from an ASR defect.
+    @Test("a cleanup stage that translates the speech is reported as a faithfulness regression")
+    func cleanupIntroducedFaithfulnessRegression() {
+        let score = TranscriptionQuality.SampleScore(sample: Self.sample(
+            cohort: .egyptianArabic,
+            reference: Arabic.reference,
+            rawASR: Arabic.garbled,
+            finalOutput: Arabic.translated
+        ))
+
+        #expect(score.rawASR.normalized.wer == score.finalOutput.normalized.wer)
+        #expect(score.rawASR.faithfulness >= Threshold.faithfulnessGate)
+        #expect(score.finalOutput.faithfulness == 0.0)
+
+        let delta = score.faithfulnessDelta
+        #expect(delta.change == -1.0)
+        #expect(delta.recognizerWasFaithful)
+        #expect(delta.isCleanupIntroducedRegression)
+    }
+
+    @Test("a stage that preserves faithfulness reports no regression")
+    func faithfulPipelineReportsNoRegression() {
+        let score = TranscriptionQuality.SampleScore(sample: Self.sample(
+            cohort: .egyptianArabic,
+            reference: Arabic.reference,
+            rawASR: Arabic.garbled,
+            finalOutput: Arabic.reference
+        ))
+        #expect(score.faithfulnessDelta.change == 0)
+        #expect(!score.faithfulnessDelta.isCleanupIntroducedRegression)
+    }
+
+    @Test("the stage subscript selects the text that stage produced")
+    func stageSubscriptSelectsStageText() {
+        let sample = Self.sample(
+            cohort: .egyptianArabic,
+            reference: Arabic.reference,
+            rawASR: Arabic.garbled,
+            finalOutput: Arabic.translated
+        )
+        #expect(sample[.rawASR] == Arabic.garbled)
+        #expect(sample[.finalOutput] == Arabic.translated)
+        let score = TranscriptionQuality.SampleScore(sample: sample)
+        #expect(score[.rawASR] == score.rawASR)
+        #expect(score[.finalOutput] == score.finalOutput)
+        #expect(score[.finalOutput].stage == .finalOutput)
+    }
+
+    // MARK: - Raw versus normalized error rates
+
+    /// AE5. Orthographic variants are the reason the repository normalizes Arabic at all. Both
+    /// figures are kept: the raw one is comparable to published WER, the normalized one answers
+    /// whether the words were actually right.
+    @Test("orthographic variants score high raw WER, near-zero normalized WER, and stay faithful")
+    func orthographicVariantsSeparateRawFromNormalized() {
+        let score = TranscriptionQuality.StageScore(
+            stage: .rawASR,
+            cohort: .egyptianArabic,
+            reference: Arabic.orthographicReference,
+            hypothesis: Arabic.orthographicVariant
+        )
+
+        // Two of three words differ before folding; none differ after it.
+        #expect(score.raw.wer == 2.0 / 3.0)
+        #expect(score.normalized.wer == 0)
+        #expect(score.normalized.cer == 0)
+        #expect(score.faithfulness == 1.0)
+        #expect(!score.scriptChangeInflatesErrorRate)
+    }
+
+    /// AE5b. Correct content in the wrong script. The shipped normalization folds Arabic
+    /// orthography, not transliteration, so it cannot recover these words — the error rates are an
+    /// upper bound and the result says so rather than claiming a recognition failure.
+    @Test("Latin transliteration of Arabic speech is unfaithful and marks its error rates inflated")
+    func transliterationIsMarkedAsAMeasurementLimitation() {
+        let score = TranscriptionQuality.StageScore(
+            stage: .rawASR,
+            cohort: .egyptianArabic,
+            reference: Arabic.reference,
+            hypothesis: Arabic.transliterated
+        )
+
+        #expect(score.faithfulness == 0.0)
+        #expect(score.faithfulness < Threshold.scriptChange)
+        #expect(score.raw.wer >= Threshold.inflatedErrorRate)
+        #expect(score.normalized.wer >= Threshold.inflatedErrorRate)
+        // Normalization cannot map transliteration back, so folding buys nothing here.
+        #expect(score.raw.wer == score.normalized.wer)
+        #expect(score.scriptChangeInflatesErrorRate)
+    }
+
+    /// The marker must not fire on a recognizer that simply got the words wrong, or it would excuse
+    /// the failures it exists to distinguish from.
+    @Test("faithful but inaccurate output is not marked as an inflated measurement")
+    func garbledArabicIsNotMarkedAsInflated() {
+        let score = TranscriptionQuality.StageScore(
+            stage: .rawASR,
+            cohort: .egyptianArabic,
+            reference: Arabic.reference,
+            hypothesis: Arabic.garbled
+        )
+        #expect(score.normalized.wer == 1.0)
+        #expect(!score.scriptChangeInflatesErrorRate)
+    }
+
+    // MARK: - Degenerate and not-applicable cases
+
+    @Test("a perfect transcription scores zero error and full faithfulness in every cohort")
+    func perfectTranscriptionScoresCleanInEveryCohort() throws {
+        let references: [Cohort: String] = [
+            .english: "please schedule the product review",
+            .egyptianArabic: Arabic.reference,
+            .arabicEnglish: "deploy \(Arabic.today) please",
         ]
-        let data = try JSONSerialization.data(withJSONObject: fields)
-        return try JSONDecoder().decode(TranscriptionQualitySample.self, from: data)
+        for cohort in Cohort.allCases {
+            let reference = try #require(references[cohort])
+            let score = TranscriptionQuality.SampleScore(sample: Self.sample(
+                cohort: cohort,
+                reference: reference,
+                rawASR: reference
+            ))
+            for stage in Stage.allCases {
+                #expect(score[stage].raw.wer == 0, "\(cohort) \(stage)")
+                #expect(score[stage].raw.cer == 0, "\(cohort) \(stage)")
+                #expect(score[stage].normalized.wer == 0, "\(cohort) \(stage)")
+                #expect(score[stage].normalized.cer == 0, "\(cohort) \(stage)")
+                #expect(score[stage].faithfulness == 1.0, "\(cohort) \(stage)")
+                #expect(!score[stage].scriptChangeInflatesErrorRate, "\(cohort) \(stage)")
+            }
+            #expect(score.faithfulnessDelta.change == 0)
+        }
+    }
+
+    @Test("an empty hypothesis scores maximal error and zero faithfulness without dividing by zero")
+    func emptyHypothesisScoresMaximalError() {
+        let score = TranscriptionQuality.StageScore(
+            stage: .rawASR,
+            cohort: .egyptianArabic,
+            reference: Arabic.reference,
+            hypothesis: ""
+        )
+
+        #expect(score.normalized.wer == 1.0)
+        #expect(score.normalized.cer == 1.0)
+        #expect(score.raw.wer == 1.0)
+        #expect(!score.normalized.wer.isNaN)
+        #expect(!score.normalized.cer.isNaN)
+        #expect(score.faithfulness == 0.0)
+        // Producing nothing is a recognition failure, not a script change to be excused.
+        #expect(!score.scriptChangeInflatesErrorRate)
+    }
+
+    @Test("an empty reference yields defined rates rather than NaN")
+    func emptyReferenceYieldsDefinedRates() {
+        let empty = TranscriptionQualityScoring.errorRates(reference: "", hypothesis: "", arabic: true)
+        #expect(empty.wer == 0)
+        #expect(empty.cer == 0)
+        let inserted = TranscriptionQualityScoring.errorRates(reference: "", hypothesis: "hello", arabic: true)
+        #expect(inserted.wer == 1.0)
+        #expect(inserted.cer == 1.0)
+    }
+
+    @Test("Arabic preservation is not-applicable for a sample with no Arabic content")
+    func arabicPreservationIsNotApplicableWithoutArabicContent() {
+        let score = TranscriptionQuality.StageScore(
+            stage: .rawASR,
+            cohort: .english,
+            reference: "please schedule the product review",
+            hypothesis: "please schedule the product review"
+        )
+        #expect(score.arabicTokenPreservation == nil)
+        #expect(score.latinTokenPreservation == 1.0)
+        #expect(score.referenceScript.arabicTokens == 0)
+        #expect(score.faithfulness == 1.0)
+    }
+
+    @Test("per-sample token preservation reports a missing script as nil, not zero")
+    func perSampleTokenPreservationNotApplicable() {
+        #expect(TranscriptionQualityScoring.tokenPreservation(
+            reference: "deploy now",
+            hypothesis: "deploy now",
+            script: .arabic
+        ) == nil)
+        #expect(TranscriptionQualityScoring.tokenPreservation(
+            reference: "deploy now",
+            hypothesis: "deploy know",
+            script: .latin
+        ) == 0.5)
+    }
+
+    // MARK: - Cohort
+
+    /// v1's `samples.jsonl` is hash-pinned by its manifest and cannot be rewritten, so its older
+    /// spelling has to keep decoding onto the canonical case.
+    @Test("the cohort decodes v1's legacy arabic spelling onto the canonical case")
+    func cohortDecodesLegacySpelling() throws {
+        #expect(try Self.decodeCohort("arabic") == .egyptianArabic)
+        #expect(try Self.decodeCohort("egyptian-arabic") == .egyptianArabic)
+        #expect(try Self.decodeCohort("arabic-english") == .arabicEnglish)
+        #expect(try Self.decodeCohort("english") == .english)
+    }
+
+    @Test("an unknown cohort is rejected with the offending value named")
+    func unknownCohortNamesTheOffendingValue() {
+        var message = ""
+        #expect(throws: (any Error).self) {
+            do {
+                _ = try Self.decodeCohort("levantine")
+            } catch {
+                message = String(describing: error)
+                throw error
+            }
+        }
+        #expect(message.contains("levantine"))
+    }
+
+    @Test("only the English cohort skips Arabic normalization")
+    func cohortSelectsNormalization() {
+        #expect(!Cohort.english.usesArabicNormalization)
+        #expect(Cohort.egyptianArabic.usesArabicNormalization)
+        #expect(Cohort.arabicEnglish.usesArabicNormalization)
+    }
+
+    private static func decodeCohort(_ raw: String) throws -> Cohort {
+        let data = try JSONSerialization.data(withJSONObject: [raw], options: .fragmentsAllowed)
+        return try JSONDecoder().decode([Cohort].self, from: data)[0]
+    }
+
+    /// Egyptian Arabic sentences shared by the faithfulness cases, so each test states only the
+    /// one thing it varies.
+    private enum Arabic {
+        /// "Send the report this morning."
+        static let reference = "ابعت التقرير النهاردة الصبح"
+        /// The same sentence in the same script with every word wrong: a bad recognizer, not a
+        /// translator.
+        static let garbled = "ابعد التقارير النهار وصبح"
+        /// The failure this harness exists to catch: Arabic speech rendered as fluent English.
+        static let translated = "send the report today"
+        /// Right words, wrong script — the shipped normalization cannot fold this back (AE5b).
+        static let transliterated = "ebaat el taqreer el naharda el sobh"
+        /// "Yesterday at the desk", written with hamza and alef maqsura.
+        static let orthographicReference = "أمس على المكتب"
+        /// The same three words in the bare forms recognizers commonly emit.
+        static let orthographicVariant = "امس علي المكتب"
+        static let today = "النهاردة"
+        static let report = "التقرير"
+    }
+
+    /// Only the four text-bearing fields matter to scoring; the rest are filled with valid-shaped
+    /// values so a sample built here still satisfies the fixture contract's bounds.
+    private static func sample(
+        cohort: Cohort,
+        reference: String,
+        rawASR: String,
+        finalOutput: String? = nil
+    ) -> TranscriptionQualitySample {
+        TranscriptionQualitySample(
+            id: "test",
+            cohort: cohort,
+            reference: reference,
+            rawASR: rawASR,
+            finalOutput: finalOutput ?? rawASR,
+            audioBytes: 1,
+            audioSHA256: String(repeating: "0", count: 64),
+            audioDurationSeconds: 1.0,
+            asrSeconds: 0.5,
+            endToEndSeconds: 1.0,
+            backend: "whisperkit",
+            model: "whisper-tiny",
+            languageConfiguration: "automatic",
+            provenanceID: "test"
+        )
     }
 }

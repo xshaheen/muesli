@@ -1,32 +1,5 @@
 import Foundation
 
-/// One measured transcription from the frozen quality corpus.
-///
-/// Property names are the on-disk JSON keys of `Fixtures/TranscriptionQuality/samples.jsonl`;
-/// renaming one silently changes what decodes.
-public struct TranscriptionQualitySample: Decodable {
-    public let id: String
-    public let cohort: Cohort
-    public let reference: String
-    public let rawASR: String
-    public let finalOutput: String
-    public let audioBytes: Int
-    public let audioSHA256: String
-    public let audioDurationSeconds: Double
-    public let asrSeconds: Double
-    public let endToEndSeconds: Double
-    public let backend: String
-    public let model: String
-    public let languageConfiguration: String
-    public let provenanceID: String
-
-    public enum Cohort: String, Decodable {
-        case english
-        case arabic
-        case arabicEnglish = "arabic-english"
-    }
-}
-
 /// Scoring for the transcription quality corpus.
 ///
 /// Every accumulation order here is load-bearing: committed baselines are compared at 1e-12,
@@ -163,5 +136,87 @@ public enum TranscriptionQualityScoring {
 
     public static func nearestRankIndex(percentile: Double, count: Int) -> Int {
         max(0, Int(ceil(percentile * Double(count))) - 1)
+    }
+}
+
+// MARK: - Per-pair metrics
+
+/// Metrics for the measurement harness, which scores one reference against one hypothesis rather
+/// than pooling a cohort. Everything above is frozen — the committed v1 baseline reproduces through
+/// it at 1e-12 — so these are added alongside instead of replacing it.
+public extension TranscriptionQualityScoring {
+    /// How much of the text is Arabic-script and how much is Latin-script.
+    static func scriptDistribution(_ value: String) -> TranscriptionQuality.ScriptDistribution {
+        let tokens = normalized(value, arabic: true).split(separator: " ").map(String.init)
+        return TranscriptionQuality.ScriptDistribution(
+            arabicTokens: tokens.filter { token($0, belongsTo: .arabic) }.count,
+            latinTokens: tokens.filter { token($0, belongsTo: .latin) }.count
+        )
+    }
+
+    /// Script distribution agreement: did the output stay in the language that was spoken?
+    ///
+    /// Deliberately blind to whether the words are correct (KTD4). It reads two script histograms
+    /// and never compares a hypothesis token against a reference token, which is the only way
+    /// garbled Arabic can score as faithful Arabic while fluent English rendered from Arabic speech
+    /// does not.
+    static func faithfulness(reference: String, hypothesis: String) -> Double {
+        // A reference with nothing script-bearing in it asked nothing of the output; a hypothesis
+        // with nothing script-bearing preserved none of what the reference did ask for.
+        guard let referenceShare = scriptDistribution(reference).arabicShare else { return 1 }
+        guard let hypothesisShare = scriptDistribution(hypothesis).arabicShare else { return 0 }
+        return 1 - abs(referenceShare - hypothesisShare)
+    }
+
+    /// Word and character error rates for one pair. `arabic` selects whether orthographic variants
+    /// are folded, so the caller can compute the published-comparable and the normalized figure
+    /// from the same text.
+    static func errorRates(
+        reference: String,
+        hypothesis: String,
+        arabic: Bool
+    ) -> TranscriptionQuality.ErrorRates {
+        let referenceTokens = normalized(reference, arabic: arabic).split(separator: " ").map(String.init)
+        let hypothesisTokens = normalized(hypothesis, arabic: arabic).split(separator: " ").map(String.init)
+        let referenceCharacters = Array(referenceTokens.joined())
+        let hypothesisCharacters = Array(hypothesisTokens.joined())
+        return TranscriptionQuality.ErrorRates(
+            wer: rate(
+                errors: levenshtein(referenceTokens, hypothesisTokens),
+                referenceLength: referenceTokens.count
+            ),
+            cer: rate(
+                errors: levenshtein(referenceCharacters, hypothesisCharacters),
+                referenceLength: referenceCharacters.count
+            )
+        )
+    }
+
+    /// Share of the reference's `script` tokens that survive into the hypothesis, matched greedily
+    /// and without replacement — the same token recall the v1 baseline reports, scored per sample.
+    ///
+    /// Returns `nil` when the reference holds no token of that script: a share with no denominator
+    /// is not-applicable, and reporting zero would claim total loss of content that never existed.
+    static func tokenPreservation(reference: String, hypothesis: String, script: Script) -> Double? {
+        let referenceTokens = normalized(reference, arabic: true).split(separator: " ").map(String.init)
+            .filter { token($0, belongsTo: script) }
+        guard !referenceTokens.isEmpty else { return nil }
+        var hypothesisTokens = normalized(hypothesis, arabic: true).split(separator: " ").map(String.init)
+            .filter { token($0, belongsTo: script) }
+        var retained = 0
+        for referenceToken in referenceTokens {
+            if let index = hypothesisTokens.firstIndex(of: referenceToken) {
+                retained += 1
+                hypothesisTokens.remove(at: index)
+            }
+        }
+        return Double(retained) / Double(referenceTokens.count)
+    }
+
+    /// An empty reference has no denominator: any output against it is wholly inserted, and no
+    /// output against it matches perfectly. Either answer beats letting a NaN reach the report.
+    private static func rate(errors: Int, referenceLength: Int) -> Double {
+        guard referenceLength > 0 else { return errors > 0 ? 1 : 0 }
+        return Double(errors) / Double(referenceLength)
     }
 }

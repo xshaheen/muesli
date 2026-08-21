@@ -21,7 +21,7 @@ struct TranscriptionQualityFixtureContractTests {
         #expect(fixture.regularFilePaths == Set(manifest.files.map(\.path) + ["manifest.json"]))
         #expect(fixture.samples.count == 9)
         #expect(Dictionary(grouping: fixture.samples, by: \.cohort).values.map(\.count).sorted() == [3, 3, 3])
-        #expect(Set(fixture.samples.map(\.cohort)) == [.english, .arabic, .arabicEnglish])
+        #expect(Set(fixture.samples.map(\.cohort)) == [.english, .egyptianArabic, .arabicEnglish])
         #expect(fixture.totalBytes <= manifest.maximumCorpusBytes)
 
         for sample in fixture.samples {
@@ -76,7 +76,10 @@ struct TranscriptionQualityFixtureContractTests {
     ) {
         assertMetric(expected.overall, equals: Metric(samples: samples, output: output))
         assertMetric(expected.english, equals: Metric(samples: samples.filter { $0.cohort == .english }, output: output))
-        assertMetric(expected.arabic, equals: Metric(samples: samples.filter { $0.cohort == .arabic }, output: output))
+        assertMetric(
+            expected.arabic,
+            equals: Metric(samples: samples.filter { $0.cohort == .egyptianArabic }, output: output)
+        )
         let mixedSamples = samples.filter { $0.cohort == .arabicEnglish }
         let mixed = Metric(samples: mixedSamples, output: output)
         assertMetric(expected.arabicEnglish, equals: mixed)
