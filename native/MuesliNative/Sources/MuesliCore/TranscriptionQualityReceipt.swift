@@ -168,10 +168,6 @@ public extension TranscriptionQualityReceipt {
         /// the whole sweep. Latency figures therefore include a machine that is already holding one
         /// model, which is the steady state a user is in — but it is not a clean-machine number.
         public let cleanupModelResidentAcrossSweep: Bool
-        /// The ranking statistic is the unweighted mean of per-utterance normalized WER, not a
-        /// pooled error rate, because the receipt carries no transcript text and therefore no
-        /// reference lengths to weight by. A one-word utterance counts as much as a long one.
-        public let statisticIsMeanOfPerUtteranceRates: Bool
         /// Anything else the maintainer of this particular run needs to say.
         public let notes: [String]
 
@@ -179,51 +175,66 @@ public extension TranscriptionQualityReceipt {
             cleanupEnabled: Bool,
             warmupSampleConsumed: Bool = true,
             cleanupModelResidentAcrossSweep: Bool = true,
-            statisticIsMeanOfPerUtteranceRates: Bool = true,
             notes: [String] = []
         ) {
             self.cleanupEnabled = cleanupEnabled
             self.warmupSampleConsumed = warmupSampleConsumed
             self.cleanupModelResidentAcrossSweep = cleanupModelResidentAcrossSweep
-            self.statisticIsMeanOfPerUtteranceRates = statisticIsMeanOfPerUtteranceRates
             self.notes = notes
         }
     }
 
-    /// One measured stage of one utterance. Rates only — the text that produced them is scored and
-    /// discarded before it reaches this type (R2).
+    /// One measured stage of one utterance. Rates and the integer counts behind them — the text that
+    /// produced them is scored and discarded before it reaches this type (R2).
+    ///
+    /// The counts are what let a cohort figure be pooled from the receipt alone, and let a later
+    /// reader recompute it (R5). A count of words or characters is derived from text, not text: it
+    /// reconstructs nothing that was said. Raw and normalized carry separate denominators because
+    /// Arabic folding can drop a diacritic-only token and always changes the character count.
     struct StageSummary: Codable, Sendable, Equatable {
         public let rawWER: Double
         public let rawCER: Double
         public let normalizedWER: Double
         public let normalizedCER: Double
+        public let rawWordErrors: Int
+        public let rawReferenceWords: Int
+        public let rawCharacterErrors: Int
+        public let rawReferenceCharacters: Int
+        public let normalizedWordErrors: Int
+        public let normalizedReferenceWords: Int
+        public let normalizedCharacterErrors: Int
+        public let normalizedReferenceCharacters: Int
         public let faithfulness: Double
         /// AE5b: the hypothesis changed script, so the error rate is an upper bound rather than a
         /// recognition result. Carried per utterance so the report can qualify the cohort figure.
         public let scriptChangeInflatesErrorRate: Bool
 
         public init(
-            rawWER: Double,
-            rawCER: Double,
-            normalizedWER: Double,
-            normalizedCER: Double,
+            raw: TranscriptionQuality.ErrorRates,
+            normalized: TranscriptionQuality.ErrorRates,
             faithfulness: Double,
             scriptChangeInflatesErrorRate: Bool
         ) {
-            self.rawWER = rawWER
-            self.rawCER = rawCER
-            self.normalizedWER = normalizedWER
-            self.normalizedCER = normalizedCER
+            rawWER = raw.wer
+            rawCER = raw.cer
+            normalizedWER = normalized.wer
+            normalizedCER = normalized.cer
+            rawWordErrors = raw.wordErrors
+            rawReferenceWords = raw.referenceWords
+            rawCharacterErrors = raw.characterErrors
+            rawReferenceCharacters = raw.referenceCharacters
+            normalizedWordErrors = normalized.wordErrors
+            normalizedReferenceWords = normalized.referenceWords
+            normalizedCharacterErrors = normalized.characterErrors
+            normalizedReferenceCharacters = normalized.referenceCharacters
             self.faithfulness = faithfulness
             self.scriptChangeInflatesErrorRate = scriptChangeInflatesErrorRate
         }
 
         public init(_ score: TranscriptionQuality.StageScore) {
             self.init(
-                rawWER: score.raw.wer,
-                rawCER: score.raw.cer,
-                normalizedWER: score.normalized.wer,
-                normalizedCER: score.normalized.cer,
+                raw: score.raw,
+                normalized: score.normalized,
                 faithfulness: score.faithfulness,
                 scriptChangeInflatesErrorRate: score.scriptChangeInflatesErrorRate
             )
@@ -281,18 +292,27 @@ public extension TranscriptionQualityReceipt {
 
         public var sampleCount: Int { utterances.count }
 
-        /// `nil` for an empty cohort. A mean over nothing is not zero, and a zero WER would rank a
+        /// Total edit distance over total reference length, micro-averaged exactly as the frozen v1
+        /// `TranscriptionQualityScoring.Metric` does — which is also how published WER is computed,
+        /// so the figure is comparable to one (R5). An unweighted mean of per-utterance rates is a
+        /// different statistic: under it a one-word utterance counts as much as a thirty-word one.
+        ///
+        /// `nil` for an empty cohort. A rate over nothing is not zero, and a zero WER would rank a
         /// backend that measured nothing first.
-        public func meanNormalizedWER(at stage: TranscriptionQuality.Stage) -> Double? {
-            mean(utterances.map { $0[stage].normalizedWER })
+        public func pooledNormalizedWER(at stage: TranscriptionQuality.Stage) -> Double? {
+            pooled(at: stage, errors: \.normalizedWordErrors, referenceLength: \.normalizedReferenceWords)
         }
 
-        public func meanRawWER(at stage: TranscriptionQuality.Stage) -> Double? {
-            mean(utterances.map { $0[stage].rawWER })
+        public func pooledRawWER(at stage: TranscriptionQuality.Stage) -> Double? {
+            pooled(at: stage, errors: \.rawWordErrors, referenceLength: \.rawReferenceWords)
         }
 
-        public func meanNormalizedCER(at stage: TranscriptionQuality.Stage) -> Double? {
-            mean(utterances.map { $0[stage].normalizedCER })
+        public func pooledNormalizedCER(at stage: TranscriptionQuality.Stage) -> Double? {
+            pooled(at: stage, errors: \.normalizedCharacterErrors, referenceLength: \.normalizedReferenceCharacters)
+        }
+
+        public func pooledRawCER(at stage: TranscriptionQuality.Stage) -> Double? {
+            pooled(at: stage, errors: \.rawCharacterErrors, referenceLength: \.rawReferenceCharacters)
         }
 
         public func meanFaithfulness(at stage: TranscriptionQuality.Stage) -> Double? {
@@ -320,6 +340,19 @@ public extension TranscriptionQualityReceipt {
             let audio = timed.reduce(0.0) { $0 + ($1.audioDurationSeconds ?? 0) }
             guard audio > 0 else { return nil }
             return timed.reduce(0.0) { $0 + $1.endToEndSeconds } / audio
+        }
+
+        private func pooled(
+            at stage: TranscriptionQuality.Stage,
+            errors: KeyPath<StageSummary, Int>,
+            referenceLength: KeyPath<StageSummary, Int>
+        ) -> Double? {
+            guard !utterances.isEmpty else { return nil }
+            let summaries = utterances.map { $0[stage] }
+            return TranscriptionQualityScoring.errorRate(
+                errors: summaries.reduce(0) { $0 + $1[keyPath: errors] },
+                referenceLength: summaries.reduce(0) { $0 + $1[keyPath: referenceLength] }
+            )
         }
 
         private func mean(_ values: [Double]) -> Double? {
@@ -464,6 +497,7 @@ public enum TranscriptionQualityDecision {
         public let label: String
         public let languageConfiguration: String
         public let sampleCount: Int
+        /// Pooled over the cohort's reference length, not averaged per utterance (R5).
         public let normalizedWER: Double
         public let finalOutputNormalizedWER: Double?
         public let faithfulness: Double
@@ -505,7 +539,7 @@ public enum TranscriptionQualityDecision {
     public struct Comparison: Sendable, Equatable {
         public let leader: String
         public let challenger: String
-        /// Mean of (challenger − leader) normalized WER over the utterances both measured.
+        /// Challenger minus leader pooled normalized WER over the utterances both measured.
         /// Positive means the leader is ahead.
         public let margin: Double
         public let lowerBound: Double
@@ -616,7 +650,7 @@ public enum TranscriptionQualityDecision {
                 continue
             }
             guard let result = backend.result(for: cohort), result.sampleCount > 0,
-                  let normalizedWER = result.meanNormalizedWER(at: .rawASR),
+                  let normalizedWER = result.pooledNormalizedWER(at: .rawASR),
                   let faithfulness = result.meanFaithfulness(at: .rawASR)
             else {
                 absent.append(Absent(
@@ -649,7 +683,7 @@ public enum TranscriptionQualityDecision {
                 languageConfiguration: backend.languageConfiguration,
                 sampleCount: result.sampleCount,
                 normalizedWER: normalizedWER,
-                finalOutputNormalizedWER: result.meanNormalizedWER(at: .finalOutput),
+                finalOutputNormalizedWER: result.pooledNormalizedWER(at: .finalOutput),
                 faithfulness: faithfulness,
                 finalOutputFaithfulness: result.meanFaithfulness(at: .finalOutput),
                 p50Seconds: latency?.p50,
@@ -813,8 +847,8 @@ public enum TranscriptionQualityBootstrap {
         challengerUtterances: [TranscriptionQualityReceipt.Utterance],
         thresholds: TranscriptionQualityReceipt.Thresholds
     ) -> TranscriptionQualityDecision.Comparison {
-        let deltas = pairedDeltas(leader: leaderUtterances, challenger: challengerUtterances)
-        guard !deltas.isEmpty else {
+        let paired = pairedCounts(leader: leaderUtterances, challenger: challengerUtterances)
+        guard !paired.isEmpty else {
             // Nothing was measured on both backends, so no advantage can be established. Returning
             // a zero-width interval around zero reads, correctly, as "not significant".
             return TranscriptionQualityDecision.Comparison(
@@ -828,50 +862,95 @@ public enum TranscriptionQualityBootstrap {
         }
 
         var generator = SplitMix64(seed: thresholds.bootstrapSeed)
-        var resampledMeans: [Double] = []
-        resampledMeans.reserveCapacity(thresholds.bootstrapResamples)
+        var resampledMargins: [Double] = []
+        resampledMargins.reserveCapacity(thresholds.bootstrapResamples)
         for _ in 0 ..< thresholds.bootstrapResamples {
-            var total = 0.0
-            for _ in deltas.indices {
-                total += deltas[generator.index(below: deltas.count)]
+            var replicate = Totals()
+            for _ in paired.indices {
+                replicate.add(paired[generator.index(below: paired.count)])
             }
-            resampledMeans.append(total / Double(deltas.count))
+            resampledMargins.append(replicate.margin)
         }
-        resampledMeans.sort()
+        resampledMargins.sort()
 
         let alpha = (1 - thresholds.confidenceLevel) / 2
         let lower = TranscriptionQualityScoring.nearestRankIndex(
             percentile: alpha,
-            count: resampledMeans.count
+            count: resampledMargins.count
         )
         let upper = TranscriptionQualityScoring.nearestRankIndex(
             percentile: 1 - alpha,
-            count: resampledMeans.count
+            count: resampledMargins.count
         )
+        var observed = Totals()
+        for pair in paired { observed.add(pair) }
         return TranscriptionQualityDecision.Comparison(
             leader: leader,
             challenger: challenger,
-            margin: deltas.reduce(0, +) / Double(deltas.count),
-            lowerBound: resampledMeans[lower],
-            upperBound: resampledMeans[upper],
-            pairedUtterances: deltas.count
+            margin: observed.margin,
+            lowerBound: resampledMargins[lower],
+            upperBound: resampledMargins[upper],
+            pairedUtterances: paired.count
         )
     }
 
-    /// Per-utterance (challenger − leader) normalized WER at `rawASR`, over utterances both
-    /// backends measured. Utterances only one of them produced are dropped rather than treated as
-    /// a win: an unpaired sample carries no information about the difference.
-    static func pairedDeltas(
+    /// One utterance as both backends measured it: normalized word-error distance and the reference
+    /// length it is over, at `rawASR`.
+    ///
+    /// The pair, not the rate, is the resampling unit — a replicate has to be a pooled figure, or
+    /// the interval would be about a statistic nobody is ranked on.
+    struct PairedCounts: Equatable, Sendable {
+        let leaderErrors: Int
+        let leaderReferenceWords: Int
+        let challengerErrors: Int
+        let challengerReferenceWords: Int
+    }
+
+    /// Running totals of one replicate, or of the observed sample.
+    private struct Totals {
+        private var leaderErrors = 0
+        private var leaderReferenceWords = 0
+        private var challengerErrors = 0
+        private var challengerReferenceWords = 0
+
+        mutating func add(_ pair: PairedCounts) {
+            leaderErrors += pair.leaderErrors
+            leaderReferenceWords += pair.leaderReferenceWords
+            challengerErrors += pair.challengerErrors
+            challengerReferenceWords += pair.challengerReferenceWords
+        }
+
+        /// Pooled challenger WER minus pooled leader WER: positive means the leader is ahead.
+        var margin: Double {
+            TranscriptionQualityScoring.errorRate(
+                errors: challengerErrors,
+                referenceLength: challengerReferenceWords
+            ) - TranscriptionQualityScoring.errorRate(
+                errors: leaderErrors,
+                referenceLength: leaderReferenceWords
+            )
+        }
+    }
+
+    /// The utterances both backends measured, paired by sample id. Utterances only one of them
+    /// produced are dropped rather than treated as a win: an unpaired sample carries no information
+    /// about the difference.
+    static func pairedCounts(
         leader: [TranscriptionQualityReceipt.Utterance],
         challenger: [TranscriptionQualityReceipt.Utterance]
-    ) -> [Double] {
+    ) -> [PairedCounts] {
         let challengerByID = Dictionary(
             challenger.map { ($0.sampleID, $0) },
             uniquingKeysWith: { first, _ in first }
         )
         return leader.compactMap { utterance in
             guard let other = challengerByID[utterance.sampleID] else { return nil }
-            return other.rawASR.normalizedWER - utterance.rawASR.normalizedWER
+            return PairedCounts(
+                leaderErrors: utterance.rawASR.normalizedWordErrors,
+                leaderReferenceWords: utterance.rawASR.normalizedReferenceWords,
+                challengerErrors: other.rawASR.normalizedWordErrors,
+                challengerReferenceWords: other.rawASR.normalizedReferenceWords
+            )
         }
     }
 }
@@ -980,6 +1059,10 @@ public enum TranscriptionQualityReport {
             "",
             "A run scored under different thresholds is not comparable to this one.",
             "",
+            "Error rates are pooled over each cohort — total edit distance over total reference "
+                + "length — so a long utterance weighs what it is, and the figures are comparable to "
+                + "published WER and CER.",
+            "",
         ]
     }
 
@@ -998,12 +1081,6 @@ public enum TranscriptionQualityReport {
             lines.append(
                 "- ASR weights are unloaded between backends, but the cleanup LLM stays resident for "
                     + "the whole sweep. Latency below is a machine already holding one model."
-            )
-        }
-        if disclosures.statisticIsMeanOfPerUtteranceRates {
-            lines.append(
-                "- The ranking statistic is the unweighted mean of per-utterance normalized WER. "
-                    + "A one-word utterance counts as much as a long one."
             )
         }
         lines += disclosures.notes.map { "- \($0)" }

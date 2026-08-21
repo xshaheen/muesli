@@ -180,15 +180,13 @@ public extension TranscriptionQualityScoring {
         let hypothesisTokens = normalized(hypothesis, arabic: arabic).split(separator: " ").map(String.init)
         let referenceCharacters = Array(referenceTokens.joined())
         let hypothesisCharacters = Array(hypothesisTokens.joined())
+        // Same tokenisation and same character view as the v1 `Metric`, so a per-pair count summed
+        // over a cohort reproduces v1's pooled figure exactly rather than approximately.
         return TranscriptionQuality.ErrorRates(
-            wer: rate(
-                errors: levenshtein(referenceTokens, hypothesisTokens),
-                referenceLength: referenceTokens.count
-            ),
-            cer: rate(
-                errors: levenshtein(referenceCharacters, hypothesisCharacters),
-                referenceLength: referenceCharacters.count
-            )
+            wordErrors: levenshtein(referenceTokens, hypothesisTokens),
+            referenceWords: referenceTokens.count,
+            characterErrors: levenshtein(referenceCharacters, hypothesisCharacters),
+            referenceCharacters: referenceCharacters.count
         )
     }
 
@@ -213,9 +211,12 @@ public extension TranscriptionQualityScoring {
         return Double(retained) / Double(referenceTokens.count)
     }
 
+    /// Edit distance over reference length — the one definition of an error rate in the harness,
+    /// used both for a single pair and for a pooled total so the two can never diverge.
+    ///
     /// An empty reference has no denominator: any output against it is wholly inserted, and no
     /// output against it matches perfectly. Either answer beats letting a NaN reach the report.
-    private static func rate(errors: Int, referenceLength: Int) -> Double {
+    static func errorRate(errors: Int, referenceLength: Int) -> Double {
         guard referenceLength > 0 else { return errors > 0 ? 1 : 0 }
         return Double(errors) / Double(referenceLength)
     }

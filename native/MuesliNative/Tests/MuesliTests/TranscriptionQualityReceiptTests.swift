@@ -152,6 +152,31 @@ struct TranscriptionQualityDecisionTests {
         #expect(TranscriptionQualityReport.markdown(for: subject).contains("**No winner**"))
     }
 
+    // MARK: R5 — the ranking statistic
+
+    @Test("the ranking pools errors over reference length rather than averaging per-utterance rates")
+    func rankingIsPooledRatherThanAveraged() throws {
+        // Both backends transcribed the same two utterances: one word long, and thirty words long.
+        // `chatty` misses the single word and nothing else; `steady` gets the short one right and
+        // misses nine words of the long one. Pooled, chatty is nine times the better recognizer;
+        // averaged per utterance the one-word miss counts as much as thirty words and flips it.
+        let subject = makeReceipt([
+            weighted("chatty", cohort: .english, counts: [(1, 1), (0, 30)], faithfulness: 0.99),
+            weighted("steady", cohort: .english, counts: [(0, 1), (9, 30)], faithfulness: 0.99),
+        ])
+
+        let decision = try #require(Policy.evaluate(subject).cohorts.first)
+
+        #expect(decision.ranking.map(\.backend) == ["chatty", "steady"])
+        #expect(abs(decision.ranking[0].normalizedWER - 1.0 / 31.0) < 1e-12)
+        #expect(abs(decision.ranking[1].normalizedWER - 9.0 / 31.0) < 1e-12)
+        // The bootstrap has to compare the same statistic the ranking does, or the interval would be
+        // about a quantity no one is ranking on.
+        let comparison = try #require(decision.comparisons.first)
+        #expect(comparison.leader == "chatty")
+        #expect(abs(comparison.margin - 8.0 / 31.0) < 1e-12)
+    }
+
     // MARK: Determinism (KTD10)
 
     @Test("the same receipt scored twice yields identical winners, ties, and Qwen3 verdict")
@@ -417,8 +442,11 @@ struct TranscriptionQualityReceiptTests {
         #expect(report.contains("Bootstrap seed"))
         #expect(report.contains("cold start"))
         #expect(report.contains("cleanup LLM stays resident"))
-        #expect(report.contains("unweighted mean"))
         #expect(report.contains("run under battery power"))
+        // The disclosure that the statistic was an unweighted mean is gone because the statistic is
+        // no longer one; the report has to state what it now is instead.
+        #expect(!report.contains("unweighted mean"))
+        #expect(report.contains("total edit distance over total reference length"))
     }
 
     @Test("the report reports each measured cohort separately rather than one headline figure")
@@ -432,11 +460,30 @@ struct TranscriptionQualityReceiptTests {
 
     // MARK: Aggregation
 
+    /// R5: published ASR figures are pooled, so a cohort figure that is not pooled is not the thing
+    /// it is being compared against. One word wrong out of thirty-one spoken is a 3% error rate; the
+    /// unweighted mean of the two utterance rates calls the same recording 50%.
+    @Test("a cohort's error rate is total edit distance over total reference length")
+    func cohortErrorRateIsPooled() throws {
+        let cohort = Receipt.CohortResult(cohort: .english, utterances: [
+            countedUtterance("short", errors: 1, referenceWords: 1),
+            countedUtterance("long", errors: 0, referenceWords: 30),
+        ])
+
+        let pooled = try #require(cohort.pooledNormalizedWER(at: .rawASR))
+
+        #expect(abs(pooled - 1.0 / 31.0) < 1e-12)
+        // Characters run five to the word here, so the same pooling has to hold on CER.
+        #expect(abs(try #require(cohort.pooledNormalizedCER(at: .rawASR)) - 1.0 / 31.0) < 1e-12)
+        #expect(abs(try #require(cohort.pooledRawWER(at: .rawASR)) - 1.0 / 31.0) < 1e-12)
+    }
+
     @Test("a cohort with no utterances reports nil rather than zero")
     func emptyCohortAggregatesToNil() {
         let empty = Receipt.CohortResult(cohort: .english, utterances: [])
 
-        #expect(empty.meanNormalizedWER(at: .rawASR) == nil)
+        #expect(empty.pooledNormalizedWER(at: .rawASR) == nil)
+        #expect(empty.pooledRawWER(at: .rawASR) == nil)
         #expect(empty.meanFaithfulness(at: .rawASR) == nil)
         #expect(empty.endToEndLatency == nil)
         #expect(empty.realTimeFactor == nil)
@@ -572,7 +619,7 @@ private let allowedReceiptKeys: Set<String> = [
     "issueCount",
     "thresholds", "faithfulnessGate", "confidenceLevel", "bootstrapResamples", "bootstrapSeed",
     "disclosures", "cleanupEnabled", "warmupSampleConsumed", "cleanupModelResidentAcrossSweep",
-    "statisticIsMeanOfPerUtteranceRates", "notes",
+    "notes",
     "backends", "backend", "model", "label", "languageConfiguration", "notRunnableReason",
     "failedSampleIDs",
     "warmup", "sampleID", "endToEndSeconds", "failureMessage",
@@ -580,6 +627,11 @@ private let allowedReceiptKeys: Set<String> = [
     "rawASR", "finalOutput",
     "rawWER", "rawCER", "normalizedWER", "normalizedCER", "faithfulness",
     "scriptChangeInflatesErrorRate",
+    // Integer counts, not text: they are the denominators a pooled cohort rate is recomputed from,
+    // and they reconstruct nothing that was said (R2, R5).
+    "rawWordErrors", "rawReferenceWords", "rawCharacterErrors", "rawReferenceCharacters",
+    "normalizedWordErrors", "normalizedReferenceWords", "normalizedCharacterErrors",
+    "normalizedReferenceCharacters",
 ]
 
 private func jsonKeys(_ value: Any) -> Set<String> {
@@ -595,14 +647,94 @@ private func jsonKeys(_ value: Any) -> Set<String> {
 
 // MARK: - Construction helpers
 
+/// Every utterance is a hundred reference words long, so the pooled figure equals the requested rate
+/// exactly and a test written about a *rate* still says what it meant to say. Length is varied only
+/// where the test is about weighting — see `weighted`.
 private func stage(wer: Double, faithfulness: Double) -> Receipt.StageSummary {
-    Receipt.StageSummary(
-        rawWER: wer,
-        rawCER: wer / 2,
-        normalizedWER: wer,
-        normalizedCER: wer / 2,
+    let rates = TranscriptionQuality.ErrorRates(
+        wordErrors: Int((wer * 100).rounded()),
+        referenceWords: 100,
+        characterErrors: Int((wer * 500).rounded()),
+        referenceCharacters: 1_000
+    )
+    return Receipt.StageSummary(
+        raw: rates,
+        normalized: rates,
         faithfulness: faithfulness,
         scriptChangeInflatesErrorRate: false
+    )
+}
+
+/// A stage built from edit distances and reference lengths rather than from a rate, so a test can
+/// construct utterances of deliberately unequal length. Characters run five to the word: only the
+/// differing denominators matter, not the ratio.
+private func countedStage(
+    errors: Int,
+    referenceWords: Int,
+    faithfulness: Double = 0.99
+) -> Receipt.StageSummary {
+    let rates = TranscriptionQuality.ErrorRates(
+        wordErrors: errors,
+        referenceWords: referenceWords,
+        characterErrors: errors * 5,
+        referenceCharacters: referenceWords * 5
+    )
+    return Receipt.StageSummary(
+        raw: rates,
+        normalized: rates,
+        faithfulness: faithfulness,
+        scriptChangeInflatesErrorRate: false
+    )
+}
+
+private func countedUtterance(_ identifier: String, errors: Int, referenceWords: Int) -> Receipt.Utterance {
+    Receipt.Utterance(
+        sampleID: identifier,
+        corpusID: "corpus",
+        rawASR: countedStage(errors: errors, referenceWords: referenceWords),
+        finalOutput: countedStage(errors: errors, referenceWords: referenceWords),
+        endToEndSeconds: 1,
+        speechRecognitionSeconds: 0.8,
+        audioDurationSeconds: 5
+    )
+}
+
+/// Like `measured`, but the utterances carry counts instead of rates and differ in length, which is
+/// what separates a pooled figure from a mean of per-utterance rates.
+private func weighted(
+    _ identifier: String,
+    cohort: TranscriptionQuality.Cohort,
+    counts: [(errors: Int, referenceWords: Int)],
+    faithfulness: Double,
+    seconds: Double = 1
+) -> Receipt.Backend {
+    Receipt.Backend(
+        backend: identifier,
+        model: "\(identifier)-model",
+        label: identifier,
+        languageConfiguration: "automatic",
+        cohorts: [Receipt.CohortResult(
+            cohort: cohort,
+            utterances: counts.enumerated().map { offset, count in
+                Receipt.Utterance(
+                    sampleID: "s\(offset)",
+                    corpusID: "corpus",
+                    rawASR: countedStage(
+                        errors: count.errors,
+                        referenceWords: count.referenceWords,
+                        faithfulness: faithfulness
+                    ),
+                    finalOutput: countedStage(
+                        errors: count.errors,
+                        referenceWords: count.referenceWords,
+                        faithfulness: faithfulness
+                    ),
+                    endToEndSeconds: seconds,
+                    speechRecognitionSeconds: seconds * 0.8,
+                    audioDurationSeconds: 5
+                )
+            }
+        )]
     )
 }
 

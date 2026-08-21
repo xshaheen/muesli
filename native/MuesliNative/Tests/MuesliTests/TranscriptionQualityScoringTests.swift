@@ -408,6 +408,39 @@ struct TranscriptionQualityScoringTests {
         #expect(!score.scriptChangeInflatesErrorRate)
     }
 
+    // MARK: - Pooling
+
+    /// R5. The per-pair scorer has to carry the counts the frozen v1 `Metric` divides, or the two
+    /// halves of the repository report different statistics under the same name — and only one of
+    /// them is comparable to a published WER. Samples of very unequal length are what separates a
+    /// pooled rate from a mean of per-utterance rates.
+    @Test("per-pair counts summed over samples reproduce the frozen v1 pooled metric exactly")
+    func perPairCountsPoolToTheVersion1Metric() {
+        let samples = [
+            Self.sample(cohort: .english, reference: "yes", rawASR: "no"),
+            Self.sample(
+                cohort: .english,
+                reference: "please schedule the product review for tomorrow morning",
+                rawASR: "please schedule the product review for tomorrow morning"
+            ),
+            Self.sample(cohort: .egyptianArabic, reference: Arabic.reference, rawASR: Arabic.garbled),
+        ]
+        let version1 = TranscriptionQualityScoring.Metric(samples: samples, output: \.rawASR)
+        let scored = samples.map { TranscriptionQuality.SampleScore(sample: $0).rawASR.normalized }
+
+        let pooledWER = Double(scored.reduce(0) { $0 + $1.wordErrors })
+            / Double(scored.reduce(0) { $0 + $1.referenceWords })
+        let pooledCER = Double(scored.reduce(0) { $0 + $1.characterErrors })
+            / Double(scored.reduce(0) { $0 + $1.referenceCharacters })
+
+        #expect(abs(pooledWER - version1.wer) < 1e-12)
+        #expect(abs(pooledCER - version1.cer) < 1e-12)
+        // The defect this replaced: averaging the rates answers a different question by a wide
+        // margin, because the one-word sample gets the same vote as the eight-word one.
+        let meanOfRates = scored.reduce(0.0) { $0 + $1.wer } / Double(scored.count)
+        #expect(abs(meanOfRates - version1.wer) > 0.1)
+    }
+
     // MARK: - Degenerate and not-applicable cases
 
     @Test("a perfect transcription scores zero error and full faithfulness in every cohort")

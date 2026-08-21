@@ -15,7 +15,10 @@
       "revision": "synthetic-0",
       "licenceIdentifier": "CC-BY-4.0",
       "acquisition": "hugging-face",
-      "cohorts": ["egyptian-arabic", "arabic-english"],
+      "cohorts": [
+        "egyptian-arabic",
+        "arabic-english"
+      ],
       "sampleCount": 4,
       "issueCount": 0
     }
@@ -30,8 +33,9 @@
     "cleanupEnabled": true,
     "warmupSampleConsumed": true,
     "cleanupModelResidentAcrossSweep": true,
-    "statisticIsMeanOfPerUtteranceRates": true,
-    "notes": ["Synthetic example. The scores below are invented, not measured."]
+    "notes": [
+      "Synthetic example. The scores below are invented, not measured."
+    ]
   },
   "backends": [
     {
@@ -39,7 +43,10 @@
       "model": "parakeet-tdt-0.6b-v3",
       "label": "Parakeet v3",
       "languageConfiguration": "automatic",
-      "warmup": {"sampleID": "s0", "endToEndSeconds": 4.812},
+      "warmup": {
+        "sampleID": "s0",
+        "endToEndSeconds": 4.812
+      },
       "failedSampleIDs": [],
       "cohorts": [
         {
@@ -49,14 +56,36 @@
               "sampleID": "s1",
               "corpusID": "arzen-example",
               "rawASR": {
-                "rawWER": 0.42, "rawCER": 0.21,
-                "normalizedWER": 0.34, "normalizedCER": 0.17,
-                "faithfulness": 0.97, "scriptChangeInflatesErrorRate": false
+                "rawWER": 0.42857142857142855,
+                "rawCER": 0.20855614973262032,
+                "normalizedWER": 0.3333333333333333,
+                "normalizedCER": 0.1712707182320442,
+                "rawWordErrors": 18,
+                "rawReferenceWords": 42,
+                "rawCharacterErrors": 39,
+                "rawReferenceCharacters": 187,
+                "normalizedWordErrors": 14,
+                "normalizedReferenceWords": 42,
+                "normalizedCharacterErrors": 31,
+                "normalizedReferenceCharacters": 181,
+                "faithfulness": 0.97,
+                "scriptChangeInflatesErrorRate": false
               },
               "finalOutput": {
-                "rawWER": 0.4, "rawCER": 0.2,
-                "normalizedWER": 0.32, "normalizedCER": 0.16,
-                "faithfulness": 0.96, "scriptChangeInflatesErrorRate": false
+                "rawWER": 0.40476190476190477,
+                "rawCER": 0.19786096256684493,
+                "normalizedWER": 0.30952380952380953,
+                "normalizedCER": 0.16022099447513813,
+                "rawWordErrors": 17,
+                "rawReferenceWords": 42,
+                "rawCharacterErrors": 37,
+                "rawReferenceCharacters": 187,
+                "normalizedWordErrors": 13,
+                "normalizedReferenceWords": 42,
+                "normalizedCharacterErrors": 29,
+                "normalizedReferenceCharacters": 181,
+                "faithfulness": 0.96,
+                "scriptChangeInflatesErrorRate": false
               },
               "endToEndSeconds": 0.41,
               "speechRecognitionSeconds": 0.18,
@@ -66,14 +95,36 @@
               "sampleID": "s2",
               "corpusID": "arzen-example",
               "rawASR": {
-                "rawWER": 0.3, "rawCER": 0.15,
-                "normalizedWER": 0.26, "normalizedCER": 0.13,
-                "faithfulness": 0.99, "scriptChangeInflatesErrorRate": false
+                "rawWER": 0.36363636363636365,
+                "rawCER": 0.15384615384615385,
+                "normalizedWER": 0.2727272727272727,
+                "normalizedCER": 0.12,
+                "rawWordErrors": 4,
+                "rawReferenceWords": 11,
+                "rawCharacterErrors": 8,
+                "rawReferenceCharacters": 52,
+                "normalizedWordErrors": 3,
+                "normalizedReferenceWords": 11,
+                "normalizedCharacterErrors": 6,
+                "normalizedReferenceCharacters": 50,
+                "faithfulness": 0.99,
+                "scriptChangeInflatesErrorRate": false
               },
               "finalOutput": {
-                "rawWER": 0.29, "rawCER": 0.14,
-                "normalizedWER": 0.25, "normalizedCER": 0.12,
-                "faithfulness": 0.99, "scriptChangeInflatesErrorRate": false
+                "rawWER": 0.2727272727272727,
+                "rawCER": 0.1346153846153846,
+                "normalizedWER": 0.18181818181818182,
+                "normalizedCER": 0.1,
+                "rawWordErrors": 3,
+                "rawReferenceWords": 11,
+                "rawCharacterErrors": 7,
+                "rawReferenceCharacters": 52,
+                "normalizedWordErrors": 2,
+                "normalizedReferenceWords": 11,
+                "normalizedCharacterErrors": 5,
+                "normalizedReferenceCharacters": 50,
+                "faithfulness": 0.99,
+                "scriptChangeInflatesErrorRate": false
               },
               "endToEndSeconds": 0.37,
               "speechRecognitionSeconds": 0.16,
@@ -88,8 +139,13 @@
       "model": "qwen3-asr",
       "label": "Qwen3 ASR",
       "languageConfiguration": "automatic",
-      "warmup": {"sampleID": "s0", "endToEndSeconds": 31.4},
-      "failedSampleIDs": ["s3"],
+      "warmup": {
+        "sampleID": "s0",
+        "endToEndSeconds": 31.4
+      },
+      "failedSampleIDs": [
+        "s3"
+      ],
       "cohorts": [
         {
           "cohort": "egyptian-arabic",
@@ -98,14 +154,36 @@
               "sampleID": "s1",
               "corpusID": "arzen-example",
               "rawASR": {
-                "rawWER": 0.95, "rawCER": 0.88,
-                "normalizedWER": 0.94, "normalizedCER": 0.86,
-                "faithfulness": 0.12, "scriptChangeInflatesErrorRate": true
+                "rawWER": 0.9523809523809523,
+                "rawCER": 0.8770053475935828,
+                "normalizedWER": 0.9285714285714286,
+                "normalizedCER": 0.861878453038674,
+                "rawWordErrors": 40,
+                "rawReferenceWords": 42,
+                "rawCharacterErrors": 164,
+                "rawReferenceCharacters": 187,
+                "normalizedWordErrors": 39,
+                "normalizedReferenceWords": 42,
+                "normalizedCharacterErrors": 156,
+                "normalizedReferenceCharacters": 181,
+                "faithfulness": 0.12,
+                "scriptChangeInflatesErrorRate": true
               },
               "finalOutput": {
-                "rawWER": 0.95, "rawCER": 0.88,
-                "normalizedWER": 0.94, "normalizedCER": 0.86,
-                "faithfulness": 0.1, "scriptChangeInflatesErrorRate": true
+                "rawWER": 0.9523809523809523,
+                "rawCER": 0.8770053475935828,
+                "normalizedWER": 0.9285714285714286,
+                "normalizedCER": 0.861878453038674,
+                "rawWordErrors": 40,
+                "rawReferenceWords": 42,
+                "rawCharacterErrors": 164,
+                "rawReferenceCharacters": 187,
+                "normalizedWordErrors": 39,
+                "normalizedReferenceWords": 42,
+                "normalizedCharacterErrors": 156,
+                "normalizedReferenceCharacters": 181,
+                "faithfulness": 0.1,
+                "scriptChangeInflatesErrorRate": true
               },
               "endToEndSeconds": 2.6,
               "speechRecognitionSeconds": 2.31,
@@ -115,14 +193,36 @@
               "sampleID": "s2",
               "corpusID": "arzen-example",
               "rawASR": {
-                "rawWER": 0.9, "rawCER": 0.81,
-                "normalizedWER": 0.89, "normalizedCER": 0.8,
-                "faithfulness": 0.16, "scriptChangeInflatesErrorRate": true
+                "rawWER": 0.9090909090909091,
+                "rawCER": 0.8653846153846154,
+                "normalizedWER": 0.9090909090909091,
+                "normalizedCER": 0.86,
+                "rawWordErrors": 10,
+                "rawReferenceWords": 11,
+                "rawCharacterErrors": 45,
+                "rawReferenceCharacters": 52,
+                "normalizedWordErrors": 10,
+                "normalizedReferenceWords": 11,
+                "normalizedCharacterErrors": 43,
+                "normalizedReferenceCharacters": 50,
+                "faithfulness": 0.16,
+                "scriptChangeInflatesErrorRate": true
               },
               "finalOutput": {
-                "rawWER": 0.9, "rawCER": 0.81,
-                "normalizedWER": 0.89, "normalizedCER": 0.8,
-                "faithfulness": 0.14, "scriptChangeInflatesErrorRate": true
+                "rawWER": 0.9090909090909091,
+                "rawCER": 0.8653846153846154,
+                "normalizedWER": 0.9090909090909091,
+                "normalizedCER": 0.86,
+                "rawWordErrors": 10,
+                "rawReferenceWords": 11,
+                "rawCharacterErrors": 45,
+                "rawReferenceCharacters": 52,
+                "normalizedWordErrors": 10,
+                "normalizedReferenceWords": 11,
+                "normalizedCharacterErrors": 43,
+                "normalizedReferenceCharacters": 50,
+                "faithfulness": 0.14,
+                "scriptChangeInflatesErrorRate": true
               },
               "endToEndSeconds": 2.44,
               "speechRecognitionSeconds": 2.19,

@@ -234,11 +234,17 @@ schema, the policy, and the renderer are testable without a corpus. Do not cite 
 
 ### What a receipt contains
 
-Only derived results: per-utterance error rates, faithfulness, script distributions, latency;
-corpus id, revision, licence and acquisition; backend, model and language configuration; host facts;
-and the thresholds the verdict was reached under. There is no field that can hold a reference or a
-hypothesis, and `TranscriptionQualityReceiptTests` asserts that against the encoded bytes with a key
-allow-list — a text field added to the schema fails the suite rather than leaking quietly.
+Only derived results: per-utterance error rates and the integer counts they were divided out of,
+faithfulness, script distributions, latency; corpus id, revision, licence and acquisition; backend,
+model and language configuration; host facts; and the thresholds the verdict was reached under.
+There is no field that can hold a reference or a hypothesis, and `TranscriptionQualityReceiptTests`
+asserts that against the encoded bytes with a key allow-list — a text field added to the schema fails
+the suite rather than leaking quietly.
+
+The counts — edit distance and reference length, in words and in characters, for both the raw and
+the normalized figure — are what make a cohort rate poolable from the receipt alone and recomputable
+by a later reader. A count of words is derived from text, not text: it reconstructs nothing that was
+said.
 
 ### How the winner is chosen
 
@@ -247,11 +253,15 @@ The policy is a pure function of the receipt, not a reviewer's reading of the ta
 1. **Faithfulness gate.** A backend whose raw-ASR faithfulness on a cohort is below **0.90** is
    ineligible to win that cohort, whatever its error rate. Faithfulness is a gate rather than a
    weighted term because the two are not commensurable: no WER advantage buys back a language change.
-2. **Ranking.** Eligible backends, ascending mean normalized WER at `rawASR`. `finalOutput` is
+2. **Ranking.** Eligible backends, ascending **pooled** normalized WER at `rawASR` — total edit
+   distance over total reference length, micro-averaged the way the frozen v1 baseline and published
+   WER both are, so a thirty-word utterance weighs thirty times a one-word one. `finalOutput` is
    reported but does not select the winner.
 3. **Margin.** A winner is declared only when its advantage over the runner-up clears a **paired
-   bootstrap 95% interval** resampled over utterances. The bootstrap's seed is recorded in the
-   receipt, so the same receipt always yields the same interval.
+   bootstrap 95% interval** resampled over utterances. Each replicate resamples the (edit distance,
+   reference length) pairs and pools them, so the interval is about the same statistic the ranking
+   is. The bootstrap's seed is recorded in the receipt, so the same receipt always yields the same
+   interval.
 4. **Ties.** Inside the interval, no winner is claimed. Tied backends are listed in ascending p50
    latency.
 5. **Missing data.** A backend that is not runnable, or produced nothing on a cohort, is listed
@@ -262,16 +272,13 @@ The policy is a pure function of the receipt, not a reviewer's reading of the ta
 
 ### What the report discloses about itself
 
-Three judgement calls shift numbers the report presents, so the report states them rather than
-leaving them in the code:
+Two judgement calls shift numbers the report presents, so the report states them rather than leaving
+them in the code:
 
 - The first sample is spent on the cold start and is **not** re-measured, so every cohort figure
   rests on one fewer utterance than the corpus holds. Every backend loses the same sample.
 - ASR weights are unloaded between backends, but the cleanup LLM stays resident for the whole sweep.
   Latency figures are therefore a machine already holding one model.
-- The ranking statistic is the unweighted mean of per-utterance normalized WER, not a pooled error
-  rate — the receipt carries no transcript text and therefore no reference lengths to weight by. A
-  one-word utterance counts as much as a long one.
 
 A row marked ⚠︎ is a backend that could not select that cohort's language. Its position reflects the
 language it was pinned to, not a failure to recognise the one that was spoken.

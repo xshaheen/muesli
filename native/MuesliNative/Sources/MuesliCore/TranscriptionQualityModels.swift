@@ -156,14 +156,40 @@ public enum TranscriptionQuality {
         }
     }
 
-    /// Word and character error rates for one reference/hypothesis pair.
+    /// Word and character error rates for one reference/hypothesis pair, together with the counts
+    /// they were divided out of.
+    ///
+    /// The counts travel with the rates because a rate cannot be weighted after the fact, and R5
+    /// asks for figures comparable to published ones — which are pooled, total edit distance over
+    /// total reference length. Without the denominators an aggregation can only average rates, which
+    /// lets a one-word utterance count as much as a thirty-word one. They are integers derived from
+    /// text and are not text (R2).
     public struct ErrorRates: Codable, Hashable, Sendable {
+        public let wordErrors: Int
+        public let referenceWords: Int
+        public let characterErrors: Int
+        public let referenceCharacters: Int
         public let wer: Double
         public let cer: Double
 
-        public init(wer: Double, cer: Double) {
-            self.wer = wer
-            self.cer = cer
+        public init(
+            wordErrors: Int,
+            referenceWords: Int,
+            characterErrors: Int,
+            referenceCharacters: Int
+        ) {
+            self.wordErrors = wordErrors
+            self.referenceWords = referenceWords
+            self.characterErrors = characterErrors
+            self.referenceCharacters = referenceCharacters
+            wer = TranscriptionQualityScoring.errorRate(
+                errors: wordErrors,
+                referenceLength: referenceWords
+            )
+            cer = TranscriptionQualityScoring.errorRate(
+                errors: characterErrors,
+                referenceLength: referenceCharacters
+            )
         }
     }
 
