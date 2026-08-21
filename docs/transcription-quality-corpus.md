@@ -213,6 +213,69 @@ Read any ranking produced from this store as *a ranking on public broadcast-styl
 that in the report alongside which cohort rests on which corpus. Closing that gap needs a personal
 dictation corpus, which is deliberately out of scope.
 
+## The run receipt and the report
+
+A sweep produces one **run receipt** — schema v2, defined by
+`native/MuesliNative/Sources/MuesliCore/TranscriptionQualityReceipt.swift` — and the report is
+*rendered* from it by `TranscriptionQualityReport.markdown(for:)`. Nothing in the report is written
+by hand. Every number and every verdict is either already in the receipt or is the deterministic
+output of `TranscriptionQualityDecision`, so a report cannot drift from the measurement it claims to
+describe, and re-rendering an old receipt reproduces its old report exactly.
+
+### Where receipts live
+
+`native/MuesliNative/Tests/MuesliTests/Fixtures/TranscriptionQualityRuns/`, with its own
+`manifest.json` and its own loader. It is deliberately **not** beside the frozen v1 baseline in
+`Fixtures/TranscriptionQuality/`: v1's contract test asserts exact set equality over its own
+directory, so a v2 file dropped in there fails the mandatory v1 gate. Do not merge the two.
+
+`run-example-v2.json` in that directory is synthetic — hand-authored numbers that exist so the
+schema, the policy, and the renderer are testable without a corpus. Do not cite it.
+
+### What a receipt contains
+
+Only derived results: per-utterance error rates, faithfulness, script distributions, latency;
+corpus id, revision, licence and acquisition; backend, model and language configuration; host facts;
+and the thresholds the verdict was reached under. There is no field that can hold a reference or a
+hypothesis, and `TranscriptionQualityReceiptTests` asserts that against the encoded bytes with a key
+allow-list — a text field added to the schema fails the suite rather than leaking quietly.
+
+### How the winner is chosen
+
+The policy is a pure function of the receipt, not a reviewer's reading of the table:
+
+1. **Faithfulness gate.** A backend whose raw-ASR faithfulness on a cohort is below **0.90** is
+   ineligible to win that cohort, whatever its error rate. Faithfulness is a gate rather than a
+   weighted term because the two are not commensurable: no WER advantage buys back a language change.
+2. **Ranking.** Eligible backends, ascending mean normalized WER at `rawASR`. `finalOutput` is
+   reported but does not select the winner.
+3. **Margin.** A winner is declared only when its advantage over the runner-up clears a **paired
+   bootstrap 95% interval** resampled over utterances. The bootstrap's seed is recorded in the
+   receipt, so the same receipt always yields the same interval.
+4. **Ties.** Inside the interval, no winner is claimed. Tied backends are listed in ascending p50
+   latency.
+5. **Missing data.** A backend that is not runnable, or produced nothing on a cohort, is listed
+   apart from the ranking. It is never ranked last — not measured is not the same as measured badly.
+6. **Qwen3.** Kept if it wins outright or ties for first on the Egyptian Arabic or Arabic-English
+   cohort; dropped otherwise. The verdict names the backend it was compared against and the language
+   configuration it ran under, because it holds only for that configuration.
+
+### What the report discloses about itself
+
+Three judgement calls shift numbers the report presents, so the report states them rather than
+leaving them in the code:
+
+- The first sample is spent on the cold start and is **not** re-measured, so every cohort figure
+  rests on one fewer utterance than the corpus holds. Every backend loses the same sample.
+- ASR weights are unloaded between backends, but the cleanup LLM stays resident for the whole sweep.
+  Latency figures are therefore a machine already holding one model.
+- The ranking statistic is the unweighted mean of per-utterance normalized WER, not a pooled error
+  rate — the receipt carries no transcript text and therefore no reference lengths to weight by. A
+  one-word utterance counts as much as a long one.
+
+A row marked ⚠︎ is a backend that could not select that cohort's language. Its position reflects the
+language it was pinned to, not a failure to recognise the one that was spoken.
+
 ## Verifying nothing leaked
 
 Before committing anything from a measured run:
@@ -229,8 +292,10 @@ Known, expected matches as of this document:
   clips, unrelated to the harness. Any other tracked audio file is a leak.
 - Transcript-shaped fields: the frozen v1 fixture under
   `native/MuesliNative/Tests/MuesliTests/Fixtures/TranscriptionQuality/` (synthetic,
-  maintainer-authored text, not corpus content) and this document, which names the field keys.
-  Anything else is a leak.
+  maintainer-authored text, not corpus content); run receipts under
+  `native/MuesliNative/Tests/MuesliTests/Fixtures/TranscriptionQualityRuns/`, where `rawASR` and
+  `finalOutput` are *stage names* on a block of numbers and never hold text; and this document,
+  which names the field keys. Anything else is a leak.
 
 `.gitignore` also blocks the directory names a corpus store is likely to be created under by
 mistake (`asr-corpus/`, `asr-corpora/`, `transcription-corpora/`), and `*.wav` is already ignored

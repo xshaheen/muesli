@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 2,
+  "maximumDirectoryBytes": 524288,
+  "files": [
+    {"path":"README.md","bytes":2338,"sha256":"e138dfea9bfee1323717e90e06666dbe12bf9f1c292eb538b327b1692d7b530a"},
+    {"path":"run-example-v2.json","bytes":4782,"sha256":"fd82d274d795b66db47e5e0c8041561c36d318062b689cdb3f2c0c8303d54886"}
+  ]
+}

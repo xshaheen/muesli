@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 2,
+  "runID": "example-synthetic",
+  "generatedAt": "2026-08-21T00:00:00Z",
+  "host": {
+    "operatingSystemVersion": "26.0.0",
+    "machineModel": "Mac16,10",
+    "architecture": "Apple M4",
+    "processorCount": 10,
+    "physicalMemoryBytes": 17179869184
+  },
+  "corpora": [
+    {
+      "id": "arzen-example",
+      "revision": "synthetic-0",
+      "licenceIdentifier": "CC-BY-4.0",
+      "acquisition": "hugging-face",
+      "cohorts": ["egyptian-arabic", "arabic-english"],
+      "sampleCount": 4,
+      "issueCount": 0
+    }
+  ],
+  "thresholds": {
+    "faithfulnessGate": 0.9,
+    "confidenceLevel": 0.95,
+    "bootstrapResamples": 1000,
+    "bootstrapSeed": 5572436338005311490
+  },
+  "disclosures": {
+    "cleanupEnabled": true,
+    "warmupSampleConsumed": true,
+    "cleanupModelResidentAcrossSweep": true,
+    "statisticIsMeanOfPerUtteranceRates": true,
+    "notes": ["Synthetic example. The scores below are invented, not measured."]
+  },
+  "backends": [
+    {
+      "backend": "parakeet",
+      "model": "parakeet-tdt-0.6b-v3",
+      "label": "Parakeet v3",
+      "languageConfiguration": "automatic",
+      "warmup": {"sampleID": "s0", "endToEndSeconds": 4.812},
+      "failedSampleIDs": [],
+      "cohorts": [
+        {
+          "cohort": "egyptian-arabic",
+          "utterances": [
+            {
+              "sampleID": "s1",
+              "corpusID": "arzen-example",
+              "rawASR": {
+                "rawWER": 0.42, "rawCER": 0.21,
+                "normalizedWER": 0.34, "normalizedCER": 0.17,
+                "faithfulness": 0.97, "scriptChangeInflatesErrorRate": false
+              },
+              "finalOutput": {
+                "rawWER": 0.4, "rawCER": 0.2,
+                "normalizedWER": 0.32, "normalizedCER": 0.16,
+                "faithfulness": 0.96, "scriptChangeInflatesErrorRate": false
+              },
+              "endToEndSeconds": 0.41,
+              "speechRecognitionSeconds": 0.18,
+              "audioDurationSeconds": 6.2
+            },
+            {
+              "sampleID": "s2",
+              "corpusID": "arzen-example",
+              "rawASR": {
+                "rawWER": 0.3, "rawCER": 0.15,
+                "normalizedWER": 0.26, "normalizedCER": 0.13,
+                "faithfulness": 0.99, "scriptChangeInflatesErrorRate": false
+              },
+              "finalOutput": {
+                "rawWER": 0.29, "rawCER": 0.14,
+                "normalizedWER": 0.25, "normalizedCER": 0.12,
+                "faithfulness": 0.99, "scriptChangeInflatesErrorRate": false
+              },
+              "endToEndSeconds": 0.37,
+              "speechRecognitionSeconds": 0.16,
+              "audioDurationSeconds": 5.4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "backend": "qwen",
+      "model": "qwen3-asr",
+      "label": "Qwen3 ASR",
+      "languageConfiguration": "automatic",
+      "warmup": {"sampleID": "s0", "endToEndSeconds": 31.4},
+      "failedSampleIDs": ["s3"],
+      "cohorts": [
+        {
+          "cohort": "egyptian-arabic",
+          "utterances": [
+            {
+              "sampleID": "s1",
+              "corpusID": "arzen-example",
+              "rawASR": {
+                "rawWER": 0.95, "rawCER": 0.88,
+                "normalizedWER": 0.94, "normalizedCER": 0.86,
+                "faithfulness": 0.12, "scriptChangeInflatesErrorRate": true
+              },
+              "finalOutput": {
+                "rawWER": 0.95, "rawCER": 0.88,
+                "normalizedWER": 0.94, "normalizedCER": 0.86,
+                "faithfulness": 0.1, "scriptChangeInflatesErrorRate": true
+              },
+              "endToEndSeconds": 2.6,
+              "speechRecognitionSeconds": 2.31,
+              "audioDurationSeconds": 6.2
+            },
+            {
+              "sampleID": "s2",
+              "corpusID": "arzen-example",
+              "rawASR": {
+                "rawWER": 0.9, "rawCER": 0.81,
+                "normalizedWER": 0.89, "normalizedCER": 0.8,
+                "faithfulness": 0.16, "scriptChangeInflatesErrorRate": true
+              },
+              "finalOutput": {
+                "rawWER": 0.9, "rawCER": 0.81,
+                "normalizedWER": 0.89, "normalizedCER": 0.8,
+                "faithfulness": 0.14, "scriptChangeInflatesErrorRate": true
+              },
+              "endToEndSeconds": 2.44,
+              "speechRecognitionSeconds": 2.19,
+              "audioDurationSeconds": 5.4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "backend": "indicasr",
+      "model": "indic-conformer",
+      "label": "Indic ASR",
+      "languageConfiguration": "pinned:hi",
+      "notRunnableReason": "model is not downloaded, and the harness never downloads one",
+      "failedSampleIDs": [],
+      "cohorts": []
+    }
+  ]
+}

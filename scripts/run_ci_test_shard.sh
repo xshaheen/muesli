@@ -110,6 +110,9 @@ case "${shard}" in
       TranscriptionCorpusStoreTests
       TranscriptionQualityRunnerTests
       TranscriptionQualityHarnessTests
+      TranscriptionQualityDecisionTests
+      TranscriptionQualityReceiptTests
+      TranscriptionQualityRunFixtureContractTests
     )
     ;;
   meetings)
