@@ -79,6 +79,13 @@ tmp-install/
 *.sqlite
 *.db
 
+# ASR evaluation corpora (MUESLI_ASR_CORPUS_DIR) — audio and reference transcripts must never be
+# committed. The store belongs outside the repo; these names guard a copy placed inside it by
+# mistake. See docs/transcription-quality-corpus.md.
+asr-corpus/
+asr-corpora/
+transcription-corpora/
+
 # Signing/certificates & releases
 developerID_application.cer
 dist-notary/
