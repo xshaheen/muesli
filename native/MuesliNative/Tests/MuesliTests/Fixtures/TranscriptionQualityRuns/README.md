@@ -24,8 +24,19 @@ Only derived results (R2):
 
 Never audio, never a reference transcript, never a hypothesis transcript. The receipt schema has no
 field that can hold one, and `TranscriptionQualityReceiptTests` asserts that against the encoded
-bytes: every JSON key in a committed receipt must appear in an explicit allow-list, so a text field
-added to the schema fails the suite instead of leaking quietly.
+bytes twice over:
+
+- **Keys.** Every JSON key in a committed receipt must appear in an explicit allow-list, so a text
+  field added to the schema fails the suite instead of leaking quietly.
+- **Values.** A key on the allow-list can still hold text, so every encoded string must be ASCII and
+  no longer than 160 characters. Identities and closed vocabularies satisfy that by construction; the
+  only two free-form fields — a maintainer's note and a thrown error's description — are put through
+  `ReceiptProse`, which drops every non-ASCII scalar and caps the length. No Arabic reference can
+  survive it in any form.
+
+The not-runnable reason is a code plus scalars rather than a rendered sentence, and the failed sample
+ids one of its cases names travel in `failedSampleIDs`. The sentence a reader sees is rendered by the
+report at read time, so nothing a future case might interpolate can reach a committed file.
 
 ## Files
 

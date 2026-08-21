@@ -30,7 +30,14 @@
     "bootstrapSeed": 5572436338005311490
   },
   "disclosures": {
-    "cleanupEnabled": true,
+    "cleanupRequested": true,
+    "cleanupAppliedUtterances": 3,
+    "cleanupNotPerformed": [
+      {
+        "reason": "not performed (skipped_unavailable)",
+        "utterances": 1
+      }
+    ],
     "warmupSampleConsumed": true,
     "cleanupModelResidentAcrossSweep": true,
     "notes": [
@@ -208,22 +215,6 @@
                 "faithfulness": 0.16,
                 "scriptChangeInflatesErrorRate": true
               },
-              "finalOutput": {
-                "rawWER": 0.9090909090909091,
-                "rawCER": 0.8653846153846154,
-                "normalizedWER": 0.9090909090909091,
-                "normalizedCER": 0.86,
-                "rawWordErrors": 10,
-                "rawReferenceWords": 11,
-                "rawCharacterErrors": 45,
-                "rawReferenceCharacters": 52,
-                "normalizedWordErrors": 10,
-                "normalizedReferenceWords": 11,
-                "normalizedCharacterErrors": 43,
-                "normalizedReferenceCharacters": 50,
-                "faithfulness": 0.14,
-                "scriptChangeInflatesErrorRate": true
-              },
               "endToEndSeconds": 2.44,
               "speechRecognitionSeconds": 2.19,
               "audioDurationSeconds": 5.4
@@ -237,9 +228,11 @@
       "model": "indic-conformer",
       "label": "Indic ASR",
       "languageConfiguration": "pinned:hi",
-      "notRunnableReason": "model is not downloaded, and the harness never downloads one",
       "failedSampleIDs": [],
-      "cohorts": []
+      "cohorts": [],
+      "notRunnable": {
+        "code": "model-not-downloaded"
+      }
     }
   ]
 }

@@ -10,6 +10,13 @@ import MuesliCore
 /// This lives in the test target because `TranscriptionQualityRun` does — the sweep's types depend
 /// on `BackendOption` and the app pipeline, and `MuesliCore` stays Foundation-only. What crosses the
 /// boundary is only what R2 permits: scores, identities, and provenance.
+///
+/// Two mappings here are load-bearing and neither is obvious from the field names. A stage is
+/// carried only when it is a *measurement of that stage* — the final stage is dropped for any
+/// utterance the cleanup stage skipped, because the pipeline still returns a text there and scoring
+/// it would report "cleanup changed nothing" about a cleanup that never ran. And a not-runnable
+/// reason is carried as a code, with its failed sample ids in the field that already holds ids,
+/// rather than as the sweep's rendered sentence.
 extension TranscriptionQualityRun.Result {
     func receipt(
         runID: String = UUID().uuidString,
@@ -38,11 +45,43 @@ extension TranscriptionQualityRun.Result {
             },
             thresholds: thresholds,
             disclosures: TranscriptionQualityReceipt.Disclosures(
-                cleanupEnabled: cleanupEnabled,
+                // What the run asked for, stated as such — and beside it what actually happened,
+                // counted off the measurements rather than off the flag. A run configured with
+                // cleanup on, whose cleanup model was never loadable, reports zero applied here
+                // instead of presenting an untouched final stage as a cleanup result.
+                cleanupRequested: cleanupEnabled,
+                cleanupAppliedUtterances: cleanupAppliedUtterances,
+                cleanupNotPerformed: cleanupNotPerformed,
                 notes: notes
             ),
             backends: backends.map(\.receiptBackend)
         )
+    }
+
+    /// Utterances across every measured backend whose final stage is genuinely the cleanup stage's
+    /// product.
+    private var cleanupAppliedUtterances: Int {
+        measurements.reduce(0) { $0 + $1.cleanupAppliedCount }
+    }
+
+    /// Why cleanup did not run, pooled across backends, in a stable order.
+    private var cleanupNotPerformed: [TranscriptionQualityReceipt.CleanupSkip] {
+        var counts: [String: Int] = [:]
+        for measurement in measurements {
+            for (reason, count) in measurement.cleanupNotPerformedCounts {
+                counts[reason, default: 0] += count
+            }
+        }
+        return counts
+            .sorted { $0.key < $1.key }
+            .map { TranscriptionQualityReceipt.CleanupSkip(reason: $0.key, utterances: $0.value) }
+    }
+
+    private var measurements: [TranscriptionQualityRun.Measurement] {
+        backends.compactMap {
+            guard case let .measured(measurement) = $0.outcome else { return nil }
+            return measurement
+        }
     }
 }
 
@@ -51,12 +90,15 @@ private extension TranscriptionQualityRun.BackendRun {
         switch outcome {
         case let .notRunnable(reason):
             // R12: a reason, never a row of zeros. Zeros would rank an unrunnable backend first.
+            // The reason is a code and its sample ids travel in `failedSampleIDs`, so no rendered
+            // sentence — and nothing a future case might interpolate into one — reaches the receipt.
             return TranscriptionQualityReceipt.Backend(
                 backend: backend,
                 model: model,
                 label: label,
                 languageConfiguration: languageConfiguration,
-                notRunnableReason: reason.description
+                notRunnable: reason.receiptReason,
+                failedSampleIDs: reason.failedSampleIDs
             )
         case let .measured(measurement):
             return TranscriptionQualityReceipt.Backend(
@@ -84,13 +126,41 @@ private extension TranscriptionQualityRun.BackendRun {
     }
 }
 
+private extension TranscriptionQualityRun.NotRunnable {
+    var receiptReason: TranscriptionQualityReceipt.NotRunnable {
+        switch self {
+        case let .requiresNewerMacOS(required, host):
+            return TranscriptionQualityReceipt.NotRunnable(
+                code: .requiresNewerMacOS,
+                requiredMacOSMajorVersion: required,
+                hostOperatingSystemVersion: host
+            )
+        case .modelNotDownloaded:
+            return TranscriptionQualityReceipt.NotRunnable(code: .modelNotDownloaded)
+        case .noSamples:
+            return TranscriptionQualityReceipt.NotRunnable(code: .noSamples)
+        case .noMeasuredSamples:
+            return TranscriptionQualityReceipt.NotRunnable(code: .noMeasuredSamples)
+        }
+    }
+
+    /// The ids the `noMeasuredSamples` reason used to spell out in prose.
+    var failedSampleIDs: [String] {
+        guard case let .noMeasuredSamples(ids) = self else { return [] }
+        return ids
+    }
+}
+
 private extension TranscriptionQualityRun.SampleMeasurement {
     var receiptUtterance: TranscriptionQualityReceipt.Utterance {
         TranscriptionQualityReceipt.Utterance(
             sampleID: sampleID,
             corpusID: corpusID,
             rawASR: TranscriptionQualityReceipt.StageSummary(rawASR),
-            finalOutput: TranscriptionQualityReceipt.StageSummary(finalOutput),
+            // `measuredFinalOutput`, never `pipelineFinalOutput`: when cleanup did not run, the
+            // pipeline's final text is not that stage's result and the receipt has to say so with an
+            // absent stage rather than with a figure that reads as an unchanged one.
+            finalOutput: measuredFinalOutput.map(TranscriptionQualityReceipt.StageSummary.init),
             endToEndSeconds: latency.endToEndSeconds,
             speechRecognitionSeconds: latency.speechRecognitionSeconds,
             audioDurationSeconds: latency.audioDurationSeconds

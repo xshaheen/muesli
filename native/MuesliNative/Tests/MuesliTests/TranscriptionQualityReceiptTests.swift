@@ -29,8 +29,8 @@ struct TranscriptionQualityDecisionTests {
         let decision = try #require(Policy.evaluate(subject).cohorts.first)
 
         #expect(decision.ranking.map(\.backend) == ["faithful"])
-        #expect(decision.winner == "faithful")
-        #expect(decision.verdict == .soleEligible(backend: "faithful"))
+        #expect(decision.winner == identity("faithful"))
+        #expect(decision.verdict == .soleEligible(backend: identity("faithful")))
         #expect(decision.excluded.map(\.backend) == ["translator"])
         let exclusion = try #require(decision.excluded.first)
         #expect(exclusion.reason.contains("0.400"))
@@ -64,7 +64,7 @@ struct TranscriptionQualityDecisionTests {
         let decision = try #require(Policy.evaluate(makeReceipt([cleanupTranslated])).cohorts.first)
 
         #expect(decision.excluded.isEmpty)
-        #expect(decision.winner == "recognizer")
+        #expect(decision.winner == "recognizer/recognizer-model")
     }
 
     // MARK: AE11 — ties and missing data
@@ -76,13 +76,13 @@ struct TranscriptionQualityDecisionTests {
         let subject = makeReceipt([
             measured("alpha", cohort: .english, wers: [0.10, 0.30, 0.20, 0.25, 0.15], faithfulness: 0.99, seconds: 1.5),
             measured("beta", cohort: .english, wers: [0.30, 0.10, 0.22, 0.18, 0.25], faithfulness: 0.99, seconds: 0.5),
-            notRunnable("gamma", reason: "requires macOS 15 or later; host is 14.2.0"),
+            notRunnable("gamma"),
         ])
 
         let decision = try #require(Policy.evaluate(subject).cohorts.first)
 
         // R16.4: no winner claimed, tied backends listed fastest first.
-        #expect(decision.verdict == .tie(backends: ["beta", "alpha"]))
+        #expect(decision.verdict == .tie(backends: [identity("beta"), identity("alpha")]))
         #expect(decision.winner == nil)
         // R16.5: absent from the ranking entirely, never ranked last.
         #expect(decision.ranking.map(\.backend) == ["alpha", "beta"])
@@ -123,14 +123,15 @@ struct TranscriptionQualityDecisionTests {
             Issue.record("expected an outright winner, got \(decision.verdict)")
             return
         }
-        #expect(backend == "alpha")
-        #expect(comparison.challenger == "beta")
+        #expect(backend == identity("alpha"))
+        #expect(comparison.challenger == identity("beta"))
         #expect(abs(comparison.margin - 0.196) < 1e-9)
         #expect(comparison.pairedUtterances == 5)
         #expect(comparison.isSignificant)
-        #expect(comparison.lowerBound > 0)
-        #expect(comparison.lowerBound <= comparison.margin)
-        #expect(comparison.upperBound >= comparison.margin)
+        #expect(comparison.isFullyPaired)
+        #expect(try #require(comparison.lowerBound) > 0)
+        #expect(try #require(comparison.lowerBound) <= comparison.margin)
+        #expect(try #require(comparison.upperBound) >= comparison.margin)
 
         let report = TranscriptionQualityReport.markdown(for: subject)
         #expect(report.contains("**Winner: alpha**"))
@@ -173,7 +174,7 @@ struct TranscriptionQualityDecisionTests {
         // The bootstrap has to compare the same statistic the ranking does, or the interval would be
         // about a quantity no one is ranking on.
         let comparison = try #require(decision.comparisons.first)
-        #expect(comparison.leader == "chatty")
+        #expect(comparison.leader == identity("chatty"))
         #expect(abs(comparison.margin - 8.0 / 31.0) < 1e-12)
     }
 
@@ -268,7 +269,7 @@ struct TranscriptionQualityDecisionTests {
 
         #expect(verdict.decision == .keep)
         #expect(verdict.cohort == .egyptianArabic)
-        #expect(verdict.comparedAgainst == "parakeet")
+        #expect(verdict.comparedAgainst == identity("parakeet"))
         // KTD5: the verdict is conditional on the configuration it ran under.
         #expect(verdict.languageConfiguration == "automatic")
         #expect(verdict.rationale.contains("automatic"))
@@ -298,7 +299,7 @@ struct TranscriptionQualityDecisionTests {
         let verdict = Policy.evaluate(subject).qwen3
 
         #expect(verdict.decision == .drop)
-        #expect(verdict.comparedAgainst == "parakeet")
+        #expect(verdict.comparedAgainst == identity("parakeet"))
         #expect(verdict.rationale.contains("faithfulness"))
         #expect(TranscriptionQualityReport.markdown(for: subject).contains("Qwen3 verdict: drop"))
     }
@@ -316,7 +317,7 @@ struct TranscriptionQualityDecisionTests {
     @Test("a not-runnable Qwen3 decides nothing rather than being dropped on no evidence")
     func qwen3NotRunnableIsUndecided() {
         let subject = makeReceipt([
-            notRunnable("qwen", reason: "model is not downloaded, and the harness never downloads one"),
+            notRunnable("qwen", reason: Receipt.NotRunnable(code: .modelNotDownloaded)),
             measured("parakeet", cohort: .egyptianArabic, wers: [0.40], faithfulness: 0.97),
         ])
 
@@ -324,6 +325,421 @@ struct TranscriptionQualityDecisionTests {
 
         #expect(verdict.decision == .undecided)
         #expect(verdict.rationale.contains("no measurement"))
+    }
+
+    /// R16.6 keeps Qwen3 when it *wins or ties for first*. Leading a field of one is neither: every
+    /// other backend was gated out, so nothing was compared, and reading that as a keep would retain
+    /// a backend on the absence of a competitor.
+    @Test("Qwen3 alone above the gate is uncontested, not kept")
+    func qwen3SoleEligibleIsUncontestedRatherThanKept() throws {
+        let subject = makeReceipt([
+            measured("qwen", cohort: .egyptianArabic, wers: [0.40, 0.42], faithfulness: 0.95),
+            measured("parakeet", cohort: .egyptianArabic, wers: [0.10, 0.11], faithfulness: 0.20),
+        ])
+
+        let evaluated = Policy.evaluate(subject)
+        let decision = try #require(evaluated.cohorts.first)
+
+        #expect(decision.verdict == .soleEligible(backend: identity("qwen")))
+        #expect(evaluated.qwen3.decision == .uncontested)
+        #expect(evaluated.qwen3.cohort == .egyptianArabic)
+        // There is no opponent, so naming one would be the claim this verdict exists to avoid.
+        #expect(evaluated.qwen3.comparedAgainst == nil)
+        #expect(evaluated.qwen3.rationale.contains("only backend to pass"))
+        #expect(TranscriptionQualityReport.markdown(for: subject).contains("Qwen3 verdict: uncontested"))
+    }
+
+    /// A contested win on one deciding cohort outranks a loss on the other: R16.6 asks whether Qwen3
+    /// wins *a* cohort. An uncontested lead never outranks either.
+    @Test("a contested win keeps Qwen3 even when it also lost the other Arabic cohort")
+    func contestedWinOutranksALossOnTheOtherCohort() {
+        let subject = makeReceipt([
+            measured("qwen", cohort: .egyptianArabic, wers: [0.40, 0.42], faithfulness: 0.97),
+            measured("parakeet", cohort: .egyptianArabic, wers: [0.10, 0.11], faithfulness: 0.97),
+            measured("qwen2", cohort: .arabicEnglish, wers: [0.10, 0.11], faithfulness: 0.97),
+        ])
+
+        // `qwen2` is a different family, so this receipt only has Qwen3 losing.
+        #expect(Policy.evaluate(subject).qwen3.decision == .drop)
+    }
+
+    // MARK: B1 — what the bootstrap pairs on
+
+    /// Sample ids belong to their own corpus. `TranscriptionCorpusStore` copies `entry.id` verbatim
+    /// and flattens every corpus into one list, so two corpora that both number their rows `0001`
+    /// collide — and a bootstrap keyed on the id alone then pairs two unrelated utterances and
+    /// reports the difference between them as if it were the difference between two backends.
+    @Test("utterances pair on corpus and sample together, never on the sample id alone")
+    func pairingIsScopedToTheCorpus() throws {
+        // Both backends measured row `0001` of two different corpora. Keyed on the id alone, the
+        // second corpus's row is dropped and both of the leader's rows pair against the first.
+        let leader = measured(
+            "alpha",
+            cohort: .english,
+            utterances: [
+                (sampleID: "0001", corpusID: "north", wer: 0.10),
+                (sampleID: "0001", corpusID: "south", wer: 0.10),
+            ],
+            faithfulness: 0.99
+        )
+        let challenger = measured(
+            "beta",
+            cohort: .english,
+            utterances: [
+                (sampleID: "0001", corpusID: "north", wer: 0.10),
+                (sampleID: "0001", corpusID: "south", wer: 0.90),
+            ],
+            faithfulness: 0.99
+        )
+
+        let comparison = TranscriptionQualityBootstrap.compare(
+            leader: leader.identity,
+            leaderUtterances: try #require(leader.result(for: .english)).utterances,
+            challenger: challenger.identity,
+            challengerUtterances: try #require(challenger.result(for: .english)).utterances,
+            thresholds: Receipt.Thresholds()
+        )
+
+        #expect(comparison.pairedUtterances == 2)
+        // Row-for-row within its own corpus: 10 errors against 10, then 10 against 90, pooled over
+        // 200 reference words — a margin of 0.400. Keyed on the id alone both of the leader's rows
+        // pair against the `north` challenger row, the bad `south` row vanishes, and the margin is 0.
+        #expect(abs(comparison.margin - 0.40) < 1e-12)
+    }
+
+    /// A sample can throw for one backend and succeed for another, so two compared backends are not
+    /// guaranteed the same measured set. The interval can only use the overlap while the ranking
+    /// pools everything, and a reader has to be able to see when those are different populations.
+    @Test("a partial overlap pairs by identity and the report says the populations differ")
+    func partialOverlapIsPairedAndDisclosed() throws {
+        let subject = makeReceipt([
+            measured(
+                "alpha",
+                cohort: .english,
+                utterances: (0 ..< 5).map { (sampleID: "s\($0)", corpusID: "corpus", wer: 0.10) },
+                faithfulness: 0.99
+            ),
+            measured(
+                "beta",
+                cohort: .english,
+                utterances: ["s0", "s2", "s4", "s7", "s8"]
+                    .map { (sampleID: $0, corpusID: "corpus", wer: 0.30) },
+                faithfulness: 0.99
+            ),
+        ])
+
+        let decision = try #require(Policy.evaluate(subject).cohorts.first)
+        let comparison = try #require(decision.comparisons.first)
+
+        // Three shared ids, not five, not zipped by position.
+        #expect(comparison.pairedUtterances == 3)
+        #expect(comparison.leaderUtterances == 5)
+        #expect(comparison.challengerUtterances == 5)
+        #expect(!comparison.isFullyPaired)
+        // The margin comes only from the shared rows: 0.30 - 0.10 over the overlap.
+        #expect(abs(comparison.margin - 0.20) < 1e-12)
+        #expect(TranscriptionQualityReport.markdown(for: subject)
+            .contains("ranking and the interval rest on different populations"))
+    }
+
+    /// When the two backends measured the same set, the interval is about exactly the population the
+    /// ranking pooled — which is the only case in which the placement and the interval are claims
+    /// about the same thing.
+    @Test("a full overlap resamples exactly the population the ranking pooled")
+    func fullOverlapResamplesTheRankedPopulation() throws {
+        let subject = makeReceipt([
+            measured("alpha", cohort: .english, wers: [0.10, 0.11, 0.09, 0.12, 0.10], faithfulness: 0.99),
+            measured("beta", cohort: .english, wers: [0.30, 0.32, 0.28, 0.31, 0.29], faithfulness: 0.99),
+        ])
+
+        let decision = try #require(Policy.evaluate(subject).cohorts.first)
+        let comparison = try #require(decision.comparisons.first)
+
+        #expect(comparison.isFullyPaired)
+        #expect(comparison.pairedUtterances == decision.ranking[0].sampleCount)
+        #expect(comparison.pairedUtterances == decision.ranking[1].sampleCount)
+        #expect(!TranscriptionQualityReport.markdown(for: subject)
+            .contains("rest on different populations"))
+    }
+
+    // MARK: B4 — backend identity
+
+    /// `BackendOption.all` holds six options whose `backend` is `whisper` and two whose `backend` is
+    /// `fluidaudio`, and the sweep runs exactly that inventory. Keyed on the family, every Whisper
+    /// size shared one dictionary slot: a comparison ran against whichever checkpoint was recorded
+    /// last, and a tie between two of them trapped on a duplicate dictionary key.
+    @Test("two checkpoints of one backend family are ranked and compared as separate models")
+    func oneFamilyWithTwoModelsIsNotCollapsed() throws {
+        let subject = makeReceipt([
+            measured(
+                "whisper",
+                cohort: .english,
+                utterances: (0 ..< 5).map { (sampleID: "s\($0)", corpusID: "corpus", wer: 0.10) },
+                faithfulness: 0.99,
+                model: "whisper-small",
+                label: "Whisper Small"
+            ),
+            measured(
+                "whisper",
+                cohort: .english,
+                utterances: (0 ..< 5).map { (sampleID: "s\($0)", corpusID: "corpus", wer: 0.40) },
+                faithfulness: 0.99,
+                model: "whisper-tiny",
+                label: "Whisper Tiny"
+            ),
+        ])
+
+        let decision = try #require(Policy.evaluate(subject).cohorts.first)
+
+        #expect(decision.ranking.map(\.identity) == ["whisper/whisper-small", "whisper/whisper-tiny"])
+        #expect(decision.ranking.map(\.backend) == ["whisper", "whisper"])
+        // Both models reach the table; keyed on the family one of them was invisible.
+        let report = TranscriptionQualityReport.markdown(for: subject)
+        #expect(report.contains("whisper-small"))
+        #expect(report.contains("whisper-tiny"))
+        // The comparison names the model, so the interval is attributable.
+        let comparison = try #require(decision.comparisons.first)
+        #expect(comparison.leader == "whisper/whisper-small")
+        #expect(comparison.challenger == "whisper/whisper-tiny")
+        #expect(comparison.pairedUtterances == 5)
+        #expect(comparison.isSignificant)
+    }
+
+    /// The crash half of the same defect: two checkpoints inside the interval built a dictionary
+    /// keyed on the shared family name and trapped on the duplicate.
+    @Test("two checkpoints of one family that tie render a tie rather than trapping")
+    func aTieWithinOneFamilyDoesNotTrap() throws {
+        let subject = makeReceipt([
+            measured(
+                "whisper",
+                cohort: .english,
+                utterances: [0.10, 0.30, 0.20, 0.25, 0.15].enumerated()
+                    .map { (sampleID: "s\($0.offset)", corpusID: "corpus", wer: $0.element) },
+                faithfulness: 0.99,
+                seconds: 1.5,
+                model: "whisper-small",
+                label: "Whisper Small"
+            ),
+            measured(
+                "whisper",
+                cohort: .english,
+                utterances: [0.30, 0.10, 0.22, 0.18, 0.25].enumerated()
+                    .map { (sampleID: "s\($0.offset)", corpusID: "corpus", wer: $0.element) },
+                faithfulness: 0.99,
+                seconds: 0.5,
+                model: "whisper-tiny",
+                label: "Whisper Tiny"
+            ),
+        ])
+
+        let decision = try #require(Policy.evaluate(subject).cohorts.first)
+
+        #expect(decision.verdict == .tie(backends: ["whisper/whisper-tiny", "whisper/whisper-small"]))
+        #expect(TranscriptionQualityReport.markdown(for: subject)
+            .contains("**Tie: Whisper Tiny, Whisper Small**"))
+    }
+
+    // MARK: B7 — tie membership
+
+    /// Each comparison is a paired bootstrap over its own overlap, so the intervals are not nested:
+    /// the leader can separate itself from #2 and fail to separate from #3. Collecting every
+    /// unseparated challenger printed "tie: leader, #3" and dropped #2 — a verdict no comparison in
+    /// the receipt supports.
+    @Test("the tie stops at the first challenger the leader separates from")
+    func tieIsAContiguousPrefixOfTheRanking() throws {
+        let subject = makeReceipt([
+            measured(
+                "alpha",
+                cohort: .english,
+                utterances: (0 ..< 5).map { (sampleID: "s\($0)", corpusID: "corpus", wer: 0.10) },
+                faithfulness: 0.99
+            ),
+            // Fully overlapping and uniformly worse: separated.
+            measured(
+                "beta",
+                cohort: .english,
+                utterances: (0 ..< 5).map { (sampleID: "s\($0)", corpusID: "corpus", wer: 0.40) },
+                faithfulness: 0.99
+            ),
+            // Worse still on pooled WER, so it ranks third — but it shares exactly one utterance
+            // with the leader, and on that one the two are identical, so nothing separates them.
+            measured(
+                "gamma",
+                cohort: .english,
+                utterances: [(sampleID: "s0", corpusID: "corpus", wer: 0.10)]
+                    + (0 ..< 4).map { (sampleID: "x\($0)", corpusID: "corpus", wer: 0.95) },
+                faithfulness: 0.99
+            ),
+        ])
+
+        let decision = try #require(Policy.evaluate(subject).cohorts.first)
+
+        #expect(decision.ranking.map(\.backend) == ["alpha", "beta", "gamma"])
+        #expect(decision.comparisons[0].isSignificant)
+        #expect(!decision.comparisons[1].isSignificant)
+        // The old rule produced `.tie([alpha, gamma])`, skipping beta.
+        #expect(decision.verdict == .winner(backend: identity("alpha"), over: decision.comparisons[0]))
+        #expect(decision.leaders == [identity("alpha")])
+    }
+
+    // MARK: B6 — degenerate thresholds
+
+    /// A receipt is data: it can carry any threshold set, zero resamples included. Indexing the
+    /// empty margin array used to trap and take report generation with it.
+    @Test("zero bootstrap resamples reports no interval rather than crashing")
+    func zeroResamplesIsNotDecidableRatherThanFatal() throws {
+        let subject = makeReceipt(
+            [
+                measured("alpha", cohort: .english, wers: [0.10, 0.11, 0.09], faithfulness: 0.99),
+                measured("beta", cohort: .english, wers: [0.30, 0.32, 0.28], faithfulness: 0.99, seconds: 2),
+            ],
+            thresholds: Receipt.Thresholds(bootstrapResamples: 0)
+        )
+
+        let decision = try #require(Policy.evaluate(subject).cohorts.first)
+        let comparison = try #require(decision.comparisons.first)
+
+        // The observed margin is data, not randomness, so it survives.
+        #expect(abs(comparison.margin - 0.20) < 1e-9)
+        #expect(comparison.lowerBound == nil)
+        #expect(comparison.upperBound == nil)
+        // No interval means nothing was separated, so no winner is claimed.
+        #expect(!comparison.isSignificant)
+        #expect(decision.verdict == .tie(backends: [identity("alpha"), identity("beta")]))
+        #expect(TranscriptionQualityReport.markdown(for: subject).contains("| none |"))
+    }
+
+    @Test("two backends that share no utterance report no interval rather than a zero-width one")
+    func noSharedUtterancesReportsNoInterval() throws {
+        let subject = makeReceipt([
+            measured(
+                "alpha",
+                cohort: .english,
+                utterances: [(sampleID: "a0", corpusID: "corpus", wer: 0.10)],
+                faithfulness: 0.99
+            ),
+            measured(
+                "beta",
+                cohort: .english,
+                utterances: [(sampleID: "b0", corpusID: "corpus", wer: 0.30)],
+                faithfulness: 0.99
+            ),
+        ])
+
+        let comparison = try #require(Policy.evaluate(subject).cohorts.first?.comparisons.first)
+
+        #expect(comparison.pairedUtterances == 0)
+        #expect(comparison.lowerBound == nil)
+        #expect(!comparison.isSignificant)
+    }
+
+    // MARK: A2 — faithfulness that was never measurable
+
+    /// A reference with nothing script-bearing in it — punctuation, digits — asks no language
+    /// question, so its faithfulness is not-applicable. Rendered as 1 it averaged to a passing 1.0
+    /// and cleared the 0.90 gate on nothing.
+    @Test("a cohort with no applicable faithfulness is absent rather than gate-passing")
+    func notApplicableFaithfulnessIsAbsentFromTheRanking() throws {
+        let subject = makeReceipt([
+            measured("alpha", cohort: .english, wers: [0.10, 0.12], faithfulness: nil),
+            measured("beta", cohort: .english, wers: [0.50, 0.55], faithfulness: 0.99),
+        ])
+
+        let decision = try #require(Policy.evaluate(subject).cohorts.first)
+
+        // `alpha` has the better error rate and would have won on a manufactured 1.0.
+        #expect(decision.ranking.map(\.backend) == ["beta"])
+        #expect(decision.absent.map(\.backend) == ["alpha"])
+        #expect(decision.absent.first?.reason.contains("not applicable") == true)
+        #expect(decision.excluded.isEmpty)
+        #expect(decision.winner == identity("beta"))
+    }
+
+    @Test("a cohort mixing applicable and not-applicable references averages only the applicable ones")
+    func meanFaithfulnessSkipsTheNotApplicable() throws {
+        let cohort = Receipt.CohortResult(cohort: .english, utterances: [
+            Receipt.Utterance(
+                sampleID: "s0",
+                corpusID: "corpus",
+                rawASR: stage(wer: 0.1, faithfulness: nil),
+                finalOutput: nil,
+                endToEndSeconds: 1,
+                speechRecognitionSeconds: 0.8,
+                audioDurationSeconds: 5
+            ),
+            Receipt.Utterance(
+                sampleID: "s1",
+                corpusID: "corpus",
+                rawASR: stage(wer: 0.1, faithfulness: 0.50),
+                finalOutput: nil,
+                endToEndSeconds: 1,
+                speechRecognitionSeconds: 0.8,
+                audioDurationSeconds: 5
+            ),
+        ])
+
+        // Averaging the placeholder alongside would give 0.75 and clear nothing but the reader's
+        // suspicion; the measurable half says 0.50.
+        #expect(cohort.meanFaithfulness(at: .rawASR) == 0.50)
+        #expect(cohort.faithfulnessMeasuredCount(at: .rawASR) == 1)
+        #expect(cohort.sampleCount == 2)
+    }
+
+    // MARK: A4 — a final stage that is not the cleanup stage's
+
+    /// The pipeline returns a final text whether or not cleanup ran. Pooling it as the cleanup
+    /// stage's result reports "cleanup changed nothing" for a run in which cleanup never ran.
+    @Test("an unmeasured final stage is absent from the cohort figures, not pooled as unchanged")
+    func unmeasuredFinalStageIsAbsentRatherThanUnchanged() throws {
+        let subject = makeReceipt([
+            measured(
+                "alpha",
+                cohort: .english,
+                utterances: (0 ..< 2).map { (sampleID: "s\($0)", corpusID: "corpus", wer: 0.10) },
+                faithfulness: 0.99,
+                finalStageMeasured: false
+            ),
+        ])
+        let result = try #require(subject.backends.first?.result(for: .english))
+
+        #expect(result.sampleCount == 2)
+        #expect(result.measuredCount(at: .finalOutput) == 0)
+        #expect(result.pooledNormalizedWER(at: .finalOutput) == nil)
+        #expect(result.meanFaithfulness(at: .finalOutput) == nil)
+        #expect(result.pooledNormalizedWER(at: .rawASR) != nil)
+
+        let entry = try #require(Policy.evaluate(subject).cohorts.first?.ranking.first)
+        #expect(entry.finalOutputNormalizedWER == nil)
+        #expect(entry.finalOutputFaithfulness == nil)
+        #expect(entry.finalOutputMeasuredCount == 0)
+        #expect(TranscriptionQualityReport.markdown(for: subject)
+            .contains("a cleanup that did not happen, not a "))
+    }
+
+    // MARK: B5 — a cold start that failed
+
+    /// The receipt has always recorded a warmup failure; the document a maintainer reads to reach
+    /// the keep/drop verdict never read it, so a backend whose model failed its very first call
+    /// could win a cohort with no sign of it anywhere in the rendered output.
+    @Test("a backend whose cold start failed is marked in the ranking and named in its own section")
+    func warmupFailureIsVisibleInTheReport() throws {
+        let subject = makeReceipt([
+            measured(
+                "alpha",
+                cohort: .english,
+                utterances: (0 ..< 3).map { (sampleID: "s\($0)", corpusID: "corpus", wer: 0.10) },
+                faithfulness: 0.99,
+                warmupFailure: "CoreML model compilation failed"
+            ),
+        ])
+
+        let entry = try #require(Policy.evaluate(subject).cohorts.first?.ranking.first)
+        #expect(entry.warmupFailed)
+
+        let report = TranscriptionQualityReport.markdown(for: subject)
+        #expect(report.contains("## Cold start"))
+        #expect(report.contains("CoreML model compilation failed"))
+        #expect(report.contains("✖︎"))
     }
 }
 
@@ -373,7 +789,7 @@ struct TranscriptionQualityReceiptTests {
         #expect(!json.contains(reference))
         #expect(!json.contains(hypothesis))
         // The measurement still made it through: the scores are the point of keeping the text out.
-        #expect(scored.rawASR.faithfulness < TranscriptionQuality.Threshold.faithfulnessGate)
+        #expect(try #require(scored.rawASR.faithfulness) < TranscriptionQuality.Threshold.faithfulnessGate)
 
         let decoded = try JSONDecoder().decode(Receipt.self, from: encoded)
         #expect(decoded.schemaVersion == Receipt.currentSchemaVersion)
@@ -412,16 +828,16 @@ struct TranscriptionQualityReceiptTests {
 
     @Test("a not-runnable backend renders its reason rather than a zero")
     func notRunnableRendersAReasonNotAZero() {
-        let reason = "requires macOS 15 or later; host is 14.2.0"
         let subject = makeReceipt([
             measured("parakeet", cohort: .english, wers: [0.10, 0.12], faithfulness: 0.99),
-            notRunnable("qwen", reason: reason),
+            notRunnable("qwen"),
         ])
 
         let report = TranscriptionQualityReport.markdown(for: subject)
 
         #expect(report.contains("## Not runnable on this host"))
-        #expect(report.contains(reason))
+        // The receipt holds the code; the sentence is rendered here, at read time.
+        #expect(report.contains("requires macOS 15 or later; host is 14.2.0"))
         // The ranking table is numbered rows; a zeroed-out Qwen3 row would appear as one of them.
         let rankingRows = report.split(separator: "\n").filter {
             $0.hasPrefix("| 1 |") || $0.hasPrefix("| 2 |")
@@ -488,6 +904,105 @@ struct TranscriptionQualityReceiptTests {
         #expect(empty.endToEndLatency == nil)
         #expect(empty.realTimeFactor == nil)
     }
+
+    // MARK: R2 — values, not only keys
+
+    /// The allow-list constrains *keys*. A key on it can still hold text: a maintainer's note, a
+    /// thrown error's description, a reason rendered from corpus-derived ids. This asserts the other
+    /// half of R2 — what the encoded strings may contain.
+    @Test("every string a receipt encodes is an identity or bounded ASCII prose, never a transcript")
+    func encodedValuesCannotCarryTranscriptText() throws {
+        let arabicReference = "الاجتماع بكرة الصبح في المكتب مع الفريق كله"
+        let englishHypothesis = String(repeating: "the meeting is tomorrow morning at the office. ", count: 12)
+        let leaky = Receipt(
+            runID: "leaky",
+            generatedAt: "2026-08-21T00:00:00Z",
+            host: testHost,
+            corpora: [],
+            disclosures: Receipt.Disclosures(
+                cleanupRequested: true,
+                cleanupAppliedUtterances: 1,
+                notes: [arabicReference, englishHypothesis]
+            ),
+            backends: [
+                Receipt.Backend(
+                    backend: "parakeet",
+                    model: "parakeet-tdt-0.6b-v3",
+                    label: "Parakeet v3",
+                    languageConfiguration: "automatic",
+                    warmup: Receipt.Warmup(
+                        sampleID: "s0",
+                        endToEndSeconds: nil,
+                        failureMessage: "decode failed on \(arabicReference)"
+                    )
+                ),
+            ]
+        )
+
+        let encoded = try JSONEncoder().encode(leaky)
+        let json = try #require(String(data: encoded, encoding: .utf8))
+
+        // Arabic cannot survive at all: every non-ASCII scalar is dropped rather than substituted.
+        #expect(!json.contains(arabicReference))
+        #expect(!json.contains("الاجتماع"))
+        // Nor can a long English one survive intact.
+        #expect(!json.contains(englishHypothesis))
+
+        for value in jsonStringValues(try JSONSerialization.jsonObject(with: encoded)) {
+            let isASCII = value.unicodeScalars.allSatisfy { $0.isASCII }
+            #expect(isASCII, "non-ASCII value: \(value)")
+            #expect(value.count <= ReceiptProse.maximumLength, "over-long value: \(value)")
+        }
+    }
+
+    /// The same contract, asserted over the committed artifact rather than a constructed one — the
+    /// bytes a reader actually gets.
+    @Test("the committed receipt's values satisfy the same contract its keys do")
+    func committedReceiptValuesAreBounded() throws {
+        let directory = try FixtureDirectory.load("TranscriptionQualityRuns")
+        let data = try Data(contentsOf: directory.root.appendingPathComponent("run-example-v2.json"))
+
+        for value in jsonStringValues(try JSONSerialization.jsonObject(with: data)) {
+            let isASCII = value.unicodeScalars.allSatisfy { $0.isASCII }
+            #expect(isASCII, "non-ASCII value: \(value)")
+            #expect(value.count <= ReceiptProse.maximumLength, "over-long value: \(value)")
+        }
+    }
+
+    // MARK: A4 — cleanup as performed
+
+    /// `cleanupEnabled` used to be the flag the caller passed, and `TranscriptionRuntime` skips
+    /// cleanup silently on several paths. A receipt then read "cleanup: enabled" over a run in which
+    /// it never fired, and a reader concluded the cleanup stage preserves language — the exact
+    /// question the harness exists to answer.
+    @Test("a receipt from a cleanup-skipped run reads as never applied, not as unchanged")
+    func disclosuresSeparateRequestedFromPerformed() throws {
+        let skipped = Receipt.Disclosures(
+            cleanupRequested: true,
+            cleanupAppliedUtterances: 0,
+            cleanupNotPerformed: [Receipt.CleanupSkip(reason: "not performed (skipped_unavailable)", utterances: 7)]
+        )
+
+        #expect(!skipped.cleanupApplied)
+        #expect(skipped.cleanupNotPerformedUtterances == 7)
+
+        let report = TranscriptionQualityReport.markdown(for: makeReceipt([], disclosures: skipped))
+        #expect(report.contains("**requested, and never applied**"))
+        #expect(report.contains("skipped_unavailable"))
+        #expect(report.contains("not the same as cleanup having changed nothing"))
+
+        let partial = Receipt.Disclosures(
+            cleanupRequested: true,
+            cleanupAppliedUtterances: 3,
+            cleanupNotPerformed: [Receipt.CleanupSkip(reason: "no final-output artifact", utterances: 1)]
+        )
+        let partialReport = TranscriptionQualityReport.markdown(for: makeReceipt([], disclosures: partial))
+        #expect(partialReport.contains("applied on 3 of 4 measured utterances"))
+
+        let off = Receipt.Disclosures(cleanupRequested: false)
+        #expect(TranscriptionQualityReport.markdown(for: makeReceipt([], disclosures: off))
+            .contains("**not requested**"))
+    }
 }
 
 // MARK: - v2 fixture contract (R15, AE9)
@@ -552,7 +1067,7 @@ struct TranscriptionQualityRunFixtureContractTests {
         // The example encodes the AE10 shape: Qwen3 has the worse error rate *and* fails the gate.
         let evaluated = Policy.evaluate(receipt)
         let decision = try #require(evaluated.cohorts.first)
-        #expect(decision.winner == "parakeet")
+        #expect(decision.winner == "parakeet/parakeet-tdt-0.6b-v3")
         #expect(decision.excluded.map(\.backend) == ["qwen"])
         #expect(decision.absent.map(\.backend) == ["indicasr"])
         #expect(evaluated.qwen3.decision == .drop)
@@ -618,12 +1133,17 @@ private let allowedReceiptKeys: Set<String> = [
     "corpora", "id", "revision", "licenceIdentifier", "acquisition", "cohorts", "sampleCount",
     "issueCount",
     "thresholds", "faithfulnessGate", "confidenceLevel", "bootstrapResamples", "bootstrapSeed",
-    "disclosures", "cleanupEnabled", "warmupSampleConsumed", "cleanupModelResidentAcrossSweep",
-    "notes",
-    "backends", "backend", "model", "label", "languageConfiguration", "notRunnableReason",
+    "disclosures", "cleanupRequested", "cleanupAppliedUtterances", "cleanupNotPerformed",
+    "warmupSampleConsumed", "cleanupModelResidentAcrossSweep", "notes",
+    "backends", "backend", "model", "label", "languageConfiguration",
+    // The not-runnable reason is a closed code plus scalars, never the sweep's rendered sentence:
+    // one of its cases joins failed sample ids into prose, and prose is an open channel.
+    "notRunnable", "code", "requiredMacOSMajorVersion", "hostOperatingSystemVersion",
     "failedSampleIDs",
+    // `CleanupSkip`: the pipeline's own outcome vocabulary and a count.
+    "reason", "utterances",
     "warmup", "sampleID", "endToEndSeconds", "failureMessage",
-    "cohort", "utterances", "corpusID", "speechRecognitionSeconds", "audioDurationSeconds",
+    "cohort", "corpusID", "speechRecognitionSeconds", "audioDurationSeconds",
     "rawASR", "finalOutput",
     "rawWER", "rawCER", "normalizedWER", "normalizedCER", "faithfulness",
     "scriptChangeInflatesErrorRate",
@@ -633,6 +1153,20 @@ private let allowedReceiptKeys: Set<String> = [
     "normalizedWordErrors", "normalizedReferenceWords", "normalizedCharacterErrors",
     "normalizedReferenceCharacters",
 ]
+
+/// Every string *value* the encoded receipt holds, at any depth — the other half of `jsonKeys`.
+private func jsonStringValues(_ value: Any) -> [String] {
+    switch value {
+    case let object as [String: Any]:
+        return object.values.flatMap(jsonStringValues)
+    case let array as [Any]:
+        return array.flatMap(jsonStringValues)
+    case let string as String:
+        return [string]
+    default:
+        return []
+    }
+}
 
 private func jsonKeys(_ value: Any) -> Set<String> {
     switch value {
@@ -650,7 +1184,7 @@ private func jsonKeys(_ value: Any) -> Set<String> {
 /// Every utterance is a hundred reference words long, so the pooled figure equals the requested rate
 /// exactly and a test written about a *rate* still says what it meant to say. Length is varied only
 /// where the test is about weighting — see `weighted`.
-private func stage(wer: Double, faithfulness: Double) -> Receipt.StageSummary {
+private func stage(wer: Double, faithfulness: Double?) -> Receipt.StageSummary {
     let rates = TranscriptionQuality.ErrorRates(
         wordErrors: Int((wer * 100).rounded()),
         referenceWords: 100,
@@ -751,23 +1285,53 @@ private func measured(
     _ identifier: String,
     cohort: TranscriptionQuality.Cohort,
     wers: [Double],
-    faithfulness: Double,
+    faithfulness: Double?,
     seconds: Double = 1,
     language: String = "automatic"
 ) -> Receipt.Backend {
+    measured(
+        identifier,
+        cohort: cohort,
+        utterances: wers.enumerated().map { (sampleID: "s\($0.offset)", corpusID: "corpus", wer: $0.element) },
+        faithfulness: faithfulness,
+        seconds: seconds,
+        language: language
+    )
+}
+
+/// The same, with the sample and corpus identities spelled out. Needed wherever the test is about
+/// *which* utterances two backends share — partial overlap, and two corpora that number their rows
+/// the same way — which the sequential helper above cannot express.
+private func measured(
+    _ identifier: String,
+    cohort: TranscriptionQuality.Cohort,
+    utterances: [(sampleID: String, corpusID: String, wer: Double)],
+    faithfulness: Double?,
+    seconds: Double = 1,
+    language: String = "automatic",
+    model: String? = nil,
+    label: String? = nil,
+    warmupFailure: String? = nil,
+    finalStageMeasured: Bool = true
+) -> Receipt.Backend {
     Receipt.Backend(
         backend: identifier,
-        model: "\(identifier)-model",
-        label: identifier,
+        model: model ?? "\(identifier)-model",
+        label: label ?? identifier,
         languageConfiguration: language,
+        warmup: warmupFailure.map {
+            Receipt.Warmup(sampleID: "warmup", endToEndSeconds: nil, failureMessage: $0)
+        },
         cohorts: [Receipt.CohortResult(
             cohort: cohort,
-            utterances: wers.enumerated().map { offset, wer in
+            utterances: utterances.map { utterance in
                 Receipt.Utterance(
-                    sampleID: "s\(offset)",
-                    corpusID: "corpus",
-                    rawASR: stage(wer: wer, faithfulness: faithfulness),
-                    finalOutput: stage(wer: wer, faithfulness: faithfulness),
+                    sampleID: utterance.sampleID,
+                    corpusID: utterance.corpusID,
+                    rawASR: stage(wer: utterance.wer, faithfulness: faithfulness),
+                    finalOutput: finalStageMeasured
+                        ? stage(wer: utterance.wer, faithfulness: faithfulness)
+                        : nil,
                     endToEndSeconds: seconds,
                     speechRecognitionSeconds: seconds * 0.8,
                     audioDurationSeconds: 5
@@ -777,19 +1341,32 @@ private func measured(
     )
 }
 
-private func notRunnable(_ identifier: String, reason: String) -> Receipt.Backend {
+private func notRunnable(
+    _ identifier: String,
+    reason: Receipt.NotRunnable = Receipt.NotRunnable(
+        code: .requiresNewerMacOS,
+        requiredMacOSMajorVersion: 15,
+        hostOperatingSystemVersion: "14.2.0"
+    ),
+    failedSampleIDs: [String] = []
+) -> Receipt.Backend {
     Receipt.Backend(
         backend: identifier,
         model: "\(identifier)-model",
         label: identifier,
         languageConfiguration: "automatic",
-        notRunnableReason: reason
+        notRunnable: reason,
+        failedSampleIDs: failedSampleIDs
     )
 }
 
 private func makeReceipt(
     _ backends: [Receipt.Backend],
-    thresholds: Receipt.Thresholds = Receipt.Thresholds()
+    thresholds: Receipt.Thresholds = Receipt.Thresholds(),
+    disclosures: Receipt.Disclosures = Receipt.Disclosures(
+        cleanupRequested: true,
+        cleanupAppliedUtterances: 1
+    )
 ) -> Receipt {
     Receipt(
         runID: "test",
@@ -797,7 +1374,7 @@ private func makeReceipt(
         host: testHost,
         corpora: [],
         thresholds: thresholds,
-        disclosures: Receipt.Disclosures(cleanupEnabled: true),
+        disclosures: disclosures,
         backends: backends
     )
 }
@@ -826,7 +1403,11 @@ private func populatedReceipt() -> Receipt {
             sampleCount: 120,
             issueCount: 3
         )],
-        disclosures: Receipt.Disclosures(cleanupEnabled: true, notes: ["run under battery power"]),
+        disclosures: Receipt.Disclosures(
+            cleanupRequested: true,
+            cleanupAppliedUtterances: 2,
+            notes: ["run under battery power"]
+        ),
         backends: [
             Receipt.Backend(
                 backend: "parakeet",
@@ -866,7 +1447,12 @@ private func populatedReceipt() -> Receipt {
                 ],
                 failedSampleIDs: ["s9"]
             ),
-            notRunnable("qwen", reason: "requires macOS 15 or later; host is 14.2.0"),
+            notRunnable("qwen"),
         ]
     )
 }
+
+/// Test backends are constructed one model per family, so identity is the family and the model
+/// name the helpers give it. Spelled out here because the decision layer keys on identity and a
+/// test that wrote the family would be asserting a value the policy never produces.
+private func identity(_ name: String) -> String { "\(name)/\(name)-model" }

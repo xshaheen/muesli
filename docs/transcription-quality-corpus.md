@@ -232,14 +232,33 @@ directory, so a v2 file dropped in there fails the mandatory v1 gate. Do not mer
 `run-example-v2.json` in that directory is synthetic — hand-authored numbers that exist so the
 schema, the policy, and the renderer are testable without a corpus. Do not cite it.
 
+A real gated run writes its own receipt and report at the end of the sweep and prints both paths.
+They default to `$TMPDIR/muesli-asr-harness-receipts/` — deliberately outside the run's scratch
+support directory, which is deleted when the test finishes. Set `MUESLI_ASR_HARNESS_OUT` to put them
+somewhere else. Copy the receipt into the fixture directory as `run-<date>-<host>.json` and add its
+bytes and SHA-256 to `manifest.json`.
+
 ### What a receipt contains
 
 Only derived results: per-utterance error rates and the integer counts they were divided out of,
 faithfulness, script distributions, latency; corpus id, revision, licence and acquisition; backend,
 model and language configuration; host facts; and the thresholds the verdict was reached under.
 There is no field that can hold a reference or a hypothesis, and `TranscriptionQualityReceiptTests`
-asserts that against the encoded bytes with a key allow-list — a text field added to the schema fails
-the suite rather than leaking quietly.
+asserts that against the encoded bytes **twice over**: a key allow-list, so a text field added to the
+schema fails the suite rather than leaking quietly, and a value contract, because a key on the
+allow-list can still hold text. Every string the receipt encodes is one of three things:
+
+- an **identity** — run, corpus, sample, backend, model — chosen by the maintainer or by the shipped
+  inventory, never derived from what was said;
+- a **closed vocabulary** — the cohort, the acquisition method, the cleanup outcome, and the
+  not-runnable reason, which is a code plus scalars rather than a rendered sentence. One of its cases
+  names every failed sample; those ids travel in `failedSampleIDs`, where ids already live, and the
+  sentence is rendered by the report at read time;
+- **bounded prose** — only a thrown error's description and a maintainer's run note. Both pass
+  through `ReceiptProse`, which drops every non-ASCII scalar (so no Arabic reference survives in any
+  form), collapses whitespace, and caps the result at 160 characters.
+
+The value test asserts that contract over both a constructed receipt and the committed one.
 
 The counts — edit distance and reference length, in words and in characters, for both the raw and
 the normalized figure — are what make a cohort rate poolable from the receipt alone and recomputable
@@ -253,6 +272,10 @@ The policy is a pure function of the receipt, not a reviewer's reading of the ta
 1. **Faithfulness gate.** A backend whose raw-ASR faithfulness on a cohort is below **0.90** is
    ineligible to win that cohort, whatever its error rate. Faithfulness is a gate rather than a
    weighted term because the two are not commensurable: no WER advantage buys back a language change.
+   A reference with no script-bearing token in it — punctuation only, digits only — asks no language
+   question, so its faithfulness is *not applicable* rather than 1. A cohort in which none of the
+   references ask the question is absent from the ranking: the gate has nothing to decide on, and an
+   average over not-applicable would clear it on nothing.
 2. **Ranking.** Eligible backends, ascending **pooled** normalized WER at `rawASR` — total edit
    distance over total reference length, micro-averaged the way the frozen v1 baseline and published
    WER both are, so a thirty-word utterance weighs thirty times a one-word one. `finalOutput` is
@@ -261,27 +284,47 @@ The policy is a pure function of the receipt, not a reviewer's reading of the ta
    bootstrap 95% interval** resampled over utterances. Each replicate resamples the (edit distance,
    reference length) pairs and pools them, so the interval is about the same statistic the ranking
    is. The bootstrap's seed is recorded in the receipt, so the same receipt always yields the same
-   interval.
-4. **Ties.** Inside the interval, no winner is claimed. Tied backends are listed in ascending p50
-   latency.
+   interval. Utterances pair on **`(corpusID, sampleID)`**, not on the sample id alone: ids belong to
+   their own corpus and two corpora that both number their rows `0001` would otherwise pair two
+   unrelated utterances. Where the two backends did not measure the same set — a sample can throw for
+   one and succeed for the other — the interval covers only the overlap while the ranking pools
+   everything, and the report says so beside the numbers.
+4. **Ties.** Inside the interval, no winner is claimed. The tie is a *prefix* of the ranking: it
+   stops at the first challenger the leader separates from, so a tie can never skip a better-ranked
+   backend. Tied backends are listed in ascending p50 latency.
 5. **Missing data.** A backend that is not runnable, or produced nothing on a cohort, is listed
    apart from the ranking. It is never ranked last — not measured is not the same as measured badly.
 6. **Qwen3.** Kept if it wins outright or ties for first on the Egyptian Arabic or Arabic-English
-   cohort; dropped otherwise. The verdict names the backend it was compared against and the language
-   configuration it ran under, because it holds only for that configuration.
+   cohort **against at least one other eligible backend**; dropped if it was ranked but not first, or
+   gated out. Leading a cohort in which nothing else passed the gate is neither: that verdict is
+   `uncontested`, because winning against an empty field is not a comparison, and no measurement at
+   all on either cohort is `undecided`. A contested win on one deciding cohort outranks a loss on the
+   other — the rule asks whether Qwen3 wins *a* cohort. The verdict names the backend it was compared
+   against and the language configuration it ran under, because it holds only for that configuration.
 
 ### What the report discloses about itself
 
-Two judgement calls shift numbers the report presents, so the report states them rather than leaving
-them in the code:
+Judgement calls that shift numbers the report presents are stated rather than left in the code:
 
 - The first sample is spent on the cold start and is **not** re-measured, so every cohort figure
   rests on one fewer utterance than the corpus holds. Every backend loses the same sample.
 - ASR weights are unloaded between backends, but the cleanup LLM stays resident for the whole sweep.
   Latency figures are therefore a machine already holding one model.
+- **Whether the cleanup stage ran**, counted off the measurements rather than off the flag. Asking
+  for cleanup is not getting it: `TranscriptionRuntime` skips it silently when the cleanup model is
+  not loadable, for the Indic backend, and for an empty transcript, and still returns a final text.
+  The receipt records what was requested *and* how many utterances cleanup actually produced, with a
+  count per reason for the rest. An utterance whose cleanup was skipped has **no** final stage at
+  all, so the final-stage columns read `n/a` rather than repeating the raw figure — a cleanup that
+  did not happen must never read as a cleanup that changed nothing.
 
 A row marked ⚠︎ is a backend that could not select that cohort's language. Its position reflects the
 language it was pinned to, not a failure to recognise the one that was spoken.
+
+A row marked ✖︎ is a backend whose **cold start** failed. Its measured samples are real — one bad
+first call must not delete a whole run — but the very first call into the model did not return, and
+the **Cold start** section names it. A backend that failed to load or compile on its first call can
+otherwise win a cohort with nothing in the document to say so.
 
 ## Verifying nothing leaked
 

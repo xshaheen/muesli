@@ -246,13 +246,107 @@ struct TranscriptionQualityScoringTests {
         #expect(distribution.arabicShare == nil)
     }
 
+    // MARK: - Digits are not a language (A1)
+
+    /// The frozen v1 classifier calls ASCII digits Latin and, through the Arabic block, Arabic-Indic
+    /// digits Arabic. Faithfulness asks which *language* came out, and a numeral is neither — under
+    /// v1's rule the same sentence differing only in digit form disagrees with itself about its own
+    /// Arabic share.
+    @Test("a numeral is evidence for neither language, in either digit form")
+    func digitsAreScriptNeutralForFaithfulness() {
+        #expect(TranscriptionQualityScoring.languageScript(ofToken: "123") == nil)
+        #expect(TranscriptionQualityScoring.languageScript(ofToken: "\u{0661}\u{0662}\u{0663}") == nil)
+        #expect(TranscriptionQualityScoring.languageScript(ofToken: "deploy") == .latin)
+        #expect(TranscriptionQualityScoring.languageScript(ofToken: Arabic.today) == .arabic)
+        // Mixed-script tokens belong to neither, exactly as the frozen classifier has it.
+        #expect(TranscriptionQualityScoring.languageScript(ofToken: "ab\u{0645}") == nil)
+        // A letter-plus-digit token is still evidence for its letters' language.
+        #expect(TranscriptionQualityScoring.languageScript(ofToken: "v2") == .latin)
+        // The frozen v1 predicate is untouched and still counts digits as Latin.
+        #expect(TranscriptionQualityScoring.token("123", belongsTo: .latin))
+    }
+
+    @Test("the same number in either digit form leaves the Arabic share unchanged")
+    func digitFormDoesNotMoveTheArabicShare() {
+        let arabicIndic = "\u{0631}\u{0627}\u{062C}\u{0639} \u{0627}\u{0644}\u{0645}\u{0644}\u{0641} \u{0661}\u{0662}\u{0663}"
+        let ascii = "\u{0631}\u{0627}\u{062C}\u{0639} \u{0627}\u{0644}\u{0645}\u{0644}\u{0641} 123"
+
+        #expect(TranscriptionQualityScoring.scriptDistribution(arabicIndic).arabicShare == 1)
+        #expect(TranscriptionQualityScoring.scriptDistribution(ascii).arabicShare == 1)
+        // Before the fix this pair scored 1 - |1 - 2/3| = 0.667 and fell under the 0.90 gate on
+        // nothing but a digit form.
+        #expect(TranscriptionQualityScoring.faithfulness(reference: arabicIndic, hypothesis: ascii) == 1)
+        #expect(
+            TranscriptionQualityScoring.faithfulness(reference: arabicIndic, hypothesis: ascii)
+                .map { $0 >= Threshold.faithfulnessGate } == true
+        )
+    }
+
+    @Test("a digits-only text is script-free, so it can neither pass nor fail on script evidence")
+    func digitsOnlyTextIsScriptFree() {
+        let distribution = TranscriptionQualityScoring.scriptDistribution("123 456")
+        #expect(distribution.scriptBearingTokens == 0)
+        #expect(distribution.arabicShare == nil)
+    }
+
+    // MARK: - Not-applicable faithfulness (A2)
+
+    /// A reference with nothing script-bearing asked nothing of the output's language. Answering
+    /// with the perfect 1 it used to return let a cohort of such rows carry a backend over the gate
+    /// on no language evidence at all.
+    @Test("a reference with no script-bearing tokens yields a not-applicable faithfulness, not a perfect one")
+    func scriptFreeReferenceIsNotApplicable() {
+        for reference in ["", "   ", "!!! ... ???", "123", "\u{0661}\u{0662}\u{0663}"] {
+            #expect(
+                TranscriptionQualityScoring.faithfulness(reference: reference, hypothesis: "send the report") == nil,
+                "\(reference)"
+            )
+            let score = TranscriptionQuality.StageScore(
+                stage: .rawASR,
+                cohort: .egyptianArabic,
+                reference: reference,
+                hypothesis: "send the report"
+            )
+            #expect(score.faithfulness == nil, "\(reference)")
+            // Nothing script-bearing in the reference cannot evidence a script change either.
+            #expect(!score.scriptChangeInflatesErrorRate, "\(reference)")
+        }
+    }
+
+    /// The delta is R8's signal. A difference between a measurement and a placeholder is not one.
+    @Test("a not-applicable stage produces no faithfulness delta rather than a zero one")
+    func notApplicableStageHasNoDelta() {
+        let score = TranscriptionQuality.SampleScore(sample: Self.sample(
+            cohort: .egyptianArabic,
+            reference: "123",
+            rawASR: "123",
+            finalOutput: "one two three"
+        ))
+        #expect(score.rawASR.faithfulness == nil)
+        #expect(score.finalOutput.faithfulness == nil)
+        #expect(score.faithfulnessDelta == nil)
+    }
+
+    @Test("a reference that does carry script keeps a measured faithfulness and a delta")
+    func scriptBearingReferenceStaysMeasured() throws {
+        let score = TranscriptionQuality.SampleScore(sample: Self.sample(
+            cohort: .egyptianArabic,
+            reference: Arabic.reference,
+            rawASR: Arabic.garbled,
+            finalOutput: Arabic.translated
+        ))
+        #expect(score.rawASR.faithfulness == 1.0)
+        #expect(score.finalOutput.faithfulness == 0.0)
+        #expect(try #require(score.faithfulnessDelta).change == -1.0)
+    }
+
     // MARK: - Faithfulness
 
     /// The discrimination this metric exists for: mistranscription is not translation. A recognizer
     /// that heard Arabic and produced wrong Arabic words preserved the language; one that produced
     /// fluent English did not — and both are equally wrong on WER, so WER cannot tell them apart.
     @Test("faithfulness is independent of accuracy: garbled Arabic stays faithful at maximal WER")
-    func faithfulnessIsIndependentOfAccuracy() {
+    func faithfulnessIsIndependentOfAccuracy() throws {
         let garbled = TranscriptionQuality.StageScore(
             stage: .rawASR,
             cohort: .egyptianArabic,
@@ -272,8 +366,8 @@ struct TranscriptionQualityScoringTests {
         // Only faithfulness separates them.
         #expect(garbled.faithfulness == 1.0)
         #expect(translated.faithfulness == 0.0)
-        #expect(garbled.faithfulness >= Threshold.faithfulnessGate)
-        #expect(translated.faithfulness < Threshold.faithfulnessGate)
+        #expect(try #require(garbled.faithfulness) >= Threshold.faithfulnessGate)
+        #expect(try #require(translated.faithfulness) < Threshold.faithfulnessGate)
     }
 
     @Test("faithfulness is unchanged when only word accuracy varies at constant script composition")
@@ -305,7 +399,7 @@ struct TranscriptionQualityScoringTests {
     /// stages score the same WER against the Arabic reference, so only the faithfulness delta
     /// distinguishes a cleanup defect from an ASR defect.
     @Test("a cleanup stage that translates the speech is reported as a faithfulness regression")
-    func cleanupIntroducedFaithfulnessRegression() {
+    func cleanupIntroducedFaithfulnessRegression() throws {
         let score = TranscriptionQuality.SampleScore(sample: Self.sample(
             cohort: .egyptianArabic,
             reference: Arabic.reference,
@@ -314,25 +408,26 @@ struct TranscriptionQualityScoringTests {
         ))
 
         #expect(score.rawASR.normalized.wer == score.finalOutput.normalized.wer)
-        #expect(score.rawASR.faithfulness >= Threshold.faithfulnessGate)
+        #expect(try #require(score.rawASR.faithfulness) >= Threshold.faithfulnessGate)
         #expect(score.finalOutput.faithfulness == 0.0)
 
-        let delta = score.faithfulnessDelta
+        let delta = try #require(score.faithfulnessDelta)
         #expect(delta.change == -1.0)
         #expect(delta.recognizerWasFaithful)
         #expect(delta.isCleanupIntroducedRegression)
     }
 
     @Test("a stage that preserves faithfulness reports no regression")
-    func faithfulPipelineReportsNoRegression() {
+    func faithfulPipelineReportsNoRegression() throws {
         let score = TranscriptionQuality.SampleScore(sample: Self.sample(
             cohort: .egyptianArabic,
             reference: Arabic.reference,
             rawASR: Arabic.garbled,
             finalOutput: Arabic.reference
         ))
-        #expect(score.faithfulnessDelta.change == 0)
-        #expect(!score.faithfulnessDelta.isCleanupIntroducedRegression)
+        let delta = try #require(score.faithfulnessDelta)
+        #expect(delta.change == 0)
+        #expect(!delta.isCleanupIntroducedRegression)
     }
 
     @Test("the stage subscript selects the text that stage produced")
@@ -377,7 +472,7 @@ struct TranscriptionQualityScoringTests {
     /// orthography, not transliteration, so it cannot recover these words — the error rates are an
     /// upper bound and the result says so rather than claiming a recognition failure.
     @Test("Latin transliteration of Arabic speech is unfaithful and marks its error rates inflated")
-    func transliterationIsMarkedAsAMeasurementLimitation() {
+    func transliterationIsMarkedAsAMeasurementLimitation() throws {
         let score = TranscriptionQuality.StageScore(
             stage: .rawASR,
             cohort: .egyptianArabic,
@@ -386,7 +481,7 @@ struct TranscriptionQualityScoringTests {
         )
 
         #expect(score.faithfulness == 0.0)
-        #expect(score.faithfulness < Threshold.scriptChange)
+        #expect(try #require(score.faithfulness) < Threshold.scriptChange)
         #expect(score.raw.wer >= Threshold.inflatedErrorRate)
         #expect(score.normalized.wer >= Threshold.inflatedErrorRate)
         // Normalization cannot map transliteration back, so folding buys nothing here.
@@ -465,7 +560,7 @@ struct TranscriptionQualityScoringTests {
                 #expect(score[stage].faithfulness == 1.0, "\(cohort) \(stage)")
                 #expect(!score[stage].scriptChangeInflatesErrorRate, "\(cohort) \(stage)")
             }
-            #expect(score.faithfulnessDelta.change == 0)
+            #expect(score.faithfulnessDelta?.change == 0)
         }
     }
 

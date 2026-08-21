@@ -145,12 +145,60 @@ public enum TranscriptionQualityScoring {
 /// than pooling a cohort. Everything above is frozen — the committed v1 baseline reproduces through
 /// it at 1e-12 — so these are added alongside instead of replacing it.
 public extension TranscriptionQualityScoring {
+    /// Which language a token is evidence for, for the faithfulness path only.
+    ///
+    /// Deliberately *not* the frozen v1 `token(_:belongsTo:)`, which counts ASCII digits as Latin
+    /// and — through the whole Arabic block — Arabic-Indic digits as Arabic. Faithfulness asks which
+    /// language came out, and a numeral is neither: under v1's classifier "راجع الملف ١٢٣" and
+    /// "راجع الملف 123" disagree about their own Arabic share (1 versus 2/3), so an utterance that
+    /// changed nothing but its digit forms looks like a partial script change and can be pushed
+    /// under the gate. Script-neutral tokens are therefore excluded from *both* histograms rather
+    /// than assigned to either.
+    ///
+    /// `nil` for a token carrying no letter of either script (digits, underscores) and for a
+    /// mixed-script token, which belongs to neither exactly as v1 has it.
+    static func languageScript(ofToken token: String) -> Script? {
+        var hasLatin = false
+        var hasArabic = false
+        for scalar in token.unicodeScalars {
+            switch scalar.value {
+            case 0x41 ... 0x5A, 0x61 ... 0x7A:
+                hasLatin = true
+            // Arabic-Indic and extended Arabic-Indic digits: numerals inside the Arabic block, and
+            // the whole reason this classifier exists.
+            case 0x0660 ... 0x0669, 0x06F0 ... 0x06F9:
+                continue
+            case 0x0600 ... 0x06FF:
+                hasArabic = true
+            default:
+                continue
+            }
+        }
+        switch (hasLatin, hasArabic) {
+        case (true, false): return .latin
+        case (false, true): return .arabic
+        default: return nil
+        }
+    }
+
     /// How much of the text is Arabic-script and how much is Latin-script.
+    ///
+    /// Counts only tokens that carry a letter, so the same number written in either digit form
+    /// contributes to neither side.
     static func scriptDistribution(_ value: String) -> TranscriptionQuality.ScriptDistribution {
         let tokens = normalized(value, arabic: true).split(separator: " ").map(String.init)
+        var arabicTokens = 0
+        var latinTokens = 0
+        for token in tokens {
+            switch languageScript(ofToken: token) {
+            case .arabic: arabicTokens += 1
+            case .latin: latinTokens += 1
+            case nil: continue
+            }
+        }
         return TranscriptionQuality.ScriptDistribution(
-            arabicTokens: tokens.filter { token($0, belongsTo: .arabic) }.count,
-            latinTokens: tokens.filter { token($0, belongsTo: .latin) }.count
+            arabicTokens: arabicTokens,
+            latinTokens: latinTokens
         )
     }
 
@@ -160,10 +208,15 @@ public extension TranscriptionQualityScoring {
     /// and never compares a hypothesis token against a reference token, which is the only way
     /// garbled Arabic can score as faithful Arabic while fluent English rendered from Arabic speech
     /// does not.
-    static func faithfulness(reference: String, hypothesis: String) -> Double {
-        // A reference with nothing script-bearing in it asked nothing of the output; a hypothesis
-        // with nothing script-bearing preserved none of what the reference did ask for.
-        guard let referenceShare = scriptDistribution(reference).arabicShare else { return 1 }
+    ///
+    /// `nil` — not-applicable — when the reference carries no script-bearing token at all: an empty,
+    /// digits-only or punctuation-only reference asked nothing of the output's language, and any
+    /// number here would be manufactured. Returning the perfect 1 it used to return let a cohort of
+    /// such rows carry a backend over the faithfulness gate on no language evidence whatsoever, so
+    /// the caller has to exclude these samples from the gate and from the cohort aggregate instead.
+    static func faithfulness(reference: String, hypothesis: String) -> Double? {
+        guard let referenceShare = scriptDistribution(reference).arabicShare else { return nil }
+        // The reference did ask for a language and the hypothesis preserved none of it.
         guard let hypothesisShare = scriptDistribution(hypothesis).arabicShare else { return 0 }
         return 1 - abs(referenceShare - hypothesisShare)
     }

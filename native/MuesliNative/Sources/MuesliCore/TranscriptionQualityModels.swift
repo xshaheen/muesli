@@ -201,7 +201,15 @@ public enum TranscriptionQuality {
         public let stage: Stage
         public let raw: ErrorRates
         public let normalized: ErrorRates
-        public let faithfulness: Double
+        /// The faithfulness figure, or `nil` when the reference carries no script-bearing token and
+        /// the question was never asked. Every aggregate, gate and delta must read this and skip the
+        /// sample when it is `nil`; a not-applicable sample carries no language evidence and must not
+        /// be allowed to contribute any.
+        ///
+        /// There is deliberately no non-optional companion. One briefly existed, rendering the
+        /// not-applicable case as 1, and a cohort of punctuation-only references then averaged to a
+        /// passing 1.0 and cleared the gate on nothing.
+        public let faithfulness: Double?
         public let referenceScript: ScriptDistribution
         public let hypothesisScript: ScriptDistribution
         /// `nil` when the reference holds no token of that script — not-applicable, not zero.
@@ -246,9 +254,11 @@ public enum TranscriptionQuality {
                 script: .arabic
             )
             // An empty or script-free hypothesis is a plain recognition failure, so it must not be
-            // excused as a measurement limitation however unfaithful it scores.
+            // excused as a measurement limitation however unfaithful it scores. A reference with
+            // nothing script-bearing cannot evidence a script change either, so the caveat needs a
+            // measured faithfulness rather than the placeholder.
             scriptChangeInflatesErrorRate = hypothesisScript.scriptBearingTokens > 0
-                && faithfulness < Threshold.scriptChange
+                && (faithfulness.map { $0 < Threshold.scriptChange } ?? false)
                 && normalized.wer >= Threshold.inflatedErrorRate
         }
     }
@@ -304,8 +314,14 @@ public enum TranscriptionQuality {
             )
         }
 
-        public var faithfulnessDelta: FaithfulnessDelta {
-            FaithfulnessDelta(rawASR: rawASR.faithfulness, finalOutput: finalOutput.faithfulness)
+        /// `nil` when either stage's faithfulness is not-applicable: a difference between a
+        /// measurement and a placeholder is not a regression, and reporting it as zero would claim
+        /// the cleanup stage was observed to be harmless when it was never observed at all.
+        public var faithfulnessDelta: FaithfulnessDelta? {
+            guard let rawASR = rawASR.faithfulness,
+                  let finalOutput = finalOutput.faithfulness
+            else { return nil }
+            return FaithfulnessDelta(rawASR: rawASR, finalOutput: finalOutput)
         }
 
         public subscript(stage: Stage) -> StageScore {

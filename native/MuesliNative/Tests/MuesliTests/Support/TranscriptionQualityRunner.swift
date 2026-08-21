@@ -125,37 +125,73 @@ enum TranscriptionQualityEligibility {
         return nil
     }
 
+    /// Weights that only ever decode one language, whatever is asked of them.
+    ///
+    /// R17 is about what the model was *able* to attempt, not about which argument the harness
+    /// passed. An English-only checkpoint has no detection step to report, so calling it
+    /// `automatic` would present it as a candidate for the Arabic cohorts and then charge its
+    /// certain failure there to model quality instead of to the configuration.
+    static func isEnglishOnly(_ backend: BackendOption) -> Bool {
+        switch backend.backend {
+        // `.en` WhisperKit checkpoints; the multilingual ones expose language selection.
+        case "whisper": return !backend.supportsWhisperLanguageSelection
+        // Parakeet v2 is the English-only member of the family; v3 covers 25 languages. The `v2`
+        // test on the model identifier is the same one `BackendOption.isDownloaded` uses to pick
+        // the download plan.
+        case "fluidaudio": return backend.model.contains("v2")
+        default: return false
+        }
+    }
+
     /// What language the backend was actually decoding in.
     ///
     /// KTD5 asks that no backend be steered by the harness, so every one runs on its shipped
     /// default. For most that default *is* automatic detection; `CohereTranscribeLanguage` and
-    /// `IndicASRLanguage` have no automatic case at all, so their default is a pinned language.
-    /// Recording it per backend is what stops the report comparing a pinned model against an
-    /// auto-detecting one without saying so.
+    /// `IndicASRLanguage` have no automatic case at all, so their default is a pinned language, and
+    /// the English-only checkpoints have no language axis at all. Recording it per backend is what
+    /// stops the report comparing a pinned model against an auto-detecting one without saying so.
     static func languageConfiguration(for backend: BackendOption) -> String {
         switch backend.backend {
         case "cohere": return "pinned:\(CohereTranscribeLanguage.defaultLanguage.rawValue)"
         case "indicasr": return "pinned:\(IndicASRLanguage.defaultLanguage.rawValue)"
-        default: return "automatic"
+        default:
+            // `qwen`, `nemotron35`, `sensevoice` and `gemma4-litert` all detect the language
+            // themselves on their shipped defaults; `whisper` and `fluidaudio` do only in their
+            // multilingual checkpoints.
+            return isEnglishOnly(backend) ? "pinned:en" : "automatic"
         }
     }
 }
 
 // MARK: - Scratch support directory
 
-/// KTD9. The sweep must not be able to reach the maintainer's real database or config, so the
-/// app-identity isolation variables are pointed at a throwaway directory for the run.
+/// KTD9. The sweep must not be able to reach the maintainer's real database or config.
+///
+/// This used to `setenv` two variables and call the job done. It did not do the job: `MUESLI_SUPPORT_DIR`
+/// and `MUESLI_DB_PATH` are read by exactly one place in the repository — `MuesliCLI.swift`, a
+/// *separate executable target* — while everything the sweep drives resolves its paths through
+/// `AppIdentity.supportDirectoryURL`, which reads `Info.plist` and the home directory and has never
+/// consulted either variable. The override therefore isolated nothing in-process, and the `setenv`
+/// itself was two further defects: it was never restored, so it leaked into every other suite in the
+/// same `swift test` process, and it raced any concurrent `getenv` in a parallel test process.
+///
+/// So nothing here mutates the process environment any more. The directory is created and returned,
+/// the overrides are kept for the one consumer they work for (a spawned `muesli-cli`), and the one
+/// real write the in-process pipeline can still make into the maintainer's support directory is
+/// named by `writeHazards` so a run can refuse rather than quietly leak.
 enum TranscriptionQualityScratchSupportDirectory {
     static let supportDirectoryVariable = "MUESLI_SUPPORT_DIR"
     static let databasePathVariable = "MUESLI_DB_PATH"
 
-    /// Pure, so the layout is assertable without touching the process environment.
+    /// Pure, so the layout is assertable without touching the file system.
     static func url(root: URL, runID: String) -> URL {
         root
             .appendingPathComponent("muesli-asr-harness", isDirectory: true)
             .appendingPathComponent(runID, isDirectory: true)
     }
 
+    /// The environment a *child* `muesli-cli` process would need to share this directory. Applying
+    /// these to the current process would change nothing, because nothing in this process reads them.
     static func environmentOverrides(at directory: URL) -> [String: String] {
         [
             supportDirectoryVariable: directory.path,
@@ -163,19 +199,38 @@ enum TranscriptionQualityScratchSupportDirectory {
         ]
     }
 
-    /// Mutates the process environment, so it is only ever called from the env-gated suite — which
-    /// by construction never runs alongside anything but itself.
+    /// Writes into the real support directory that the sweep can still perform, given `environment`.
+    ///
+    /// Only one exists: `TranscriptionRuntime.logPostProcPair` appends raw and cleaned transcript
+    /// text to `postproc-pairs.jsonl` under `AppIdentity.supportDirectoryURL`, gated on the two
+    /// verbose-logging variables below. That is transcript text landing outside the scratch
+    /// directory, which is the isolation claim this type makes — so it is reported rather than
+    /// assumed away.
+    static func writeHazards(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String] {
+        func isEnabled(_ variable: String) -> Bool {
+            let raw = environment[variable]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return raw == "1" || raw == "true" || raw == "yes"
+        }
+        guard isEnabled("MUESLI_DEBUG_POSTPROC_LOGS"), isEnabled("MUESLI_LOG_POSTPROC_PAIRS") else {
+            return []
+        }
+        return [
+            "MUESLI_LOG_POSTPROC_PAIRS appends transcript text to postproc-pairs.jsonl in the real "
+                + "app support directory, which no scratch directory can redirect",
+        ]
+    }
+
+    /// Creates the scratch directory. Deliberately leaves the process environment alone.
     @discardableResult
-    static func activate(
+    static func prepare(
         root: URL = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true),
         runID: String = UUID().uuidString,
         fileManager: FileManager = .default
     ) throws -> URL {
         let directory = url(root: root, runID: runID)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        for (key, value) in environmentOverrides(at: directory) {
-            setenv(key, value, 1)
-        }
         return directory
     }
 }
@@ -192,6 +247,15 @@ enum TranscriptionQualityRun {
         /// The store held nothing to measure. Recorded per backend so the matrix stays complete
         /// rather than silently short.
         case noSamples
+        /// The backend loaded and ran, and came out of it with nothing scored: either the corpus
+        /// held only the sample the cold start consumed, or every remaining sample threw.
+        ///
+        /// This is *not* a measured outcome. A `.measured` entry with an empty sample list looks
+        /// like a result to everything downstream — it can be ranked, and with no utterances its
+        /// pooled figures are absent rather than bad — so an entirely failed backend could present
+        /// as a real one. The failing sample ids travel in the reason so naming them is not lost
+        /// with the outcome.
+        case noMeasuredSamples(failedSampleIDs: [String])
 
         var description: String {
             switch self {
@@ -201,6 +265,12 @@ enum TranscriptionQualityRun {
                 return "model is not downloaded, and the harness never downloads one"
             case .noSamples:
                 return "the corpus store yielded no usable samples"
+            case let .noMeasuredSamples(failedSampleIDs):
+                guard !failedSampleIDs.isEmpty else {
+                    return "the corpus held no sample beyond the one the cold start consumed"
+                }
+                return "every sample failed, so nothing was scored: "
+                    + failedSampleIDs.joined(separator: ", ")
             }
         }
     }
@@ -226,28 +296,79 @@ enum TranscriptionQualityRun {
         }
     }
 
+    /// Whether the cleanup stage actually ran for one sample, and what came out of it.
+    ///
+    /// Asking for cleanup is not the same as getting it. `TranscriptionRuntime` reports
+    /// `.skippedUnavailable` when the cleanup model is not loadable and skips it outright for the
+    /// Indic backend, and the run still returns a `finalOutput` — the raw text after artifact
+    /// cleanup and filler removal. Scoring that as the cleanup stage's product is how a sweep
+    /// reports "cleanup changed nothing" for a sweep in which cleanup never ran, which inverts the
+    /// entire reason two stages are measured (R7/R8: catching the Arabic-to-English translation the
+    /// cleanup stage introduces).
+    enum CleanupExecution: Sendable, Equatable, CustomStringConvertible {
+        /// Cleanup ran and its output is what `finalOutput` scores.
+        case applied
+        /// Cleanup did not run. The stage is still an honest measurement of what the pipeline
+        /// finally produced, but it is not evidence about cleanup and carries no faithfulness delta.
+        case notPerformed(outcome: String)
+        /// The pipeline reported no final-output artifact at all, so there is nothing to score.
+        case notReported
+
+        var description: String {
+            switch self {
+            case .applied: return "applied"
+            case let .notPerformed(outcome): return "not performed (\(outcome))"
+            case .notReported: return "no final-output artifact"
+            }
+        }
+
+        var didRun: Bool { self == .applied }
+    }
+
     /// One sample measured at both stages (R7).
     struct SampleMeasurement: Sendable {
         let sampleID: String
         let corpusID: String
         let cohort: TranscriptionQuality.Cohort
         let rawASR: TranscriptionQuality.StageScore
-        let finalOutput: TranscriptionQuality.StageScore
+        /// Scored from whatever text the pipeline finally produced — never mirrored from `rawASR`,
+        /// and scored against the empty string when the pipeline reported no final output at all.
+        ///
+        /// Named for the pipeline rather than for the stage because it is *not* a measurement of the
+        /// cleanup stage unless `cleanup == .applied`. Read `measuredFinalOutput` for that question;
+        /// this one only answers "what did the pipeline hand back".
+        let pipelineFinalOutput: TranscriptionQuality.StageScore
+        let cleanup: CleanupExecution
         let latency: Latency
+
+        /// The final stage as a measurement of the cleanup stage: `nil` when cleanup did not run,
+        /// or when the pipeline reported no final-output artifact for this sample.
+        var measuredFinalOutput: TranscriptionQuality.StageScore? {
+            cleanup.didRun ? pipelineFinalOutput : nil
+        }
 
         /// R8's signal: what the cleanup stage did to faithfulness, which is a different defect
         /// from a recognition error.
-        var faithfulnessDelta: TranscriptionQuality.FaithfulnessDelta {
-            TranscriptionQuality.FaithfulnessDelta(
-                rawASR: rawASR.faithfulness,
-                finalOutput: finalOutput.faithfulness
+        ///
+        /// `nil` when cleanup did not run, or when either stage's faithfulness is not-applicable. A
+        /// zero here would read as "cleanup left the language alone", which is a claim no
+        /// unperformed cleanup can support.
+        var faithfulnessDelta: TranscriptionQuality.FaithfulnessDelta? {
+            guard let finalOutput = measuredFinalOutput?.faithfulness,
+                  let rawASR = rawASR.faithfulness
+            else { return nil }
+            return TranscriptionQuality.FaithfulnessDelta(
+                rawASR: rawASR,
+                finalOutput: finalOutput
             )
         }
 
-        subscript(stage: TranscriptionQuality.Stage) -> TranscriptionQuality.StageScore {
+        /// `nil` at `.finalOutput` when the cleanup stage did not run: there is a text, but it is
+        /// not that stage's measurement, and every aggregate has to skip it rather than pool it.
+        subscript(stage: TranscriptionQuality.Stage) -> TranscriptionQuality.StageScore? {
             switch stage {
             case .rawASR: rawASR
-            case .finalOutput: finalOutput
+            case .finalOutput: measuredFinalOutput
             }
         }
     }
@@ -313,6 +434,33 @@ extension TranscriptionQualityRun.Measurement {
         }
     }
 
+    /// Samples whose final stage is genuinely the cleanup stage's product. A run configured with
+    /// cleanup enabled but with none of these measured nothing about cleanup, which the receipt has
+    /// to be able to say (A4).
+    var cleanupAppliedCount: Int {
+        samples.filter { $0.cleanup.didRun }.count
+    }
+
+    /// Why cleanup did not run, and on how many samples, in a stable order.
+    var cleanupNotPerformedCounts: [(reason: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for sample in samples where !sample.cleanup.didRun {
+            counts[sample.cleanup.description, default: 0] += 1
+        }
+        return counts.sorted { $0.key < $1.key }.map { (reason: $0.key, count: $0.value) }
+    }
+
+    /// Mean faithfulness over the samples where the question applies. `nil` when none do: a mean
+    /// over no measurement is not zero (A2).
+    func meanFaithfulness(
+        in cohort: TranscriptionQuality.Cohort,
+        at stage: TranscriptionQuality.Stage
+    ) -> Double? {
+        let measured = samples(in: cohort).compactMap { $0[stage]?.faithfulness }
+        guard !measured.isEmpty else { return nil }
+        return measured.reduce(0, +) / Double(measured.count)
+    }
+
     /// R9's per-cohort latency distribution, nearest-rank through the existing scoring code.
     /// `nil` when the cohort produced no measured sample: a distribution over nothing would report
     /// a p50 of zero.
@@ -369,17 +517,22 @@ extension TranscriptionQualityRun.Result {
                 } ?? "no warmup"
                 lines.append(
                     "\(header): \(measurement.samples.count) measured, "
-                        + "\(measurement.failures.count) failed, \(warmup)"
+                        + "\(measurement.failures.count) failed, \(warmup), "
+                        + "cleanup applied on \(measurement.cleanupAppliedCount)"
                 )
+                for (reason, count) in measurement.cleanupNotPerformedCounts {
+                    lines.append("  cleanup \(reason) on \(count) sample(s)")
+                }
                 for cohort in measurement.cohorts {
                     let scores = measurement.samples(in: cohort)
-                    let faithfulness = scores.reduce(0.0) { $0 + $1.finalOutput.faithfulness }
-                        / Double(scores.count)
+                    // Not-applicable faithfulness is skipped rather than counted as agreement, and
+                    // the final stage only counts where cleanup actually ran.
+                    let faithfulness = measurement.meanFaithfulness(in: cohort, at: .finalOutput)
                     let latency = measurement.endToEndDistribution(in: cohort)
                     let realTime = measurement.realTimeFactor(in: cohort)
                     lines.append(
                         "  \(cohort.rawValue): n=\(scores.count) "
-                            + "faithfulness=\(String(format: "%.3f", faithfulness)) "
+                            + "faithfulness=\(faithfulness.map { String(format: "%.3f", $0) } ?? "n/a") "
                             + "p50=\(latency.map { String(format: "%.2f", $0.p50) } ?? "n/a")s "
                             + "p95=\(latency.map { String(format: "%.2f", $0.p95) } ?? "n/a")s "
                             + "rtf=\(realTime.map { String(format: "%.2f", $0) } ?? "n/a")"
@@ -397,20 +550,38 @@ extension TranscriptionQualityRun.Result {
 /// reported rather than the ones the harness guessed.
 struct TranscriptionQualityTrace: Sendable, Equatable {
     var rawASR: String
-    var finalOutput: String
+    /// `nil` when the pipeline reported no final-output artifact — nothing to score, as opposed to
+    /// an empty final output, which is a recognition failure.
+    var finalOutput: String?
+    /// What the pipeline said the cleanup stage did, so the sweep can tell a cleanup that changed
+    /// nothing from a cleanup that never ran.
+    var cleanupOutcome: DictationCleanupOutcome?
     var stageMilliseconds: [DictationTranscriptionStageEvent.Stage: Int]
     var elapsedSeconds: Double
 
     init(
         rawASR: String,
-        finalOutput: String,
+        finalOutput: String?,
+        cleanupOutcome: DictationCleanupOutcome? = .applied,
         stageMilliseconds: [DictationTranscriptionStageEvent.Stage: Int] = [:],
         elapsedSeconds: Double = 0
     ) {
         self.rawASR = rawASR
         self.finalOutput = finalOutput
+        self.cleanupOutcome = cleanupOutcome
         self.stageMilliseconds = stageMilliseconds
         self.elapsedSeconds = elapsedSeconds
+    }
+
+    /// How the final stage should be read, given what the pipeline reported.
+    var cleanupExecution: TranscriptionQualityRun.CleanupExecution {
+        guard finalOutput != nil else { return .notReported }
+        switch cleanupOutcome {
+        case .applied: return .applied
+        case let .some(outcome): return .notPerformed(outcome: outcome.rawValue)
+        // No outcome reported at all is not evidence that cleanup ran.
+        case .none: return .notPerformed(outcome: "unreported")
+        }
     }
 
     var speechRecognitionSeconds: Double {
@@ -483,7 +654,7 @@ struct LiveTranscriptionQualityDriver: TranscriptionQualityDriver {
         let startedAt = Date()
         // Every language argument is left at its shipped default (KTD5): steering one competitor
         // and not another would compare a guided model against an unguided one.
-        _ = try await coordinator.transcribeDictationWithCleanupOutcome(
+        let outcome = try await coordinator.transcribeDictationWithCleanupOutcome(
             at: sample.audioURL,
             backend: backend,
             enablePostProcessor: cleanupEnabled,
@@ -493,7 +664,13 @@ struct LiveTranscriptionQualityDriver: TranscriptionQualityDriver {
         let snapshot = await collector.snapshot()
         return TranscriptionQualityTrace(
             rawASR: snapshot.artifacts[.rawASR] ?? "",
-            finalOutput: snapshot.artifacts[.finalOutput] ?? "",
+            // No `?? ""`: an absent artifact is nothing to score, and scoring the empty string
+            // against the reference would report a total cleanup failure that was never observed.
+            finalOutput: snapshot.artifacts[.finalOutput],
+            // The pipeline's own verdict on the cleanup stage. `.skippedUnavailable` and the
+            // fallbacks all mean the final text is not cleanup's product, however the run was
+            // configured.
+            cleanupOutcome: outcome.cleanupOutcome,
             stageMilliseconds: snapshot.stages,
             elapsedSeconds: elapsed
         )
@@ -535,21 +712,47 @@ private actor HarnessTraceCollector {
 /// matrix records, because an hour-long sweep that aborts on the eleventh backend has measured
 /// nothing (R4, R12).
 struct TranscriptionQualityRunner: Sendable {
+    /// A sample whose transcription outran its budget. Recorded as a per-sample failure like any
+    /// other throw, because a hung model must cost one sample, not the sweep.
+    struct SampleTimedOut: Error, LocalizedError {
+        let sampleID: String
+        let seconds: Double
+        var errorDescription: String? {
+            "transcribing \(sampleID) exceeded the \(String(format: "%.0f", seconds))s budget"
+        }
+    }
+
+    /// Generous enough that no honest transcription reaches it — the slowest backend here is a
+    /// 2-3 second autoregressive decoder, so five minutes on one utterance is a hang, not slowness.
+    static let defaultSampleTimeoutSeconds: Double = 300
+    /// The cold start pays model load and, for CoreML backends, first-run compilation, which is
+    /// tens of seconds by design (R9). It gets its own, larger budget rather than a shared one that
+    /// would have to be loose enough to hide a hang in the measured samples.
+    static let defaultWarmupTimeoutSeconds: Double = 1_800
+
     let driver: any TranscriptionQualityDriver
     /// `nil` for audio whose duration cannot be read, which only costs the real-time factor.
     let audioDurationSeconds: @Sendable (TranscriptionCorpus.Sample) -> Double?
     let cleanupEnabled: Bool
+    /// A hung model would otherwise stall an hour-long sweep with no signal at all. Injectable so
+    /// the expiry path is provable in a test in milliseconds.
+    let sampleTimeoutSeconds: Double
+    let warmupTimeoutSeconds: Double
 
     init(
         driver: any TranscriptionQualityDriver,
         audioDurationSeconds: @escaping @Sendable (TranscriptionCorpus.Sample) -> Double? = {
             TranscriptionQualityRunner.measuredDuration(of: $0)
         },
-        cleanupEnabled: Bool = true
+        cleanupEnabled: Bool = true,
+        sampleTimeoutSeconds: Double = TranscriptionQualityRunner.defaultSampleTimeoutSeconds,
+        warmupTimeoutSeconds: Double = TranscriptionQualityRunner.defaultWarmupTimeoutSeconds
     ) {
         self.driver = driver
         self.audioDurationSeconds = audioDurationSeconds
         self.cleanupEnabled = cleanupEnabled
+        self.sampleTimeoutSeconds = sampleTimeoutSeconds
+        self.warmupTimeoutSeconds = warmupTimeoutSeconds
     }
 
     /// Prefers the corpus index's own figure and falls back to reading the file, so a corpus that
@@ -594,7 +797,11 @@ struct TranscriptionQualityRunner: Sendable {
 
             var warmup: TranscriptionQualityRun.Warmup
             do {
-                let trace = try await driver.transcribe(warmupSample, backend: backend)
+                let trace = try await transcribe(
+                    warmupSample,
+                    backend: backend,
+                    timeoutSeconds: warmupTimeoutSeconds
+                )
                 warmup = TranscriptionQualityRun.Warmup(
                     sampleID: warmupSample.id,
                     endToEndSeconds: trace.elapsedSeconds,
@@ -617,7 +824,11 @@ struct TranscriptionQualityRunner: Sendable {
             // backend keeps the comparison fair.
             for sample in samples.dropFirst() {
                 do {
-                    let trace = try await driver.transcribe(sample, backend: backend)
+                    let trace = try await transcribe(
+                        sample,
+                        backend: backend,
+                        timeoutSeconds: sampleTimeoutSeconds
+                    )
                     measurements.append(measurement(for: sample, trace: trace))
                     cohorts.insert(sample.cohort)
                 } catch {
@@ -629,8 +840,17 @@ struct TranscriptionQualityRunner: Sendable {
             }
 
             // Before the next backend loads, never after the sweep: two resident models is exactly
-            // the contention R11 forbids.
+            // the contention R11 forbids. The warmup already loaded this one, so it runs on both
+            // paths below.
             await driver.unload(backend)
+
+            // R12/A3: a backend that scored nothing is not a measured backend. Recorded as measured
+            // it would carry an empty distribution into the ranking, where absent figures read as
+            // "no worse than anyone" rather than as no result at all.
+            guard !measurements.isEmpty else {
+                record(.notRunnable(.noMeasuredSamples(failedSampleIDs: failures.map(\.sampleID))))
+                continue
+            }
             record(.measured(TranscriptionQualityRun.Measurement(
                 warmup: warmup,
                 samples: measurements,
@@ -643,6 +863,39 @@ struct TranscriptionQualityRunner: Sendable {
             cleanupEnabled: cleanupEnabled,
             cohortsMeasured: TranscriptionQuality.Cohort.allCases.filter { cohorts.contains($0) }
         )
+    }
+
+    /// One transcription under a wall-clock budget.
+    ///
+    /// Expiry is a per-sample failure, not a crash and not an abort: the sweep records it beside the
+    /// other failures and moves on, which is the same contract every other throw here has. The
+    /// losing task is cancelled, though a backend already inside a synchronous CoreML call will not
+    /// notice — the point is that the *sweep* stops waiting on it, and that the receipt names the
+    /// sample instead of the run ending in silence.
+    private func transcribe(
+        _ sample: TranscriptionCorpus.Sample,
+        backend: BackendOption,
+        timeoutSeconds: Double
+    ) async throws -> TranscriptionQualityTrace {
+        let driver = driver
+        let sampleID = sample.id
+        return try await withThrowingTaskGroup(of: TranscriptionQualityTrace?.self) { group in
+            group.addTask {
+                try await driver.transcribe(sample, backend: backend)
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(max(0, timeoutSeconds) * 1_000_000_000))
+                return nil
+            }
+            defer { group.cancelAll() }
+            while let finished = try await group.next() {
+                guard let trace = finished else {
+                    throw SampleTimedOut(sampleID: sampleID, seconds: timeoutSeconds)
+                }
+                return trace
+            }
+            throw SampleTimedOut(sampleID: sampleID, seconds: timeoutSeconds)
+        }
     }
 
     private func measurement(
@@ -659,12 +912,16 @@ struct TranscriptionQualityRunner: Sendable {
                 reference: sample.reference,
                 hypothesis: trace.rawASR
             ),
-            finalOutput: TranscriptionQuality.StageScore(
+            // An absent final artifact scores against the empty string — nothing was produced —
+            // and is flagged `.notReported` so no reader mistakes it for a cleanup result. It is
+            // never filled in from `rawASR`, which would report a cleanup that changed nothing.
+            pipelineFinalOutput: TranscriptionQuality.StageScore(
                 stage: .finalOutput,
                 cohort: sample.cohort,
                 reference: sample.reference,
-                hypothesis: trace.finalOutput
+                hypothesis: trace.finalOutput ?? ""
             ),
+            cleanup: trace.cleanupExecution,
             latency: TranscriptionQualityRun.Latency(
                 endToEndSeconds: trace.elapsedSeconds,
                 speechRecognitionSeconds: trace.speechRecognitionSeconds,
