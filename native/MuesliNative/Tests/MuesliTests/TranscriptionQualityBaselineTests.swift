@@ -1,6 +1,11 @@
 import CryptoKit
 import Foundation
+import MuesliCore
 import Testing
+
+private typealias Sample = TranscriptionQualitySample
+private typealias Metric = TranscriptionQualityScoring.Metric
+private typealias Distribution = TranscriptionQualityScoring.Distribution
 
 /// Verifies the immutable fixture, scoring, and timing schema. It does not run
 /// ASR; behavior PRs publish a new measured capture before changing baselines.
@@ -77,11 +82,11 @@ struct TranscriptionQualityFixtureContractTests {
         assertMetric(expected.arabicEnglish, equals: mixed)
         expectEqual(
             expected.arabicEnglish.latinTokenPreservation,
-            tokenPreservation(samples: mixedSamples, output: output, script: .latin)
+            TranscriptionQualityScoring.tokenPreservation(samples: mixedSamples, output: output, script: .latin)
         )
         expectEqual(
             expected.arabicEnglish.arabicTokenPreservation,
-            tokenPreservation(samples: mixedSamples, output: output, script: .arabic)
+            TranscriptionQualityScoring.tokenPreservation(samples: mixedSamples, output: output, script: .arabic)
         )
     }
 
@@ -143,29 +148,6 @@ private struct Fixture {
     }
 }
 
-private struct Sample: Decodable {
-    let id: String
-    let cohort: Cohort
-    let reference: String
-    let rawASR: String
-    let finalOutput: String
-    let audioBytes: Int
-    let audioSHA256: String
-    let audioDurationSeconds: Double
-    let asrSeconds: Double
-    let endToEndSeconds: Double
-    let backend: String
-    let model: String
-    let languageConfiguration: String
-    let provenanceID: String
-}
-
-private enum Cohort: String, Decodable {
-    case english
-    case arabic
-    case arabicEnglish = "arabic-english"
-}
-
 private struct Manifest: Decodable {
     let schemaVersion: Int
     let maximumCorpusBytes: Int
@@ -206,130 +188,4 @@ private struct Timing: Decodable {
     let asrSeconds: Distribution
     let endToEndSeconds: Distribution
     let realTimeFactor: Distribution
-}
-
-private struct Distribution: Decodable {
-    let count: Int
-    let p50: Double
-    let p95: Double
-    let maximum: Double
-
-    init(values: [Double]) {
-        let sorted = values.sorted()
-        count = sorted.count
-        p50 = sorted[nearestRankIndex(percentile: 0.50, count: sorted.count)]
-        p95 = sorted[nearestRankIndex(percentile: 0.95, count: sorted.count)]
-        maximum = sorted.last ?? 0
-    }
-}
-
-private struct Metric {
-    let wer: Double
-    let cer: Double
-
-    init(samples: [Sample], output: KeyPath<Sample, String>) {
-        var wordErrors = 0
-        var referenceWords = 0
-        var characterErrors = 0
-        var referenceCharacters = 0
-        for sample in samples {
-            let arabicNormalization = sample.cohort != .english
-            let reference = normalized(sample.reference, arabic: arabicNormalization)
-            let hypothesis = normalized(sample[keyPath: output], arabic: arabicNormalization)
-            let referenceTokens = reference.split(separator: " ").map(String.init)
-            let hypothesisTokens = hypothesis.split(separator: " ").map(String.init)
-            let referenceCharactersForSample = Array(referenceTokens.joined())
-            let hypothesisCharacters = Array(hypothesisTokens.joined())
-            wordErrors += levenshtein(referenceTokens, hypothesisTokens)
-            referenceWords += referenceTokens.count
-            characterErrors += levenshtein(referenceCharactersForSample, hypothesisCharacters)
-            referenceCharacters += referenceCharactersForSample.count
-        }
-        wer = Double(wordErrors) / Double(referenceWords)
-        cer = Double(characterErrors) / Double(referenceCharacters)
-    }
-}
-
-private enum Script {
-    case latin
-    case arabic
-}
-
-private func tokenPreservation(
-    samples: [Sample],
-    output: KeyPath<Sample, String>,
-    script: Script
-) -> Double {
-    var retained = 0
-    var referenceCount = 0
-    for sample in samples {
-        let reference = normalized(sample.reference, arabic: true).split(separator: " ").map(String.init)
-            .filter { token($0, belongsTo: script) }
-        var hypothesis = normalized(sample[keyPath: output], arabic: true).split(separator: " ").map(String.init)
-            .filter { token($0, belongsTo: script) }
-        referenceCount += reference.count
-        for referenceToken in reference {
-            if let index = hypothesis.firstIndex(of: referenceToken) {
-                retained += 1
-                hypothesis.remove(at: index)
-            }
-        }
-    }
-    return Double(retained) / Double(referenceCount)
-}
-
-private func token(_ value: String, belongsTo script: Script) -> Bool {
-    guard !value.isEmpty else { return false }
-    return value.unicodeScalars.allSatisfy { scalar in
-        switch script {
-        case .latin:
-            return (0x61 ... 0x7A).contains(scalar.value) || (0x30 ... 0x39).contains(scalar.value)
-        case .arabic:
-            return (0x0600 ... 0x06FF).contains(scalar.value)
-        }
-    }
-}
-
-private func normalized(_ value: String, arabic: Bool) -> String {
-    var scalars = Array(value.precomposedStringWithCanonicalMapping.lowercased().unicodeScalars)
-    if arabic {
-        scalars = scalars.compactMap { scalar in
-            switch scalar.value {
-            case 0x0610 ... 0x061A, 0x064B ... 0x065F, 0x0670, 0x06D6 ... 0x06ED, 0x0640:
-                return nil
-            case 0x0622, 0x0623, 0x0625, 0x0671:
-                return UnicodeScalar(0x0627)
-            case 0x0649:
-                return UnicodeScalar(0x064A)
-            default:
-                return scalar
-            }
-        }
-    }
-    let string = String(String.UnicodeScalarView(scalars))
-    let expression = try! NSRegularExpression(pattern: #"[\p{L}\p{N}_]+"#)
-    let range = NSRange(string.startIndex ..< string.endIndex, in: string)
-    return expression.matches(in: string, range: range).compactMap { match in
-        Range(match.range, in: string).map { String(string[$0]) }
-    }.joined(separator: " ")
-}
-
-private func levenshtein<Element: Equatable>(_ source: [Element], _ target: [Element]) -> Int {
-    var previous = Array(0 ... target.count)
-    for (sourceIndex, sourceValue) in source.enumerated() {
-        var current = [sourceIndex + 1]
-        for (targetIndex, targetValue) in target.enumerated() {
-            current.append(min(
-                current[targetIndex] + 1,
-                previous[targetIndex + 1] + 1,
-                previous[targetIndex] + (sourceValue == targetValue ? 0 : 1)
-            ))
-        }
-        previous = current
-    }
-    return previous[target.count]
-}
-
-private func nearestRankIndex(percentile: Double, count: Int) -> Int {
-    max(0, Int(ceil(percentile * Double(count))) - 1)
 }
