@@ -253,9 +253,10 @@ enum TranscriptionQualityRun {
         /// This is *not* a measured outcome. A `.measured` entry with an empty sample list looks
         /// like a result to everything downstream — it can be ranked, and with no utterances its
         /// pooled figures are absent rather than bad — so an entirely failed backend could present
-        /// as a real one. The failing sample ids travel in the reason so naming them is not lost
-        /// with the outcome.
-        case noMeasuredSamples(failedSampleIDs: [String])
+        /// as a real one. The failures travel in the reason so neither the ids nor *why* they failed
+        /// is lost with the outcome: an id list alone cannot distinguish a missing file from a model
+        /// that never loaded, and this is exactly the case where that is the only question.
+        case noMeasuredSamples(failures: [SampleFailure])
 
         var description: String {
             switch self {
@@ -265,12 +266,15 @@ enum TranscriptionQualityRun {
                 return "model is not downloaded, and the harness never downloads one"
             case .noSamples:
                 return "the corpus store yielded no usable samples"
-            case let .noMeasuredSamples(failedSampleIDs):
-                guard !failedSampleIDs.isEmpty else {
+            case let .noMeasuredSamples(failures):
+                guard !failures.isEmpty else {
                     return "the corpus held no sample beyond the one the cold start consumed"
                 }
-                return "every sample failed, so nothing was scored: "
-                    + failedSampleIDs.joined(separator: ", ")
+                let sentence = "every sample failed, so nothing was scored: "
+                    + failures.map(\.sampleID).joined(separator: ", ")
+                let reasons = SampleFailure.distinctMessages(in: failures)
+                guard !reasons.isEmpty else { return sentence }
+                return sentence + " — " + reasons.joined(separator: "; ")
             }
         }
     }
@@ -373,11 +377,19 @@ enum TranscriptionQualityRun {
         }
     }
 
-    /// One sample that threw. Named rather than dropped, so a backend with three bad files is
-    /// distinguishable from a backend with three fewer samples.
+    /// One sample that threw. Named *and explained* rather than dropped: a backend with three bad
+    /// files, a backend with three fewer samples and a backend whose model never loaded are three
+    /// different facts, and only the message separates the last one from the first.
     struct SampleFailure: Sendable, Equatable {
         let sampleID: String
         let message: String
+
+        /// The messages present, deduplicated, in first-seen order. One cause usually explains a
+        /// whole backend, so a reason is worth stating once rather than once per sample.
+        static func distinctMessages(in failures: [SampleFailure]) -> [String] {
+            var seen: Set<String> = []
+            return failures.map(\.message).filter { !$0.isEmpty && seen.insert($0).inserted }
+        }
     }
 
     /// R9's separately-reported cold start. The first call pays model load and, for CoreML
@@ -520,6 +532,11 @@ extension TranscriptionQualityRun.Result {
                         + "\(measurement.failures.count) failed, \(warmup), "
                         + "cleanup applied on \(measurement.cleanupAppliedCount)"
                 )
+                // Counting the failures without saying why is what made a real sweep undiagnosable.
+                for reason in TranscriptionQualityRun.SampleFailure.distinctMessages(in: measurement.failures) {
+                    let count = measurement.failures.filter { $0.message == reason }.count
+                    lines.append("  failed on \(count) sample(s): \(reason)")
+                }
                 for (reason, count) in measurement.cleanupNotPerformedCounts {
                     lines.append("  cleanup \(reason) on \(count) sample(s)")
                 }
@@ -625,6 +642,8 @@ struct LiveTranscriptionQualityDriver: TranscriptionQualityDriver {
     /// Cleanup is where the reported Arabic-to-English translation happens, so measuring with it
     /// off would hide the defect this harness exists to find.
     let cleanupEnabled: Bool
+    /// Which backends this driver has already selected and loaded. See `prepare`.
+    private let loaded = LoadedBackends()
 
     init(
         coordinator: TranscriptionCoordinator,
@@ -646,12 +665,62 @@ struct LiveTranscriptionQualityDriver: TranscriptionQualityDriver {
         )
     }
 
+    /// Selects the backend and loads its weights, exactly as choosing the model in the app does.
+    ///
+    /// Not optional, and not something `transcribeDictationWithCleanupOutcome` does for itself.
+    /// `TranscriptionCoordinator.route` calls straight into each transcriber, and only Nemotron and
+    /// Cohere load on demand inside their own `transcribe`; FluidAudio, WhisperKit, Qwen3, SenseVoice
+    /// and Indic all throw `notLoaded` unless something has already called `preloadRequired`. In the
+    /// app that something is `MuesliController` reacting to the model selection — which no test
+    /// process has. Without this the sweep measured the two self-loading backends and recorded every
+    /// other one as a total failure.
+    ///
+    /// The designation is as load-bearing as the load itself: `preloadRequired` ends by reconciling
+    /// residency, and a backend that stands behind no designated slot is unloaded there — so a
+    /// preload without a selection would hand the next call an unloaded model again.
+    ///
+    /// Called from `transcribe` rather than from the sweep so the cold start pays the model load,
+    /// which is what R9 reports it as.
+    private func prepare(_ backend: BackendOption) async throws {
+        guard await loaded.claim("\(backend.backend)/\(backend.model)") else { return }
+        do {
+            await coordinator.setDesignatedBackends(
+                dictation: Self.residencyIdentifier(for: backend),
+                meetingTranscription: nil,
+                meetingLiveCaption: nil
+            )
+            try await coordinator.preloadRequired(
+                backend: backend,
+                enablePostProcessor: cleanupEnabled,
+                // The sweep measures dictation. Loading the diarizer and the meeting VAD would put a
+                // second set of weights on the machine every latency figure is read off.
+                includeMeetingHelpers: false
+            )
+        } catch {
+            // A failed load must be retried by the next sample rather than silently downgraded into
+            // "already loaded", or one bad first call would fail the backend for the whole sweep with
+            // a different reason than the real one.
+            await loaded.release("\(backend.backend)/\(backend.model)")
+            throw error
+        }
+    }
+
+    /// `TranscriptionCoordinator.residencyIdentifier` is private, and mirroring it off the same
+    /// published set is what keeps the designation this driver writes equal to the one the
+    /// coordinator reconciles against. A mismatch does not fail loudly — it unloads the model.
+    private static func residencyIdentifier(for backend: BackendOption) -> String {
+        TranscriptionCoordinator.explicitlyRoutedBackendIdentifiers.contains(backend.backend)
+            ? backend.backend
+            : "fluidaudio"
+    }
+
     func transcribe(
         _ sample: TranscriptionCorpus.Sample,
         backend: BackendOption
     ) async throws -> TranscriptionQualityTrace {
         let collector = HarnessTraceCollector()
         let startedAt = Date()
+        try await prepare(backend)
         // Every language argument is left at its shipped default (KTD5): steering one competitor
         // and not another would compare a guided model against an unguided one.
         let outcome = try await coordinator.transcribeDictationWithCleanupOutcome(
@@ -678,7 +747,22 @@ struct LiveTranscriptionQualityDriver: TranscriptionQualityDriver {
 
     func unload(_ backend: BackendOption) async {
         await coordinator.unloadTranscriber(for: backend)
+        // The weights are gone, so the next call has to load them again rather than trust a claim
+        // made before the unload.
+        await loaded.release("\(backend.backend)/\(backend.model)")
     }
+}
+
+/// Which backends the live driver has already selected and loaded, so the model load lands on the
+/// cold start once rather than on every sample. An actor because `TranscriptionQualityDriver` is
+/// `Sendable` and the driver itself is a value.
+private actor LoadedBackends {
+    private var identities: Set<String> = []
+
+    /// `true` when this call is the one that must perform the load.
+    func claim(_ identity: String) -> Bool { identities.insert(identity).inserted }
+
+    func release(_ identity: String) { identities.remove(identity) }
 }
 
 /// Collects the pipeline's trace events for one transcription. An actor because the reporter is
@@ -730,6 +814,13 @@ struct TranscriptionQualityRunner: Sendable {
     /// would have to be loose enough to hide a hang in the measured samples.
     static let defaultWarmupTimeoutSeconds: Double = 1_800
 
+    /// Where the sweep narrates itself. An hour-long run that only speaks in its closing summary is
+    /// a run a maintainer cannot follow, and a failure that is only visible after every backend has
+    /// finished is a failure diagnosed an hour late.
+    static let liveLog: @Sendable (String) -> Void = { line in
+        fputs("[asr-harness] \(line)\n", stderr)
+    }
+
     let driver: any TranscriptionQualityDriver
     /// `nil` for audio whose duration cannot be read, which only costs the real-time factor.
     let audioDurationSeconds: @Sendable (TranscriptionCorpus.Sample) -> Double?
@@ -738,6 +829,9 @@ struct TranscriptionQualityRunner: Sendable {
     /// the expiry path is provable in a test in milliseconds.
     let sampleTimeoutSeconds: Double
     let warmupTimeoutSeconds: Double
+    /// Injectable so the fake-driven contract tests, which fail samples deliberately, do not print
+    /// scripted failures into every unrelated run of the suite.
+    let log: @Sendable (String) -> Void
 
     init(
         driver: any TranscriptionQualityDriver,
@@ -746,13 +840,15 @@ struct TranscriptionQualityRunner: Sendable {
         },
         cleanupEnabled: Bool = true,
         sampleTimeoutSeconds: Double = TranscriptionQualityRunner.defaultSampleTimeoutSeconds,
-        warmupTimeoutSeconds: Double = TranscriptionQualityRunner.defaultWarmupTimeoutSeconds
+        warmupTimeoutSeconds: Double = TranscriptionQualityRunner.defaultWarmupTimeoutSeconds,
+        log: @escaping @Sendable (String) -> Void = TranscriptionQualityRunner.liveLog
     ) {
         self.driver = driver
         self.audioDurationSeconds = audioDurationSeconds
         self.cleanupEnabled = cleanupEnabled
         self.sampleTimeoutSeconds = sampleTimeoutSeconds
         self.warmupTimeoutSeconds = warmupTimeoutSeconds
+        self.log = log
     }
 
     /// Prefers the corpus index's own figure and falls back to reading the file, so a corpus that
@@ -785,15 +881,19 @@ struct TranscriptionQualityRunner: Sendable {
                 ))
             }
 
+            let header = "\(backend.label) [\(backend.backend)/\(backend.model)]"
             if let reason = await driver.notRunnableReason(for: backend) {
                 // Nothing is loaded and nothing is fetched, so there is nothing to unload either.
+                log("\(header): not runnable — \(reason.description)")
                 record(.notRunnable(reason))
                 continue
             }
             guard let warmupSample = samples.first else {
+                log("\(header): not runnable — \(TranscriptionQualityRun.NotRunnable.noSamples)")
                 record(.notRunnable(.noSamples))
                 continue
             }
+            log("\(header): starting on \(samples.count) sample(s)")
 
             var warmup: TranscriptionQualityRun.Warmup
             do {
@@ -809,7 +909,9 @@ struct TranscriptionQualityRunner: Sendable {
                 )
             } catch {
                 // A warmup that throws still loaded the model, and one bad file must not cost the
-                // backend its whole run.
+                // backend its whole run. It is also the first place a broken backend shows itself,
+                // so the reason goes out live rather than waiting for the summary.
+                log("\(header): cold start on \(warmupSample.id) failed — \(error.localizedDescription)")
                 warmup = TranscriptionQualityRun.Warmup(
                     sampleID: warmupSample.id,
                     endToEndSeconds: nil,
@@ -832,6 +934,7 @@ struct TranscriptionQualityRunner: Sendable {
                     measurements.append(measurement(for: sample, trace: trace))
                     cohorts.insert(sample.cohort)
                 } catch {
+                    log("\(header): \(sample.id) failed — \(error.localizedDescription)")
                     failures.append(TranscriptionQualityRun.SampleFailure(
                         sampleID: sample.id,
                         message: error.localizedDescription
@@ -848,9 +951,12 @@ struct TranscriptionQualityRunner: Sendable {
             // it would carry an empty distribution into the ranking, where absent figures read as
             // "no worse than anyone" rather than as no result at all.
             guard !measurements.isEmpty else {
-                record(.notRunnable(.noMeasuredSamples(failedSampleIDs: failures.map(\.sampleID))))
+                let reason = TranscriptionQualityRun.NotRunnable.noMeasuredSamples(failures: failures)
+                log("\(header): \(reason.description)")
+                record(.notRunnable(reason))
                 continue
             }
+            log("\(header): \(measurements.count) measured, \(failures.count) failed")
             record(.measured(TranscriptionQualityRun.Measurement(
                 warmup: warmup,
                 samples: measurements,

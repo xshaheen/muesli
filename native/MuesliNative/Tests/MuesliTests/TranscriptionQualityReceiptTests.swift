@@ -780,7 +780,10 @@ struct TranscriptionQualityReceiptTests {
                 languageConfiguration: "automatic",
                 warmup: Receipt.Warmup(sampleID: "arzen-0001", endToEndSeconds: 31.2, failureMessage: nil),
                 cohorts: [Receipt.CohortResult(cohort: .egyptianArabic, utterances: [scored])],
-                failedSampleIDs: ["arzen-0099"]
+                failures: [Receipt.SampleFailure(
+                    sampleID: "arzen-0099",
+                    reason: "the audio file could not be read"
+                )]
             ),
         ])
 
@@ -857,6 +860,9 @@ struct TranscriptionQualityReceiptTests {
         #expect(report.contains("Faithfulness gate"))
         #expect(report.contains("Bootstrap seed"))
         #expect(report.contains("cold start"))
+        // A backend that measured most of its samples still has to say what happened to the rest.
+        #expect(report.contains("## Sample failures"))
+        #expect(report.contains("the decoder returned no tokens"))
         #expect(report.contains("cleanup LLM stays resident"))
         #expect(report.contains("run under battery power"))
         // The disclosure that the statistic was an unweighted mean is gone because the statistic is
@@ -934,7 +940,16 @@ struct TranscriptionQualityReceiptTests {
                         sampleID: "s0",
                         endToEndSeconds: nil,
                         failureMessage: "decode failed on \(arabicReference)"
-                    )
+                    ),
+                    // The per-sample reason is the newest way arbitrary text reaches the schema, and
+                    // a thrown error is exactly the kind of string that quotes what it choked on.
+                    failures: [
+                        Receipt.SampleFailure(
+                            sampleID: "s1",
+                            reason: "decode failed on \(arabicReference)"
+                        ),
+                        Receipt.SampleFailure(sampleID: "s2", reason: englishHypothesis),
+                    ]
                 ),
             ]
         )
@@ -1139,7 +1154,10 @@ private let allowedReceiptKeys: Set<String> = [
     // The not-runnable reason is a closed code plus scalars, never the sweep's rendered sentence:
     // one of its cases joins failed sample ids into prose, and prose is an open channel.
     "notRunnable", "code", "requiredMacOSMajorVersion", "hostOperatingSystemVersion",
-    "failedSampleIDs",
+    // `SampleFailure`: the id, and the thrown error's description bounded by `ReceiptProse`. The
+    // reason is here because an entirely failed backend is undiagnosable without it — and it is
+    // bounded because an error can quote the transcript it failed on.
+    "failures",
     // `CleanupSkip`: the pipeline's own outcome vocabulary and a count.
     "reason", "utterances",
     "warmup", "sampleID", "endToEndSeconds", "failureMessage",
@@ -1348,7 +1366,7 @@ private func notRunnable(
         requiredMacOSMajorVersion: 15,
         hostOperatingSystemVersion: "14.2.0"
     ),
-    failedSampleIDs: [String] = []
+    failures: [Receipt.SampleFailure] = []
 ) -> Receipt.Backend {
     Receipt.Backend(
         backend: identifier,
@@ -1356,7 +1374,7 @@ private func notRunnable(
         label: identifier,
         languageConfiguration: "automatic",
         notRunnable: reason,
-        failedSampleIDs: failedSampleIDs
+        failures: failures
     )
 }
 
@@ -1445,7 +1463,10 @@ private func populatedReceipt() -> Receipt {
                         ),
                     ]),
                 ],
-                failedSampleIDs: ["s9"]
+                failures: [Receipt.SampleFailure(
+                    sampleID: "s9",
+                    reason: "the decoder returned no tokens"
+                )]
             ),
             notRunnable("qwen"),
         ]

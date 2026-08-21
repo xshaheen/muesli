@@ -54,7 +54,7 @@
         "sampleID": "s0",
         "endToEndSeconds": 4.812
       },
-      "failedSampleIDs": [],
+      "failures": [],
       "cohorts": [
         {
           "cohort": "egyptian-arabic",
@@ -150,8 +150,11 @@
         "sampleID": "s0",
         "endToEndSeconds": 31.4
       },
-      "failedSampleIDs": [
-        "s3"
+      "failures": [
+        {
+          "sampleID": "s3",
+          "reason": "the decoder returned no tokens for this utterance"
+        }
       ],
       "cohorts": [
         {
@@ -228,7 +231,7 @@
       "model": "indic-conformer",
       "label": "Indic ASR",
       "languageConfiguration": "pinned:hi",
-      "failedSampleIDs": [],
+      "failures": [],
       "cohorts": [],
       "notRunnable": {
         "code": "model-not-downloaded"

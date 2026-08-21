@@ -34,9 +34,11 @@ bytes twice over:
   `ReceiptProse`, which drops every non-ASCII scalar and caps the length. No Arabic reference can
   survive it in any form.
 
-The not-runnable reason is a code plus scalars rather than a rendered sentence, and the failed sample
-ids one of its cases names travel in `failedSampleIDs`. The sentence a reader sees is rendered by the
-report at read time, so nothing a future case might interpolate can reach a committed file.
+The not-runnable reason is a code plus scalars rather than a rendered sentence, and the samples one of
+its cases names travel in `failures` — each with the id *and* the thrown error's description, because
+a backend that scored nothing is undiagnosable from an id list alone. Those descriptions are the
+second `ReceiptProse` field. The sentence a reader sees is rendered by the report at read time, so
+nothing a future case might interpolate can reach a committed file.
 
 ## Files
 

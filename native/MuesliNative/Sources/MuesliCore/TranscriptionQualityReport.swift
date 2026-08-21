@@ -26,6 +26,7 @@ public enum TranscriptionQualityReport {
             lines += cohortSection(cohort, receipt: receipt)
         }
         lines += coldStartSection(receipt)
+        lines += sampleFailureSection(receipt)
         lines += notRunnableSection(receipt)
         lines += qwen3Section(decisions.qwen3)
         return lines.joined(separator: "\n") + "\n"
@@ -317,6 +318,44 @@ public enum TranscriptionQualityReport {
                     + "must not delete a whole run — but it is a signal about the model's stability on "
                     + "this host, and a ranking row for such a backend is marked ✖︎ above.",
             ]
+        }
+        return lines + [""]
+    }
+
+    /// Why individual samples threw under a backend that still produced a result.
+    ///
+    /// A backend that scored *nothing* carries its reasons in the not-runnable sentence below; this
+    /// section is for the other case, which the document used to lose entirely — a backend with a
+    /// real ranking row and four samples missing from it, with no statement anywhere of what went
+    /// wrong on those four.
+    private static func sampleFailureSection(_ receipt: TranscriptionQualityReceipt) -> [String] {
+        let partial = receipt.backends.filter { $0.isRunnable && !$0.failures.isEmpty }
+        guard !partial.isEmpty else { return [] }
+        var lines = [
+            "## Sample failures",
+            "",
+            "Samples that threw under a backend that still measured others. They are absent from "
+                + "every figure above, so a row here is a cohort figure resting on fewer utterances "
+                + "than the corpus holds.",
+            "",
+            "| Backend | Model | Samples | Reason |",
+            "| --- | --- | ---: | --- |",
+        ]
+        for backend in partial {
+            for reason in TranscriptionQualityReceipt.SampleFailure.distinctReasons(in: backend.failures) {
+                let ids = backend.failures.filter { $0.reason == reason }.map(\.sampleID)
+                lines.append(
+                    "| \(backend.label) | \(backend.model) | \(ids.count) | \(reason) |"
+                )
+            }
+            // A reason that sanitized away to nothing still cost the samples, so it is counted.
+            let unexplained = backend.failures.filter(\.reason.isEmpty)
+            if !unexplained.isEmpty {
+                lines.append(
+                    "| \(backend.label) | \(backend.model) | \(unexplained.count) "
+                        + "| the error carried no description |"
+                )
+            }
         }
         return lines + [""]
     }

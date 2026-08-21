@@ -90,15 +90,16 @@ private extension TranscriptionQualityRun.BackendRun {
         switch outcome {
         case let .notRunnable(reason):
             // R12: a reason, never a row of zeros. Zeros would rank an unrunnable backend first.
-            // The reason is a code and its sample ids travel in `failedSampleIDs`, so no rendered
-            // sentence — and nothing a future case might interpolate into one — reaches the receipt.
+            // The reason is a code and its failures travel in `failures`, so no rendered sentence —
+            // and nothing a future case might interpolate into one — reaches the receipt. The
+            // per-sample messages that do are bounded by `ReceiptProse` on the way in.
             return TranscriptionQualityReceipt.Backend(
                 backend: backend,
                 model: model,
                 label: label,
                 languageConfiguration: languageConfiguration,
                 notRunnable: reason.receiptReason,
-                failedSampleIDs: reason.failedSampleIDs
+                failures: reason.failures.map(\.receiptFailure)
             )
         case let .measured(measurement):
             return TranscriptionQualityReceipt.Backend(
@@ -119,8 +120,9 @@ private extension TranscriptionQualityRun.BackendRun {
                         utterances: measurement.samples(in: cohort).map(\.receiptUtterance)
                     )
                 },
-                // Named, not counted: three bad files and three fewer samples are different facts.
-                failedSampleIDs: measurement.failures.map(\.sampleID)
+                // Named and explained, not counted: three bad files, three fewer samples and a model
+                // that never loaded are three different facts, and only the message separates them.
+                failures: measurement.failures.map(\.receiptFailure)
             )
         }
     }
@@ -144,10 +146,18 @@ private extension TranscriptionQualityRun.NotRunnable {
         }
     }
 
-    /// The ids the `noMeasuredSamples` reason used to spell out in prose.
-    var failedSampleIDs: [String] {
-        guard case let .noMeasuredSamples(ids) = self else { return [] }
-        return ids
+    /// The failures the `noMeasuredSamples` reason used to spell out in prose.
+    var failures: [TranscriptionQualityRun.SampleFailure] {
+        guard case let .noMeasuredSamples(failures) = self else { return [] }
+        return failures
+    }
+}
+
+private extension TranscriptionQualityRun.SampleFailure {
+    /// The message is bounded rather than trusted: a thrown error can quote the audio path, the
+    /// hypothesis it failed on, or anything else the backend chose to interpolate.
+    var receiptFailure: TranscriptionQualityReceipt.SampleFailure {
+        TranscriptionQualityReceipt.SampleFailure(sampleID: sampleID, reason: message)
     }
 }
 

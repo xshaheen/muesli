@@ -238,7 +238,11 @@ public extension TranscriptionQualityReceipt {
 
         /// The sentence the report prints. Rendered here rather than stored, so the receipt holds
         /// the fact and the document holds the wording.
-        public func description(failedSampleIDs: [String] = []) -> String {
+        ///
+        /// `failures` carries the reasons as well as the ids: a backend that scored nothing is the
+        /// one case where "which samples" is the least useful half of the answer, and a maintainer
+        /// four hours into a sweep needs to know whether the model was missing, unloaded, or wedged.
+        public func description(failures: [SampleFailure] = []) -> String {
             switch code {
             case .requiresNewerMacOS:
                 let required = requiredMacOSMajorVersion.map(String.init) ?? "a newer major version"
@@ -249,12 +253,40 @@ public extension TranscriptionQualityReceipt {
             case .noSamples:
                 return "the corpus store yielded no usable samples"
             case .noMeasuredSamples:
-                guard !failedSampleIDs.isEmpty else {
+                guard !failures.isEmpty else {
                     return "the corpus held no sample beyond the one the cold start consumed"
                 }
-                return "every sample failed, so nothing was scored: "
-                    + failedSampleIDs.joined(separator: ", ")
+                let sentence = "every sample failed, so nothing was scored: "
+                    + failures.map(\.sampleID).joined(separator: ", ")
+                // One cause usually explains the whole backend, so the distinct reasons are named
+                // once rather than repeated beside every id.
+                let reasons = SampleFailure.distinctReasons(in: failures)
+                guard !reasons.isEmpty else { return sentence }
+                return sentence + " — " + reasons.joined(separator: "; ")
             }
+        }
+    }
+
+    /// One sample that threw, with why.
+    ///
+    /// The id alone was what the schema used to keep, and it made an entirely failed backend
+    /// undiagnosable: a missing file, an unloaded model, an unsupported sample rate and a decoder
+    /// error all arrived as the same empty result. The message is the second of the two fields a
+    /// caller does not compose — a thrown error's description — so it is bounded by `ReceiptProse`
+    /// rather than trusted: an error can in principle quote the transcript it failed on.
+    struct SampleFailure: Codable, Sendable, Equatable {
+        public let sampleID: String
+        public let reason: String
+
+        public init(sampleID: String, reason: String) {
+            self.sampleID = sampleID
+            self.reason = ReceiptProse.sanitized(reason)
+        }
+
+        /// The reasons present, deduplicated, in first-seen order.
+        public static func distinctReasons(in failures: [SampleFailure]) -> [String] {
+            var seen: Set<String> = []
+            return failures.map(\.reason).filter { !$0.isEmpty && seen.insert($0).inserted }
         }
     }
 
@@ -563,10 +595,11 @@ public extension TranscriptionQualityReceipt {
         public let notRunnable: NotRunnable?
         public let warmup: Warmup?
         public let cohorts: [CohortResult]
-        /// Samples that threw, named so a backend with three bad files is distinguishable from a
-        /// backend with three fewer samples. Also carries the failures behind a
-        /// `noMeasuredSamples` reason, which is why that reason does not spell them out itself.
-        public let failedSampleIDs: [String]
+        /// Samples that threw, named and explained, so a backend with three bad files is
+        /// distinguishable from a backend with three fewer samples — and from a backend whose model
+        /// never loaded. Also carries the failures behind a `noMeasuredSamples` reason, which is why
+        /// that reason does not spell them out itself.
+        public let failures: [SampleFailure]
 
         public init(
             backend: String,
@@ -576,7 +609,7 @@ public extension TranscriptionQualityReceipt {
             notRunnable: NotRunnable? = nil,
             warmup: Warmup? = nil,
             cohorts: [CohortResult] = [],
-            failedSampleIDs: [String] = []
+            failures: [SampleFailure] = []
         ) {
             self.backend = backend
             self.model = model
@@ -585,8 +618,11 @@ public extension TranscriptionQualityReceipt {
             self.notRunnable = notRunnable
             self.warmup = warmup
             self.cohorts = cohorts
-            self.failedSampleIDs = failedSampleIDs
+            self.failures = failures
         }
+
+        /// The ids alone, for readers that only pair measurements across backends.
+        public var failedSampleIDs: [String] { failures.map(\.sampleID) }
 
         /// What the decision layer keys on.
         ///
@@ -599,9 +635,9 @@ public extension TranscriptionQualityReceipt {
 
         public var isRunnable: Bool { notRunnable == nil }
 
-        /// The rendered reason, with the failed sample ids the `noMeasuredSamples` case needs.
+        /// The rendered reason, with the failures the `noMeasuredSamples` case needs.
         public var notRunnableDescription: String? {
-            notRunnable?.description(failedSampleIDs: failedSampleIDs)
+            notRunnable?.description(failures: failures)
         }
 
         public func result(for cohort: TranscriptionQuality.Cohort) -> CohortResult? {

@@ -121,7 +121,9 @@ private func harnessRunner(
         driver: driver,
         audioDurationSeconds: { _ in durationSeconds },
         sampleTimeoutSeconds: sampleTimeoutSeconds,
-        warmupTimeoutSeconds: warmupTimeoutSeconds
+        warmupTimeoutSeconds: warmupTimeoutSeconds,
+        // These suites fail samples on purpose; a real sweep's live narration would be noise here.
+        log: { _ in }
     )
 }
 
@@ -656,7 +658,7 @@ struct TranscriptionQualityRunnerTests {
         )
 
         let reason = try notRunnableReason(result, backend: "fluidaudio")
-        #expect(reason == .noMeasuredSamples(failedSampleIDs: []))
+        #expect(reason == .noMeasuredSamples(failures: []))
         #expect(reason.description.contains("cold start"))
         #expect(result.measuredBackends.isEmpty)
         // The model was loaded by the warmup, so it still has to be unloaded before the next one.
@@ -664,7 +666,10 @@ struct TranscriptionQualityRunnerTests {
         #expect(events.contains(.unload("fluidaudio")))
     }
 
-    @Test("a backend whose every sample failed is not runnable and names the failures")
+    /// The reason has to travel with the ids. Naming the samples alone is what made a real sweep
+    /// undiagnosable: four backends failed every sample and the artifact could not say whether the
+    /// file was missing, the model unloaded, or the decoder wedged.
+    @Test("a backend whose every sample failed is not runnable and names the failures and why")
     func backendWhoseSamplesAllFailedIsNotMeasured() async throws {
         let driver = FakeQualityDriver(fallback: .init(failingSampleIDs: ["s2", "s3"]))
         let result = await harnessRunner(driver: driver).sweep(
@@ -673,10 +678,38 @@ struct TranscriptionQualityRunnerTests {
         )
 
         let reason = try notRunnableReason(result, backend: "fluidaudio")
-        #expect(reason == .noMeasuredSamples(failedSampleIDs: ["s2", "s3"]))
+        #expect(reason == .noMeasuredSamples(failures: [
+            TranscriptionQualityRun.SampleFailure(sampleID: "s2", message: "scripted failure for s2"),
+            TranscriptionQualityRun.SampleFailure(sampleID: "s3", message: "scripted failure for s3"),
+        ]))
         #expect(reason.description.contains("s2"))
         #expect(reason.description.contains("s3"))
+        #expect(reason.description.contains("scripted failure"))
         #expect(result.measuredBackends.isEmpty)
+    }
+
+    /// The other half of the same defect: the sweep used to say nothing at all until it ended, so an
+    /// hour-long run gave a maintainer no way to tell a broken backend from a slow one.
+    @Test("each failure is narrated while the sweep runs, not only in the closing summary")
+    func failuresAreNarratedLive() async throws {
+        let recorded = LineRecorder()
+        let driver = FakeQualityDriver(fallback: .init(failingSampleIDs: ["s2"]))
+        let runner = TranscriptionQualityRunner(
+            driver: driver,
+            audioDurationSeconds: { _ in 2 },
+            log: { recorded.record($0) }
+        )
+
+        let result = await runner.sweep(
+            backends: [.parakeetMultilingual],
+            samples: [harnessSample("s1"), harnessSample("s2"), harnessSample("s3")]
+        )
+
+        let live = recorded.lines.joined(separator: "\n")
+        #expect(live.contains("s2 failed — scripted failure for s2"))
+        #expect(live.contains("Parakeet v3"))
+        // And the closing summary carries the reason too, not merely a count.
+        #expect(result.summaryLines.joined(separator: "\n").contains("scripted failure for s2"))
     }
 
     // MARK: Timeout (A7)
@@ -911,6 +944,8 @@ struct TranscriptionQualityRunnerTests {
         #expect(parakeet.warmup?.sampleID == "warmup")
         #expect(parakeet.warmup?.didFail == false)
         #expect(parakeet.failedSampleIDs == ["s3"])
+        // And why, so a sweep with a failed sample is diagnosable from the artifact alone.
+        #expect(parakeet.failures.first?.reason.contains("scripted failure for s3") == true)
         #expect(parakeet.cohorts.map(\.cohort) == [.english, .egyptianArabic])
         let arabicCohort = try #require(parakeet.result(for: .egyptianArabic))
         #expect(arabicCohort.utterances.map(\.sampleID) == ["s2"])
@@ -947,9 +982,9 @@ struct TranscriptionQualityRunnerTests {
         #expect(TranscriptionQualityReport.markdown(for: receipt).contains("## Cohort: egyptian-arabic"))
     }
 
-    /// A3's state, carried through the mapping: the reason is a code and the ids it used to spell
-    /// out in prose land in the field that already holds ids.
-    @Test("a backend that scored nothing maps to a coded reason carrying its failed sample ids")
+    /// A3's state, carried through the mapping: the reason is a code, and the ids and messages it
+    /// used to spell out in prose land in the field that holds them.
+    @Test("a backend that scored nothing maps to a coded reason carrying its failures and their reasons")
     func noMeasuredSamplesMapsToACodeAndItsIDs() async throws {
         let driver = FakeQualityDriver(fallback: .init(failingSampleIDs: ["s2", "s3"]))
         let samples = [harnessSample("s1"), harnessSample("s2"), harnessSample("s3")]
@@ -964,9 +999,16 @@ struct TranscriptionQualityRunnerTests {
         #expect(backend.notRunnable?.code == .noMeasuredSamples)
         #expect(backend.failedSampleIDs == ["s2", "s3"])
         #expect(backend.notRunnableDescription?.contains("s2, s3") == true)
+        // The reason a maintainer actually needs: not which samples, but why all of them.
+        #expect(backend.failures.map(\.reason) == ["scripted failure for s2", "scripted failure for s3"])
+        #expect(backend.notRunnableDescription?.contains("scripted failure for s2") == true)
         // The ids reach the reader through the rendered sentence, not through a stored one.
         let json = try #require(String(data: try JSONEncoder().encode(receipt), encoding: .utf8))
         #expect(!json.contains("every sample failed"))
+        // And the document a maintainer reads says it, rather than only naming the samples.
+        let report = TranscriptionQualityReport.markdown(for: receipt)
+        #expect(report.contains("## Not runnable on this host"))
+        #expect(report.contains("scripted failure for s2"))
     }
 
     /// A4's state, carried through the mapping: the pipeline returned a final text, cleanup did not
@@ -1045,6 +1087,25 @@ struct TranscriptionQualityRunnerTests {
         ])
         #expect(hazards.count == 1)
         #expect(hazards[0].contains("postproc-pairs.jsonl"))
+    }
+}
+
+/// Collects the sweep's live narration from a `@Sendable` closure, so an assertion can say what a
+/// maintainer would have seen while the run was still going.
+private final class LineRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String] = []
+
+    func record(_ line: String) {
+        lock.lock()
+        recorded.append(line)
+        lock.unlock()
+    }
+
+    var lines: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
     }
 }
 
