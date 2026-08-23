@@ -276,6 +276,22 @@ struct MuesliCLITests {
         #expect(command.dictionary == "/tmp/dictionary.json")
     }
 
+    @Test("--language parses Auto, one ISO code, and a constrained set")
+    func languageOptionParses() throws {
+        #expect(try TranscribeCommand.parseLanguageSelection("auto") == .automatic)
+        #expect(try TranscribeCommand.parseLanguageSelection("ar") ==
+            TranscriptionLanguageSelection(selectedLanguages: [.arabic]))
+        #expect(try TranscribeCommand.parseLanguageSelection("en,ar") ==
+            TranscriptionLanguageSelection(selectedLanguages: [.arabic, .english]))
+    }
+
+    @Test("--language rejects unknown codes and Auto mixed with explicit codes")
+    func languageOptionRejectsInvalidValues() {
+        #expect(throws: Error.self) { try TranscribeCommand.parseLanguageSelection("auto,ar") }
+        #expect(throws: Error.self) { try TranscribeCommand.parseLanguageSelection("xx") }
+        #expect(throws: Error.self) { try TranscribeCommand.parseLanguageSelection("en,") }
+    }
+
     @Test("loadCustomWords accepts a plain JSON array")
     func loadCustomWordsAcceptsPlainArray() throws {
         let url = FileManager.default.temporaryDirectory

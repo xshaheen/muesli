@@ -1,3 +1,4 @@
+import MuesliCore
 import Testing
 @testable import MuesliNativeApp
 
@@ -6,7 +7,7 @@ import Testing
 struct LanguageProfileSettingsModelTests {
     @Test("loading crosses one adapter and preserves an existing draft")
     func loadUsesOneAdapterWithoutOverwritingDraft() throws {
-        let loaded = try LanguageProfile(
+        let loaded = try DictationLanguageProfile(
             selectedLanguages: [.arabic],
             dominantLanguage: .arabic
         )
@@ -31,7 +32,7 @@ struct LanguageProfileSettingsModelTests {
 
     @Test("edits remain draft state until the atomic save succeeds")
     func failedSaveRetainsDraft() throws {
-        let original = try LanguageProfile(
+        let original = try DictationLanguageProfile(
             selectedLanguages: [.english],
             dominantLanguage: .english
         )
@@ -57,7 +58,6 @@ struct LanguageProfileSettingsModelTests {
         model.toggle(.english)
         model.toggle(.arabic)
         model.setDominant(.arabic)
-        model.setMeetingOutputPolicy(.dominantLanguage)
         var saveCount = 0
 
         let client = LanguageProfileClient { profile in
@@ -69,17 +69,15 @@ struct LanguageProfileSettingsModelTests {
         #expect(saveCount == 1)
         #expect(model.committedProfile.selectedLanguages == [.arabic, .english])
         #expect(model.committedProfile.dominantLanguage == .arabic)
-        #expect(model.committedProfile.meetingOutputPolicy == .dominantLanguage)
         #expect(!model.hasUnsavedChanges)
         #expect(model.errorMessage == nil)
     }
 
-    @Test("removing a dominant language clears dominance and its output policy")
+    @Test("removing a dominant language clears dominance")
     func removingDominantLanguageRepairsDraft() throws {
-        let profile = try LanguageProfile(
+        let profile = try DictationLanguageProfile(
             selectedLanguages: [.english, .arabic],
-            dominantLanguage: .arabic,
-            meetingOutputPolicy: .dominantLanguage
+            dominantLanguage: .arabic
         )
         let model = LanguageProfileSettingsModel(profile: profile)
 
@@ -87,6 +85,5 @@ struct LanguageProfileSettingsModelTests {
 
         #expect(model.selectedLanguages == [.english])
         #expect(model.dominantLanguage == nil)
-        #expect(model.meetingOutputPolicy == .automatic)
     }
 }

@@ -2,6 +2,7 @@ import Testing
 import Foundation
 @testable import MuesliCore
 @testable import MuesliNativeApp
+@testable import MuesliQwenCoreML
 
 @Suite("WhisperKitTranscriber")
 struct WhisperKitTranscriberTests {

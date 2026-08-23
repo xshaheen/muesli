@@ -5,16 +5,25 @@ import Foundation
 import FluidAudio
 import MuesliCore
 @testable import MuesliNativeApp
+@testable import MuesliQwenCoreML
 
 @Suite("BackendOption")
 struct BackendOptionTests {
+
+    @Test("Qwen runtime pins its independently managed model source")
+    func qwenRuntimeUsesPinnedManagedModelSource() {
+        let plan = Qwen3ModelIntegrity.plan()
+        #expect(plan.repository == Qwen3ModelIntegrity.repository)
+        #expect(plan.revision == Qwen3ModelIntegrity.revision)
+        #expect(plan.requiredArtifactAlternatives.count == Qwen3ModelIntegrity.digests.count)
+    }
 
     @Test("dictation tests freeze their backend override and Cohere language together")
     func dictationTestSelectionUsesEffectiveBackend() throws {
         var config = AppConfig()
         config.sttBackend = BackendOption.parakeetMultilingual.backend
         config.sttModel = BackendOption.parakeetMultilingual.model
-        config.languageProfile = try LanguageProfile(
+        config.dictationLanguageProfile = try DictationLanguageProfile(
             selectedLanguages: [.english, .arabic],
             dominantLanguage: nil
         )
@@ -339,8 +348,8 @@ struct BackendOptionTests {
         #expect(BackendOption.resolve(backend: "whisper", model: "medium.en") == .whisperMediumEnglish)
     }
 
-    @Test("resolveDownloaded falls back when an English-only selection is not downloaded")
-    func resolveDownloadedFallsBackForMissingEnglishWhisperSelection() {
+    @Test("resolveDownloaded preserves an unavailable English-only selection")
+    func resolveDownloadedPreservesMissingEnglishWhisperSelection() {
         let resolved = BackendOption.resolveDownloaded(
             backend: "whisper",
             model: "small.en",
@@ -348,7 +357,7 @@ struct BackendOptionTests {
             downloadedOptions: [.parakeetMultilingual, .whisperSmall]
         )
 
-        #expect(resolved == .parakeetMultilingual)
+        #expect(resolved == .whisperSmallEnglish)
     }
 
     @Test("resolveDownloaded keeps an installed English-only Whisper selection")
@@ -375,8 +384,8 @@ struct BackendOptionTests {
         #expect(resolved == .whisperLargeTurbo)
     }
 
-    @Test("resolveDownloaded falls back when selected meeting model is unavailable")
-    func resolveDownloadedFallsBackWhenSelectedUnavailable() {
+    @Test("resolveDownloaded preserves selected meeting model when unavailable")
+    func resolveDownloadedPreservesSelectedUnavailable() {
         let resolved = BackendOption.resolveDownloaded(
             backend: BackendOption.whisperLargeTurbo.backend,
             model: BackendOption.whisperLargeTurbo.model,
@@ -384,11 +393,11 @@ struct BackendOptionTests {
             downloadedOptions: [.parakeetMultilingual, .whisperSmall]
         )
 
-        #expect(resolved == .parakeetMultilingual)
+        #expect(resolved == .whisperLargeTurbo)
     }
 
-    @Test("resolveDownloaded uses first downloaded model when fallback is unavailable")
-    func resolveDownloadedUsesFirstDownloadedWhenFallbackUnavailable() {
+    @Test("resolveDownloaded preserves known selection before downloaded fallbacks")
+    func resolveDownloadedPreservesKnownSelectionBeforeFallbacks() {
         let resolved = BackendOption.resolveDownloaded(
             backend: BackendOption.whisperLargeTurbo.backend,
             model: BackendOption.whisperLargeTurbo.model,
@@ -396,7 +405,7 @@ struct BackendOptionTests {
             downloadedOptions: [.whisperSmall]
         )
 
-        #expect(resolved == .whisperSmall)
+        #expect(resolved == .whisperLargeTurbo)
     }
 }
 
@@ -534,10 +543,12 @@ struct LanguageProfileTests {
         #expect(behavior.explanation.contains("English-only"))
     }
 
-    @Test("AppConfig migrates legacy pins once and encodes the profile")
+    @Test("AppConfig migrates legacy pins once and encodes split authorities")
     func appConfigMigratesLegacyPinsOnce() throws {
         let empty = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
-        #expect(empty.languageProfile == .automatic)
+        #expect(empty.dictationLanguageProfile == .automatic)
+        #expect(empty.meetingSpokenLanguage == .automatic)
+        #expect(empty.meetingArtifactLanguagePolicy == .automatic)
         #expect(!empty.languageProfileNeedsConfirmation)
 
         let legacy = Data("""
@@ -550,14 +561,38 @@ struct LanguageProfileTests {
         """.utf8)
 
         let decoded = try JSONDecoder().decode(AppConfig.self, from: legacy)
-        #expect(decoded.languageProfile.selectedLanguages == [.arabic, .english, .hindi])
-        #expect(decoded.languageProfile.dominantLanguage == nil)
+        #expect(decoded.dictationLanguageProfile.selectedLanguages == [.arabic, .english, .hindi])
+        #expect(decoded.dictationLanguageProfile.dominantLanguage == nil)
+        #expect(decoded.meetingSpokenLanguage == .automatic)
+        #expect(decoded.meetingArtifactLanguagePolicy == .automatic)
         #expect(decoded.languageProfileNeedsConfirmation)
 
         let reencoded = try JSONEncoder().encode(decoded)
         let roundTrip = try JSONDecoder().decode(AppConfig.self, from: reencoded)
-        #expect(roundTrip.languageProfile == decoded.languageProfile)
+        #expect(roundTrip.dictationLanguageProfile == decoded.dictationLanguageProfile)
+        #expect(roundTrip.meetingSpokenLanguage == decoded.meetingSpokenLanguage)
+        #expect(roundTrip.meetingArtifactLanguagePolicy == decoded.meetingArtifactLanguagePolicy)
         #expect(roundTrip.languageProfileNeedsConfirmation)
+    }
+
+    @Test("legacy combined profile migrates meeting and output authorities deterministically")
+    func appConfigMigratesCombinedProfile() throws {
+        let legacy = Data("""
+        {
+          "language_profile": {
+            "selectedLanguages": ["en", "ar"],
+            "dominantLanguage": "ar",
+            "meetingOutputPolicy": "dominant_language"
+          }
+        }
+        """.utf8)
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: legacy)
+        #expect(decoded.dictationLanguageProfile.selectedLanguages == [.arabic, .english])
+        #expect(decoded.dictationLanguageProfile.dominantLanguage == .arabic)
+        #expect(decoded.meetingSpokenLanguage == .explicit(.arabic))
+        #expect(decoded.meetingArtifactLanguagePolicy == .arabic)
+        #expect(decoded.languageProfile.meetingOutputPolicy == .dominantLanguage)
     }
 }
 

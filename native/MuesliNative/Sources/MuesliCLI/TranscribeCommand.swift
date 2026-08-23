@@ -3,6 +3,7 @@ import AVFoundation
 import FluidAudio
 import Foundation
 import MuesliCore
+import MuesliQwenCoreML
 import WhisperKit
 
 enum TranscribeOutputFormat: String, CaseIterable, ExpressibleByArgument {
@@ -50,6 +51,55 @@ enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
         case .parakeetV3, .parakeetV2, .parakeetEou320ms, .senseVoice, .nemotron35:
             return nil
         }
+    }
+
+    var transcriptionBackendID: TranscriptionBackendID {
+        TranscriptionBackendID(rawValue: "cli:\(rawValue)")
+    }
+
+    /// U1 maps CLI identities into the shared contract. U3 consumes this
+    /// descriptor after it adds the `--language` input and backend adapters.
+    func languageCapabilities() -> TranscriptionBackendCapabilities {
+        let multilingual = Set(TranscriptionLanguage.allCases)
+        let fixedEnglish: Bool
+        let supportsSingle: Bool
+        let supportsAuto: Bool
+        switch self {
+        case .parakeetV2, .whisperTinyEnglish, .whisperSmallEnglish, .whisperMediumEnglish:
+            fixedEnglish = true
+            supportsSingle = false
+            supportsAuto = false
+        case .whisperTiny, .whisperSmall, .whisperLargeTurbo, .nemotron35:
+            fixedEnglish = false
+            supportsSingle = true
+            supportsAuto = true
+        default:
+            fixedEnglish = false
+            supportsSingle = false
+            supportsAuto = true
+        }
+        return TranscriptionBackendCapabilities(
+            backendID: transcriptionBackendID,
+            supportedLanguages: fixedEnglish
+                ? [.english]
+                : (self == .nemotron35
+                    ? [.arabic, .chinese, .english, .french, .german, .hindi, .italian,
+                       .japanese, .korean, .portuguese, .russian, .spanish]
+                    : multilingual),
+            supportsAutomaticDetection: supportsAuto,
+            supportsSingleLanguage: supportsSingle,
+            // Remains disabled until deterministic English, Arabic, and mixed
+            // sentinels prove this exact model/backend score contract.
+            constrainedCandidateLanguages: [],
+            constrainedCandidateCapacity: 0,
+            hasComparableCandidateConfidence: false,
+            fixedLanguage: fixedEnglish ? .english : nil,
+            supportsCodeSwitching: supportsAuto,
+            maximumSafeDuration: nil,
+            supportsStreaming: self == .parakeetEou320ms || self == .nemotron35,
+            workloads: [.cli],
+            isAvailable: true
+        )
     }
 
     /// Parses `--model`, rejecting a retired identifier by name instead of letting
@@ -147,6 +197,8 @@ struct TranscribeCommand: AsyncParsableCommand {
         transform: TranscribeModel.parse
     )
     var model: TranscribeModel = .parakeetV3
+    @Option(name: .long, help: "Spoken language: auto, one ISO code, or comma-separated candidate ISO codes (for example en,ar).")
+    var language = "auto"
     @Flag(name: .long, help: "Generate meeting notes using the configured Muesli summary backend when available.")
     var summarize = false
     @Flag(name: .long, help: "Save the transcript as an imported Muesli meeting.")
@@ -163,6 +215,7 @@ struct TranscribeCommand: AsyncParsableCommand {
         guard MuesliAudioFilePreparer.isSupportedFileURL(url) else {
             throw ValidationError("Unsupported audio file extension. Supported extensions: mp3, mp4, m4a, wav.")
         }
+        _ = try Self.parseLanguageSelection(language)
     }
 
     func run() async throws {
@@ -177,6 +230,7 @@ struct TranscribeCommand: AsyncParsableCommand {
             request: MuesliAudioTranscriptionRequest(
                 sourceURL: sourceURL,
                 model: model,
+                languageSelection: try Self.parseLanguageSelection(language),
                 title: title,
                 summarize: summarize,
                 saveMeeting: saveMeeting,
@@ -210,6 +264,26 @@ struct TranscribeCommand: AsyncParsableCommand {
         } else {
             FileHandle.standardOutput.write(Data(outputText.utf8))
         }
+    }
+
+    static func parseLanguageSelection(_ rawValue: String) throws -> TranscriptionLanguageSelection {
+        let values = rawValue.split(separator: ",", omittingEmptySubsequences: false).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        guard !values.isEmpty, values.allSatisfy({ !$0.isEmpty }) else {
+            throw ValidationError("--language must be auto, one ISO code, or comma-separated ISO codes.")
+        }
+        if values == ["auto"] { return .automatic }
+        guard !values.contains("auto") else {
+            throw ValidationError("--language auto cannot be combined with explicit language codes.")
+        }
+        let languages = try values.map { value -> TranscriptionLanguage in
+            guard let language = TranscriptionLanguage(rawValue: value) else {
+                throw ValidationError("Unsupported --language code: \(value).")
+            }
+            return language
+        }
+        return try TranscriptionLanguageSelection(selectedLanguages: languages)
     }
 }
 
@@ -245,6 +319,7 @@ func writeOutput(_ text: String, to url: URL) throws {
 struct MuesliAudioTranscriptionRequest {
     let sourceURL: URL
     let model: TranscribeModel
+    var languageSelection: TranscriptionLanguageSelection = .automatic
     let title: String?
     let summarize: Bool
     let saveMeeting: Bool
@@ -291,6 +366,32 @@ protocol AudioPreparing {
 
 protocol AudioTranscribing {
     func transcribe(wavURL: URL, model: TranscribeModel, progress: @escaping (String) -> Void) async throws -> HeadlessTranscription
+    func transcribe(
+        wavURL: URL,
+        model: TranscribeModel,
+        languageDecision: LanguageRoutingDecision,
+        progress: @escaping (String) -> Void
+    ) async throws -> HeadlessTranscription
+}
+
+extension AudioTranscribing {
+    func transcribe(
+        wavURL: URL,
+        model: TranscribeModel,
+        languageDecision: LanguageRoutingDecision,
+        progress: @escaping (String) -> Void
+    ) async throws -> HeadlessTranscription {
+        switch languageDecision {
+        case .automatic, .fixed:
+            return try await transcribe(wavURL: wavURL, model: model, progress: progress)
+        case .pinned(let language):
+            throw LanguageRoutingIncompatibility.languageUnsupported(language)
+        case .constrainedCandidates:
+            throw LanguageRoutingIncompatibility.constrainedCandidatesUnsupported
+        case .incompatible(let incompatibility):
+            throw incompatibility
+        }
+    }
 }
 
 protocol MeetingSummarizing {
@@ -321,6 +422,17 @@ struct MuesliAudioTranscriptionPipeline {
     }
 
     func run(request: MuesliAudioTranscriptionRequest, context: CLIContext) async throws -> MuesliAudioTranscriptionResult {
+        let languageDecision = TranscriptionLanguageRouter.resolve(
+            selection: request.languageSelection,
+            capabilities: request.model.languageCapabilities(),
+            workload: .cli
+        )
+        if case .incompatible(let incompatibility) = languageDecision {
+            throw CLIError.invalidInput(
+                incompatibility.localizedDescription,
+                fix: "Choose a compatible --model/--language combination; the selected model was not changed."
+            )
+        }
         let customWords: [CustomWord]?
         if let dictionaryURL = request.dictionaryURL {
             customWords = try Self.loadCustomWords(from: dictionaryURL)
@@ -340,6 +452,7 @@ struct MuesliAudioTranscriptionPipeline {
         let transcription = try await transcriber.transcribe(
             wavURL: prepared.wavURL,
             model: request.model,
+            languageDecision: languageDecision,
             progress: { message in
                 fputs("[muesli-cli] \(message)\n", stderr)
             }
@@ -693,6 +806,20 @@ struct RoutingAudioTranscriber: AudioTranscribing {
     var whisper: AudioTranscribing = WhisperCLITranscriber()
 
     func transcribe(wavURL: URL, model: TranscribeModel, progress: @escaping (String) -> Void) async throws -> HeadlessTranscription {
+        try await transcribe(
+            wavURL: wavURL,
+            model: model,
+            languageDecision: .automatic,
+            progress: progress
+        )
+    }
+
+    func transcribe(
+        wavURL: URL,
+        model: TranscribeModel,
+        languageDecision: LanguageRoutingDecision,
+        progress: @escaping (String) -> Void
+    ) async throws -> HeadlessTranscription {
         let transcriber: AudioTranscribing
         switch model {
         case .parakeetV3, .parakeetV2: transcriber = batch
@@ -704,7 +831,12 @@ struct RoutingAudioTranscriber: AudioTranscribing {
              .whisperLargeTurbo:
             transcriber = whisper
         }
-        return try await transcriber.transcribe(wavURL: wavURL, model: model, progress: progress)
+        return try await transcriber.transcribe(
+            wavURL: wavURL,
+            model: model,
+            languageDecision: languageDecision,
+            progress: progress
+        )
     }
 }
 
@@ -796,7 +928,31 @@ actor Nemotron35CLITranscriber: AudioTranscribing {
     private var manager: StreamingNemotronMultilingualAsrManager?
 
     func transcribe(wavURL: URL, model: TranscribeModel, progress: @escaping (String) -> Void) async throws -> HeadlessTranscription {
+        try await transcribe(
+            wavURL: wavURL,
+            model: model,
+            languageDecision: .automatic,
+            progress: progress
+        )
+    }
+
+    func transcribe(
+        wavURL: URL,
+        model: TranscribeModel,
+        languageDecision: LanguageRoutingDecision,
+        progress: @escaping (String) -> Void
+    ) async throws -> HeadlessTranscription {
         let manager = try await loadedManager(progress: progress)
+        switch languageDecision {
+        case .automatic:
+            await manager.setLanguage("auto")
+        case .pinned(let language), .fixed(let language):
+            await manager.setLanguage(language.rawValue)
+        case .constrainedCandidates:
+            throw LanguageRoutingIncompatibility.constrainedCandidatesUnsupported
+        case .incompatible(let incompatibility):
+            throw incompatibility
+        }
         let start = CFAbsoluteTimeGetCurrent()
         let samples = try AudioConverter().resampleAudioFile(wavURL)
         _ = try await manager.process(samples: samples)
@@ -834,6 +990,20 @@ actor WhisperCLITranscriber: AudioTranscribing {
     private var loadedModel: String?
 
     func transcribe(wavURL: URL, model: TranscribeModel, progress: @escaping (String) -> Void) async throws -> HeadlessTranscription {
+        try await transcribe(
+            wavURL: wavURL,
+            model: model,
+            languageDecision: .automatic,
+            progress: progress
+        )
+    }
+
+    func transcribe(
+        wavURL: URL,
+        model: TranscribeModel,
+        languageDecision: LanguageRoutingDecision,
+        progress: @escaping (String) -> Void
+    ) async throws -> HeadlessTranscription {
         guard let modelName = model.whisperKitModelName else {
             throw CLIError.invalidInput(
                 "\(model.rawValue) is not a Whisper model.",
@@ -844,19 +1014,80 @@ actor WhisperCLITranscriber: AudioTranscribing {
         guard let whisperKit else {
             throw CLIError.invalidInput("WhisperKit model was not loaded.", fix: "Run the command again after the model finishes downloading.")
         }
+        switch languageDecision {
+        case .automatic:
+            return try await transcribeCandidate(
+                wavURL: wavURL,
+                modelName: modelName,
+                language: nil,
+                whisperKit: whisperKit,
+                progress: progress
+            ).transcription
+        case .pinned(let language), .fixed(let language):
+            return try await transcribeCandidate(
+                wavURL: wavURL,
+                modelName: modelName,
+                language: language,
+                whisperKit: whisperKit,
+                progress: progress
+            ).transcription
+        case .constrainedCandidates(let languages, let dominantLanguage):
+            var candidates: [TranscriptionLanguageCandidate<HeadlessTranscription>] = []
+            for language in languages {
+                try Task.checkCancellation()
+                let candidate = try await transcribeCandidate(
+                    wavURL: wavURL,
+                    modelName: modelName,
+                    language: language,
+                    whisperKit: whisperKit,
+                    progress: progress
+                )
+                guard let score = candidate.normalizedScore else {
+                    throw TranscriptionCandidateSelectionError.invalidScore(language)
+                }
+                candidates.append(TranscriptionLanguageCandidate(
+                    language: language,
+                    value: candidate.transcription,
+                    normalizedScore: score
+                ))
+            }
+            return try TranscriptionLanguageCandidateSelector.select(
+                candidates,
+                expectedLanguages: languages,
+                dominantLanguage: dominantLanguage
+            ).value
+        case .incompatible(let incompatibility):
+            throw incompatibility
+        }
+    }
+
+    private func transcribeCandidate(
+        wavURL: URL,
+        modelName: String,
+        language: TranscriptionLanguage?,
+        whisperKit: WhisperKit,
+        progress: @escaping (String) -> Void
+    ) async throws -> (transcription: HeadlessTranscription, normalizedScore: Double?) {
         let start = CFAbsoluteTimeGetCurrent()
         // English-only `.en` checkpoints have no multilingual tokens — keep default DecodingOptions.
         // Multilingual variants need detectLanguage; WhisperKit defaults otherwise force English.
         let decodeOptions: DecodingOptions
         if modelName.hasSuffix(".en") {
             decodeOptions = DecodingOptions()
+        } else if let language {
+            decodeOptions = DecodingOptions(language: language.rawValue)
         } else {
             decodeOptions = DecodingOptions(detectLanguage: true)
         }
         let results = try await whisperKit.transcribe(audioPath: wavURL.path, decodeOptions: decodeOptions)
         let text = results.map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedScore = WhisperSegmentConfidenceAdapter.normalizedScore(
+            results.flatMap(\.segments).map {
+                (averageLogProbability: Double($0.avgLogprob), tokenCount: $0.tokens.count)
+            }
+        )
         progress("transcription complete in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - start))s")
-        return HeadlessTranscription(text: text, durationSeconds: nil)
+        return (HeadlessTranscription(text: text, durationSeconds: nil), normalizedScore)
     }
 
     private func load(modelName: String, progress: @escaping (String) -> Void) async throws {

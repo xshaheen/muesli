@@ -1125,10 +1125,10 @@ struct Nemotron35LanguageTests {
     @Test("config persists the selected language via snake_case key")
     func configRoundTrip() throws {
         var cfg = AppConfig()
-        cfg.languageProfile = try LanguageProfile(
+        cfg.applyLegacyLanguageProfile(try LanguageProfile(
             selectedLanguages: [.hindi],
             dominantLanguage: .hindi
-        )
+        ))
         cfg.mirrorLanguageProfileToLegacyPins()
         let data = try JSONEncoder().encode(cfg)
         let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -1196,10 +1196,10 @@ struct WhisperKitLanguageTests {
     @Test("config persists the selected language via snake_case key")
     func configRoundTrip() throws {
         var cfg = AppConfig()
-        cfg.languageProfile = try LanguageProfile(
+        cfg.applyLegacyLanguageProfile(try LanguageProfile(
             selectedLanguages: [.german],
             dominantLanguage: .german
-        )
+        ))
         cfg.mirrorLanguageProfileToLegacyPins()
         let data = try JSONEncoder().encode(cfg)
         let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])

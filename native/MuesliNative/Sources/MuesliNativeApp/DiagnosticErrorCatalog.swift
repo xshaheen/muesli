@@ -1,4 +1,6 @@
 import Foundation
+import MuesliCore
+import MuesliQwenCoreML
 
 struct DiagnosticErrorMeaning: Codable, Equatable, Sendable {
     let summary: String
@@ -70,6 +72,10 @@ enum DiagnosticErrorCatalog {
             match = coreAudioTapMatch(for: coreAudioError)
         } else if let dictationError = error as? DictationTranscriptionDiagnosticError {
             match = dictationTranscriptionMatch(for: dictationError)
+        } else if let qwenError = error as? Qwen3LongAudioError {
+            match = qwenLongAudioMatch(for: qwenError)
+        } else if let routingError = error as? LanguageRoutingIncompatibility {
+            match = languageRoutingMatch(for: routingError)
         } else {
             let nsError = error as NSError
             match = lookup(domain: nsError.domain, code: String(nsError.code))
@@ -84,6 +90,51 @@ enum DiagnosticErrorCatalog {
             safeDomain: match.safeDomain,
             safeCode: match.safeCode,
             isKnown: true
+        )
+    }
+
+    private static func qwenLongAudioMatch(for error: Qwen3LongAudioError) -> Match {
+        let code: String
+        let summary: String
+        switch error {
+        case .durationExceeded:
+            (code, summary) = ("duration_exceeded", "Qwen audio exceeded the bounded duration limit")
+        case .workLimitExceeded:
+            (code, summary) = ("work_limit_exceeded", "Qwen candidate window work exceeded the bounded call limit")
+        case .cacheCapacity:
+            (code, summary) = ("cache_capacity", "Qwen decoder cache capacity was insufficient for a window")
+        case .windowFailed:
+            (code, summary) = ("window_failed", "A bounded Qwen inference window failed")
+        case .emptySpeechWindow:
+            (code, summary) = ("empty_speech_window", "Qwen returned empty text for a window classified as speech")
+        case .silenceClassificationIndeterminate:
+            (code, summary) = ("silence_indeterminate", "Qwen returned empty text and silence could not be confirmed")
+        }
+        return fixedMatch(
+            signature: "qwen_long_audio_\(code)",
+            summary: summary,
+            area: "transcription_inference",
+            domain: "Qwen3LongAudioError",
+            code: code
+        )
+    }
+
+    private static func languageRoutingMatch(for error: LanguageRoutingIncompatibility) -> Match {
+        let code: String
+        switch error {
+        case .backendUnavailable: code = "backend_unavailable"
+        case .unsupportedWorkload: code = "unsupported_workload"
+        case .automaticDetectionUnsupported: code = "automatic_detection_unsupported"
+        case .languageUnsupported: code = "language_unsupported"
+        case .constrainedCandidatesUnsupported: code = "constrained_candidates_unsupported"
+        case .tooManyLanguages: code = "too_many_languages"
+        }
+        return fixedMatch(
+            signature: "language_routing_\(code)",
+            summary: "The selected model and spoken-language intent were incompatible",
+            area: "transcription_routing",
+            domain: "LanguageRoutingIncompatibility",
+            code: code
         )
     }
 
@@ -405,6 +456,22 @@ enum DiagnosticErrorCatalog {
     ]
 
     private static let exactMeanings: [String: [String: DiagnosticErrorMeaning]] = [
+        "Qwen3LongAudioError": [
+            "duration_exceeded": .init(summary: "Qwen audio exceeded the bounded duration limit", area: "transcription_inference"),
+            "work_limit_exceeded": .init(summary: "Qwen candidate window work exceeded the bounded call limit", area: "transcription_inference"),
+            "cache_capacity": .init(summary: "Qwen decoder cache capacity was insufficient for a window", area: "transcription_inference"),
+            "window_failed": .init(summary: "A bounded Qwen inference window failed", area: "transcription_inference"),
+            "empty_speech_window": .init(summary: "Qwen returned empty text for a window classified as speech", area: "transcription_inference"),
+            "silence_indeterminate": .init(summary: "Qwen returned empty text and silence could not be confirmed", area: "transcription_inference"),
+        ],
+        "LanguageRoutingIncompatibility": [
+            "backend_unavailable": .init(summary: "The selected model and spoken-language intent were incompatible", area: "transcription_routing"),
+            "unsupported_workload": .init(summary: "The selected model and spoken-language intent were incompatible", area: "transcription_routing"),
+            "automatic_detection_unsupported": .init(summary: "The selected model and spoken-language intent were incompatible", area: "transcription_routing"),
+            "language_unsupported": .init(summary: "The selected model and spoken-language intent were incompatible", area: "transcription_routing"),
+            "constrained_candidates_unsupported": .init(summary: "The selected model and spoken-language intent were incompatible", area: "transcription_routing"),
+            "too_many_languages": .init(summary: "The selected model and spoken-language intent were incompatible", area: "transcription_routing"),
+        ],
         "MuesliTranscriptionRuntime": [
             "1": .init(summary: "Nemotron 3.5 requires a newer macOS version", area: "transcription_runtime"),
             "4": .init(summary: "Cohere Transcribe requires a newer macOS version", area: "transcription_runtime"),

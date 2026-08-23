@@ -1,0 +1,834 @@
+<title>Spark App System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#141312; --base:#1a1918; --raised:#211f1e; --hover:#2a2826; --surface:#32312f;
+    --glass:#211f1e; --deepest:#0e0e0d;
+    --ink:#f3f2ef; --ink-2:rgba(243,242,239,.62); --ink-3:rgba(243,242,239,.40); --ink-4:rgba(243,242,239,.22);
+    --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.14); --line-3:rgba(255,255,255,.22);
+    --coral:#ff7043; --amber:#ffb04d; --green:#48e57b; --red:#ff6961; --blue:#6ba3f7;
+    --r-xs:4px; --r-s:6px; --r-m:10px; --r-l:14px; --r-xl:22px;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--sans); font-size:15px; line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1120px;margin:0 auto;padding:0 28px 120px}
+
+  /* ---------- masthead ---------- */
+  .mast{padding:64px 0 30px;border-bottom:1px solid var(--line)}
+  .eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--coral);font-weight:600}
+  .mast h1{font-size:46px;line-height:1.04;letter-spacing:-.028em;font-weight:700;margin:14px 0 0}
+  .mast h1 em{font-style:normal;color:var(--ink-3)}
+  .mast p{max-width:66ch;color:var(--ink-2);font-size:16px;margin:16px 0 0}
+  .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}
+  .meta span{font-family:var(--mono);font-size:11px;color:var(--ink-3);border:1px solid var(--line);padding:4px 9px;border-radius:var(--r-s)}
+
+  /* ---------- nav ---------- */
+  nav{position:sticky;top:0;z-index:40;background:rgba(20,19,18,.86);backdrop-filter:blur(14px);
+      border-bottom:1px solid var(--line);margin-bottom:0}
+  .navin{max-width:1120px;margin:0 auto;padding:0 28px;display:flex;gap:2px;overflow-x:auto}
+  .navin::-webkit-scrollbar{display:none}
+  nav button{
+    appearance:none;background:none;border:0;color:var(--ink-3);font:inherit;font-size:13px;font-weight:500;
+    padding:14px 12px;cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;transition:color .16s
+  }
+  nav button:hover{color:var(--ink-2)}
+  nav button.on{color:var(--ink);border-bottom-color:var(--coral)}
+
+  /* ---------- sections ---------- */
+  section{padding:52px 0;border-bottom:1px solid var(--line)}
+  section:last-child{border-bottom:0}
+  h2{font-size:13px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);font-weight:600;margin:0 0 8px}
+  h3{font-size:26px;letter-spacing:-.02em;font-weight:650;margin:0 0 14px}
+  h4{font-size:15px;font-weight:650;margin:34px 0 10px;letter-spacing:-.005em}
+  p{margin:0 0 14px;color:var(--ink-2);max-width:72ch}
+  p strong,li strong{color:var(--ink);font-weight:600}
+  ul{margin:0 0 14px;padding-left:18px;color:var(--ink-2);max-width:72ch}
+  li{margin-bottom:7px}
+  code{font-family:var(--mono);font-size:.86em;background:var(--raised);border:1px solid var(--line);
+       padding:1px 5px;border-radius:var(--r-xs);color:var(--ink)}
+  .lede{font-size:17px;color:var(--ink);max-width:68ch;margin-bottom:26px}
+
+  /* ---------- generic blocks ---------- */
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+  @media(max-width:860px){.g2,.g3,.g4{grid-template-columns:1fr}}
+  .card{background:var(--base);border:1px solid var(--line);border-radius:var(--r-l);padding:20px}
+  .card h5{margin:0 0 6px;font-size:14px;font-weight:650}
+  .card p{font-size:13.5px;margin:0}
+  .callout{border-left:2px solid var(--coral);background:rgba(255,112,67,.06);padding:14px 18px;
+           border-radius:0 var(--r-m) var(--r-m) 0;margin:20px 0}
+  .callout p{margin:0;color:var(--ink)}
+  .scroll{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r-l);background:var(--base);margin:18px 0}
+  table{width:100%;border-collapse:collapse;font-size:13px;min-width:640px}
+  th{text-align:left;font-weight:600;color:var(--ink-3);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+     padding:12px 16px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:11px 16px;border-bottom:1px solid var(--line);color:var(--ink-2);vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  td b{color:var(--ink);font-weight:600}
+  .tag{display:inline-block;font-family:var(--mono);font-size:10.5px;padding:2px 7px;border-radius:999px;
+       border:1px solid var(--line-2);color:var(--ink-3)}
+  .tag.coral{color:var(--coral);border-color:rgba(255,112,67,.4);background:rgba(255,112,67,.08)}
+  .tag.green{color:var(--green);border-color:rgba(72,229,123,.35);background:rgba(72,229,123,.07)}
+  .tag.amber{color:var(--amber);border-color:rgba(255,176,77,.35);background:rgba(255,176,77,.07)}
+
+  /* ---------- swatches ---------- */
+  .ramp{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px;margin:14px 0 4px}
+  .sw{border:1px solid var(--line);border-radius:var(--r-m);overflow:hidden;background:var(--base)}
+  .sw .chip{height:56px}
+  .sw .lbl{padding:8px 10px;font-size:11.5px;line-height:1.35}
+  .sw .lbl b{display:block;color:var(--ink);font-weight:600}
+  .sw .lbl span{font-family:var(--mono);font-size:10.5px;color:var(--ink-3)}
+
+  /* ---------- type scale ---------- */
+  .typerow{display:flex;align-items:baseline;gap:18px;padding:11px 0;border-bottom:1px solid var(--line)}
+  .typerow:last-child{border-bottom:0}
+  .typerow .k{font-family:var(--mono);font-size:11px;color:var(--ink-3);width:150px;flex:none}
+  .typerow .s{color:var(--ink)}
+
+  /* ---------- component sandbox ---------- */
+  .sand{background:var(--base);border:1px solid var(--line);border-radius:var(--r-l);padding:22px;margin:14px 0}
+  .sand .cap{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.09em;margin-bottom:14px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+
+  .btn{font:inherit;font-size:13px;font-weight:500;padding:6px 13px;border-radius:var(--r-s);cursor:default;
+       border:1px solid var(--line-2);background:var(--raised);color:var(--ink)}
+  .btn.prim{background:var(--coral);border-color:transparent;color:#22140d;font-weight:600}
+  .btn.ghost{background:transparent;border-color:var(--line)}
+  .btn.dest{border-color:rgba(255,105,97,.4);color:var(--red);background:rgba(255,105,97,.07)}
+  .sw-toggle{width:38px;height:22px;border-radius:999px;background:var(--surface);border:1px solid var(--line-2);
+             position:relative;flex:none}
+  .sw-toggle i{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:999px;background:var(--ink-3);display:block}
+  .sw-toggle.on{background:var(--coral);border-color:transparent}
+  .sw-toggle.on i{left:18px;background:#fff}
+  .seg{display:inline-flex;background:var(--raised);border:1px solid var(--line);border-radius:var(--r-s);padding:2px}
+  .seg span{font-size:12.5px;padding:4px 12px;border-radius:4px;color:var(--ink-3)}
+  .seg span.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.35)}
+  .pop{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;background:var(--raised);
+       border:1px solid var(--line-2);border-radius:var(--r-s);padding:5px 9px;color:var(--ink)}
+  .pop:after{content:"\2303\2304";font-size:9px;color:var(--ink-3);letter-spacing:-1px;transform:scaleY(.8)}
+  .chipf{font-size:12px;padding:4px 10px;border-radius:999px;background:var(--raised);border:1px solid var(--line);color:var(--ink-2)}
+  .chipf.on{background:rgba(255,112,67,.12);border-color:rgba(255,112,67,.4);color:var(--amber)}
+
+  .srow{display:flex;align-items:flex-start;gap:20px;padding:13px 0;border-bottom:1px solid var(--line)}
+  .srow:last-child{border-bottom:0}
+  .srow .t{flex:1;min-width:0}
+  .srow .t b{display:block;font-size:13.5px;font-weight:500;color:var(--ink)}
+  .srow .t span{display:block;font-size:12px;color:var(--ink-3);margin-top:2px}
+
+  /* ---------- spark objects ---------- */
+  .obj{display:flex;gap:26px;flex-wrap:wrap;align-items:center}
+  .obj figure{margin:0;text-align:center}
+  .obj figcaption{font-family:var(--mono);font-size:10px;color:var(--ink-3);margin-top:9px}
+  .disc{width:22px;height:22px;border-radius:999px;background:rgba(0,0,0,.72);border:1px solid var(--line-2);
+        display:grid;place-items:center;margin:0 auto}
+  .disc i{width:5px;height:5px;border-radius:999px;background:var(--coral);display:block}
+  .cap22{height:22px;border-radius:11px;background:rgba(24,24,23,.86);border:1px solid var(--line-2);
+         display:inline-flex;align-items:center;gap:6px;padding:0 8px}
+  .wave{display:flex;align-items:center;gap:1px;height:12px}
+  .wave b{width:1px;background:var(--amber);display:block;border-radius:1px}
+  .orb{width:22px;height:22px;border-radius:999px;background:rgba(14,14,13,.9);border:1px solid var(--line-2);
+       display:grid;place-items:center;margin:0 auto}
+  .orb u{display:grid;grid-template-columns:repeat(5,2px);gap:2px;text-decoration:none}
+  .orb u b{width:2px;height:2px;border-radius:999px;background:var(--amber);display:block}
+  .okdisc{width:22px;height:22px;border-radius:999px;background:rgba(72,229,123,.82);display:grid;place-items:center;
+          margin:0 auto;color:#08200f;font-size:12px;font-weight:700}
+
+  /* ---------- window mockups ---------- */
+  .win{border:1px solid var(--line-2);border-radius:var(--r-xl);overflow:hidden;background:var(--base);
+       box-shadow:0 30px 70px -30px rgba(0,0,0,.85);margin:20px 0}
+  .win-bar{height:34px;display:flex;align-items:center;gap:7px;padding:0 13px;background:var(--raised);
+           border-bottom:1px solid var(--line)}
+  .dotr{display:flex;gap:6px}
+  .dotr i{width:9px;height:9px;border-radius:999px;background:var(--line-3);display:block}
+  .win-title{font-size:11.5px;color:var(--ink-3);margin-left:8px}
+  .win-body{display:flex;min-height:420px}
+  .side{width:186px;flex:none;background:var(--ground);border-right:1px solid var(--line);padding:12px 8px;font-size:12.5px}
+  .side .grp{font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-4);padding:12px 9px 5px;font-weight:600}
+  .side .it{display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:var(--r-s);color:var(--ink-2);margin-bottom:1px}
+  .side .it.on{background:var(--hover);color:var(--ink);font-weight:500}
+  .side .it.on .gl{color:var(--coral)}
+  .side .it .gl{width:14px;text-align:center;color:var(--ink-3);font-size:11px}
+  .side .it .ct{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-4)}
+  .side .sub{padding-left:23px}
+  .main{flex:1;min-width:0;padding:20px 22px;background:var(--base)}
+  .main .hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+  .main .hd h6{margin:0;font-size:19px;font-weight:650;letter-spacing:-.015em}
+  .searchb{background:var(--raised);border:1px solid var(--line);border-radius:var(--r-s);padding:5px 10px;
+           font-size:12px;color:var(--ink-4);width:170px}
+  .lrow{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);align-items:flex-start}
+  .lrow:last-child{border-bottom:0}
+  .lrow .av{width:22px;height:22px;border-radius:999px;flex:none;background:var(--raised);border:1px solid var(--line);
+            display:grid;place-items:center;font-size:9px;color:var(--ink-3)}
+  .lrow .bd{flex:1;min-width:0}
+  .lrow .bd b{display:block;font-size:12.5px;font-weight:500;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lrow .bd span{font-size:11px;color:var(--ink-3)}
+  .lrow .tm{font-family:var(--mono);font-size:10.5px;color:var(--ink-4);flex:none}
+  .stat{display:flex;gap:10px;margin-bottom:16px}
+  .stat div{flex:1;background:var(--raised);border:1px solid var(--line);border-radius:var(--r-m);padding:10px 12px}
+  .stat b{display:block;font-size:19px;font-weight:650;letter-spacing:-.02em;font-family:var(--mono)}
+  .stat span{font-size:10.5px;color:var(--ink-3)}
+  .prow{display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid var(--line)}
+  .prow:last-child{border-bottom:0}
+  .prow .t{flex:1}
+  .prow .t b{display:block;font-size:12.5px;font-weight:500}
+  .prow .t span{display:block;font-size:11px;color:var(--ink-3);margin-top:1px}
+  .sectitle{font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-4);font-weight:600;
+            margin:20px 0 4px}
+  .sectitle:first-child{margin-top:0}
+
+  .verdict{display:flex;gap:10px;align-items:flex-start;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+  .verdict .k{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);width:78px;flex:none;padding-top:2px}
+  .verdict .v{font-size:13px;color:var(--ink-2);flex:1}
+
+  .tree{font-family:var(--mono);font-size:12px;line-height:1.85;color:var(--ink-2);white-space:pre;overflow-x:auto;
+        background:var(--base);border:1px solid var(--line);border-radius:var(--r-l);padding:18px 20px;margin:14px 0}
+  .tree b{color:var(--ink);font-weight:600}
+  .tree em{color:var(--coral);font-style:normal}
+  .tree s{color:var(--ink-4);text-decoration:none}
+
+  .dec{background:var(--base);border:1px solid var(--line);border-radius:var(--r-l);padding:20px;margin-bottom:14px}
+  .dec .q{font-size:15px;font-weight:600;margin-bottom:10px;color:var(--ink)}
+  .dec .opt{display:flex;gap:12px;padding:8px 0;border-top:1px solid var(--line);font-size:13px;color:var(--ink-2)}
+  .dec .opt .n{font-family:var(--mono);font-size:11px;color:var(--ink-3);width:22px;flex:none;padding-top:2px}
+  .dec .rec{margin-top:12px;font-size:13px;color:var(--ink);background:rgba(255,112,67,.07);
+            border:1px solid rgba(255,112,67,.22);border-radius:var(--r-m);padding:10px 13px}
+  .dec .rec b{color:var(--coral)}
+  footer{padding:40px 0 0;color:var(--ink-4);font-size:12px}
+  footer a{color:var(--ink-3)}
+</style>
+
+<nav>
+  <div class="navin" id="nav"></div>
+</nav>
+
+<div class="wrap">
+
+<div class="mast">
+  <div class="eyebrow">Art direction &middot; muesli-app-shell &middot; node 01</div>
+  <h1>Spark<br><em>one design system for the whole app</em></h1>
+  <p>The floating Mini and the meeting object now speak a settled visual language &mdash; warm charcoal glass, a coral&ndash;amber activity signal, continuous radii, 0.16&thinsp;s morphs. The app window does not. This node carries that language inward, and reorganises settings around the objects people actually configure instead of the panes we happened to grow.</p>
+  <div class="meta">
+    <span>evidence: 97,460 LOC app target</span>
+    <span>SettingsView.swift 3,448 lines</span>
+    <span>6 panes &middot; ~90 rows</span>
+    <span>competitors: 5</span>
+    <span>status: proposal</span>
+  </div>
+</div>
+
+<!-- ============================== WHY ============================== -->
+<section id="why" data-nav="The problem">
+  <h2>01 &middot; The problem</h2>
+  <h3>Muesli currently ships two products with two identities</h3>
+  <p class="lede">A user holds the hotkey, a warm coral disc appears under their caret, stretches into a charcoal glass capsule, resolves into an amber orb. Then they open the app to change the model &mdash; and land in a cool blue-black window with a blue accent and a segmented control. Nothing carries over.</p>
+
+  <div class="grid g2">
+    <div class="card">
+      <h5>Floating surfaces &mdash; settled</h5>
+      <div class="row" style="margin:14px 0 12px">
+        <span style="width:26px;height:26px;border-radius:var(--r-s);background:#211f1e;border:1px solid var(--line-2);display:block"></span>
+        <span style="width:26px;height:26px;border-radius:var(--r-s);background:#32312f;display:block"></span>
+        <span style="width:26px;height:26px;border-radius:var(--r-s);background:#ff7043;display:block"></span>
+        <span style="width:26px;height:26px;border-radius:var(--r-s);background:#ffb04d;display:block"></span>
+        <span style="width:26px;height:26px;border-radius:var(--r-s);background:#48e57b;display:block"></span>
+      </div>
+      <p>Warm charcoal <code>#211f1e</code>, coral <code>#ff7043</code>, amber <code>#ffb04d</code>. Inter. Radii 11&thinsp;/&thinsp;14 continuous. HUD material behind a 60&nbsp;% tint, one hairline edge at 16&nbsp;%. Motion: 0.16&thinsp;s morph, 0.26&thinsp;s pop, 0.14&thinsp;s fade.</p>
+    </div>
+    <div class="card">
+      <h5>App shell &mdash; unrelated</h5>
+      <div class="row" style="margin:14px 0 12px">
+        <span style="width:26px;height:26px;border-radius:var(--r-s);background:#111214;border:1px solid var(--line-2);display:block"></span>
+        <span style="width:26px;height:26px;border-radius:var(--r-s);background:#1c1d20;display:block"></span>
+        <span style="width:26px;height:26px;border-radius:var(--r-s);background:#6ba3f7;display:block"></span>
+        <span style="width:26px;height:26px;border-radius:var(--r-s);background:#2563eb;display:block"></span>
+        <span style="width:26px;height:26px;border-radius:var(--r-s);background:#ef4444;display:block"></span>
+      </div>
+      <p>Cool blue-black <code>#111214</code>, blue accent <code>#6ba3f7</code>, user-overridable to 7 presets. SF Pro via <code>.system()</code>. Radii 6&thinsp;/&thinsp;10&thinsp;/&thinsp;14&thinsp;/&thinsp;20, default corner curve. No shared motion vocabulary.</p>
+    </div>
+  </div>
+
+  <h4>What is actually broken in settings</h4>
+  <ul>
+    <li><strong>AI provider credentials are configured in four separate places.</strong> Dictation Cleanup, Meeting Summaries, Meeting Transcript Cleanup and Computer&nbsp;Use each carry their own Account&thinsp;/&thinsp;API&nbsp;Key&thinsp;/&thinsp;Model&thinsp;/&thinsp;URL rows for the same six providers. Paste an OpenAI key for dictation and meeting summaries still ask for one.</li>
+    <li><strong>Language is configured in three places</strong> &mdash; Settings&nbsp;&rsaquo;&nbsp;Dictation&nbsp;languages, the Nemotron picker in the Models tab, and the Cohere language card in the Models tab.</li>
+    <li><strong>Model download and model selection live in different tabs.</strong> You download in Models, then select in Settings&nbsp;&rsaquo;&nbsp;Speech&nbsp;Recognition, then choose the meeting final-transcript source in Settings&nbsp;&rsaquo;&nbsp;Meetings.</li>
+    <li><strong>A segmented control does not scale to this.</strong> Six equal-weight panes, but Meetings holds 8 sections and ~25 rows while Sync holds 2. Every competitor moved to a settings sidebar years ago.</li>
+    <li><strong>Appearance is a junk drawer</strong> &mdash; dark mode, menu-bar icon, hotkey display, accent colour, sound effects, the idle dot, next-meeting display and Marauder&rsquo;s Map.</li>
+    <li><strong>Four libraries are modal or orphaned.</strong> Writing&nbsp;Styles opens as a sheet from Settings, Meeting&nbsp;Templates as a sheet from Meetings, Cleanup&nbsp;Prompts as a sheet, and <b>Insights has no sidebar entry at all</b> &mdash; it is reachable only by clicking the stats header.</li>
+  </ul>
+
+  <div class="callout"><p><strong>Thesis.</strong> The app window inherits Spark&rsquo;s <em>palette, geometry and motion</em> &mdash; but never its <em>material</em>. Glass is the signature of a surface floating over someone else&rsquo;s work; inside our own opaque window there is nothing behind it to blur, and faking it is the tell of an AI-generated interface. Same colours, same radii, same timings, opaque.</p></div>
+</section>
+
+<!-- ============================== COMPETITORS ============================== -->
+<section id="comp" data-nav="Competitors">
+  <h2>02 &middot; Competitive research</h2>
+  <h3>Everyone else already moved to a sidebar and a profile object</h3>
+  <p class="lede">Five products in Muesli&rsquo;s lane, read for information architecture rather than feature lists. The pattern is consistent enough to be a constraint rather than an opinion.</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Product</th><th>Primary nav</th><th>Settings model</th><th>The idea worth taking</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>Wispr Flow</b><br><span class="tag">cloud</span></td>
+        <td>Hub sidebar: Home, Dictionary, Snippets, Style, Scratchpad; Settings&thinsp;/&thinsp;Help pinned bottom</td>
+        <td>Two groups &mdash; <b>Settings</b> (General, System, Vibe&nbsp;Coding, Experimental) and <b>Account</b> (Account, Plans&nbsp;&amp;&nbsp;Billing, Data&nbsp;&amp;&nbsp;Privacy)</td>
+        <td>Libraries are <b>first-class sidebar items</b>, not modals. Privacy gets its own named section instead of being scattered.</td>
+      </tr>
+      <tr>
+        <td><b>Superwhisper</b><br><span class="tag">local</span></td>
+        <td>Single unified settings window; Modes and Models are their own sections</td>
+        <td>Sidebar sections: Overview, Sound, Shortcuts, Advanced, Appearance</td>
+        <td><b>Modes</b> as the central object &mdash; a named bundle of model + prompt + output behaviour, switchable from the keyboard. Recording-window behaviour is its own settings area.</td>
+      </tr>
+      <tr>
+        <td><b>VoiceInk</b><br><span class="tag">local</span> <span class="tag">GPLv3</span></td>
+        <td>Sidebar; a <b>Power&nbsp;Mode</b> item appears in the sidebar once enabled</td>
+        <td>Per-page sections: General, Audio&nbsp;Input, Power&nbsp;Mode, Enhancement (per-mode, not global)</td>
+        <td><b>Enhancement is configured per mode, not globally.</b> Also: microphone <b>priority order</b> with fallback, and Backup&thinsp;/&thinsp;Restore of all settings, modes, dictionary and providers.</td>
+      </tr>
+      <tr>
+        <td><b>Monologue</b><br><span class="tag">hybrid</span></td>
+        <td>Menu-bar first; app-aware Modes, dictionary, searchable archive across Mac&thinsp;/&thinsp;iPhone&thinsp;/&thinsp;Watch</td>
+        <td>Compact preference surface; the follower dot carries its own menu (snooze, hide, settings)</td>
+        <td><b>The surface carries its own settings.</b> Muesli already adopted its follower behaviour &mdash; adopt the menu-on-the-object idea too.</td>
+      </tr>
+      <tr>
+        <td><b>Granola</b><br><span class="tag">meetings</span></td>
+        <td>Note-first; menu-bar resident, one button to record</td>
+        <td>Deliberately thin &mdash; &ldquo;invisible design&rdquo;, the note is the product</td>
+        <td>The <b>content, not the chrome</b>, is the interface. Muesli&rsquo;s meeting detail should read like a document, not a dashboard.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h4>Five patterns to adopt</h4>
+  <div class="grid g3">
+    <div class="card"><h5>1 &middot; Settings sidebar</h5><p>Nobody with more than five sections uses a segmented control. Vertical, scannable, deep-linkable.</p></div>
+    <div class="card"><h5>2 &middot; Libraries in the sidebar</h5><p>Dictionary, Styles, Templates, Prompts are content people curate. They stop being sheets.</p></div>
+    <div class="card"><h5>3 &middot; A credentials registry</h5><p>Providers are configured once; features declare which provider they use. Nobody pastes a key twice.</p></div>
+    <div class="card"><h5>4 &middot; Named profiles</h5><p>Superwhisper Modes, VoiceInk Power Mode, Wispr Style. Muesli already has per-app Writing Styles &mdash; it is a mode system that never got promoted.</p></div>
+    <div class="card"><h5>5 &middot; Privacy as a destination</h5><p>Permissions, screen context, sync, retention and diagnostics belong on one page a privacy-conscious user can read top to bottom.</p></div>
+    <div class="card"><h5>&mdash; and one to reject</h5><p>Wispr&rsquo;s Account&thinsp;/&thinsp;Billing group. Muesli is local-first and free; a billing shelf would be dead chrome.</p></div>
+  </div>
+
+  <div class="callout"><p><strong>Muesli&rsquo;s unearned advantage.</strong> No competitor here does dictation <em>and</em> meetings <em>and</em> 11 on-device models seriously. That breadth is why the settings sprawled &mdash; and why a registry-plus-assignments model pays off more here than it would for any of them.</p></div>
+</section>
+
+<!-- ============================== TOKENS ============================== -->
+<section id="tokens" data-nav="Tokens">
+  <h2>03 &middot; Tokens</h2>
+  <h3>The Spark scale, extended to opaque surfaces</h3>
+  <p class="lede">Every value below is either lifted verbatim from the shipped floating surfaces or interpolated on the same warm axis. Nothing is invented from taste.</p>
+
+  <h4>Warm neutral ramp &mdash; dark</h4>
+  <div class="ramp">
+    <div class="sw"><div class="chip" style="background:#0e0e0d"></div><div class="lbl"><b>ink&#8209;well</b><span>#0e0e0d</span></div></div>
+    <div class="sw"><div class="chip" style="background:#141312"></div><div class="lbl"><b>ground</b><span>#141312</span></div></div>
+    <div class="sw"><div class="chip" style="background:#1a1918"></div><div class="lbl"><b>base</b><span>#1a1918</span></div></div>
+    <div class="sw"><div class="chip" style="background:#211f1e"></div><div class="lbl"><b>raised</b><span>#211f1e &lowast;</span></div></div>
+    <div class="sw"><div class="chip" style="background:#2a2826"></div><div class="lbl"><b>hover</b><span>#2a2826</span></div></div>
+    <div class="sw"><div class="chip" style="background:#32312f"></div><div class="lbl"><b>surface</b><span>#32312f &lowast;</span></div></div>
+  </div>
+  <p style="font-size:12.5px"><code>&lowast;</code> lifted verbatim: <code>DictationMiniPalette.glassTintHex</code> and <code>surfaceTopHex</code>. The app&rsquo;s <code>raised</code> is literally the glass tint, made opaque &mdash; so a card in the window and the Mini beside the caret sit at the same value.</p>
+
+  <h4>Warm neutral ramp &mdash; light</h4>
+  <div class="ramp">
+    <div class="sw"><div class="chip" style="background:#fffdfb"></div><div class="lbl"><b>base</b><span>#fffdfb</span></div></div>
+    <div class="sw"><div class="chip" style="background:#f7f4ef"></div><div class="lbl"><b>ground</b><span>#f7f4ef</span></div></div>
+    <div class="sw"><div class="chip" style="background:#f0ece5"></div><div class="lbl"><b>raised</b><span>#f0ece5</span></div></div>
+    <div class="sw"><div class="chip" style="background:#e7e2d9"></div><div class="lbl"><b>hover</b><span>#e7e2d9</span></div></div>
+    <div class="sw"><div class="chip" style="background:#d9d3c8"></div><div class="lbl"><b>surface</b><span>#d9d3c8</span></div></div>
+    <div class="sw"><div class="chip" style="background:#1a1918"></div><div class="lbl"><b>ink</b><span>#1a1918</span></div></div>
+  </div>
+  <p style="font-size:12.5px">The light ramp is warm too &mdash; today&rsquo;s light mode is neutral grey <code>#f5f5f7</code>, which reads as a different app again. Warm paper keeps one identity across both appearances.</p>
+
+  <h4>Signal &mdash; the only colours that carry meaning</h4>
+  <div class="ramp">
+    <div class="sw"><div class="chip" style="background:#ff7043"></div><div class="lbl"><b>coral</b><span>#ff7043 &middot; record, active</span></div></div>
+    <div class="sw"><div class="chip" style="background:#ffb04d"></div><div class="lbl"><b>amber</b><span>#ffb04d &middot; working, paused</span></div></div>
+    <div class="sw"><div class="chip" style="background:#48e57b"></div><div class="lbl"><b>green</b><span>#48e57b &middot; success</span></div></div>
+    <div class="sw"><div class="chip" style="background:#ff6961"></div><div class="lbl"><b>red</b><span>#ff6961 &middot; failure</span></div></div>
+    <div class="sw"><div class="chip" style="background:#f3f2ef"></div><div class="lbl"><b>ink</b><span>#f3f2ef</span></div></div>
+  </div>
+  <p style="font-size:12.5px">Ink opacity ladder: <code>92&nbsp;%</code> primary &middot; <code>62&nbsp;%</code> secondary &middot; <code>40&nbsp;%</code> tertiary &middot; <code>22&nbsp;%</code> disabled. Hairlines: <code>8&nbsp;%</code> in-window, <code>16&nbsp;%</code> on glass, <code>80&nbsp;%</code> under Increase&nbsp;Contrast. These match <code>MuesliTheme</code>&rsquo;s existing ladder, so the change is hue-only.</p>
+
+  <h4>Type</h4>
+  <div class="sand">
+    <div class="cap">scale &mdash; Inter, tabular figures for time and counts</div>
+    <div class="typerow"><span class="k">display / 28&thinsp;600</span><span class="s" style="font-size:28px;font-weight:600;letter-spacing:-.02em">Yesterday&rsquo;s standup</span></div>
+    <div class="typerow"><span class="k">title / 22&thinsp;600</span><span class="s" style="font-size:22px;font-weight:600;letter-spacing:-.015em">Models &amp; Languages</span></div>
+    <div class="typerow"><span class="k">section / 18&thinsp;600</span><span class="s" style="font-size:18px;font-weight:600">Speech recognition</span></div>
+    <div class="typerow"><span class="k">row / 13.5&thinsp;500</span><span class="s" style="font-size:13.5px;font-weight:500">Save dictation recording</span></div>
+    <div class="typerow"><span class="k">body / 13&thinsp;400</span><span class="s" style="font-size:13px">Automatic uses system input, or the Mac mic with AirPods.</span></div>
+    <div class="typerow"><span class="k">caption / 11.5&thinsp;400</span><span class="s" style="font-size:11.5px;color:var(--ink-3)">Leave empty for automatic detection</span></div>
+    <div class="typerow"><span class="k">label / 10&thinsp;600&thinsp;tracked</span><span class="s" style="font-size:10px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3)">Library</span></div>
+    <div class="typerow"><span class="k">numeric / mono</span><span class="s" style="font-family:var(--mono);font-size:15px">00:42:18 &middot; 1,183 words &middot; 128 wpm</span></div>
+  </div>
+  <p><strong>Open question, answered:</strong> the shell uses SF&nbsp;Pro (<code>.system()</code>) while the floating surfaces use bundled Inter (<code>AppFonts</code>). Recommendation is <b>Inter everywhere in the app window</b>, SF&nbsp;Pro left in place only where AppKit hands us a system control we do not draw. Inter is already bundled and registered, so this costs nothing; the alternative &mdash; moving the Mini to SF&nbsp;Pro &mdash; would undo settled visual QA on 22&thinsp;pt chrome.</p>
+
+  <h4>Geometry &amp; motion</h4>
+  <div class="grid g2">
+    <div class="card">
+      <h5>Radii &mdash; continuous curve everywhere</h5>
+      <p style="margin-top:8px"><code>4</code> chip &middot; <code>6</code> control &middot; <code>10</code> field&thinsp;/&thinsp;row &middot; <code>14</code> card&thinsp;/&thinsp;panel &middot; <code>22</code> window. The 11&thinsp;pt pill and 14&thinsp;pt panel already ship; <code>cornerCurve = .continuous</code> becomes non-negotiable &mdash; today the app uses the default circular curve, which is the single most visible difference at a glance.</p>
+    </div>
+    <div class="card">
+      <h5>Motion &mdash; lifted verbatim</h5>
+      <p style="margin-top:8px"><code>0.16&thinsp;s</code> morph &middot; <code>0.26&thinsp;s</code> pop-in (0.55&nbsp;&rarr;&nbsp;1.06&nbsp;&rarr;&nbsp;1) &middot; <code>0.14&thinsp;s</code> fade &middot; <code>0.4&thinsp;s</code> hover grace. Tab switches, sheet presentation and row disclosure all take the 0.16&thinsp;s morph. Reduce&nbsp;Motion collapses every one to the fade.</p>
+    </div>
+    <div class="card">
+      <h5>Rhythm</h5>
+      <p style="margin-top:8px">4&thinsp;pt grid retained. <b>22&thinsp;pt is the module</b> &mdash; the Mini capsule height, the meeting row height, the sidebar item height, the control height. A settings row is 2&times;22 + padding.</p>
+    </div>
+    <div class="card">
+      <h5>Material rule</h5>
+      <p style="margin-top:8px">HUD glass belongs to <b>floating panels only</b>. In-window surfaces are opaque at the same hex. One exception: the window&rsquo;s own titlebar may use the system material, because macOS owns it.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== COMPONENTS ============================== -->
+<section id="comp2" data-nav="Components">
+  <h2>04 &middot; Components</h2>
+  <h3>The kit, rendered</h3>
+  <p class="lede">Every control below is drawn at its real size against the real ground, so density is judged rather than described.</p>
+
+  <div class="sand">
+    <div class="cap">controls</div>
+    <div class="row" style="margin-bottom:18px">
+      <button class="btn prim">Save language profile</button>
+      <button class="btn">Open Diagnostics&hellip;</button>
+      <button class="btn ghost">Cancel</button>
+      <button class="btn dest">Clear dictation history</button>
+    </div>
+    <div class="row" style="margin-bottom:18px">
+      <span class="sw-toggle on"><i></i></span>
+      <span class="sw-toggle"><i></i></span>
+      <span class="seg"><span class="on">Transcript</span><span>Chat</span><span>My notes</span></span>
+      <span class="pop">Parakeet v3</span>
+      <span class="pop">English, Arabic</span>
+    </div>
+    <div class="row">
+      <span class="chipf on">English</span><span class="chipf on">Arabic (Egypt)</span>
+      <span class="chipf">German</span><span class="chipf">+ 98 more</span>
+    </div>
+  </div>
+
+  <div class="sand">
+    <div class="cap">settings row &mdash; 20&thinsp;pt gutter, description at 40&nbsp;% ink, control right-aligned on a fixed column</div>
+    <div class="srow"><div class="t"><b>Dictation model</b><span>Runs on the Neural Engine. Downloaded models only.</span></div><span class="pop">Parakeet v3</span></div>
+    <div class="srow"><div class="t"><b>Save dictation recording</b><span>Audio is kept locally and never leaves the device.</span></div><span class="pop">On failure only</span></div>
+    <div class="srow"><div class="t"><b>Dictionary suggestions</b><span>Suggests words after corrections by briefly reading focused app text.</span></div><span class="sw-toggle on"><i></i></span></div>
+    <div class="srow"><div class="t"><b>Idle dot near your text</b><span>Keeps the Mini&rsquo;s dot near your text context when you&rsquo;re not dictating.</span></div><span class="sw-toggle on"><i></i></span></div>
+  </div>
+
+  <div class="sand">
+    <div class="cap">the Spark object &mdash; the same silhouette family, reused inside the window</div>
+    <div class="obj">
+      <figure><div class="disc"><i style="width:3px;height:3px"></i></div><figcaption>idle 14&thinsp;pt</figcaption></figure>
+      <figure><div class="disc"><i></i></div><figcaption>preparing</figcaption></figure>
+      <figure><span class="cap22" style="width:58px"><span class="wave" id="w1"></span></span><figcaption>recording 58&times;22</figcaption></figure>
+      <figure><div class="orb"><u><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b></u></div><figcaption>processing 20&thinsp;pt</figcaption></figure>
+      <figure><div class="okdisc">&#10003;</div><figcaption>success</figcaption></figure>
+      <figure><span class="cap22" style="width:72px;gap:7px;padding:0 9px"><i style="width:8px;height:8px;border-radius:999px;background:var(--coral);display:block"></i><span style="font-size:11px;font-family:var(--mono)">04:12</span></span><figcaption>meeting pill 72&times;22</figcaption></figure>
+    </div>
+    <p style="margin:18px 0 0;font-size:13px">Inside the window these stop being feedback and become <b>status</b>: the sidebar&rsquo;s model-preparation indicator is the preparing disc, an in-flight dictation row carries the processing orb, a live meeting row carries the coral dot and the mono clock. One vocabulary, two contexts.</p>
+  </div>
+
+  <div class="sand">
+    <div class="cap">list row &mdash; dictations &amp; meetings</div>
+    <div class="lrow"><span class="av" style="border-color:rgba(255,112,67,.5);color:var(--coral)">&#9679;</span><div class="bd"><b>Weekly sync &mdash; platform</b><span>4 speakers &middot; 42 min &middot; notes ready</span></div><span class="tm">09:15</span></div>
+    <div class="lrow"><span class="av"><span class="orb" style="width:16px;height:16px;border:0"><u style="grid-template-columns:repeat(3,1.5px);gap:1.5px"><b style="width:1.5px;height:1.5px"></b><b style="width:1.5px;height:1.5px"></b><b style="width:1.5px;height:1.5px"></b><b style="width:1.5px;height:1.5px"></b><b style="width:1.5px;height:1.5px"></b><b style="width:1.5px;height:1.5px"></b></u></span></span><div class="bd"><b>Transcribing&hellip;</b><span>Parakeet v3 &middot; 0:08 of audio</span></div><span class="tm">now</span></div>
+    <div class="lrow"><span class="av">&#9835;</span><div class="bd"><b>Reply to the migration thread &mdash; the corpus numbers hold up&hellip;</b><span>Slack &middot; 38 words &middot; cleaned</span></div><span class="tm">08:51</span></div>
+  </div>
+
+  <div class="sand">
+    <div class="cap">speaker convention &mdash; carried out of the meeting panel into the detail view</div>
+    <div style="display:grid;grid-template-columns:52px 1fr;gap:8px 10px;font-size:13px;line-height:1.45">
+      <span style="color:var(--coral);font-weight:600;font-size:11px;text-align:right;padding-top:2px">You</span>
+      <span>The corpus numbers hold up &mdash; Whisper wins English and Egyptian, and the register split is real.</span>
+      <span style="color:var(--ink-3);font-weight:600;font-size:11px;text-align:right;padding-top:2px">Nadia</span>
+      <span>Then we should pin the default per language rather than per model.</span>
+      <span style="color:var(--ink-3);font-weight:600;font-size:11px;text-align:right;padding-top:2px">Others</span>
+      <span style="color:var(--ink-3);font-style:italic">and if we do that we probably want the profile to&hellip;</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== SHELL VARIANTS ============================== -->
+<section id="shell" data-nav="Shell A / B / C">
+  <h2>05 &middot; The contested decision</h2>
+  <h3>Where do settings live?</h3>
+  <p class="lede">The palette is not contested &mdash; it is already shipped on the floating surfaces. What is genuinely open is the navigation model, and it is the choice that decides how far the reorganisation can go. Three variants, from conservative to ambitious.</p>
+
+  <!-- A -->
+  <h4>A &mdash; Continuum &middot; one window, settings nests in the sidebar</h4>
+  <p>Keeps today&rsquo;s single-window model. Settings stops being a segmented pane and becomes a sidebar section that expands in place, exactly like Wispr&nbsp;Flow&rsquo;s Hub. Libraries are promoted out of their sheets. Insights finally gets an entry.</p>
+  <div class="win">
+    <div class="win-bar"><span class="dotr"><i></i><i></i><i></i></span><span class="win-title">Muesli</span></div>
+    <div class="win-body">
+      <div class="side">
+        <div style="display:flex;align-items:center;gap:8px;padding:4px 9px 10px">
+          <span class="disc" style="width:18px;height:18px;margin:0"><i style="width:4px;height:4px"></i></span>
+          <b style="font-size:13px">Shaheen</b>
+        </div>
+        <div class="searchb" style="width:auto;margin:0 9px 10px">Search&hellip;</div>
+        <div class="it"><span class="gl">&#9835;</span>Dictations<span class="ct">1,183</span></div>
+        <div class="it"><span class="gl">&#9636;</span>Meetings<span class="ct">64</span></div>
+        <div class="it"><span class="gl">&#9650;</span>Insights</div>
+        <div class="grp">Library</div>
+        <div class="it"><span class="gl">&#9776;</span>Dictionary</div>
+        <div class="it"><span class="gl">&#9998;</span>Styles</div>
+        <div class="it"><span class="gl">&#9744;</span>Templates</div>
+        <div class="it"><span class="gl">&#9998;</span>Prompts</div>
+        <div class="grp">Settings</div>
+        <div class="it"><span class="gl">&#9881;</span>General</div>
+        <div class="it"><span class="gl">&#9835;</span>Dictation</div>
+        <div class="it"><span class="gl">&#9636;</span>Meetings</div>
+        <div class="it on"><span class="gl">&#9660;</span>Models &amp; Languages</div>
+        <div class="it"><span class="gl">&#9729;</span>AI Providers</div>
+        <div class="it"><span class="gl">&#9000;</span>Shortcuts</div>
+        <div class="it"><span class="gl">&#9737;</span>Privacy &amp; Data</div>
+        <div class="it"><span class="gl">&#9679;</span>Appearance</div>
+      </div>
+      <div class="main">
+        <div class="hd"><h6>Models &amp; Languages</h6><span class="pop">Check for updates</span></div>
+        <div class="sectitle">In use</div>
+        <div class="prow"><span class="disc" style="width:20px;height:20px;margin:0"><i style="width:4px;height:4px"></i></span><div class="t"><b>Dictation</b><span>Parakeet v3 &middot; 665&nbsp;MB &middot; on device</span></div><span class="pop">Parakeet v3</span></div>
+        <div class="prow"><span class="disc" style="width:20px;height:20px;margin:0;background:rgba(255,176,77,.18);border-color:rgba(255,176,77,.4)"><i style="width:4px;height:4px;background:var(--amber)"></i></span><div class="t"><b>Meetings &mdash; live</b><span>Nemotron 3.5 Multilingual &middot; streaming</span></div><span class="pop">Nemotron 3.5</span></div>
+        <div class="prow"><span class="disc" style="width:20px;height:20px;margin:0"><i style="width:4px;height:4px"></i></span><div class="t"><b>Meetings &mdash; final transcript</b><span>Re-transcribes after the meeting for accuracy</span></div><span class="pop">Whisper Large Turbo</span></div>
+        <div class="sectitle">Languages</div>
+        <div class="prow"><div class="t"><b>Spoken languages</b><span>Applies to every model that supports selection</span></div><div class="row"><span class="chipf on">English</span><span class="chipf on">Arabic (EG)</span><span class="chipf">+</span></div></div>
+        <div class="prow"><div class="t"><b>Dominant language</b><span>Pins compatible recognisers. Unset preserves code-switching.</span></div><span class="pop">None</span></div>
+        <div class="sectitle">Downloaded &mdash; 4 of 11</div>
+        <div class="prow"><div class="t"><b>Whisper Large Turbo</b><span>1.5&nbsp;GB &middot; update available</span></div><button class="btn" style="font-size:11.5px;padding:4px 10px">Update</button></div>
+        <div class="prow"><div class="t"><b>SenseVoice Small</b><span>234&nbsp;MB</span></div><button class="btn ghost" style="font-size:11.5px;padding:4px 10px">Remove</button></div>
+      </div>
+    </div>
+  </div>
+  <div class="verdict">
+    <div class="k">Gains</div><div class="v">Cheapest to build &mdash; the sidebar already exists and <code>SettingsPane</code> becomes a list instead of a picker. Deep-linking a setting from a diagnostic or the Mini&rsquo;s menu becomes trivial. Nothing is hidden behind a sheet.</div>
+  </div>
+  <div class="verdict">
+    <div class="k">Costs</div><div class="v">A 17-item sidebar is long, and content browsing and configuration share one window &mdash; changing the model closes your place in the meeting you were reading. Not the macOS convention for &#8984;,.</div>
+  </div>
+
+  <!-- B -->
+  <h4>B &mdash; Workbench &middot; content window + a real preferences window</h4>
+  <p>The main window holds only what you read &mdash; Dictations, Meetings, Insights, and the four libraries. Settings moves to its own window on &#8984;, with its own sidebar, the way Superwhisper, Xcode and every native Mac app do it. Two windows, each with one job.</p>
+  <div class="grid g2" style="align-items:start">
+    <div class="win" style="margin-top:0">
+      <div class="win-bar"><span class="dotr"><i></i><i></i><i></i></span><span class="win-title">Muesli</span></div>
+      <div class="win-body" style="min-height:360px">
+        <div class="side" style="width:150px">
+          <div class="it on"><span class="gl">&#9835;</span>Dictations</div>
+          <div class="it"><span class="gl">&#9636;</span>Meetings</div>
+          <div class="it"><span class="gl">&#9650;</span>Insights</div>
+          <div class="grp">Library</div>
+          <div class="it"><span class="gl">&#9776;</span>Dictionary</div>
+          <div class="it"><span class="gl">&#9998;</span>Styles</div>
+          <div class="it"><span class="gl">&#9744;</span>Templates</div>
+          <div class="it"><span class="gl">&#9998;</span>Prompts</div>
+          <div class="grp">&nbsp;</div>
+          <div class="it"><span class="gl">&#9881;</span>Settings&hellip;<span class="ct">&#8984;,</span></div>
+          <div class="it"><span class="gl">&#9432;</span>About</div>
+        </div>
+        <div class="main" style="padding:16px 18px">
+          <div class="stat">
+            <div><b>1,183</b><span>dictations</span></div>
+            <div><b>128</b><span>wpm</span></div>
+            <div><b>17</b><span>day streak</span></div>
+          </div>
+          <div class="lrow"><span class="av" style="border-color:rgba(255,112,67,.5);color:var(--coral)">&#9679;</span><div class="bd"><b>Reply to the migration thread</b><span>Slack &middot; 38 words</span></div><span class="tm">08:51</span></div>
+          <div class="lrow"><span class="av">&#9835;</span><div class="bd"><b>The corpus numbers hold up across&hellip;</b><span>Notes &middot; 112 words</span></div><span class="tm">08:44</span></div>
+          <div class="lrow"><span class="av">&#9835;</span><div class="bd"><b>Ship the language profile behind&hellip;</b><span>Linear &middot; 24 words</span></div><span class="tm">08:02</span></div>
+          <div class="lrow"><span class="av">&#9835;</span><div class="bd"><b>Yes &mdash; Tuesday works, let&rsquo;s do 14:00</b><span>Mail &middot; 9 words</span></div><span class="tm">Yest.</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="win" style="margin-top:0">
+      <div class="win-bar"><span class="dotr"><i></i><i></i><i></i></span><span class="win-title">Settings</span></div>
+      <div class="win-body" style="min-height:360px">
+        <div class="side" style="width:158px">
+          <div class="it"><span class="gl">&#9881;</span>General</div>
+          <div class="it"><span class="gl">&#9835;</span>Dictation</div>
+          <div class="it"><span class="gl">&#9636;</span>Meetings</div>
+          <div class="it"><span class="gl">&#9660;</span>Models</div>
+          <div class="it on"><span class="gl">&#9729;</span>AI Providers</div>
+          <div class="it"><span class="gl">&#9000;</span>Shortcuts</div>
+          <div class="it"><span class="gl">&#9737;</span>Privacy &amp; Data</div>
+          <div class="it"><span class="gl">&#9679;</span>Appearance</div>
+          <div class="it"><span class="gl">&#9881;</span>Advanced</div>
+        </div>
+        <div class="main" style="padding:16px 18px">
+          <div class="sectitle">Connected</div>
+          <div class="prow"><span style="width:18px;height:18px;border-radius:5px;background:var(--surface);display:grid;place-items:center;font-size:9px">&#9679;</span><div class="t"><b>ChatGPT</b><span>Signed in &middot; subscription</span></div><span class="tag green">active</span></div>
+          <div class="prow"><span style="width:18px;height:18px;border-radius:5px;background:var(--surface);display:grid;place-items:center;font-size:9px">&#9679;</span><div class="t"><b>Ollama</b><span>localhost:11434 &middot; 3 models</span></div><span class="tag green">active</span></div>
+          <div class="prow"><span style="width:18px;height:18px;border-radius:5px;background:var(--surface);display:grid;place-items:center;font-size:9px">&#9675;</span><div class="t"><b>OpenAI</b><span>No key</span></div><button class="btn ghost" style="font-size:11px;padding:3px 9px">Connect</button></div>
+          <div class="sectitle">Used by</div>
+          <div class="prow"><div class="t"><b>Dictation cleanup</b></div><span class="pop">Ollama &middot; qwen3:8b</span></div>
+          <div class="prow"><div class="t"><b>Meeting summaries</b></div><span class="pop">ChatGPT &middot; gpt-5</span></div>
+          <div class="prow"><div class="t"><b>Transcript cleanup</b></div><span class="pop">Ollama &middot; qwen3:8b</span></div>
+          <div class="prow"><div class="t"><b>Computer use</b></div><span class="pop">Off</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="verdict"><div class="k">Gains</div><div class="v">Native and expected &mdash; &#8984;, opens a settings window, closing it returns you to exactly where you were reading. Each sidebar stays short. The <b>Connected&thinsp;/&thinsp;Used&nbsp;by</b> split shown here is the credentials registry, and it collapses four duplicated provider blocks into one page.</div></div>
+  <div class="verdict"><div class="k">Costs</div><div class="v">A second window to own: state restoration, one-instance policy, and a settings surface that cannot show live content next to a setting. Onboarding deep-links need to target a window rather than a tab.</div></div>
+
+  <!-- C -->
+  <h4>C &mdash; Modes &middot; the profile becomes the object</h4>
+  <p>The ambitious one. Muesli already has per-app Writing&nbsp;Styles &mdash; a mode system that was never promoted. Variant&nbsp;C makes a <b>Mode</b> the primary object: a named bundle of model, languages, cleanup provider, writing style, dictionary scope and hotkey, bound to apps or sites. Global settings shrink to what genuinely is global. This is Superwhisper&rsquo;s Modes and VoiceInk&rsquo;s Power&nbsp;Mode, done with Muesli&rsquo;s on-device model range behind it.</p>
+  <div class="win">
+    <div class="win-bar"><span class="dotr"><i></i><i></i><i></i></span><span class="win-title">Muesli &mdash; Modes</span></div>
+    <div class="win-body">
+      <div class="side">
+        <div class="it"><span class="gl">&#9835;</span>Dictations</div>
+        <div class="it"><span class="gl">&#9636;</span>Meetings</div>
+        <div class="it"><span class="gl">&#9650;</span>Insights</div>
+        <div class="grp">Modes</div>
+        <div class="it on"><span class="gl" style="color:var(--coral)">&#9679;</span>Code</div>
+        <div class="it"><span class="gl">&#9679;</span>Email</div>
+        <div class="it"><span class="gl">&#9679;</span>Notes</div>
+        <div class="it"><span class="gl">&#9679;</span>Arabic</div>
+        <div class="it" style="color:var(--ink-4)"><span class="gl">+</span>New mode</div>
+        <div class="grp">Library</div>
+        <div class="it"><span class="gl">&#9776;</span>Dictionary</div>
+        <div class="it"><span class="gl">&#9744;</span>Templates</div>
+        <div class="it"><span class="gl">&#9881;</span>Settings</div>
+      </div>
+      <div class="main">
+        <div class="hd">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="disc" style="width:22px;height:22px;margin:0"><i></i></span>
+            <h6>Code</h6>
+            <span class="tag coral">active in Cursor</span>
+          </div>
+          <span class="pop">&#8963;&#8997;C</span>
+        </div>
+        <div class="sectitle">Applies when</div>
+        <div class="row" style="margin-bottom:6px">
+          <span class="chipf on">Cursor</span><span class="chipf on">Terminal</span><span class="chipf on">Xcode</span>
+          <span class="chipf on">github.com</span><span class="chipf">+ add app or site</span>
+        </div>
+        <div class="sectitle">Recognition</div>
+        <div class="prow"><div class="t"><b>Model</b><span>Fastest local model; punctuation from the model itself</span></div><span class="pop">Parakeet v3</span></div>
+        <div class="prow"><div class="t"><b>Languages</b><span>Inherits the global profile unless overridden</span></div><span class="pop">English only</span></div>
+        <div class="prow"><div class="t"><b>Dictionary</b><span>Adds this mode&rsquo;s terms on top of the global list</span></div><span class="pop">Global + Code (48)</span></div>
+        <div class="sectitle">Output</div>
+        <div class="prow"><div class="t"><b>Cleanup</b><span>Ollama &middot; qwen3:8b &mdash; from AI Providers</span></div><span class="sw-toggle on"><i></i></span></div>
+        <div class="prow"><div class="t"><b>Writing style</b><span>Lowercase, no trailing period, keep identifiers verbatim</span></div><span class="pop">Terse</span></div>
+        <div class="prow"><div class="t"><b>App context</b><span>Reads nearby editor text to disambiguate symbols</span></div><span class="sw-toggle on"><i></i></span></div>
+      </div>
+    </div>
+  </div>
+  <div class="verdict"><div class="k">Gains</div><div class="v">Answers the question people actually have &mdash; &ldquo;why did it write it that way <em>here</em>&rdquo; &mdash; in one screen. Settings shrink dramatically because most rows are per-context, not global. It is the only variant that turns Muesli&rsquo;s 11-model range into a visible advantage rather than a picker.</div></div>
+  <div class="verdict"><div class="k">Costs</div><div class="v">The largest change by far: a new persisted object, migration from <code>DictationStyleResolver</code>&rsquo;s per-app rules, resolution precedence to design and test, and a real risk of ending up with two overlapping systems if the migration is partial. Not a one-release change.</div></div>
+
+  <div class="callout"><p><strong>Recommendation: B now, C next.</strong> B is the correct macOS shape and it is what unlocks the credentials registry &mdash; the single biggest usability win in this document &mdash; without betting the release on a new persisted object. C is the right two-releases-out destination, and B&rsquo;s <b>Connected&thinsp;/&thinsp;Used&nbsp;by</b> page is exactly the layer a Mode later overrides. A is the fallback if a second window is judged too costly.</p></div>
+</section>
+
+<!-- ============================== SETTINGS IA ============================== -->
+<section id="ia" data-nav="Settings IA">
+  <h2>06 &middot; Settings reorganisation</h2>
+  <h3>From six panes to nine sections, with nothing configured twice</h3>
+
+  <div class="grid g2" style="align-items:start">
+    <div>
+      <h4 style="margin-top:0">Today</h4>
+      <div class="tree"><s>segmented picker, 6 panes</s>
+
+<b>General</b>      launch, dashboard, data, permissions
+<b>Sync</b>         iCloud, iPhone bridge
+<b>Dictation</b>    languages, model, mic, cleanup <em>+ 6 providers</em>,
+             recording, media, app context, OCR
+<b>Computer Use</b> planner <em>+ provider</em>
+<b>Meetings</b>     context, notes, recording, export,
+             notifications, calendars, hooks,
+             transcription, cleanup <em>+ provider</em>,
+             summaries <em>+ 7 providers</em>
+<b>Appearance</b>   theme, menu bar, accent, sound,
+             idle dot, next meeting, Marauder&rsquo;s Map
+
+<s>elsewhere in the sidebar</s>
+<b>Models</b>   downloads + Nemotron &amp; Cohere language pickers
+<b>Shortcuts</b> hotkeys
+<b>Dictionary</b> vocabulary
+
+<s>modal sheets, no home</s>
+<b>Writing Styles</b>      sheet from Settings
+<b>Meeting Templates</b>   sheet from Meetings
+<b>Cleanup Prompts</b>     sheet
+<b>Insights</b>           <em>no sidebar entry at all</em></div>
+    </div>
+    <div>
+      <h4 style="margin-top:0">Proposed</h4>
+      <div class="tree"><s>settings sidebar, 9 sections</s>
+
+<b>General</b>          launch, dock, menu bar (icon, hotkey,
+                 next meeting), sound, updates
+<b>Dictation</b>        hotkeys, microphone + priority, indicator
+                 &amp; idle dot, save recording, media ducking,
+                 cleanup <em>&rarr; assignment</em>, dictionary suggestions
+<b>Meetings</b>         recording, notes &amp; template, notifications,
+                 calendars, auto-export
+<b>Models &amp; Lang.</b>  downloads, dictation model, meeting live +
+                 final model, per-model language, spoken
+                 languages, dominant language, updates
+<b>AI Providers</b>     <em>registry:</em> ChatGPT, OpenAI, OpenRouter,
+                 Ollama, LM Studio, Custom &mdash; once each
+                 <em>assignments:</em> dictation cleanup, meeting
+                 summaries, transcript cleanup, computer use
+<b>Shortcuts</b>        every hotkey, one table
+<b>Privacy &amp; Data</b>  permissions, screen context &amp; OCR, iCloud
+                 sync, iPhone bridge, retention, diagnostics,
+                 clear history
+<b>Appearance</b>       theme, accent, density, Marauder&rsquo;s Map
+<b>Advanced</b>         computer use, post-meeting hooks,
+                 experimental, backup &amp; restore
+
+<s>main sidebar &mdash; content and libraries only</s>
+Dictations &middot; Meetings &middot; <em>Insights</em>
+Library: Dictionary &middot; <em>Styles</em> &middot; <em>Templates</em> &middot; <em>Prompts</em></div>
+    </div>
+  </div>
+
+  <h4>Every current row, and where it goes</h4>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Today</th><th>Rows</th><th>Moves to</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td><b>General</b> &rsaquo; Launch at login, Open dashboard on launch</td><td>2</td><td>General</td><td>unchanged</td></tr>
+      <tr><td><b>General</b> &rsaquo; Clear dictation / meeting history, Session diagnostics, Permissions</td><td>4</td><td>Privacy &amp; Data</td><td>a privacy-conscious user reads one page top to bottom</td></tr>
+      <tr><td><b>Sync</b> &rsaquo; Private iCloud sync</td><td>1</td><td>Privacy &amp; Data &rsaquo; Sync</td><td>sync is a data-residency decision, not a feature area</td></tr>
+      <tr><td><b>Sync</b> &rsaquo; Show iOS companion prompt</td><td>1</td><td>General</td><td>it is a prompt preference, not sync</td></tr>
+      <tr><td><b>Dictation</b> &rsaquo; Spoken languages, Dominant language, Save profile</td><td>3</td><td>Models &amp; Languages</td><td>joins the two model-specific pickers stranded in the Models tab</td></tr>
+      <tr><td><b>Dictation</b> &rsaquo; Dictation model</td><td>1</td><td>Models &amp; Languages</td><td>selection belongs beside download</td></tr>
+      <tr><td><b>Dictation</b> &rsaquo; Microphone</td><td>1</td><td>Dictation &rsaquo; Audio</td><td>+ adopt VoiceInk&rsquo;s <b>priority order with fallback</b></td></tr>
+      <tr><td><b>Dictation</b> &rsaquo; Save recording, AI cleanup toggle, Cleanup prompt, Dictionary suggestions</td><td>4</td><td>Dictation</td><td>prompt body itself moves to Library &rsaquo; Prompts</td></tr>
+      <tr><td><b>Dictation</b> &rsaquo; Cleanup backend, Account, API key, Model, URL <span class="tag coral">&times;6 providers</span></td><td>~14</td><td>AI Providers</td><td><b>the duplication fix</b> &mdash; one row survives here: &ldquo;Cleanup uses&hellip;&rdquo;</td></tr>
+      <tr><td><b>Dictation</b> &rsaquo; Pause media, Mute system audio</td><td>2</td><td>Dictation &rsaquo; Audio</td><td>they are audio-session behaviour, not &ldquo;advanced&rdquo;</td></tr>
+      <tr><td><b>Dictation</b> &rsaquo; App context, Screen OCR context</td><td>2</td><td>Privacy &amp; Data</td><td>both read the screen; they belong with permissions</td></tr>
+      <tr><td><b>Computer Use</b> &rsaquo; Enable, Account, Planner model, Timeout</td><td>4</td><td>Advanced (credentials to AI Providers)</td><td>experimental surface, one home</td></tr>
+      <tr><td><b>Meetings</b> &rsaquo; Meeting context</td><td>1</td><td>Privacy &amp; Data</td><td>same reason as dictation app context</td></tr>
+      <tr><td><b>Meetings</b> &rsaquo; Default template, Summary retries, Templates&hellip;</td><td>3</td><td>Meetings &rsaquo; Notes</td><td>the manager sheet becomes Library &rsaquo; Templates</td></tr>
+      <tr><td><b>Meetings</b> &rsaquo; Auto-record, Floating Record button, Save recording, Format</td><td>4</td><td>Meetings &rsaquo; Recording</td><td>unchanged</td></tr>
+      <tr><td><b>Meetings</b> &rsaquo; Auto-export (4), Notifications (4), Calendars (2)</td><td>10</td><td>Meetings</td><td>unchanged, but no longer sharing a pane with 15 other rows</td></tr>
+      <tr><td><b>Meetings</b> &rsaquo; Meeting model, Final transcript</td><td>2</td><td>Models &amp; Languages</td><td>all three model choices on one page, in pipeline order</td></tr>
+      <tr><td><b>Meetings</b> &rsaquo; Transcript cleanup, Summary backend + Account/Key/Model <span class="tag coral">&times;7 providers</span></td><td>~16</td><td>AI Providers</td><td><b>the duplication fix</b></td></tr>
+      <tr><td><b>Meetings</b> &rsaquo; Post-meeting hook, Script, Timeout</td><td>3</td><td>Advanced &rsaquo; Automation</td><td>scripting is not a meeting preference</td></tr>
+      <tr><td><b>Appearance</b> &rsaquo; Dark mode, Accent colour</td><td>2</td><td>Appearance</td><td>see decision D2 on the accent</td></tr>
+      <tr><td><b>Appearance</b> &rsaquo; Menu bar icon, Show hotkey, Show next meeting</td><td>3</td><td>General &rsaquo; Menu bar</td><td>menu-bar behaviour is not styling</td></tr>
+      <tr><td><b>Appearance</b> &rsaquo; Play sound effects</td><td>1</td><td>General &rsaquo; Feedback</td><td>sits with the lifecycle cues it controls</td></tr>
+      <tr><td><b>Appearance</b> &rsaquo; Idle dot near your text</td><td>1</td><td>Dictation &rsaquo; Indicator</td><td>it is dictation behaviour with a visual side effect</td></tr>
+      <tr><td><b>Appearance</b> &rsaquo; Marauder&rsquo;s Map</td><td>2</td><td>Appearance &rsaquo; Extras</td><td>unchanged</td></tr>
+      <tr><td><b>Models</b> tab, <b>Shortcuts</b> tab</td><td>&mdash;</td><td>Settings sections</td><td>they were always settings wearing a sidebar badge</td></tr>
+      <tr><td><b>Dictionary</b> tab</td><td>&mdash;</td><td>Library &rsaquo; Dictionary</td><td>curated content, stays in the main window</td></tr>
+      <tr><td>Writing Styles, Meeting Templates, Cleanup Prompts <span class="tag amber">modal</span></td><td>&mdash;</td><td>Library</td><td>editable collections should not live in sheets</td></tr>
+      <tr><td>Insights <span class="tag amber">orphaned</span></td><td>&mdash;</td><td>Main sidebar</td><td>a whole 817-line view with no navigation entry</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout"><p><strong>Net effect.</strong> Roughly 30 provider rows collapse into 6 provider entries plus 4 assignment rows. The Meetings pane drops from ~25 rows to ~14. Nothing is deleted &mdash; every current capability keeps a home, and three that were behind sheets get one for the first time.</p></div>
+</section>
+
+<!-- ============================== DECISIONS ============================== -->
+<section id="dec" data-nav="Decisions">
+  <h2>07 &middot; Open decisions</h2>
+  <h3>Five calls that need your judgment, each with a lean</h3>
+
+  <div class="dec">
+    <div class="q">D1 &mdash; Which shell?</div>
+    <div class="opt"><span class="n">A</span><span>Continuum &mdash; one window, settings nested in the sidebar. Cheapest; least native.</span></div>
+    <div class="opt"><span class="n">B</span><span>Workbench &mdash; content window plus a real &#8984;, preferences window. Native; one more window to own.</span></div>
+    <div class="opt"><span class="n">C</span><span>Modes &mdash; the per-context profile becomes the primary object. Highest ceiling; largest migration.</span></div>
+    <div class="rec"><b>Lean: B, with C as the next destination.</b> B is what Mac users expect from &#8984;, and it is enough to land the credentials registry. C should be planned, not attempted in the same release.</div>
+  </div>
+
+  <div class="dec">
+    <div class="q">D2 &mdash; Does the user-selectable accent survive?</div>
+    <div class="opt"><span class="n">1</span><span>Coral becomes the fixed product accent; the 7 presets are removed. Strongest identity, removes a shipped preference.</span></div>
+    <div class="opt"><span class="n">2</span><span>Coral is the default; presets stay but are scoped to <em>selection and highlight only</em> &mdash; the record dot, the Mini and every semantic signal stay coral regardless.</span></div>
+    <div class="opt"><span class="n">3</span><span>Status quo &mdash; the accent tints everything, and the Mini keeps its separate ownership.</span></div>
+    <div class="rec"><b>Lean: 2.</b> The Mini already owns its palette independently of <code>recordingColorHex</code> and that boundary is documented in the mini-indicator brief; option 2 makes the app follow the same rule instead of inventing a third. Removing a preference people already set (option 1) is a real regression for no design gain.</div>
+  </div>
+
+  <div class="dec">
+    <div class="q">D3 &mdash; Inter or SF Pro in the app window?</div>
+    <div class="opt"><span class="n">1</span><span>Inter everywhere &mdash; matches the floating surfaces; already bundled and registered by <code>AppFonts</code>.</span></div>
+    <div class="opt"><span class="n">2</span><span>SF Pro in the window, Inter on the floating surfaces &mdash; most native, but keeps two identities.</span></div>
+    <div class="rec"><b>Lean: 1, with SF Pro kept for AppKit-drawn system controls</b> we do not render ourselves (menus, popup buttons). Mixing is invisible at those sizes; the headline type is what carries identity.</div>
+  </div>
+
+  <div class="dec">
+    <div class="q">D4 &mdash; Does the light appearance go warm?</div>
+    <div class="opt"><span class="n">1</span><span>Warm paper &mdash; <code>#f7f4ef</code> ground, warm greys, coral accent. One identity in both appearances.</span></div>
+    <div class="opt"><span class="n">2</span><span>Keep neutral grey light mode; only dark mode goes warm.</span></div>
+    <div class="rec"><b>Lean: 1.</b> Half a redesign reads as a bug. The warm light ramp above is contrast-checked against the same ink ladder the app already uses.</div>
+  </div>
+
+  <div class="dec">
+    <div class="q">D5 &mdash; How far does the credentials registry go in v1?</div>
+    <div class="opt"><span class="n">1</span><span>Full registry &mdash; providers stored once, four assignment rows, migration from the four existing config key sets.</span></div>
+    <div class="opt"><span class="n">2</span><span>Presentation only &mdash; one AI Providers page that still writes to today&rsquo;s four separate key sets, deduplicating the UI but not the storage.</span></div>
+    <div class="rec"><b>Lean: 1 if the config migration is tolerant</b> (read old keys, write new, keep decoding both for a release). Option&nbsp;2 keeps the &ldquo;paste the key twice&rdquo; bug alive under a nicer surface, which is the worst of both.</div>
+  </div>
+
+  <h4>What I need from you</h4>
+  <p>D1 and D5 change the shape of the work and are worth a real answer. D2, D3 and D4 have safe leans &mdash; if you say nothing I will build them as recommended. Mark up this page or reply with the letters.</p>
+</section>
+
+<footer>
+  <p style="max-width:none">Node <code>muesli-app-shell/01</code> &middot; generated locally, no reference sent to any external service &middot; sources: Wispr&nbsp;Flow help centre, Superwhisper docs, VoiceInk docs, published Granola and Monologue reviews, and the Muesli source tree.</p>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var secs = Array.prototype.slice.call(document.querySelectorAll('section[data-nav]'));
+  var nav = document.getElementById('nav');
+  secs.forEach(function(s,i){
+    var b = document.createElement('button');
+    b.textContent = (i+1) + '. ' + s.getAttribute('data-nav');
+    b.onclick = function(){ show(i); };
+    nav.appendChild(b);
+  });
+  var btns = Array.prototype.slice.call(nav.querySelectorAll('button'));
+  function show(i){
+    secs.forEach(function(s,j){ s.style.display = (j===i) ? '' : 'none'; });
+    btns.forEach(function(b,j){ b.className = (j===i) ? 'on' : ''; });
+    window.scrollTo({top:0,behavior:'instant'});
+  }
+  show(0);
+
+  // spark wave bars
+  var w = document.getElementById('w1');
+  if (w) {
+    for (var k=0;k<24;k++){
+      var b = document.createElement('b');
+      var t = k/23;
+      var h = 1 + Math.round(11 * Math.pow(Math.abs(Math.sin(k*1.9))*0.6 + t*0.5, 1.1));
+      b.style.height = Math.min(h,12) + 'px';
+      b.style.opacity = (0.42 + 0.58*t).toFixed(2);
+      b.style.marginRight = '1px';
+      w.appendChild(b);
+    }
+  }
+})();
+</script>

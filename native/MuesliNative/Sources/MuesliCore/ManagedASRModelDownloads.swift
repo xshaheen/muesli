@@ -2,6 +2,7 @@ import Foundation
 
 /// A third-party ASR model whose transport is owned by Muesli.
 public struct ManagedASRModelPlan: Sendable {
+    public typealias IntegrityValidator = @Sendable (URL) throws -> Void
     private struct CompletionMarker: Codable {
         struct File: Codable {
             let relativePath: String
@@ -26,6 +27,7 @@ public struct ManagedASRModelPlan: Sendable {
     /// Every inner group is an either/or requirement; every group must be satisfied.
     public let requiredArtifactAlternatives: [[String]]
     public let maximumConcurrency: Int
+    private let integrityValidator: IntegrityValidator?
 
     public init(
         modelID: String,
@@ -34,7 +36,8 @@ public struct ManagedASRModelPlan: Sendable {
         cacheDirectory: URL,
         selections: [HuggingFaceModelSelection],
         requiredArtifactAlternatives: [[String]],
-        maximumConcurrency: Int = 2
+        maximumConcurrency: Int = 2,
+        integrityValidator: IntegrityValidator? = nil
     ) {
         self.modelID = modelID
         self.repository = repository
@@ -43,6 +46,7 @@ public struct ManagedASRModelPlan: Sendable {
         self.selections = selections
         self.requiredArtifactAlternatives = requiredArtifactAlternatives
         self.maximumConcurrency = maximumConcurrency
+        self.integrityValidator = integrityValidator
     }
 
     public func isComplete(fileManager: FileManager = .default) -> Bool {
@@ -54,13 +58,14 @@ public struct ManagedASRModelPlan: Sendable {
               !marker.files.isEmpty
         else { return false }
 
-        return marker.files.allSatisfy { file in
+        let markerFilesAreComplete = marker.files.allSatisfy { file in
             let url = cacheDirectory.appendingPathComponent(file.relativePath)
             guard fileManager.fileExists(atPath: url.path) else { return false }
             guard let expectedByteCount = file.expectedByteCount else { return true }
             let size = (try? fileManager.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value
             return size == expectedByteCount
         }
+        return markerFilesAreComplete && integrityIsValid(fileManager: fileManager)
     }
 
     /// True for either a marker-validated managed download or a complete cache
@@ -77,6 +82,13 @@ public struct ManagedASRModelPlan: Sendable {
         isLegacyInstallation(fileManager: fileManager)
     }
 
+    /// A complete local artifact set with an integrity mismatch must be removed
+    /// before coordinator repair; otherwise matching paths can be mistaken for a
+    /// resumable download.
+    public func requiresIntegrityRepair(fileManager: FileManager = .default) -> Bool {
+        requiredArtifactsExist(fileManager: fileManager) && !integrityIsValid(fileManager: fileManager)
+    }
+
     /// Records a successful, fully validated coordinator install. The marker
     /// carries every manifest file so readiness cannot be inferred from an
     /// early sentinel while sibling weights are still partial or missing.
@@ -84,6 +96,7 @@ public struct ManagedASRModelPlan: Sendable {
         _ manifest: ModelDownloadManifest,
         fileManager: FileManager = .default
     ) throws {
+        try validateIntegrity()
         try fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         let marker = CompletionMarker(
             modelID: modelID,
@@ -108,6 +121,8 @@ public struct ManagedASRModelPlan: Sendable {
         guard !isComplete(fileManager: fileManager),
               isLegacyInstallation(fileManager: fileManager)
         else { return }
+
+        try validateIntegrity()
 
         let files = try selectedLocalFiles(fileManager: fileManager)
         guard !files.isEmpty else { return }
@@ -140,8 +155,23 @@ public struct ManagedASRModelPlan: Sendable {
             }
     }
 
+    private func integrityIsValid(fileManager _: FileManager) -> Bool {
+        guard let integrityValidator else { return true }
+        do {
+            try integrityValidator(cacheDirectory)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func validateIntegrity() throws {
+        try integrityValidator?(cacheDirectory)
+    }
+
     private func isLegacyInstallation(fileManager: FileManager) -> Bool {
         guard requiredArtifactsExist(fileManager: fileManager),
+              integrityIsValid(fileManager: fileManager),
               !fileManager.fileExists(atPath: completionMarkerURL.path),
               !fileManager.fileExists(
                 atPath: cacheDirectory.appendingPathComponent(Self.downloadStateName).path
@@ -337,6 +367,9 @@ public enum ManagedASRModelDownloader {
     ) async throws -> URL {
         try await operations.run(modelID: plan.modelID) {
             if plan.isAvailableLocally() { return plan.cacheDirectory }
+            if plan.requiresIntegrityRepair() {
+                try plan.delete()
+            }
 
             return try await performDownload(
                 plan,
