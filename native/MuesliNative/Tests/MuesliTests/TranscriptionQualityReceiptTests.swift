@@ -880,6 +880,115 @@ struct TranscriptionQualityReceiptTests {
         #expect(!report.contains("## Cohort: english"))
     }
 
+    // MARK: Per-corpus breakdown
+
+    /// The first full sweep pooled FLEURS read speech and MGB-3 spontaneous broadcast speech into
+    /// one `egyptian-arabic` figure, and the gap between them ran to three tenths of a WER — the
+    /// pooled number described neither corpus and overstated what a backend does on the register
+    /// dictation actually is. The split has to be a *pooled* figure per corpus, not a mean of
+    /// per-utterance rates, or it is a different statistic from the one it sits under: here the two
+    /// utterances of `read` are 1/1 and 0/30, which pool to 0.032 and average to 0.500.
+    @Test("a cohort drawn from two corpora reports each one, pooled the way the cohort figure is")
+    func multiCorpusCohortReportsEachCorpus() throws {
+        let backend = spanning("whisper", cohort: .egyptianArabic, counts: [
+            (sampleID: "r0", corpusID: "fleurs-read", errors: 1, referenceWords: 1),
+            (sampleID: "r1", corpusID: "fleurs-read", errors: 0, referenceWords: 30),
+            (sampleID: "s0", corpusID: "mgb3-spontaneous", errors: 6, referenceWords: 10),
+            (sampleID: "s1", corpusID: "mgb3-spontaneous", errors: 14, referenceWords: 20),
+        ], faithfulness: 0.99)
+        let subject = makeReceipt([backend], corpora: [
+            corpus("mgb3-spontaneous"), corpus("fleurs-read"),
+        ])
+
+        let report = TranscriptionQualityReport.markdown(for: subject)
+        let rows = breakdownRows(in: report)
+
+        #expect(report.contains("**Per-corpus breakdown.**"))
+        #expect(report.contains("differ in register"))
+        // Corpus order follows the corpora table above, not the order utterances happened to arrive.
+        #expect(rows.count == 2)
+        #expect(rows[0].contains("mgb3-spontaneous"))
+        #expect(rows[1].contains("fleurs-read"))
+        // 20/30 spontaneous, 1/31 read — pooled, and rendered to the same three places as the
+        // ranking. 0.500 here would be the mean of the read corpus's two utterance rates.
+        #expect(rows[0].contains("| 2 | 0.667 | 0.990 | 1.00 |"))
+        #expect(rows[1].contains("| 2 | 0.032 | 0.990 | 1.00 |"))
+        #expect(!report.contains("| 2 | 0.500 |"))
+
+        // And the pooled cohort figure is neither of them: it is 21/61, which is the number the
+        // breakdown exists to stop a reader from reading as either corpus's result.
+        let result = try #require(backend.result(for: .egyptianArabic))
+        #expect(abs(try #require(result.pooledNormalizedWER(at: .rawASR)) - 21.0 / 61.0) < 1e-12)
+        #expect(report.contains("| 4 | 0.344 |"))
+    }
+
+    /// The accessor the breakdown rests on, asserted against the pooling it claims to reuse rather
+    /// than through the rendered table.
+    @Test("restricting a cohort to one corpus keeps every utterance of it and no other")
+    func restrictingACohortSelectsExactlyThatCorpus() throws {
+        let result = Receipt.CohortResult(cohort: .egyptianArabic, utterances: [
+            corpusUtterance("r0", corpusID: "read", errors: 1, referenceWords: 1),
+            corpusUtterance("s0", corpusID: "spontaneous", errors: 6, referenceWords: 10),
+            corpusUtterance("r1", corpusID: "read", errors: 0, referenceWords: 30),
+        ])
+
+        #expect(result.corpusIDs == ["read", "spontaneous"])
+        let read = result.restricted(toCorpus: "read")
+        #expect(read.utterances.map(\.sampleID) == ["r0", "r1"])
+        #expect(abs(try #require(read.pooledNormalizedWER(at: .rawASR)) - 1.0 / 31.0) < 1e-12)
+        #expect(result.restricted(toCorpus: "spontaneous").sampleCount == 1)
+        #expect(result.restricted(toCorpus: "absent").sampleCount == 0)
+    }
+
+    /// A cohort with one corpus behind it would restate its own row, so it does not. The report is
+    /// long enough that a table saying nothing is a cost.
+    @Test("a cohort drawn from a single corpus grows no breakdown")
+    func singleCorpusCohortHasNoBreakdown() {
+        let subject = makeReceipt(
+            [spanning("whisper", cohort: .english, counts: [
+                (sampleID: "s0", corpusID: "fleurs-en", errors: 1, referenceWords: 10),
+                (sampleID: "s1", corpusID: "fleurs-en", errors: 2, referenceWords: 20),
+            ], faithfulness: 0.99)],
+            corpora: [corpus("fleurs-en")]
+        )
+
+        let report = TranscriptionQualityReport.markdown(for: subject)
+
+        #expect(report.contains("## Cohort: english"))
+        #expect(!report.contains("Per-corpus breakdown"))
+        #expect(breakdownRows(in: report).isEmpty)
+    }
+
+    /// A gate-excluded backend is the case the split explains best: Cohere Transcribe scored 0.428
+    /// on read speech and 1.839 on spontaneous, and only the second number says what happened to it.
+    /// Filtering the breakdown to the ranking would have hidden exactly that.
+    @Test("a backend the faithfulness gate excluded still reports its per-corpus figures")
+    func excludedBackendAppearsInTheBreakdown() throws {
+        let subject = makeReceipt([
+            spanning("whisper", cohort: .egyptianArabic, counts: [
+                (sampleID: "r0", corpusID: "read", errors: 1, referenceWords: 10),
+                (sampleID: "s0", corpusID: "spontaneous", errors: 4, referenceWords: 10),
+            ], faithfulness: 0.99),
+            spanning("cohere", cohort: .egyptianArabic, counts: [
+                (sampleID: "r0", corpusID: "read", errors: 4, referenceWords: 10),
+                (sampleID: "s0", corpusID: "spontaneous", errors: 18, referenceWords: 10),
+            ], faithfulness: 0.20),
+        ], corpora: [corpus("read"), corpus("spontaneous")])
+
+        let report = TranscriptionQualityReport.markdown(for: subject)
+        let rows = breakdownRows(in: report)
+
+        // It is excluded from the ranking, and its exclusion is exactly what the breakdown explains.
+        let decision = try #require(Policy.evaluate(subject).cohorts.first)
+        #expect(decision.excluded.map(\.label) == ["cohere"])
+        #expect(rows.count == 4)
+        // The eligible backend first, then the excluded one — the order the section introduced them.
+        #expect(rows[0].hasPrefix("| whisper | read |"))
+        #expect(rows[1].hasPrefix("| whisper | spontaneous |"))
+        #expect(rows[2].contains("| cohere | read | 1 | 0.400 |"))
+        #expect(rows[3].contains("| cohere | spontaneous | 1 | 1.800 |"))
+    }
+
     // MARK: Aggregation
 
     /// R5: published ASR figures are pooled, so a cohort figure that is not pooled is not the thing
@@ -1086,7 +1195,12 @@ struct TranscriptionQualityRunFixtureContractTests {
         #expect(decision.excluded.map(\.backend) == ["qwen"])
         #expect(decision.absent.map(\.backend) == ["indicasr"])
         #expect(evaluated.qwen3.decision == .drop)
-        #expect(!TranscriptionQualityReport.markdown(for: receipt, decisions: evaluated).isEmpty)
+        let report = TranscriptionQualityReport.markdown(for: receipt, decisions: evaluated)
+        #expect(!report.isEmpty)
+        // Every cohort in the example draws on one corpus, so none of them may grow a breakdown
+        // that would only restate the row above it.
+        #expect(receipt.backends.allSatisfy { $0.cohorts.allSatisfy { $0.corpusIDs.count <= 1 } })
+        #expect(!report.contains("Per-corpus breakdown"))
     }
 }
 
@@ -1290,6 +1404,86 @@ private func weighted(
     )
 }
 
+private func corpusUtterance(
+    _ identifier: String,
+    corpusID: String,
+    errors: Int,
+    referenceWords: Int,
+    faithfulness: Double = 0.99,
+    seconds: Double = 1
+) -> Receipt.Utterance {
+    Receipt.Utterance(
+        sampleID: identifier,
+        corpusID: corpusID,
+        rawASR: countedStage(errors: errors, referenceWords: referenceWords, faithfulness: faithfulness),
+        finalOutput: countedStage(errors: errors, referenceWords: referenceWords, faithfulness: faithfulness),
+        endToEndSeconds: seconds,
+        speechRecognitionSeconds: seconds * 0.8,
+        audioDurationSeconds: 5
+    )
+}
+
+/// One backend over a cohort assembled from more than one corpus, with counts rather than rates.
+///
+/// Both halves are needed to say anything about a per-corpus breakdown: the corpus, because that is
+/// what the split is over, and the counts, because utterances of equal length make a pooled figure
+/// and a mean of rates the same number — and then a test cannot tell which one was rendered.
+private func spanning(
+    _ identifier: String,
+    cohort: TranscriptionQuality.Cohort,
+    counts: [(sampleID: String, corpusID: String, errors: Int, referenceWords: Int)],
+    faithfulness: Double,
+    seconds: Double = 1
+) -> Receipt.Backend {
+    Receipt.Backend(
+        backend: identifier,
+        model: "\(identifier)-model",
+        label: identifier,
+        languageConfiguration: "automatic",
+        cohorts: [Receipt.CohortResult(
+            cohort: cohort,
+            utterances: counts.map {
+                corpusUtterance(
+                    $0.sampleID,
+                    corpusID: $0.corpusID,
+                    errors: $0.errors,
+                    referenceWords: $0.referenceWords,
+                    faithfulness: faithfulness,
+                    seconds: seconds
+                )
+            }
+        )]
+    )
+}
+
+/// Corpus identity only. The breakdown reads the corpora list for ordering and nothing else — the
+/// revision and licence stay in the corpora table, which is why they are not repeated below it.
+private func corpus(_ identifier: String) -> Receipt.Corpus {
+    Receipt.Corpus(
+        id: identifier,
+        revision: "rev",
+        licenceIdentifier: "CC-BY-4.0",
+        acquisition: "hugging-face",
+        cohorts: [],
+        sampleCount: 0,
+        issueCount: 0
+    )
+}
+
+/// The breakdown table's data rows, so a test can assert what is *in* it rather than that the
+/// backend's name appears somewhere in a section that also holds a ranking and an exclusion table.
+private func breakdownRows(in report: String) -> [String] {
+    let lines = report.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    guard let start = lines.firstIndex(where: { $0.hasPrefix("**Per-corpus breakdown.**") }) else {
+        return []
+    }
+    return lines[start...]
+        .drop { !$0.hasPrefix("| ---") }
+        .dropFirst()
+        .prefix { $0.hasPrefix("|") }
+        .map { $0 }
+}
+
 /// Twenty error rates in a fixed but scattered order. Two different steps produce permutations of
 /// the same multiset, so the two backends' means match exactly while their paired differences do
 /// not — the only shape in which a bootstrap interval, and not the margin, decides the outcome.
@@ -1380,6 +1574,7 @@ private func notRunnable(
 
 private func makeReceipt(
     _ backends: [Receipt.Backend],
+    corpora: [Receipt.Corpus] = [],
     thresholds: Receipt.Thresholds = Receipt.Thresholds(),
     disclosures: Receipt.Disclosures = Receipt.Disclosures(
         cleanupRequested: true,
@@ -1390,7 +1585,7 @@ private func makeReceipt(
         runID: "test",
         generatedAt: "2026-08-21T00:00:00Z",
         host: testHost,
-        corpora: [],
+        corpora: corpora,
         thresholds: thresholds,
         disclosures: disclosures,
         backends: backends

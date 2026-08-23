@@ -208,6 +208,8 @@ public enum TranscriptionQualityReport {
             lines.append("")
         }
 
+        lines += corpusBreakdown(decision, receipt: receipt)
+
         if !decision.absent.isEmpty {
             lines += [
                 "**Not ranked — no data on this cohort.** Absent from the ranking rather than last.",
@@ -246,6 +248,120 @@ public enum TranscriptionQualityReport {
             lines += ["", "</details>", ""]
         }
         return lines
+    }
+
+    // MARK: Per-corpus breakdown
+
+    /// One backend's rows in the breakdown: its label, and its slice of the cohort.
+    private struct CorpusBreakdownRow {
+        let label: String
+        let result: TranscriptionQualityReceipt.CohortResult
+        /// Where the reader already met this backend in the section above.
+        let position: Int
+    }
+
+    /// The cohort's figures again, one corpus at a time.
+    ///
+    /// A cohort is a language condition, not a corpus, and the corpora that satisfy one are chosen
+    /// separately: `egyptian-arabic` is read speech from FLEURS pooled with spontaneous broadcast
+    /// speech from MGB-3. Pooling holds a long utterance at its true weight, but it cannot hold two
+    /// registers apart — the cohort figure lands between them and describes neither, and a reader
+    /// deciding what to ship for dictation needs the spontaneous half specifically.
+    ///
+    /// This is a reporting split and nothing more. Every figure is the same pooled statistic the
+    /// ranking uses, computed by the same code over fewer rows (`CohortResult.restricted(toCorpus:)`);
+    /// the ranking, the gate and the verdict above are untouched by it. A cohort backed by one
+    /// corpus renders nothing here, since restating its own figures would say nothing.
+    private static func corpusBreakdown(
+        _ decision: TranscriptionQualityDecision.CohortDecision,
+        receipt: TranscriptionQualityReceipt
+    ) -> [String] {
+        let rows = breakdownRows(decision, receipt: receipt)
+        let corpora = orderedCorpusIDs(in: rows.map(\.result), receipt: receipt)
+        guard corpora.count > 1 else { return [] }
+
+        var lines = [
+            "**Per-corpus breakdown.** This cohort pools \(corpora.count) corpora, and corpora "
+                + "differ in register — read speech and spontaneous speech are not equally hard — so "
+                + "the single figure above can sit between two results and describe neither. Below is "
+                + "the same pooling over one corpus at a time; the ranking and the verdict are "
+                + "unchanged by it.",
+            "",
+            "| Backend | Corpus | n | WER raw ASR | Faithfulness raw | p50 s |",
+            "| --- | --- | ---: | ---: | ---: | ---: |",
+        ]
+        for row in rows {
+            for corpus in corpora {
+                let slice = row.result.restricted(toCorpus: corpus)
+                // A backend that measured nothing from this corpus gets no row: an empty row would
+                // read as a result, and its absence is already visible in the counts.
+                guard slice.sampleCount > 0 else { continue }
+                lines.append(
+                    "| \(row.label) | \(corpus) | \(slice.sampleCount) "
+                        + "| \(format(slice.pooledNormalizedWER(at: .rawASR))) "
+                        + "| \(format(slice.meanFaithfulness(at: .rawASR))) "
+                        + "| \(format(slice.endToEndLatency?.p50, places: 2)) |"
+                )
+            }
+        }
+        return lines + [""]
+    }
+
+    /// Every backend with utterances in this cohort, in the order the section above introduced it.
+    ///
+    /// Gate-excluded backends belong here rather than being filtered to the ranking: a per-corpus
+    /// split is precisely what explains an exclusion — a backend that holds together on read speech
+    /// and collapses on spontaneous speech has a diagnosis, not just a failing average. A backend
+    /// can also carry utterances and appear in neither list, when no reference in the cohort held
+    /// language evidence for the gate to judge, so the fall-through keeps it too.
+    private static func breakdownRows(
+        _ decision: TranscriptionQualityDecision.CohortDecision,
+        receipt: TranscriptionQualityReceipt
+    ) -> [CorpusBreakdownRow] {
+        let introduced = decision.ranking.map(\.identity)
+            + decision.excluded.map(\.identity)
+            + decision.absent.map(\.identity)
+        let position = Dictionary(
+            introduced.enumerated().map { ($0.element, $0.offset) },
+            uniquingKeysWith: min
+        )
+        return receipt.backends
+            .compactMap { backend -> CorpusBreakdownRow? in
+                guard let result = backend.result(for: decision.cohort), result.sampleCount > 0 else {
+                    return nil
+                }
+                return CorpusBreakdownRow(
+                    label: backend.label,
+                    result: result,
+                    position: position[backend.identity] ?? Int.max
+                )
+            }
+            // `sorted(by:)` is not documented as stable, so receipt order is the explicit tiebreak
+            // rather than an assumption — otherwise two unplaced backends could swap between runs.
+            .enumerated()
+            .sorted { left, right in
+                left.element.position == right.element.position
+                    ? left.offset < right.offset
+                    : left.element.position < right.element.position
+            }
+            .map(\.element)
+    }
+
+    /// Corpus ids in the order the corpora table above lists them, so a reader can look one up
+    /// where its revision and licence already are. Anything the table does not name — a corpus that
+    /// measured utterances without being recorded in the run's corpus list — follows, rather than
+    /// being dropped from a breakdown whose whole job is to account for every utterance.
+    private static func orderedCorpusIDs(
+        in results: [TranscriptionQualityReceipt.CohortResult],
+        receipt: TranscriptionQualityReceipt
+    ) -> [String] {
+        var present: Set<String> = []
+        var firstSeen: [String] = []
+        for result in results {
+            for id in result.corpusIDs where present.insert(id).inserted { firstSeen.append(id) }
+        }
+        let listed = receipt.corpora.map(\.id).filter(present.contains)
+        return listed + firstSeen.filter { !listed.contains($0) }
     }
 
     /// A final-stage column of `n/a` is the honest rendering of a cleanup stage that did not run,

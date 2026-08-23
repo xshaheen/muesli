@@ -476,6 +476,26 @@ public extension TranscriptionQualityReceipt {
 
         public var sampleCount: Int { utterances.count }
 
+        /// The corpora this cohort's utterances came from, in the order they first appear.
+        ///
+        /// More than one is the normal case: a cohort is a *language condition*, and the corpora
+        /// that satisfy it are chosen separately. `egyptian-arabic` is read speech from FLEURS and
+        /// spontaneous broadcast speech from MGB-3, which are not the same task.
+        public var corpusIDs: [String] {
+            var seen: Set<String> = []
+            return utterances.map(\.corpusID).filter { seen.insert($0).inserted }
+        }
+
+        /// The same cohort narrowed to the utterances of one corpus.
+        ///
+        /// A `CohortResult` rather than a purpose-built summary, so every per-corpus figure is
+        /// produced by the pooling above — literally the function that produced the cohort figure
+        /// it will be printed under. A second summariser would be free to drift from the first, and
+        /// the only claim a breakdown makes is that it is the same statistic over fewer rows.
+        public func restricted(toCorpus corpusID: String) -> CohortResult {
+            CohortResult(cohort: cohort, utterances: utterances.filter { $0.corpusID == corpusID })
+        }
+
         /// Utterances that carry a measurement at this stage. Below the total at `.finalOutput`
         /// whenever cleanup was skipped for some of them.
         public func measuredCount(at stage: TranscriptionQuality.Stage) -> Int {
