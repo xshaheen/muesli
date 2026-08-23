@@ -95,6 +95,19 @@ private actor FakeQualityDriver: TranscriptionQualityDriver {
     }
 }
 
+/// The Qwen3 catalogue entry as it stood for the 21-08-2026 run, kept only so these
+/// tests can still describe a sweep that measured it. Qwen3 was removed from
+/// `BackendOption.all`, but the committed receipt fixture carries its rows, so the
+/// harness must go on being able to express a historical run that included it.
+private let historicalQwen3Asr = BackendOption(
+    backend: "qwen",
+    model: "FluidInference/qwen3-asr-0.6b-coreml",
+    label: "Qwen3 ASR",
+    sizeLabel: "~1.3 GB",
+    description: "Removed after the 21-08-2026 measurement run.",
+    recommended: false
+)
+
 private func harnessSample(
     _ id: String,
     cohort: TranscriptionQuality.Cohort = .english,
@@ -302,7 +315,7 @@ struct TranscriptionQualityRunnerTests {
     func macOSGateIsReportedAndSkipsTheCacheProbe() {
         let probed = Probe()
         let reason = TranscriptionQualityEligibility.notRunnableReason(
-            for: .qwen3Asr,
+            for: .cohereTranscribe,
             hostVersion: HarnessHostOperatingSystem(major: 14, minor: 2),
             isModelAvailableLocally: { _ in
                 probed.record()
@@ -343,7 +356,7 @@ struct TranscriptionQualityRunnerTests {
     func eligibleBackendHasNoReason() {
         #expect(
             TranscriptionQualityEligibility.notRunnableReason(
-                for: .qwen3Asr,
+                for: .cohereTranscribe,
                 hostVersion: HarnessHostOperatingSystem(major: 15),
                 isModelAvailableLocally: { _ in true }
             ) == nil
@@ -389,7 +402,6 @@ struct TranscriptionQualityRunnerTests {
         let expected: [String: String] = [
             "FluidInference/parakeet-tdt-0.6b-v3-coreml": "automatic",
             "FluidInference/parakeet-tdt-0.6b-v2-coreml": "pinned:en",
-            "FluidInference/qwen3-asr-0.6b-coreml": "automatic",
             "tiny": "automatic",
             "tiny.en": "pinned:en",
             "small": "automatic",
@@ -422,7 +434,7 @@ struct TranscriptionQualityRunnerTests {
             "whisper": .init(notRunnable: .modelNotDownloaded),
         ])
         let result = await harnessRunner(driver: driver).sweep(
-            backends: [.qwen3Asr, .whisperTiny, .parakeetMultilingual],
+            backends: [historicalQwen3Asr, .whisperTiny, .parakeetMultilingual],
             samples: [harnessSample("s1"), harnessSample("s2")]
         )
 
@@ -914,7 +926,7 @@ struct TranscriptionQualityRunnerTests {
         let store = try harnessStore(cohort: .egyptianArabic, samples: samples, issues: 2)
 
         let result = await harnessRunner(driver: driver, durationSeconds: 3).sweep(
-            backends: [.parakeetMultilingual, .qwen3Asr],
+            backends: [.parakeetMultilingual, historicalQwen3Asr],
             samples: samples
         )
         let receipt = result.receipt(

@@ -417,21 +417,22 @@ struct ModelDownloadCoordinatorTests {
     func managedASRPlanCompleteness() throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let plan = ManagedASRModelPlans.qwen3ASRInt8(modelsRoot: root)
+        let plan = ManagedASRModelPlans.parakeetRealtimeEOU320(modelsRoot: root)
         #expect(plan.cacheDirectory.standardizedFileURL.path.hasPrefix(root.standardizedFileURL.path + "/"))
 
         try FileManager.default.createDirectory(
-            at: plan.cacheDirectory.appendingPathComponent("qwen3_asr_audio_encoder_v2.mlmodelc"),
+            at: plan.cacheDirectory.appendingPathComponent("streaming_encoder.mlmodelc"),
             withIntermediateDirectories: true
         )
         #expect(!plan.isComplete())
 
         for relativePath in [
-            "qwen3_asr_audio_encoder_v2.mlmodelc/coremldata.bin",
-            "qwen3_asr_audio_encoder_v2.mlmodelc/weights/weight.bin",
-            "qwen3_asr_decoder_stateful.mlmodelc/coremldata.bin",
-            "qwen3_asr_decoder_stateful.mlmodelc/weights/weight.bin",
-            "qwen3_asr_embeddings.bin",
+            "streaming_encoder.mlmodelc/coremldata.bin",
+            "streaming_encoder.mlmodelc/weights/weight.bin",
+            "decoder.mlmodelc/coremldata.bin",
+            "decoder.mlmodelc/weights/weight.bin",
+            "joint_decision.mlmodelc/coremldata.bin",
+            "joint_decision.mlmodelc/weights/weight.bin",
             "vocab.json",
         ] {
             let url = plan.cacheDirectory.appendingPathComponent(relativePath)
@@ -458,15 +459,15 @@ struct ModelDownloadCoordinatorTests {
 
         try FileManager.default.removeItem(
             at: plan.cacheDirectory.appendingPathComponent(
-                "qwen3_asr_audio_encoder_v2.mlmodelc/weights/weight.bin"
+                "streaming_encoder.mlmodelc/weights/weight.bin"
             )
         )
         #expect(!plan.isComplete())
         #expect(!plan.isAvailableLocally())
-        #expect(plan.modelID == "FluidInference/qwen3-asr-0.6b-coreml")
-        #expect(plan.cacheDirectory.path.hasSuffix("qwen3-asr-0.6b/int8"))
+        #expect(plan.modelID == "FluidInference/parakeet-realtime-eou-120m-coreml/320ms")
+        #expect(plan.cacheDirectory.path.hasSuffix("parakeet-eou-streaming/320ms"))
         #expect(plan.selections.count == 1)
-        #expect(plan.selections[0].remoteDirectory == "int8")
+        #expect(plan.selections[0].remoteDirectory == "320ms")
         #expect(plan.selections[0].includedPaths.contains("vocab.json"))
 
         let whisper = ManagedASRModelPlans.whisperKit(modelName: "tiny", downloadRoot: root)
@@ -531,13 +532,14 @@ struct ModelDownloadCoordinatorTests {
 
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let plan = ManagedASRModelPlans.qwen3ASRInt8(modelsRoot: root)
+        let plan = ManagedASRModelPlans.parakeetRealtimeEOU320(modelsRoot: root)
         for relativePath in [
-            "qwen3_asr_audio_encoder_v2.mlmodelc/coremldata.bin",
-            "qwen3_asr_audio_encoder_v2.mlmodelc/weights/weight.bin",
-            "qwen3_asr_decoder_stateful.mlmodelc/coremldata.bin",
-            "qwen3_asr_decoder_stateful.mlmodelc/weights/weight.bin",
-            "qwen3_asr_embeddings.bin",
+            "streaming_encoder.mlmodelc/coremldata.bin",
+            "streaming_encoder.mlmodelc/weights/weight.bin",
+            "decoder.mlmodelc/coremldata.bin",
+            "decoder.mlmodelc/weights/weight.bin",
+            "joint_decision.mlmodelc/coremldata.bin",
+            "joint_decision.mlmodelc/weights/weight.bin",
             "vocab.json",
         ] {
             let url = plan.cacheDirectory.appendingPathComponent(relativePath)

@@ -187,7 +187,6 @@ struct MuesliCLITests {
         #expect(TranscribeModel(argument: "parakeet-v2") == .parakeetV2)
         #expect(TranscribeModel(argument: "parakeet-eou-320ms") == .parakeetEou320ms)
         #expect(TranscribeModel(argument: "sensevoice") == .senseVoice)
-        #expect(TranscribeModel(argument: "qwen3-asr") == .qwen3Asr)
         #expect(TranscribeModel(argument: "nemotron35") == .nemotron35)
         #expect(TranscribeModel(argument: "whisper-tiny") == .whisperTiny)
         #expect(TranscribeModel(argument: "whisper-tiny-english") == .whisperTinyEnglish)
@@ -204,10 +203,40 @@ struct MuesliCLITests {
         #expect(TranscribeModel.whisperLargeTurbo.whisperKitModelName == "large-v3-v20240930_626MB")
         #expect(TranscribeModel(argument: "whisper-medium") == nil)
         #expect(TranscribeModel(argument: "canary-qwen") == nil)
+        #expect(TranscribeModel(argument: "qwen3-asr") == nil)
         #expect(TranscribeOutputFormat(argument: "text") == .text)
         #expect(TranscribeOutputFormat(argument: "json") == .json)
         #expect(TranscribeOutputFormat(argument: "markdown") == .markdown)
         #expect(TranscribeOutputFormat(argument: "xml") == nil)
+    }
+
+    /// R1/R3 at the CLI boundary: someone with `--model qwen3-asr` in a script must be
+    /// told what replaced it, not just that the value is unrecognized.
+    @Test("the CLI rejects a retired model and names its replacement")
+    func transcribeRejectsRetiredModelWithNamedReplacement() throws {
+        #expect(throws: (any Error).self) { try TranscribeModel.parse("qwen3-asr") }
+
+        var message = ""
+        do {
+            _ = try TranscribeModel.parse("qwen3-asr")
+        } catch {
+            message = "\(error)"
+        }
+        #expect(message.contains("qwen3-asr"))
+        #expect(message.contains("removed"))
+        #expect(message.contains("parakeet-v3"))
+        #expect(message.contains("whisper-large-turbo"))
+
+        // A value that was never a model still gets the generic list, not this message.
+        var unknownMessage = ""
+        do {
+            _ = try TranscribeModel.parse("not-a-model")
+        } catch {
+            unknownMessage = "\(error)"
+        }
+        #expect(unknownMessage.contains("Unknown model"))
+        #expect(!unknownMessage.contains("removed"))
+        #expect(try TranscribeModel.parse("parakeet-v3") == .parakeetV3)
     }
 
     @Test("streaming WAV reader emits ordered fixed chunks and pads only the tail")

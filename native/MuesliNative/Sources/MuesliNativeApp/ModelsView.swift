@@ -46,6 +46,7 @@ struct ModelsView: View {
     @State private var liveCaptionDownloadTask: Task<Void, Never>?
     @State private var liveCaptionDownloadGeneration = ModelDownloadGenerationState()
     @State private var showDeleteLiveCaptionModelConfirmation = false
+    @State private var retiredCaches: [RetiredASRBackendCache] = []
 
     // Post-processor state
     @State private var downloadingPostProcModels: Set<String> = []
@@ -104,6 +105,7 @@ struct ModelsView: View {
             isLiveCaptionModelDownloaded = MeetingLiveCaptionModelStore.isDownloaded()
             syncSelectionsFromActiveBackend()
             checkNemotron35Update()
+            refreshRetiredCaches()
         }
         .onChange(of: appState.selectedBackend.model) { _, _ in
             syncSelectionsFromActiveBackend()
@@ -168,6 +170,8 @@ struct ModelsView: View {
     private var selectedCategoryContent: some View {
         switch appState.selectedModelsCategory {
         case .dictation:
+            retiredBackendSection
+
             familyCard(
                 title: "Parakeet Family",
                 subtitle: "The most responsive choices for everyday dictation, with multilingual and English-only options.",
@@ -176,8 +180,6 @@ struct ModelsView: View {
                 selection: $selectedParakeetModel,
                 options: BackendOption.parakeetFamily
             )
-
-            modelCard(option: .qwen3Asr, logo: "qwen-logo")
 
             familyCard(
                 title: "Whisper",
@@ -195,6 +197,88 @@ struct ModelsView: View {
             streamingSection
         case .postProcessing:
             postProcessorSection
+        }
+    }
+
+    /// R3 and R4 land in one place: the user is told which removed model they were on
+    /// and what replaced it, and offered the space its files are still holding.
+    @ViewBuilder
+    private var retiredBackendSection: some View {
+        if let notice = appState.config.retiredASRBackendNotice {
+            retiredCard(
+                title: "\(notice.retiredLabel) was removed",
+                body: notice.message,
+                action: ("Got it", { controller.updateConfig { $0.retiredASRBackendNotice = nil } })
+            )
+        }
+
+        ForEach(retiredCaches, id: \.backend) { cache in
+            retiredCard(
+                title: "\(cache.backend.label) files are still on this Mac",
+                body: "Deleting them frees \(cache.sizeLabel). \(cache.backend.label) can no longer be selected, so nothing will need them again.",
+                action: (
+                    "Delete \(cache.sizeLabel)",
+                    { deleteRetiredCache(cache) }
+                )
+            )
+        }
+    }
+
+    private func retiredCard(
+        title: String,
+        body: String,
+        action: (title: String, perform: () -> Void)
+    ) -> some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            Text(title)
+                .font(MuesliTheme.headline())
+                .foregroundStyle(MuesliTheme.textPrimary)
+
+            Text(body)
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button(action.title, action: action.perform)
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .padding(.horizontal, MuesliTheme.spacing12)
+                .padding(.vertical, 4)
+                .background(MuesliTheme.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(MuesliTheme.spacing16)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
+        .padding(.top, MuesliTheme.spacing8)
+    }
+
+    /// Sizing walks the cache directories, so it runs once when the tab appears rather
+    /// than on every view update.
+    private func refreshRetiredCaches() {
+        Task.detached(priority: .utility) {
+            let detected = RetiredASRBackendCache.detectAll()
+            await MainActor.run { retiredCaches = detected }
+        }
+    }
+
+    private func deleteRetiredCache(_ cache: RetiredASRBackendCache) {
+        retiredCaches.removeAll { $0.backend == cache.backend }
+        Task {
+            do {
+                try await ModelDeletionExecutor.execute(
+                    .retiredCache(directories: cache.directories)
+                )
+            } catch {
+                fputs("[muesli-native] retired cache delete failed for \(cache.backend.rawValue): \(error)\n", stderr)
+                await MainActor.run { refreshRetiredCaches() }
+            }
         }
     }
 
@@ -940,7 +1024,6 @@ struct ModelsView: View {
         case "fluidaudio": return "nvidia-logo"
         case "whisper": return "openai-logo"
         case "cohere": return "cohere-logo"
-        case "qwen": return "qwen-logo"
         case "nemotron35": return "nvidia-logo"
         case "indicasr": return "ai4bharat-logo"
         case "sensevoice": return "qwen-logo"

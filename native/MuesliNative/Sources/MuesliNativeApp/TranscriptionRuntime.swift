@@ -505,12 +505,11 @@ actor TranscriptionCoordinator {
     private static let defaultDiarizerLoadOperationTimeout: Duration = .seconds(300)
 
     static let explicitlyRoutedBackendIdentifiers: Set<String> = [
-        "whisper", "nemotron35", "qwen", "cohere", "indicasr", "sensevoice", "gemma4-litert",
+        "whisper", "nemotron35", "cohere", "indicasr", "sensevoice", "gemma4-litert",
     ]
 
     private let fluidTranscriber = FluidAudioTranscriber()
     private let whisperTranscriber = WhisperKitTranscriber()
-    private var _qwen3Transcriber: Any?
     private var _qwen3PostProcessor: Any?
     private var _cohereTranscriber: Any?
     private var _indicASRTranscriber: Any?
@@ -638,14 +637,6 @@ actor TranscriptionCoordinator {
         if #available(macOS 15, *), let postProcessor = _qwen3PostProcessor as? Qwen3PostProcessor {
             await postProcessor.shutdown()
         }
-    }
-
-    @available(macOS 15, *)
-    private var qwen3Transcriber: Qwen3AsrTranscriber {
-        if _qwen3Transcriber == nil {
-            _qwen3Transcriber = Qwen3AsrTranscriber()
-        }
-        return _qwen3Transcriber as! Qwen3AsrTranscriber
     }
 
     private var postProcessorModelURL: URL = PostProcessorOption.defaultOption.modelURL
@@ -874,17 +865,6 @@ actor TranscriptionCoordinator {
             } else {
                 throw NSError(domain: "MuesliTranscriptionRuntime", code: 1, userInfo: [
                     NSLocalizedDescriptionKey: "Nemotron 3.5 requires macOS 15 or later.",
-                ])
-            }
-        case "qwen":
-            if #available(macOS 15, *) {
-                try await qwen3Transcriber.loadModels(
-                    progress: progress,
-                    progressSnapshot: progressSnapshot
-                )
-            } else {
-                throw NSError(domain: "MuesliTranscriptionRuntime", code: 2, userInfo: [
-                    NSLocalizedDescriptionKey: "Qwen3 ASR requires macOS 15 or later.",
                 ])
             }
         case "cohere":
@@ -1219,11 +1199,6 @@ actor TranscriptionCoordinator {
             await unloadNemotron35Transcriber()
         case "gemma4-litert":
             await unloadGemma4LiteRTTranscriber()
-        case "qwen":
-            if #available(macOS 15, *), let transcriber = _qwen3Transcriber as? Qwen3AsrTranscriber {
-                await transcriber.shutdown()
-                _qwen3Transcriber = nil
-            }
         case "cohere":
             if #available(macOS 15, *), let transcriber = _cohereTranscriber as? CohereTranscribeTranscriber {
                 await transcriber.shutdown()
@@ -1751,7 +1726,6 @@ actor TranscriptionCoordinator {
             if let nemotron35 = _nemotron35Transcriber as? Nemotron35StreamingTranscriber {
                 await nemotron35.shutdown()
             }
-            await qwen3Transcriber.shutdown()
             if let postProcessor = _qwen3PostProcessor as? Qwen3PostProcessor {
                 await postProcessor.shutdown()
             }
@@ -2207,8 +2181,6 @@ actor TranscriptionCoordinator {
                 url: url,
                 promptId: nemotron35Language.promptId
             )
-        case "qwen":
-            return try await transcribeWithQwen3(url: url)
         case "cohere":
             return try await transcribeWithCohere(url: url, language: cohereLanguage)
         case "indicasr":
@@ -2257,25 +2229,6 @@ actor TranscriptionCoordinator {
             text: text,
             segments: text.isEmpty ? [] : [SpeechSegment(start: 0, end: 0, text: text)]
         )
-    }
-
-    // MARK: - Qwen3 ASR (Autoregressive CoreML on ANE)
-
-    private func transcribeWithQwen3(url: URL) async throws -> SpeechTranscriptionResult {
-        if #available(macOS 15, *) {
-            fputs("[muesli-native] transcribing with Qwen3 ASR: \(url.lastPathComponent)\n", stderr)
-            let result = try await qwen3Transcriber.transcribe(wavURL: url)
-            fputs("[muesli-native] Qwen3 ASR result: \(result.text.prefix(80)) (took \(String(format: "%.3f", result.processingTime))s)\n", stderr)
-            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return SpeechTranscriptionResult(
-                text: text,
-                segments: text.isEmpty ? [] : [SpeechSegment(start: 0, end: 0, text: text)]
-            )
-        } else {
-            throw NSError(domain: "Muesli", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Qwen3 ASR requires macOS 15 or later.",
-            ])
-        }
     }
 
     // MARK: - SenseVoiceSmall (FunASR via FluidAudio/CoreML)

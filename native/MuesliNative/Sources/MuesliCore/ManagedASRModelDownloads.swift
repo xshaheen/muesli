@@ -247,30 +247,6 @@ public enum ManagedASRModelPlans {
         )
     }
 
-    public static func qwen3ASRInt8(modelsRoot: URL? = nil) -> ManagedASRModelPlan {
-        let required = [
-            "qwen3_asr_audio_encoder_v2.mlmodelc",
-            "qwen3_asr_decoder_stateful.mlmodelc",
-            "qwen3_asr_embeddings.bin",
-            "vocab.json",
-        ]
-        let directory = (modelsRoot ?? fluidAudioModelsRoot())
-            .appendingPathComponent("qwen3-asr-0.6b/int8", isDirectory: true)
-        return ManagedASRModelPlan(
-            modelID: "FluidInference/qwen3-asr-0.6b-coreml",
-            repository: "FluidInference/qwen3-asr-0.6b-coreml",
-            cacheDirectory: directory,
-            selections: [
-                HuggingFaceModelSelection(
-                    remoteDirectory: "int8",
-                    includedPaths: Set(required),
-                    recursive: true
-                )
-            ],
-            requiredArtifactAlternatives: completenessRequirements(for: required)
-        )
-    }
-
     public static func parakeetRealtimeEOU320(modelsRoot: URL? = nil) -> ManagedASRModelPlan {
         let required = [
             "streaming_encoder.mlmodelc", "decoder.mlmodelc", "joint_decision.mlmodelc", "vocab.json",

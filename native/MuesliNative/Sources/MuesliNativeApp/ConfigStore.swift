@@ -41,6 +41,11 @@ final class ConfigStore {
         }
         do {
             _ = try DictationStyleResolver.prepareCanonicalConfiguration(decoded)
+            // R3: a migrated selection reaches disk on the launch that migrated it, so
+            // the rewrite survives a crash and cannot be re-derived from stale keys.
+            if decoded.retiredASRBackendMigrationApplied {
+                save(decoded)
+            }
             return .loaded(decoded)
         } catch {
             let reason = error.localizedDescription

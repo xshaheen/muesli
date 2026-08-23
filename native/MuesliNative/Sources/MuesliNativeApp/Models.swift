@@ -140,15 +140,6 @@ struct BackendOption: Equatable {
         .whisperMediumEnglish, .whisperLargeTurbo,
     ]
 
-    static let qwen3Asr = BackendOption(
-        backend: "qwen",
-        model: "FluidInference/qwen3-asr-0.6b-coreml",
-        label: "Qwen3 ASR",
-        sizeLabel: "~1.3 GB",
-        description: "Strong multilingual transcription across 52 languages when accuracy matters more than instant results. Expect a short 2–3 second wait compared with Parakeet, and about 30 seconds of one-time preparation the first time it runs.",
-        recommended: false
-    )
-
     static let experimental: [BackendOption] = [
         .senseVoiceSmall, .indicASR, .gemma4E2BLiteRT,
     ]
@@ -163,7 +154,6 @@ struct BackendOption: Equatable {
     /// Models available for download and use.
     static let all: [BackendOption] = {
         parakeetFamily
-            + [.qwen3Asr]
             + whisperFamily
             + [.cohereTranscribe]
             + streaming
@@ -235,8 +225,6 @@ struct BackendOption: Equatable {
                 ? ManagedASRModelPlans.parakeetV2()
                 : ManagedASRModelPlans.parakeetV3()
             return plan.isAvailableLocally(fileManager: fm)
-        case "qwen":
-            return Qwen3AsrModelStore.isModelDownloaded(fileManager: fm)
         case "nemotron35":
             return Nemotron35ModelStore.isModelDownloaded(fileManager: fm)
         case "cohere":
@@ -1719,6 +1707,14 @@ struct AppConfig: Codable {
     var whisperLanguage: String = WhisperKitLanguage.defaultLanguage.rawValue
     var languageProfile: LanguageProfile = .automatic
     var languageProfileNeedsConfirmation: Bool = false
+    /// Set when a persisted selection named a removed backend, and cleared once the
+    /// user acknowledges it. Persisted so the announcement survives the launch it
+    /// happened on.
+    var retiredASRBackendNotice: RetiredASRBackendNotice? = nil
+    /// Decode-only state, deliberately outside `CodingKeys`: it tells `ConfigStore`
+    /// that this particular decode rewrote a selection and the result has to reach
+    /// disk. Persisting it would make every later load look like a fresh migration.
+    var retiredASRBackendMigrationApplied: Bool = false
     var meetingTranscriptionBackend: String = BackendOption.whisper.backend
     var meetingTranscriptionModel: String = BackendOption.whisper.model
     var meetingSummaryBackend: String = MeetingSummaryBackendOption.chatGPT.backend
@@ -1879,6 +1875,7 @@ struct AppConfig: Codable {
         case whisperLanguage = "whisper_language"
         case languageProfile = "language_profile"
         case languageProfileNeedsConfirmation = "language_profile_needs_confirmation"
+        case retiredASRBackendNotice = "retired_asr_backend_notice"
         case meetingTranscriptionBackend = "meeting_transcription_backend"
         case meetingTranscriptionModel = "meeting_transcription_model"
         case meetingSummaryBackend = "meeting_summary_backend"
@@ -1999,6 +1996,58 @@ struct AppConfig: Codable {
         case showDictationFocusReminder = "show_dictation_focus_reminder"
     }
 
+    struct RetiredASRBackendMigrationOutcome {
+        let dictation: BackendOption?
+        let meetingTranscription: BackendOption?
+        let notice: RetiredASRBackendNotice
+    }
+
+    /// Maps every persisted selection of a removed backend onto its measured
+    /// replacement, and describes the result for the user.
+    ///
+    /// `meeting_live_caption_backend` never admitted `qwen` as a value, so there is
+    /// nothing to rewrite there — `MeetingLiveCaptionBackend.resolved` already coerces
+    /// an unknown value to the default. A hand-edited config that names a removed
+    /// backend is still reported, because the user's live captions did change model.
+    static func migratingRetiredASRBackends(
+        dictationBackend: String,
+        meetingBackend: String,
+        liveCaptionBackend: String?,
+        languageProfile: LanguageProfile
+    ) -> RetiredASRBackendMigrationOutcome? {
+        let retiredDictation = RetiredASRBackend.resolve(backend: dictationBackend)
+        let retiredMeeting = RetiredASRBackend.resolve(backend: meetingBackend)
+        let retiredLiveCaption = RetiredASRBackend.resolve(backend: liveCaptionBackend)
+        guard let retired = retiredDictation ?? retiredMeeting ?? retiredLiveCaption else {
+            return nil
+        }
+
+        let replacement = RetiredASRBackendMigration.replacement(for: languageProfile)
+        var changes: [RetiredASRBackendNotice.Change] = []
+        if retiredDictation != nil {
+            changes.append(.init(surface: "Dictation", replacementLabel: replacement.label))
+        }
+        if retiredMeeting != nil {
+            changes.append(.init(surface: "Meeting transcription", replacementLabel: replacement.label))
+        }
+        if retiredLiveCaption != nil {
+            changes.append(.init(
+                surface: "Live meeting captions",
+                replacementLabel: MeetingLiveCaptionBackend.defaultBackend.label
+            ))
+        }
+
+        return RetiredASRBackendMigrationOutcome(
+            dictation: retiredDictation == nil ? nil : replacement,
+            meetingTranscription: retiredMeeting == nil ? nil : replacement,
+            notice: RetiredASRBackendNotice(
+                retiredLabel: retired.label,
+                reason: retired.removalReason,
+                changes: changes
+            )
+        )
+    }
+
     init() {}
 
     init(from decoder: Decoder) throws {
@@ -2048,6 +2097,27 @@ struct AppConfig: Codable {
         }
         meetingTranscriptionBackend = (try? c.decode(String.self, forKey: .meetingTranscriptionBackend)) ?? sttBackend
         meetingTranscriptionModel = (try? c.decode(String.self, forKey: .meetingTranscriptionModel)) ?? sttModel
+        retiredASRBackendNotice = try? c.decode(RetiredASRBackendNotice.self, forKey: .retiredASRBackendNotice)
+        // R3. Every persisted selection that still names a removed backend is rewritten
+        // here, before anything downstream can read it, and the rewrite is recorded so
+        // the user is told rather than quietly moved.
+        if let migration = Self.migratingRetiredASRBackends(
+            dictationBackend: sttBackend,
+            meetingBackend: meetingTranscriptionBackend,
+            liveCaptionBackend: try? c.decode(String.self, forKey: .meetingLiveCaptionBackend),
+            languageProfile: languageProfile
+        ) {
+            if let replacement = migration.dictation {
+                sttBackend = replacement.backend
+                sttModel = replacement.model
+            }
+            if let replacement = migration.meetingTranscription {
+                meetingTranscriptionBackend = replacement.backend
+                meetingTranscriptionModel = replacement.model
+            }
+            retiredASRBackendNotice = migration.notice
+            retiredASRBackendMigrationApplied = true
+        }
         meetingSummaryBackend = (try? c.decode(String.self, forKey: .meetingSummaryBackend)) ?? defaults.meetingSummaryBackend
         defaultMeetingTemplateID = (try? c.decode(String.self, forKey: .defaultMeetingTemplateID)) ?? defaults.defaultMeetingTemplateID
         whisperModel = (try? c.decode(String.self, forKey: .whisperModel)) ?? defaults.whisperModel

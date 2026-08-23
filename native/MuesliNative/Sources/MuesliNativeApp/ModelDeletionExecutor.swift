@@ -8,6 +8,9 @@ enum ModelDeletionPlan: Sendable, Equatable {
     case backend(backend: String, model: String)
     case postProcessor(cacheDirectory: URL)
     case liveCaption
+    /// R4: a removed backend's cache is reclaimable through the same path as a live
+    /// model's, rather than being orphaned on disk with nothing left to delete it.
+    case retiredCache(directories: [URL])
 
     static func backend(_ option: BackendOption) -> Self {
         .backend(backend: option.backend, model: option.model)
@@ -31,6 +34,10 @@ enum ModelDeletionPlan: Sendable, Equatable {
             try? fileManager.removeItem(at: cacheDirectory)
         case .liveCaption:
             try MeetingLiveCaptionModelStore.delete(fileManager: fileManager)
+        case .retiredCache(let directories):
+            for directory in directories {
+                try Self.removeItemIfPresent(at: directory, fileManager: fileManager)
+            }
         }
     }
 
@@ -68,8 +75,6 @@ enum ModelDeletionPlan: Sendable, Equatable {
                 ? ManagedASRModelPlans.parakeetV2()
                 : ManagedASRModelPlans.parakeetV3()
             try plan.delete(fileManager: fileManager)
-        case "qwen":
-            try Qwen3AsrModelStore.deleteModelFiles(fileManager: fileManager)
         default:
             break
         }

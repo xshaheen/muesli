@@ -16,7 +16,6 @@ enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
     case parakeetV2 = "parakeet-v2"
     case parakeetEou320ms = "parakeet-eou-320ms"
     case senseVoice = "sensevoice"
-    case qwen3Asr = "qwen3-asr"
     case nemotron35 = "nemotron35"
     case whisperTiny = "whisper-tiny"
     case whisperTinyEnglish = "whisper-tiny-english"
@@ -31,7 +30,7 @@ enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
         switch self {
         case .parakeetV3: return .v3
         case .parakeetV2: return .v2
-        case .parakeetEou320ms, .senseVoice, .qwen3Asr, .nemotron35,
+        case .parakeetEou320ms, .senseVoice, .nemotron35,
              .whisperTiny, .whisperTinyEnglish,
              .whisperSmall, .whisperSmallEnglish, .whisperMediumEnglish,
              .whisperLargeTurbo:
@@ -48,11 +47,45 @@ enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
         case .whisperSmallEnglish: return "small.en"
         case .whisperMediumEnglish: return "medium.en"
         case .whisperLargeTurbo: return "large-v3-v20240930_626MB"
-        case .parakeetV3, .parakeetV2, .parakeetEou320ms, .senseVoice, .qwen3Asr, .nemotron35:
+        case .parakeetV3, .parakeetV2, .parakeetEou320ms, .senseVoice, .nemotron35:
             return nil
         }
     }
 
+    /// Parses `--model`, rejecting a retired identifier by name instead of letting
+    /// ArgumentParser report it as merely unrecognized. Someone with `qwen3-asr` in a
+    /// script needs to be told what replaced it, not that the value is invalid.
+    static func parse(_ argument: String) throws -> TranscribeModel {
+        if let retired = RetiredTranscribeModel(rawValue: argument) {
+            throw ValidationError(retired.rejectionMessage)
+        }
+        guard let model = TranscribeModel(rawValue: argument) else {
+            throw ValidationError(
+                "Unknown model '\(argument)'. Supported models: "
+                    + TranscribeModel.allCases.map(\.rawValue).joined(separator: ", ")
+                    + "."
+            )
+        }
+        return model
+    }
+}
+
+/// A `--model` value the CLI used to accept.
+///
+/// Qwen3 ASR lost every measured cohort on 21-08-2026, including the Arabic ones it
+/// was kept for, so it was removed rather than maintained. The replacement named here
+/// is the English winner; a non-English workload should pass `whisper-large-turbo`.
+enum RetiredTranscribeModel: String, CaseIterable {
+    case qwen3Asr = "qwen3-asr"
+
+    var rejectionMessage: String {
+        switch self {
+        case .qwen3Asr:
+            "The 'qwen3-asr' model was removed: it was measured against every other model "
+                + "and came last or near-last on every language, including Arabic. "
+                + "Use --model parakeet-v3 for English, or --model whisper-large-turbo otherwise."
+        }
+    }
 }
 
 struct TranscribeJSONPayload: Encodable {
@@ -108,7 +141,11 @@ struct TranscribeCommand: AsyncParsableCommand {
     var file: String
     @Option(name: .long, help: "Output format: text, json, or markdown.")
     var format: TranscribeOutputFormat = .text
-    @Option(name: .long, help: "Transcription model: parakeet-v3, parakeet-v2, parakeet-eou-320ms (streaming), sensevoice, qwen3-asr, nemotron35, whisper-tiny, whisper-tiny-english, whisper-small, whisper-small-english, whisper-medium-english, or whisper-large-turbo.")
+    @Option(
+        name: .long,
+        help: "Transcription model: parakeet-v3, parakeet-v2, parakeet-eou-320ms (streaming), sensevoice, nemotron35, whisper-tiny, whisper-tiny-english, whisper-small, whisper-small-english, whisper-medium-english, or whisper-large-turbo.",
+        transform: TranscribeModel.parse
+    )
     var model: TranscribeModel = .parakeetV3
     @Flag(name: .long, help: "Generate meeting notes using the configured Muesli summary backend when available.")
     var summarize = false
@@ -647,12 +684,11 @@ struct MuesliAudioFilePreparer: AudioPreparing {
 /// Dispatches to a per-model-family transcriber. Kept as a thin router so each
 /// transcriber stays focused on one inference shape (single-pass FluidAudio
 /// `AsrManager` batch, chunked EOU streaming, or a different FluidAudio manager
-/// entirely for SenseVoice/Qwen3).
+/// entirely for SenseVoice).
 struct RoutingAudioTranscriber: AudioTranscribing {
     var batch: AudioTranscribing = FluidAudioCLITranscriber()
     var streaming: AudioTranscribing = StreamingEouCLITranscriber()
     var senseVoice: AudioTranscribing = SenseVoiceCLITranscriber()
-    var qwen3Asr: AudioTranscribing = Qwen3AsrCLITranscriber()
     var nemotron35: AudioTranscribing = Nemotron35CLITranscriber()
     var whisper: AudioTranscribing = WhisperCLITranscriber()
 
@@ -662,7 +698,6 @@ struct RoutingAudioTranscriber: AudioTranscribing {
         case .parakeetV3, .parakeetV2: transcriber = batch
         case .parakeetEou320ms: transcriber = streaming
         case .senseVoice: transcriber = senseVoice
-        case .qwen3Asr: transcriber = qwen3Asr
         case .nemotron35: transcriber = nemotron35
         case .whisperTiny, .whisperTinyEnglish,
              .whisperSmall, .whisperSmallEnglish, .whisperMediumEnglish,
@@ -752,53 +787,6 @@ actor SenseVoiceCLITranscriber: AudioTranscribing {
         progress("transcription complete in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - start))s")
         return HeadlessTranscription(text: text, durationSeconds: nil)
     }
-}
-
-/// Wraps FluidAudio's `Qwen3AsrManager` directly — a thin wrapper, same shape as
-/// the app's `Qwen3AsrTranscriber` (`Qwen3AsrBackend.swift`), reusing the app's
-/// default model cache. Requires macOS 15+ for CoreML stateful decoder support,
-/// same constraint FluidAudio's `Qwen3AsrManager` itself carries.
-actor Qwen3AsrCLITranscriber: AudioTranscribing {
-    func transcribe(wavURL: URL, model: TranscribeModel, progress: @escaping (String) -> Void) async throws -> HeadlessTranscription {
-        guard #available(macOS 15, *) else {
-            throw CLIError.invalidInput("qwen3-asr requires macOS 15 or later.", fix: "Run on macOS 15+, or choose a different --model.")
-        }
-        return try await transcribeOnSupportedOS(wavURL: wavURL, progress: progress)
-    }
-
-    @available(macOS 15, *)
-    private func transcribeOnSupportedOS(wavURL: URL, progress: @escaping (String) -> Void) async throws -> HeadlessTranscription {
-        if manager == nil {
-            progress("loading qwen3-asr")
-            let plan = ManagedASRModelPlans.qwen3ASRInt8()
-            manager = try await ManagedASRModelDownloader.loadValidated(
-                plan,
-                progress: { fraction, message in
-                    progress(message ?? "model \(Int((fraction * 100).rounded()))%")
-                }
-            ) { modelDir in
-                progress("preparing model")
-                let mgr = Qwen3AsrManager()
-                try await mgr.loadModels(from: modelDir)
-                return mgr
-            }
-            progress("model ready")
-        }
-        guard let manager else {
-            throw CLIError.invalidInput("Qwen3 ASR model was not loaded.", fix: "Run the command again after the model finishes downloading.")
-        }
-        let start = CFAbsoluteTimeGetCurrent()
-        let samples = try AudioConverter().resampleAudioFile(wavURL)
-        let text = try await (manager as! Qwen3AsrManager).transcribe(audioSamples: samples)
-        progress("transcription complete in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - start))s")
-        return HeadlessTranscription(text: text, durationSeconds: nil)
-    }
-
-    // Stored as Any: `Qwen3AsrManager` itself is `@available(macOS 15, *)` in FluidAudio,
-    // and a stored property of that type would force this whole actor declaration behind
-    // the same guard — but `RoutingAudioTranscriber` needs to construct this actor
-    // unconditionally on any deployment target, and only fail at call time on older OSes.
-    private var manager: Any?
 }
 
 /// Wraps FluidAudio's public multilingual Nemotron manager using the exact

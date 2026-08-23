@@ -49,7 +49,7 @@ struct BackendOptionTests {
 
     @Test("backend field is one of the known backends")
     func knownBackends() {
-        let known: Set<String> = ["fluidaudio", "whisper", "qwen", "nemotron35", "cohere", "indicasr", "sensevoice", "gemma4-litert"]
+        let known: Set<String> = ["fluidaudio", "whisper", "nemotron35", "cohere", "indicasr", "sensevoice", "gemma4-litert"]
         for option in BackendOption.all {
             #expect(known.contains(option.backend), "Unknown backend: \(option.backend)")
         }
@@ -97,7 +97,6 @@ struct BackendOptionTests {
         #expect(BackendOption.all.contains(.whisperSmallEnglish))
         #expect(BackendOption.all.contains(.whisperMediumEnglish))
         #expect(BackendOption.all.contains(.whisperLargeTurbo))
-        #expect(BackendOption.all.contains(.qwen3Asr))
         #expect(BackendOption.all.contains(.cohereTranscribe))
         #expect(BackendOption.all.contains(.indicASR))
         #expect(BackendOption.all.contains(.senseVoiceSmall))
@@ -105,12 +104,17 @@ struct BackendOptionTests {
         #expect(BackendOption.all.contains(.gemma4E2BLiteRT))
     }
 
-    @Test("Qwen ASR is a standard dictation model")
-    func qwenAsrIsNotExperimental() {
-        #expect(BackendOption.all.contains(.qwen3Asr))
-        #expect(!BackendOption.experimental.contains(.qwen3Asr))
-        #expect(BackendOption.qwen3Asr.description.contains("52 languages"))
-        #expect(BackendOption.qwen3Asr.description.contains("2–3 second"))
+    /// R1. Nothing in the catalogue may reach a removed backend — not the browsable
+    /// list, not the onboarding picks, not the readiness probe used to decide whether a
+    /// model can be selected.
+    @Test("a retired backend is absent from every catalogue surface")
+    func retiredBackendsAreAbsentFromTheCatalogue() {
+        let retired = Set(RetiredASRBackend.allCases.map(\.rawValue))
+        #expect(!retired.isEmpty)
+        for option in BackendOption.all + BackendOption.onboarding + BackendOption.streaming {
+            #expect(!retired.contains(option.backend), "\(option.label) names a retired backend")
+        }
+        #expect(BackendOption.all.allSatisfy { !$0.model.contains("qwen") })
     }
 
     @Test("model descriptions explain usage without implementation jargon")
@@ -128,92 +132,48 @@ struct BackendOptionTests {
         }
     }
 
-    @Test("Qwen ASR cache names preserve current runtime and legacy cleanup paths")
-    func qwenAsrCacheDirectoryNamesMatchFluidAudio() {
-        // FluidAudio Repo.folderName default strips "-coreml" from the repo slug,
-        // so downloads land in qwen3-asr-0.6b/{int8,f32} (issue #380).
-        #expect(Qwen3AsrModelStore.cacheDirectoryNames.first == "qwen3-asr-0.6b")
-        #expect(Qwen3AsrModelStore.cacheDirectoryNames.contains("qwen3-asr-0.6b-coreml"))
-    }
-
-    @Test("Qwen ASR readiness matches the complete managed INT8 runtime directory")
-    func qwenAsrReadinessMatchesManagedRuntimeDirectory() throws {
+    /// AE7. The removed model's ~1.3 GB is still reclaimable: model management detects
+    /// both directory names it could have installed under, reports the space, and
+    /// deletes it through the same executor as a live model.
+    @Test("a retired backend's orphaned cache is detected with its size and deletable")
+    func retiredBackendCacheIsOfferedForDeletionWithItsSize() async throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory
-            .appendingPathComponent("muesli-qwen-asr-path-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("muesli-retired-cache-\(UUID().uuidString)", isDirectory: true)
         defer { try? fm.removeItem(at: root) }
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
 
-        func installRequiredArtifacts(in directory: URL) throws {
-            for relativePath in [
-                "qwen3_asr_audio_encoder_v2.mlmodelc/coremldata.bin",
-                "qwen3_asr_audio_encoder_v2.mlmodelc/weights/weight.bin",
-                "qwen3_asr_decoder_stateful.mlmodelc/coremldata.bin",
-                "qwen3_asr_decoder_stateful.mlmodelc/weights/weight.bin",
-                "qwen3_asr_embeddings.bin",
-                "vocab.json",
-            ] {
-                let url = directory.appendingPathComponent(relativePath)
-                try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try Data([0x01]).write(to: url)
-            }
+        #expect(RetiredASRBackendCache.detectAll(in: root, fileManager: fm).isEmpty)
+
+        // FluidAudio's Repo.folderName strips "-coreml" (issue #380), so a managed
+        // install and an older manual one can both be present.
+        for name in RetiredASRBackend.qwen3ASR.cacheDirectoryNames {
+            let directory = root.appendingPathComponent(name, isDirectory: true)
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data(repeating: 0x01, count: 4096)
+                .write(to: directory.appendingPathComponent("weights.bin"))
         }
 
-        #expect(!Qwen3AsrModelStore.isModelDownloaded(in: root, fileManager: fm))
+        let cache = try #require(RetiredASRBackendCache.detectAll(in: root, fileManager: fm).first)
+        #expect(cache.backend == .qwen3ASR)
+        #expect(cache.directories.count == 2)
+        #expect(cache.byteCount >= 8192)
+        #expect(!cache.sizeLabel.isEmpty)
 
-        let legacyDirectory = root
-            .appendingPathComponent("qwen3-asr-0.6b-coreml/int8", isDirectory: true)
-        try installRequiredArtifacts(in: legacyDirectory)
-        #expect(!Qwen3AsrModelStore.isModelDownloaded(in: root, fileManager: fm))
-
-        let managedDirectory = ManagedASRModelPlans.qwen3ASRInt8(modelsRoot: root).cacheDirectory
-        try installRequiredArtifacts(in: managedDirectory)
-        let managedPlan = ManagedASRModelPlans.qwen3ASRInt8(modelsRoot: root)
-        #expect(Qwen3AsrModelStore.isModelDownloaded(in: root, fileManager: fm))
-        let installedPaths = [
-            "qwen3_asr_audio_encoder_v2.mlmodelc/coremldata.bin",
-            "qwen3_asr_audio_encoder_v2.mlmodelc/weights/weight.bin",
-            "qwen3_asr_decoder_stateful.mlmodelc/coremldata.bin",
-            "qwen3_asr_decoder_stateful.mlmodelc/weights/weight.bin",
-            "qwen3_asr_embeddings.bin",
-            "vocab.json",
-        ]
-        let installedManifest = ModelDownloadManifest(
-            id: managedPlan.modelID,
-            version: "test-install",
-            files: installedPaths.map { relativePath in
-                ModelDownloadFile(
-                    relativePath: relativePath,
-                    remoteURL: URL(string: "https://example.com/model")!,
-                    expectedByteCount: 1
-                )
-            }
-        )
-        try managedPlan.recordSuccessfulInstallation(installedManifest)
-        #expect(Qwen3AsrModelStore.isModelDownloaded(in: root, fileManager: fm))
-
-        let completionMarker = managedDirectory
-            .appendingPathComponent(".muesli-managed-model-complete.json")
-        try Data("not-json".utf8).write(to: completionMarker)
-        #expect(!Qwen3AsrModelStore.isModelDownloaded(in: root, fileManager: fm))
-
-        try managedPlan.recordSuccessfulInstallation(installedManifest)
-        try fm.removeItem(at: managedDirectory.appendingPathComponent("vocab.json"))
-        #expect(!Qwen3AsrModelStore.isModelDownloaded(in: root, fileManager: fm))
-
-        try Qwen3AsrModelStore.deleteModelFiles(from: root, fileManager: fm)
-        #expect(!fm.fileExists(atPath: root.appendingPathComponent("qwen3-asr-0.6b").path))
-        #expect(!fm.fileExists(atPath: root.appendingPathComponent("qwen3-asr-0.6b-coreml").path))
+        try await ModelDeletionExecutor.execute(.retiredCache(directories: cache.directories))
+        for name in RetiredASRBackend.qwen3ASR.cacheDirectoryNames {
+            #expect(!fm.fileExists(atPath: root.appendingPathComponent(name).path))
+        }
+        #expect(RetiredASRBackendCache.detectAll(in: root, fileManager: fm).isEmpty)
     }
 
-    @Test("Qwen ASR warmup publishes readiness only for the current uncancelled load")
-    func qwenAsrWarmupReadinessGate() throws {
-        try Qwen3AsrWarmupReadiness.validate(isCancelled: false, isCurrent: true)
-        #expect(throws: CancellationError.self) {
-            try Qwen3AsrWarmupReadiness.validate(isCancelled: true, isCurrent: true)
-        }
-        #expect(throws: CancellationError.self) {
-            try Qwen3AsrWarmupReadiness.validate(isCancelled: false, isCurrent: false)
-        }
+    @Test("deleting an absent retired cache is a no-op rather than an error")
+    func retiredBackendCacheDeletionToleratesAbsentDirectories() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-retired-absent-\(UUID().uuidString)", isDirectory: true)
+        try await ModelDeletionExecutor.execute(
+            .retiredCache(directories: [root.appendingPathComponent("qwen3-asr-0.6b")])
+        )
     }
 
     @Test("Parakeet deletion unloads only the matching runtime variant")
@@ -1052,6 +1012,153 @@ struct AppConfigTests {
         #expect(TranscriptCleanupPrompts.writingID == "writing")
         #expect(TranscriptCleanupPrompts.codeID == "code")
         #expect(DictationStyleCategory.allCases.map(\.rawValue) == ["messages", "email", "writing", "code"])
+    }
+
+    // MARK: Retired ASR backends (R3, AE2, AE3)
+
+    @Test("an Arabic-dominant profile migrates a Qwen3 selection to Whisper Large Turbo")
+    func retiredQwenMigratesToWhisperForAnArabicProfile() throws {
+        let json = """
+        {
+          "stt_backend": "qwen",
+          "stt_model": "FluidInference/qwen3-asr-0.6b-coreml",
+          "meeting_transcription_backend": "qwen",
+          "meeting_transcription_model": "FluidInference/qwen3-asr-0.6b-coreml",
+          "language_profile": {
+            "selectedLanguages": ["ar", "en"],
+            "dominantLanguage": "ar"
+          }
+        }
+        """
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+
+        #expect(config.sttBackend == BackendOption.whisperLargeTurbo.backend)
+        #expect(config.sttModel == BackendOption.whisperLargeTurbo.model)
+        #expect(config.meetingTranscriptionBackend == BackendOption.whisperLargeTurbo.backend)
+        #expect(config.meetingTranscriptionModel == BackendOption.whisperLargeTurbo.model)
+    }
+
+    @Test("an English-only profile migrates a Qwen3 selection to Parakeet v3")
+    func retiredQwenMigratesToParakeetForAnEnglishProfile() throws {
+        let json = """
+        {
+          "stt_backend": "qwen",
+          "stt_model": "FluidInference/qwen3-asr-0.6b-coreml",
+          "language_profile": {
+            "selectedLanguages": ["en"],
+            "dominantLanguage": "en"
+          }
+        }
+        """
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+
+        #expect(config.sttBackend == BackendOption.parakeetMultilingual.backend)
+        #expect(config.sttModel == BackendOption.parakeetMultilingual.model)
+    }
+
+    /// KTD2's conservative half: an unset profile says nothing about the user's
+    /// languages, and Parakeet v3 is the measured English winner, so it is the
+    /// replacement only when nothing non-English is indicated.
+    @Test("an unset language profile migrates a Qwen3 selection to Parakeet v3")
+    func retiredQwenMigratesToParakeetWithoutALanguageProfile() throws {
+        let json = #"{"stt_backend": "qwen", "stt_model": "FluidInference/qwen3-asr-0.6b-coreml"}"#
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+
+        #expect(config.sttBackend == BackendOption.parakeetMultilingual.backend)
+        #expect(config.sttModel == BackendOption.parakeetMultilingual.model)
+    }
+
+    /// Parakeet v3 scored 0.005 faithfulness on Arabic — it essentially never emits
+    /// Arabic script — so any selected non-English language sends the user to Whisper
+    /// even when English is the dominant one.
+    @Test("a selected non-English language migrates to Whisper even when English dominates")
+    func retiredQwenMigratesToWhisperWhenANonEnglishLanguageIsSelected() throws {
+        let json = """
+        {
+          "stt_backend": "qwen",
+          "language_profile": {
+            "selectedLanguages": ["ar", "en"],
+            "dominantLanguage": "en"
+          }
+        }
+        """
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+
+        #expect(config.sttBackend == BackendOption.whisperLargeTurbo.backend)
+    }
+
+    @Test("a config with no retired selection is untouched and gets no notice")
+    func configWithoutARetiredSelectionIsUntouched() throws {
+        let json = """
+        {
+          "stt_backend": "fluidaudio",
+          "stt_model": "FluidInference/parakeet-tdt-0.6b-v3-coreml",
+          "meeting_transcription_backend": "whisper",
+          "meeting_transcription_model": "small"
+        }
+        """
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+
+        #expect(config.sttBackend == "fluidaudio")
+        #expect(config.sttModel == "FluidInference/parakeet-tdt-0.6b-v3-coreml")
+        #expect(config.meetingTranscriptionBackend == "whisper")
+        #expect(config.meetingTranscriptionModel == "small")
+        #expect(config.retiredASRBackendNotice == nil)
+        #expect(!config.retiredASRBackendMigrationApplied)
+    }
+
+    @Test("the migration names the removed model, its replacement, and every surface it changed")
+    func retiredQwenMigrationIsAnnouncedOnce() throws {
+        let json = """
+        {
+          "stt_backend": "qwen",
+          "meeting_transcription_backend": "qwen",
+          "language_profile": {"selectedLanguages": ["ar"], "dominantLanguage": "ar"}
+        }
+        """
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        let notice = try #require(config.retiredASRBackendNotice)
+
+        #expect(config.retiredASRBackendMigrationApplied)
+        #expect(notice.retiredLabel == "Qwen3 ASR")
+        #expect(notice.changes.map(\.surface) == ["Dictation", "Meeting transcription"])
+        #expect(notice.changes.allSatisfy { $0.replacementLabel == BackendOption.whisperLargeTurbo.label })
+        #expect(notice.message.contains("Qwen3 ASR"))
+        #expect(notice.message.contains(BackendOption.whisperLargeTurbo.label))
+        #expect(notice.message.contains(notice.reason))
+
+        // Announced once: the persisted notice survives a round trip, while the
+        // load-only "this decode migrated something" flag does not.
+        let roundTrip = try JSONDecoder().decode(
+            AppConfig.self,
+            from: try JSONEncoder().encode(config)
+        )
+        #expect(roundTrip.retiredASRBackendNotice == notice)
+        #expect(!roundTrip.retiredASRBackendMigrationApplied)
+        #expect(roundTrip.sttBackend == BackendOption.whisperLargeTurbo.backend)
+    }
+
+    /// `MeetingLiveCaptionBackend` never admitted `qwen`, but a hand-edited config can
+    /// still hold it, and it must be reported rather than silently coerced.
+    @Test("a retired live-caption selection is reported alongside its default replacement")
+    func retiredLiveCaptionSelectionIsReported() throws {
+        let json = #"{"meeting_live_caption_backend": "qwen"}"#
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        let notice = try #require(config.retiredASRBackendNotice)
+
+        #expect(notice.changes.map(\.surface) == ["Live meeting captions"])
+        #expect(
+            notice.changes.first?.replacementLabel
+                == MeetingLiveCaptionBackend.defaultBackend.label
+        )
+        #expect(config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU)
     }
 
     @Test("legacy custom global prompt survives with adaptive styles off")

@@ -21,11 +21,11 @@ struct TranscriptionBackendResidencyPolicyTests {
     @Test("unloads backends left over from earlier selections")
     func unloadsUndesignatedBackends() {
         let unloadable = TranscriptionBackendResidencyPolicy.backendsToUnload(
-            loaded: ["whisper", "qwen", "fluidaudio"],
+            loaded: ["whisper", "cohere", "fluidaudio"],
             designation: designation(dictation: "fluidaudio")
         )
 
-        #expect(unloadable == ["qwen", "whisper"])
+        #expect(unloadable == ["cohere", "whisper"])
     }
 
     @Test("keeps every designated slot resident")
@@ -65,12 +65,12 @@ struct TranscriptionBackendResidencyPolicyTests {
     @Test("never unloads a backend that is mid-transcription")
     func skipsInFlightBackends() {
         let unloadable = TranscriptionBackendResidencyPolicy.backendsToUnload(
-            loaded: ["fluidaudio", "whisper", "qwen"],
+            loaded: ["fluidaudio", "whisper", "cohere"],
             designation: designation(dictation: "fluidaudio"),
             inFlight: ["whisper"]
         )
 
-        #expect(unloadable == ["qwen"])
+        #expect(unloadable == ["cohere"])
     }
 
     @Test("one backend serving several slots is designated once")

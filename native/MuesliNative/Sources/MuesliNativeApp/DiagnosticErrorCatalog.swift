@@ -240,15 +240,6 @@ enum DiagnosticErrorCatalog {
                 code: normalizedCode
             )
         }
-        if normalizedDomain.hasSuffix(".Qwen3AsrTranscriber.TranscriberError"), normalizedCode == "0" {
-            return fixedMatch(
-                signature: "qwen3_models_not_loaded",
-                summary: "Qwen3 ASR transcription models were not loaded",
-                area: "transcription_model_state",
-                domain: "Qwen3AsrTranscriber.TranscriberError",
-                code: normalizedCode
-            )
-        }
         if normalizedDomain.hasSuffix(".SenseVoiceTranscriber.TranscriberError"), normalizedCode == "0" {
             return fixedMatch(
                 signature: "sensevoice_models_not_loaded",
@@ -416,7 +407,6 @@ enum DiagnosticErrorCatalog {
     private static let exactMeanings: [String: [String: DiagnosticErrorMeaning]] = [
         "MuesliTranscriptionRuntime": [
             "1": .init(summary: "Nemotron 3.5 requires a newer macOS version", area: "transcription_runtime"),
-            "2": .init(summary: "Qwen3 ASR requires a newer macOS version", area: "transcription_runtime"),
             "4": .init(summary: "Cohere Transcribe requires a newer macOS version", area: "transcription_runtime"),
             "5": .init(summary: "Unknown transcription backend was requested", area: "transcription_runtime"),
             "6": .init(summary: "Indic ASR requires a newer macOS version", area: "transcription_runtime"),

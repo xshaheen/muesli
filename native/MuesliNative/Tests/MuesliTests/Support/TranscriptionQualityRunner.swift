@@ -102,7 +102,7 @@ enum TranscriptionQualityEligibility {
     /// and throws on anything older. Read off those checks directly rather than inferred from the
     /// model catalogue, because the throw is what the sweep would otherwise record as a failure.
     static let macOS15Backends: Set<String> = [
-        "qwen", "cohere", "indicasr", "gemma4-litert", "nemotron35",
+        "cohere", "indicasr", "gemma4-litert", "nemotron35",
     ]
 
     static func minimumMacOSMajorVersion(for backend: BackendOption) -> Int? {
@@ -155,7 +155,7 @@ enum TranscriptionQualityEligibility {
         case "cohere": return "pinned:\(CohereTranscribeLanguage.defaultLanguage.rawValue)"
         case "indicasr": return "pinned:\(IndicASRLanguage.defaultLanguage.rawValue)"
         default:
-            // `qwen`, `nemotron35`, `sensevoice` and `gemma4-litert` all detect the language
+            // `nemotron35`, `sensevoice` and `gemma4-litert` all detect the language
             // themselves on their shipped defaults; `whisper` and `fluidaudio` do only in their
             // multilingual checkpoints.
             return isEnglishOnly(backend) ? "pinned:en" : "automatic"
