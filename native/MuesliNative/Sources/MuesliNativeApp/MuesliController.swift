@@ -1771,6 +1771,20 @@ final class MuesliController: NSObject {
     ) -> BackendOption? {
         let meetingOptions = downloadedOptions.filter(\.supportsMeetingTranscription)
         let fallback = dictationBackend.supportsMeetingTranscription ? dictationBackend : nil
+        // `resolveDownloaded` deliberately keeps a persisted selection that is merely not
+        // downloaded yet: availability is a runtime state, and rewriting the user's choice
+        // over it would lose their model the moment a cache was cleared. Meeting support is
+        // a different kind of fact — a streaming-only backend appends words and never
+        // revises them, so it cannot produce a final meeting transcript however complete
+        // its download is. Passing such a selection through would have it survive the
+        // `meetingOptions` filter it was just excluded from.
+        let configured = BackendOption.resolve(
+            backend: config.meetingTranscriptionBackend,
+            model: config.meetingTranscriptionModel
+        )
+        if let configured, !configured.supportsMeetingTranscription {
+            return fallback ?? meetingOptions.first
+        }
         return BackendOption.resolveDownloaded(
             backend: config.meetingTranscriptionBackend,
             model: config.meetingTranscriptionModel,
