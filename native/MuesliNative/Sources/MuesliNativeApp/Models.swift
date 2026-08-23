@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import MuesliCore
-import MuesliQwenCoreML
 
 struct BackendOption: Equatable {
     let backend: String

@@ -3,7 +3,6 @@ import AVFoundation
 import FluidAudio
 import Foundation
 import MuesliCore
-import MuesliQwenCoreML
 import WhisperKit
 
 enum TranscribeOutputFormat: String, CaseIterable, ExpressibleByArgument {

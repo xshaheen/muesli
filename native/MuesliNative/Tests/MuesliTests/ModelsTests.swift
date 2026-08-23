@@ -5,18 +5,9 @@ import Foundation
 import FluidAudio
 import MuesliCore
 @testable import MuesliNativeApp
-@testable import MuesliQwenCoreML
 
 @Suite("BackendOption")
 struct BackendOptionTests {
-
-    @Test("Qwen runtime pins its independently managed model source")
-    func qwenRuntimeUsesPinnedManagedModelSource() {
-        let plan = Qwen3ModelIntegrity.plan()
-        #expect(plan.repository == Qwen3ModelIntegrity.repository)
-        #expect(plan.revision == Qwen3ModelIntegrity.revision)
-        #expect(plan.requiredArtifactAlternatives.count == Qwen3ModelIntegrity.digests.count)
-    }
 
     @Test("dictation tests freeze their backend override and Cohere language together")
     func dictationTestSelectionUsesEffectiveBackend() throws {

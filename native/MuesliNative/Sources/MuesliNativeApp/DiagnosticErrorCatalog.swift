@@ -1,6 +1,5 @@
 import Foundation
 import MuesliCore
-import MuesliQwenCoreML
 
 struct DiagnosticErrorMeaning: Codable, Equatable, Sendable {
     let summary: String
@@ -72,8 +71,6 @@ enum DiagnosticErrorCatalog {
             match = coreAudioTapMatch(for: coreAudioError)
         } else if let dictationError = error as? DictationTranscriptionDiagnosticError {
             match = dictationTranscriptionMatch(for: dictationError)
-        } else if let qwenError = error as? Qwen3LongAudioError {
-            match = qwenLongAudioMatch(for: qwenError)
         } else if let routingError = error as? LanguageRoutingIncompatibility {
             match = languageRoutingMatch(for: routingError)
         } else {
@@ -90,32 +87,6 @@ enum DiagnosticErrorCatalog {
             safeDomain: match.safeDomain,
             safeCode: match.safeCode,
             isKnown: true
-        )
-    }
-
-    private static func qwenLongAudioMatch(for error: Qwen3LongAudioError) -> Match {
-        let code: String
-        let summary: String
-        switch error {
-        case .durationExceeded:
-            (code, summary) = ("duration_exceeded", "Qwen audio exceeded the bounded duration limit")
-        case .workLimitExceeded:
-            (code, summary) = ("work_limit_exceeded", "Qwen candidate window work exceeded the bounded call limit")
-        case .cacheCapacity:
-            (code, summary) = ("cache_capacity", "Qwen decoder cache capacity was insufficient for a window")
-        case .windowFailed:
-            (code, summary) = ("window_failed", "A bounded Qwen inference window failed")
-        case .emptySpeechWindow:
-            (code, summary) = ("empty_speech_window", "Qwen returned empty text for a window classified as speech")
-        case .silenceClassificationIndeterminate:
-            (code, summary) = ("silence_indeterminate", "Qwen returned empty text and silence could not be confirmed")
-        }
-        return fixedMatch(
-            signature: "qwen_long_audio_\(code)",
-            summary: summary,
-            area: "transcription_inference",
-            domain: "Qwen3LongAudioError",
-            code: code
         )
     }
 
@@ -456,6 +427,11 @@ enum DiagnosticErrorCatalog {
     ]
 
     private static let exactMeanings: [String: [String: DiagnosticErrorMeaning]] = [
+        // Qwen3 ASR was removed after the 21-08-2026 measurement run, so nothing raises
+        // these any more. The table is keyed by the domain and code strings a diagnostic
+        // was *recorded* with, though, and incidents captured before the removal are still
+        // on disk — dropping the entry would turn a readable past incident into an opaque
+        // one for no gain.
         "Qwen3LongAudioError": [
             "duration_exceeded": .init(summary: "Qwen audio exceeded the bounded duration limit", area: "transcription_inference"),
             "work_limit_exceeded": .init(summary: "Qwen candidate window work exceeded the bounded call limit", area: "transcription_inference"),

@@ -20,6 +20,8 @@ case "${shard}" in
       ConfigStoreTests
       LanguageProfileSettingsModelTests
       LanguageProfileTests
+      LanguageSelectionPresentationTests
+      TranscriptionLanguageRoutingTests
       DictationStoreTests
       SessionTraceStoreTests
       RecordingArtifactStoreTests

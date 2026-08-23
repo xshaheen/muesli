@@ -1,7 +1,6 @@
 import FluidAudio
 import Foundation
 import MuesliCore
-import MuesliQwenCoreML
 
 struct SpeechSegment: Sendable {
     let start: Double
