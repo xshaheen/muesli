@@ -94,12 +94,21 @@ struct FluidAudioUpgradeCharacterizationTests {
         #expect(whisperRequired.contains("generation_config.json"))
     }
 
-    /// FluidAudio owns Nemotron's chunking, so a release that changes its cadence changes
-    /// Muesli's latency contract without touching a line of Muesli's code. 2240 ms at
-    /// 16 kHz is 35,840 samples; the cache geometry is the model's, not ours.
-    @Test("Nemotron streaming geometry is unchanged by the upgrade")
-    func nemotronStreamingGeometryIsFrozen() {
-        let config = NemotronRNNTConfig(
+    /// FluidAudio owns `NemotronRNNTConfig`, so a release that renames or retypes one of
+    /// its geometry fields changes Muesli's streaming contract. **Compiling is the
+    /// assertion here** — this initialiser names every field Muesli depends on, so a
+    /// field that is renamed, removed, or retyped upstream breaks the build rather than
+    /// passing quietly.
+    ///
+    /// Deliberately no `#expect` on the values that were just passed in: asserting
+    /// `config.chunkSamples == 35840` after constructing it with `chunkSamples: 35840`
+    /// only proves the struct stores its arguments, and would read as upgrade safety it
+    /// does not provide. The values themselves (2240 ms at 16 kHz = 35,840 samples, and
+    /// the cache geometry from the model's metadata.json) are Muesli's own constants and
+    /// are covered where the backend declares them.
+    @Test("Nemotron's FluidAudio config surface is unchanged by the upgrade")
+    func nemotronStreamingConfigSurfaceIsFrozen() {
+        _ = NemotronRNNTConfig(
             chunkSamples: 35840,
             cacheChannelFrames: 42,
             totalMelFrames: 233,
@@ -109,8 +118,5 @@ struct FluidAudioUpgradeCharacterizationTests {
             promptId: 101,
             stripAngleBracketTags: true
         )
-        #expect(config.chunkSamples == 35840, "Nemotron's 2240ms chunk moved")
-        #expect(config.cacheChannelFrames == 42, "Nemotron's attention-context cache moved")
-        #expect(config.blankTokenId == 13087, "Nemotron's blank token moved")
     }
 }
