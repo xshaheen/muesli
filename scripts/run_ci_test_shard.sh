@@ -23,6 +23,7 @@ case "${shard}" in
       LanguageSelectionPresentationTests
       FluidAudioUpgradeCharacterizationTests
       MeetingTranscriptionAvailabilityTests
+      TranscriptionQualityUpgradeComparisonTests
       TranscriptionLanguageRoutingTests
       DictationStoreTests
       SessionTraceStoreTests

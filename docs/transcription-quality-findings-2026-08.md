@@ -147,3 +147,87 @@ swift test --package-path native/MuesliNative --filter TranscriptionQualityHarne
 
 The harness refuses to run in CI, refuses to download models, and never copies corpus text into
 its receipt. Corpus acquisition is documented in `docs/transcription-quality-corpus.md`.
+
+---
+
+# Post-upgrade re-measurement — 25-08-2026 (U4)
+
+The FluidAudio 0.15.1 → 0.15.6 upgrade, re-measured against the identical corpus and
+compared to the 21-08 baseline. This is R10's gate, and it is the only evidence that the
+upgrade did not move transcription quality.
+
+- **Run:** `run-7DE3FC4A-AB7F-487C-BAE0-255901AB7F81`, FluidAudio **0.15.6**
+- **Baseline:** `run-19A6C1CB-6C16-4122-8975-1E8F5F43BBF2`, FluidAudio 0.15.1 (recorded as
+  `unrecorded` in that receipt — the provenance field postdates it, so the version is known
+  from the pin at the time rather than from the receipt)
+- **Samples:** 1,182 per backend, 5 backends, 0 failures. Identical corpora and revisions,
+  so the pairing precondition holds.
+
+## Why this comparison and not the ranking's interval
+
+The run's own bootstrap compares two *backends within one run* — "is this backend separated
+from the leader today?". Reusing it here would compare a single backend's before/after delta
+against the spread of a two-backend difference: different quantities, and a gate that would
+pass and fail for the wrong reasons. An earlier draft of the upgrade plan specified exactly
+that mistake.
+
+What is correct is pairing each backend against **itself** across the two runs. Both runs
+scored the same utterances, so the corpus's own difficulty cancels. A movement whose 95%
+interval excludes zero is reported; one whose interval contains zero is recorded as unmoved.
+
+## Result: 13 of 15 unmoved
+
+| Backend | Cohort | before | after | delta | 95% interval | verdict |
+|---|---|---:|---:|---:|---|---|
+| Parakeet v3 | english | 0.0628 | 0.0609 | −0.0019 | [−0.0045, −0.0001] | **moved, better** |
+| Parakeet v3 | egyptian-arabic | 1.0632 | 1.0627 | −0.0005 | [−0.0023, +0.0013] | unmoved |
+| Parakeet v3 | arabic-english | 0.9362 | 0.9343 | −0.0019 | [−0.0063, +0.0016] | unmoved |
+| Whisper Large Turbo | english | 0.0566 | 0.0542 | −0.0024 | [−0.0076, +0.0004] | unmoved |
+| Whisper Large Turbo | egyptian-arabic | 0.3856 | 0.3912 | +0.0055 | [−0.0067, +0.0188] | unmoved |
+| Whisper Large Turbo | arabic-english | 0.6643 | 0.6594 | −0.0048 | [−0.0234, +0.0140] | unmoved |
+| Whisper Tiny | english | 0.2489 | 0.2430 | −0.0059 | [−0.0242, +0.0096] | unmoved |
+| Whisper Tiny | egyptian-arabic | 0.8578 | 0.8581 | +0.0003 | [−0.0071, +0.0078] | unmoved |
+| Whisper Tiny | arabic-english | 0.9488 | 0.9657 | +0.0168 | [+0.0024, +0.0317] | **moved, worse** |
+| Cohere Transcribe | all three | — | — | 0.0000 | [0, 0] | unmoved |
+| Nemotron 3.5 | all three | — | — | 0.0000 | [0, 0] | unmoved |
+
+**Neither movement is a reason to hold the upgrade.**
+
+- *Parakeet v3 on English improved*, by 3% relative — and it is the backend the 0.15.6 chunk
+  work actually touches, so an improvement is the expected direction. The interval's upper
+  bound is −0.0001, which is as marginal as separation gets; treat it as "did not get worse"
+  rather than as a demonstrated gain.
+- *Whisper Tiny degraded on code-switching*, on a cohort where it already scored 0.949 WER and
+  failed the faithfulness gate at 0.509. It is unusable there before and after; the movement is
+  between two unusable numbers.
+
+**Cohere and Nemotron reproduced bit-identically** across the two runs — delta exactly zero on
+every cohort. Neither routes through FluidAudio's parakeet pipeline (Cohere is its own Core ML,
+Nemotron runs Muesli's own engine), so no change was expected, and the exact reproduction is
+also a useful check that the harness itself is deterministic.
+
+## This answers the open P1
+
+The review flagged that 0.15.6 rewrote FluidAudio's parakeet long-form pipeline — seam-gap
+repair on by default, final-window re-cutting, timestamp clamping instead of sorting — affecting
+every transcript over 15 s, with nothing measuring it. It is measured now: Parakeet's three
+cohorts are unmoved-or-better, so the rewrite did not degrade transcription on this corpus.
+
+## What it still does not cover
+
+- **Diarization.** No test and no measurement exercises `performCompleteDiarization`, and the
+  0.15.6 diarizer refactor is unverified. Speaker attribution is the path behind the
+  "published as both You and the remote speaker" bug, so this gap sits directly on a known
+  defect.
+- **Run-to-run nondeterminism is unquantified.** The comparison attributes all movement to the
+  upgrade. Cohere and Nemotron reproducing exactly is evidence for determinism, but Whisper is
+  neither a FluidAudio ASR backend nor bit-identical here, which suggests some movement comes
+  from somewhere other than the parakeet pipeline — plausibly the shared audio converter. A
+  same-version repeat run would separate noise from effect and has not been done.
+- **Latency is not compared.** A build briefly contended for the machine early in this run.
+  It was blocked on the SwiftPM lock rather than consuming CPU, so the effect should be nil,
+  but the figures were not taken under a contention-free guarantee and no latency claim is made
+  from them. Real-time factors this run: Parakeet 0.034, Whisper Tiny 0.064, Nemotron 0.065,
+  Cohere 0.084, Whisper Large Turbo 0.149.
+- **Automatic detection only**, as before. The pinned-language configuration users actually run
+  remains unmeasured.
