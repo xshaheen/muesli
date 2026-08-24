@@ -13,7 +13,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.1"),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.6"),
         // Pinned to the commit fixing empty transcriptions when `promptTokens` are set
         // (argmaxinc PR #514) — vocabulary biasing returns "" on every decode without it.
         // TODO: move to a tagged release once one ships with that fix.
