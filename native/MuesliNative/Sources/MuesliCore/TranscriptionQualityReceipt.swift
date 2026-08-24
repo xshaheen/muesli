@@ -36,6 +36,14 @@ public struct TranscriptionQualityReceipt: Codable, Sendable {
     public let thresholds: Thresholds
     public let disclosures: Disclosures
     public let backends: [Backend]
+    /// Versions of the dependencies that actually produce the transcripts.
+    ///
+    /// Two runs over the identical corpus can differ for exactly one interesting reason —
+    /// something under the app changed — and without this the receipt cannot say which
+    /// version produced which numbers. Optional so a receipt written before this field
+    /// existed still decodes; a comparison against such a receipt has to state that the
+    /// earlier side's versions are unrecorded rather than assume them.
+    public let dependencies: Dependencies?
 
     public init(
         runID: String,
@@ -44,7 +52,8 @@ public struct TranscriptionQualityReceipt: Codable, Sendable {
         corpora: [Corpus],
         thresholds: Thresholds = Thresholds(),
         disclosures: Disclosures,
-        backends: [Backend]
+        backends: [Backend],
+        dependencies: Dependencies? = nil
     ) {
         schemaVersion = Self.currentSchemaVersion
         self.runID = runID
@@ -54,6 +63,20 @@ public struct TranscriptionQualityReceipt: Codable, Sendable {
         self.thresholds = thresholds
         self.disclosures = disclosures
         self.backends = backends
+        self.dependencies = dependencies
+    }
+
+    /// The transcription dependencies whose version can move a score.
+    public struct Dependencies: Codable, Sendable, Equatable {
+        /// The exact FluidAudio version pinned when the run was taken, e.g. "0.15.6".
+        public let fluidAudio: String?
+        /// WhisperKit's pin, for the Whisper backends.
+        public let whisperKit: String?
+
+        public init(fluidAudio: String? = nil, whisperKit: String? = nil) {
+            self.fluidAudio = fluidAudio
+            self.whisperKit = whisperKit
+        }
     }
 }
 

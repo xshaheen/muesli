@@ -24,7 +24,8 @@ extension TranscriptionQualityRun.Result {
         host: TranscriptionQualityReceipt.Host = .current(),
         store: TranscriptionCorpusStore,
         thresholds: TranscriptionQualityReceipt.Thresholds = TranscriptionQualityReceipt.Thresholds(),
-        notes: [String] = []
+        notes: [String] = [],
+        dependencies: TranscriptionQualityReceipt.Dependencies? = .resolvedFromPackage()
     ) -> TranscriptionQualityReceipt {
         TranscriptionQualityReceipt(
             runID: runID,
@@ -54,7 +55,8 @@ extension TranscriptionQualityRun.Result {
                 cleanupNotPerformed: cleanupNotPerformed,
                 notes: notes
             ),
-            backends: backends.map(\.receiptBackend)
+            backends: backends.map(\.receiptBackend),
+            dependencies: dependencies
         )
     }
 
@@ -175,5 +177,55 @@ private extension TranscriptionQualityRun.SampleMeasurement {
             speechRecognitionSeconds: latency.speechRecognitionSeconds,
             audioDurationSeconds: latency.audioDurationSeconds
         )
+    }
+}
+
+extension TranscriptionQualityReceipt.Dependencies {
+    /// Reads the pins out of `Package.resolved` rather than taking a hand-typed string.
+    ///
+    /// A version a maintainer types into a run is a claim about the build; one read from the
+    /// resolution file is the build. This is what lets a later comparison say "these numbers
+    /// came from 0.15.1 and those from 0.15.6" without anyone having to remember.
+    ///
+    /// Returns nil rather than guessing when the file cannot be found or parsed: an absent
+    /// version is honest, and an invented one would silently mislabel a run.
+    static func resolvedFromPackage(
+        packageResolved: URL? = TranscriptionCorpusStorePaths.packageResolvedURL()
+    ) -> TranscriptionQualityReceipt.Dependencies? {
+        guard let packageResolved,
+              let data = try? Data(contentsOf: packageResolved),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let pins = root["pins"] as? [[String: Any]]
+        else { return nil }
+
+        func version(ofIdentity identity: String) -> String? {
+            for pin in pins {
+                guard let pinIdentity = pin["identity"] as? String,
+                      pinIdentity.caseInsensitiveCompare(identity) == .orderedSame,
+                      let state = pin["state"] as? [String: Any]
+                else { continue }
+                return state["version"] as? String
+            }
+            return nil
+        }
+
+        let fluid = version(ofIdentity: "fluidaudio")
+        let whisper = version(ofIdentity: "whisperkit")
+        guard fluid != nil || whisper != nil else { return nil }
+        return TranscriptionQualityReceipt.Dependencies(fluidAudio: fluid, whisperKit: whisper)
+    }
+}
+
+enum TranscriptionCorpusStorePaths {
+    /// Walks up from this source file to the package root. The harness only ever runs from a
+    /// checkout, so the resolution file is beside `Package.swift`; nil when it is not there.
+    static func packageResolvedURL(file: StaticString = #filePath) -> URL? {
+        var directory = URL(fileURLWithPath: String(describing: file)).deletingLastPathComponent()
+        for _ in 0 ..< 6 {
+            let candidate = directory.appendingPathComponent("Package.resolved")
+            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+            directory = directory.deletingLastPathComponent()
+        }
+        return nil
     }
 }
