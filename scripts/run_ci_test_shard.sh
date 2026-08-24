@@ -21,6 +21,7 @@ case "${shard}" in
       LanguageProfileSettingsModelTests
       LanguageProfileTests
       LanguageSelectionPresentationTests
+      FluidAudioUpgradeCharacterizationTests
       TranscriptionLanguageRoutingTests
       DictationStoreTests
       SessionTraceStoreTests
