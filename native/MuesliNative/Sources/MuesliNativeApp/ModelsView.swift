@@ -85,6 +85,12 @@ struct ModelsView: View {
                     .pickerStyle(.segmented)
                     .frame(maxWidth: 520)
 
+                    // Above the category switch, not inside one arm: a retired backend can
+                    // move the meeting transcription model while leaving dictation alone,
+                    // and this picker has no meeting category, so a notice scoped to
+                    // .dictation would never reach the user it was written for.
+                    retiredBackendSection
+
                     selectedCategoryContent
                 }
                 .padding(MuesliTheme.spacing32)
@@ -170,8 +176,6 @@ struct ModelsView: View {
     private var selectedCategoryContent: some View {
         switch appState.selectedModelsCategory {
         case .dictation:
-            retiredBackendSection
-
             familyCard(
                 title: "Parakeet Family",
                 subtitle: "The most responsive choices for everyday dictation, with multilingual and English-only options.",
