@@ -41,8 +41,18 @@ final class ConfigStore {
         }
         do {
             _ = try DictationStyleResolver.prepareCanonicalConfiguration(decoded)
-            // R3: a migrated selection reaches disk on the launch that migrated it, so
-            // the rewrite survives a crash and cannot be re-derived from stale keys.
+            // R3: a migrated selection reaches disk on the launch that migrated it, so the
+            // rewrite survives a crash and cannot be re-derived from stale keys.
+            //
+            // This holds only on the non-quarantined path. If the ruleset above throws,
+            // control leaves for `catch` before this runs, and `dictationStyleQuarantineReason`
+            // then makes every later `save(_:)` a no-op — so a quarantined user who also had a
+            // retired backend keeps `qwen` in config.json, is re-migrated in memory on each
+            // launch (dictation stays correct), and cannot dismiss the removal notice because
+            // the dismissal write is refused too. That is deliberate for now: the refusal
+            // exists to stop a corrupt-but-recoverable ruleset being overwritten, and a
+            // repeating notice is a smaller harm than trading that away. Fixing it properly
+            // means letting a write through that provably touches no dictation-style key.
             if decoded.retiredASRBackendMigrationApplied {
                 save(decoded)
             }

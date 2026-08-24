@@ -1650,3 +1650,78 @@ struct MeetingBrowserLogicTests {
         )
     }
 }
+
+/// The resolver that decides which model produces a meeting's final transcript.
+///
+/// Its answer is persisted, so a wrong one does not merely mis-route a single meeting —
+/// it overwrites the user's stored selection. These cover the streaming-only branch,
+/// which is the one that bypasses `resolveDownloaded`'s no-rewrite rule and therefore
+/// has to reimplement its download gating rather than skip it.
+@MainActor
+@Suite("Meeting transcription availability")
+struct MeetingTranscriptionAvailabilityTests {
+
+    private func config(meeting backend: BackendOption) -> AppConfig {
+        var config = AppConfig()
+        config.meetingTranscriptionBackend = backend.backend
+        config.meetingTranscriptionModel = backend.model
+        return config
+    }
+
+    @Test("a streaming-only selection is replaced by a downloaded meeting-capable model")
+    func streamingOnlySelectionIsReplaced() throws {
+        let resolved = try #require(MuesliController.availableMeetingTranscriptionBackend(
+            config: config(meeting: .nemotron35Multilingual),
+            dictationBackend: .nemotron35Multilingual,
+            downloadedOptions: [.nemotron35Multilingual, .parakeetMultilingual]
+        ))
+        #expect(resolved.supportsMeetingTranscription)
+        #expect(resolved == .parakeetMultilingual)
+    }
+
+    /// The regression this branch was fixed for: the dictation backend is meeting-capable
+    /// but is not on disk, while a downloaded meeting-capable model is. Preferring the
+    /// dictation backend here would persist a model that cannot run.
+    @Test("an undownloaded dictation backend loses to a downloaded meeting model")
+    func undownloadedDictationFallbackIsNotPreferred() throws {
+        let resolved = try #require(MuesliController.availableMeetingTranscriptionBackend(
+            config: config(meeting: .nemotron35Multilingual),
+            dictationBackend: .whisperLargeTurbo,
+            downloadedOptions: [.nemotron35Multilingual, .parakeetMultilingual]
+        ))
+        #expect(resolved == .parakeetMultilingual, "picked a model that is not downloaded")
+    }
+
+    @Test("a downloaded dictation backend is preferred over other meeting models")
+    func downloadedDictationFallbackWins() throws {
+        let resolved = try #require(MuesliController.availableMeetingTranscriptionBackend(
+            config: config(meeting: .nemotron35Multilingual),
+            dictationBackend: .whisperLargeTurbo,
+            downloadedOptions: [.whisperLargeTurbo, .parakeetMultilingual]
+        ))
+        #expect(resolved == .whisperLargeTurbo)
+    }
+
+    /// Nothing meeting-capable is downloaded at all. Returning the streaming-only
+    /// selection would be worse than returning nil: callers treat nil as "fall back to a
+    /// known-good default", and that path only ever yields a meeting-capable option.
+    @Test("no downloaded meeting model yields no resolution rather than a streaming one")
+    func noMeetingCapableDownloadYieldsNil() {
+        let resolved = MuesliController.availableMeetingTranscriptionBackend(
+            config: config(meeting: .nemotron35Multilingual),
+            dictationBackend: .nemotron35Multilingual,
+            downloadedOptions: [.nemotron35Multilingual]
+        )
+        #expect(resolved?.supportsMeetingTranscription ?? true)
+    }
+
+    @Test("a meeting-capable selection is kept even when it is not downloaded")
+    func capableSelectionSurvivesMissingDownload() throws {
+        let resolved = try #require(MuesliController.availableMeetingTranscriptionBackend(
+            config: config(meeting: .whisperLargeTurbo),
+            dictationBackend: .parakeetMultilingual,
+            downloadedOptions: [.parakeetMultilingual]
+        ))
+        #expect(resolved == .whisperLargeTurbo, "availability must not rewrite a capable choice")
+    }
+}

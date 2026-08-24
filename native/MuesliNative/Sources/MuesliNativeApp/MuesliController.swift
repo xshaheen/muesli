@@ -1764,7 +1764,9 @@ final class MuesliController: NSObject {
         appState.searchResultMeetings = []
     }
 
-    private static func availableMeetingTranscriptionBackend(
+    /// Internal rather than private so the download-gating below can be tested directly;
+    /// its result is persisted, so a wrong answer here rewrites the user's stored model.
+    static func availableMeetingTranscriptionBackend(
         config: AppConfig,
         dictationBackend: BackendOption,
         downloadedOptions: [BackendOption] = BackendOption.downloaded
@@ -1783,7 +1785,16 @@ final class MuesliController: NSObject {
             model: config.meetingTranscriptionModel
         )
         if let configured, !configured.supportsMeetingTranscription {
-            return fallback ?? meetingOptions.first
+            // Prefer the dictation backend only when it is actually on disk. Returning it
+            // unconditionally would hand back a model the user has not downloaded while a
+            // downloaded, meeting-capable one sat unconsidered in `meetingOptions` — and
+            // because this result is persisted, that guess would overwrite their stored
+            // selection with something that cannot run. `resolveDownloaded` gates its own
+            // fallback the same way; this branch has to match it, not bypass it.
+            let downloadedFallback = fallback.flatMap { candidate in
+                meetingOptions.contains(candidate) ? candidate : nil
+            }
+            return downloadedFallback ?? meetingOptions.first ?? fallback
         }
         return BackendOption.resolveDownloaded(
             backend: config.meetingTranscriptionBackend,

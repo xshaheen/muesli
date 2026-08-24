@@ -1,3 +1,4 @@
+import FluidAudio
 import Foundation
 import MuesliCore
 import Testing
@@ -9,8 +10,7 @@ import Testing
 /// suite exists to catch is the silent one: an upstream release moves a model to a new
 /// repository or revision, Muesli goes on offering it under the same label, and a user
 /// who chose a model quietly receives a different one — or keeps the label and loses the
-/// download, because `Repo.folderName` derives the on-disk cache path from exactly these
-/// identifiers.
+/// download when the path a model lands in moves.
 ///
 /// Recorded against FluidAudio 0.15.1 *before* the pin moved to 0.15.6, per the plan's
 /// R7/KTD4 and its execution note: without a baseline taken first, a post-upgrade failure
@@ -20,7 +20,45 @@ import Testing
 @Suite("FluidAudio upgrade characterization")
 struct FluidAudioUpgradeCharacterizationTests {
 
-    /// Every managed model's repository and revision, frozen.
+    /// The one cross-boundary contract in this suite: Muesli hardcodes each repository
+    /// string in `ManagedASRModelDownloads` (a module with no FluidAudio dependency at
+    /// all), and FluidAudio independently declares the same model in its own `Repo` enum.
+    /// Those two must agree. If an upstream release moves a model, `Repo`'s raw value
+    /// changes, this breaks, and the upgrade stops rather than shipping a Muesli that
+    /// downloads from a repository FluidAudio no longer serves.
+    ///
+    /// Everything below this case compares Muesli values to Muesli values. That is worth
+    /// pinning against accidental edits, but it cannot fail when the *dependency* moves —
+    /// an earlier version of this suite had only those cases while claiming to guard the
+    /// upgrade, which is a guard that cannot fire.
+    @Test("Muesli's repository identifiers still match FluidAudio's own")
+    func repositoryIdentifiersMatchFluidAudio() {
+        #expect(ManagedASRModelPlans.parakeetV3().repository == Repo.parakeetV3.rawValue)
+        #expect(ManagedASRModelPlans.parakeetV2().repository == Repo.parakeetV2.rawValue)
+        #expect(ManagedASRModelPlans.senseVoice().repository == Repo.senseVoiceSmall.rawValue)
+        #expect(
+            BackendOption.nemotron35Multilingual.model == Repo.nemotronMultilingual.rawValue,
+            "the catalogue and FluidAudio disagree about the Nemotron multilingual repository"
+        )
+    }
+
+    /// A release can keep a repository string identical and still relocate the directory
+    /// its files land in, because FluidAudio derives that from `folderName` rather than
+    /// from the repository. `parakeetEou320` is the case that shows the two differ: its
+    /// repository ends `/320ms` while its folder is `parakeet-eou-streaming/320ms`.
+    @Test("FluidAudio's cache-path derivation is unchanged by the upgrade")
+    func cachePathDerivationIsUnchanged() {
+        #expect(Repo.parakeetV3.folderName == "parakeet-tdt-0.6b-v3")
+        #expect(Repo.parakeetEou320.folderName == "parakeet-eou-streaming/320ms")
+        #expect(Repo.senseVoiceSmall.folderName == "sensevoice-small")
+        // The `-coreml` strip is the behaviour the retired-cache cleanup relies on when it
+        // looks for both `qwen3-asr-0.6b` and `qwen3-asr-0.6b-coreml`.
+        #expect(!Repo.parakeetV3.folderName.hasSuffix("-coreml"))
+    }
+
+    /// Every managed model's repository and revision, frozen. Muesli values on both
+    /// sides: this pins the catalogue against an accidental local edit and does **not**
+    /// detect an upstream move — `repositoryIdentifiersMatchFluidAudio` is that case.
     @Test("managed model repositories and revisions are unchanged by the upgrade")
     func managedModelIdentitiesAreFrozen() {
         let plans: [(String, ManagedASRModelPlan)] = [
@@ -94,19 +132,16 @@ struct FluidAudioUpgradeCharacterizationTests {
         #expect(whisperRequired.contains("generation_config.json"))
     }
 
-    /// FluidAudio owns `NemotronRNNTConfig`, so a release that renames or retypes one of
-    /// its geometry fields changes Muesli's streaming contract. **Compiling is the
-    /// assertion here** — this initialiser names every field Muesli depends on, so a
-    /// field that is renamed, removed, or retyped upstream breaks the build rather than
-    /// passing quietly.
+    /// `NemotronRNNTConfig` is **Muesli's own** type (`NemotronRNNTEngine.swift`), not
+    /// FluidAudio's — an earlier comment here claimed the opposite, which made this read
+    /// as upgrade protection it never provided. No FluidAudio release can rename these
+    /// fields; the app runs its own Nemotron engine.
     ///
-    /// Deliberately no `#expect` on the values that were just passed in: asserting
-    /// `config.chunkSamples == 35840` after constructing it with `chunkSamples: 35840`
-    /// only proves the struct stores its arguments, and would read as upgrade safety it
-    /// does not provide. The values themselves (2240 ms at 16 kHz = 35,840 samples, and
-    /// the cache geometry from the model's metadata.json) are Muesli's own constants and
-    /// are covered where the backend declares them.
-    @Test("Nemotron's FluidAudio config surface is unchanged by the upgrade")
+    /// It still earns a place pinning the geometry Muesli feeds the model (2240 ms at
+    /// 16 kHz = 35,840 samples, cache shape from the checkpoint's metadata.json) against
+    /// an accidental edit, with compilation covering the field names. No `#expect` on
+    /// values just passed in — that would only prove the struct stores its arguments.
+    @Test("Nemotron's streaming geometry is pinned against accidental edits")
     func nemotronStreamingConfigSurfaceIsFrozen() {
         _ = NemotronRNNTConfig(
             chunkSamples: 35840,
