@@ -35,6 +35,30 @@ final class MeetingChatConversation {
         lastError = nil
     }
 
+    /// Takes on history that finished loading after this conversation was already handed to a
+    /// view, placing it before anything sent in the meantime.
+    ///
+    /// The read is asynchronous precisely so the panel never blocks on SQLite, which means a
+    /// question can be asked while it is still in flight. Merging rather than assigning is what
+    /// keeps that question — and assigning would also drop it silently, since the loaded turns
+    /// know nothing about it.
+    func adoptPersistedTurns(_ persisted: [MeetingChatTurn]) {
+        guard !persisted.isEmpty else { return }
+        let known = Set(turns.map(\.id))
+        let missing = persisted.filter { !known.contains($0.id) }
+        guard !missing.isEmpty else { return }
+        turns = missing + turns
+    }
+
+    /// Records that stored history could not be read, without disturbing the conversation.
+    ///
+    /// The turns already present are still usable and still sendable; what the user loses is
+    /// the older history, so this reports the failure rather than clearing anything.
+    func reportHistoryLoadFailure(_ error: Error) {
+        guard turns.isEmpty else { return }
+        lastError = "Chat history could not be loaded: \(error.localizedDescription)"
+    }
+
     /// Composes the request, sends it, and records the reply.
     ///
     /// The transcript is supplied per call rather than stored, because it changes as the
@@ -171,6 +195,7 @@ final class MeetingChatConversations {
 
     private static let capacity = 10
     private var byMeeting: [Int64: MeetingChatConversation] = [:]
+    private var historyLoads: [Int64: Task<Void, Never>] = [:]
     private var meetingIDsByRecency: [Int64] = []
     private let store: DictationStore?
 
@@ -188,19 +213,14 @@ final class MeetingChatConversations {
 
         let created: MeetingChatConversation
         if let store {
-            let persistTurns = persistenceHandler(for: meetingID, store: store)
-            do {
-                let turns = try store.meetingChatTurns(meetingID: meetingID)
-                created = MeetingChatConversation(
-                    turns: turns,
-                    persistTurns: persistTurns
-                )
-            } catch {
-                created = MeetingChatConversation(
-                    lastError: "Chat history could not be loaded: \(error.localizedDescription)",
-                    persistTurns: recoveryPersistenceHandler(for: meetingID, store: store)
-                )
-            }
+            // Always the merging handler now that history arrives asynchronously. The blind
+            // replace this used to take on a successful read is only safe when the in-memory
+            // turns are authoritative, and they are not while a load is still in flight —
+            // it would persist a conversation that had forgotten its own history.
+            created = MeetingChatConversation(
+                persistTurns: recoveryPersistenceHandler(for: meetingID, store: store)
+            )
+            loadPersistedTurns(into: created, meetingID: meetingID, store: store)
         } else {
             created = MeetingChatConversation()
         }
@@ -209,24 +229,51 @@ final class MeetingChatConversations {
         return created
     }
 
-    private func persistenceHandler(
-        for meetingID: Int64,
+    /// Reads stored history off the caller's thread and merges it in when it arrives.
+    ///
+    /// This used to be a synchronous `store.meetingChatTurns` call inside `conversation(for:)`,
+    /// which the meeting panel invokes from inside SwiftUI's `body` — on the main thread, while
+    /// the meeting that owns the panel is writing to the same database. `DictationStore` opens
+    /// SQLite with a five-second busy timeout, so a contended write could stall the UI for
+    /// seconds each time the chat tab was shown.
+    private func loadPersistedTurns(
+        into conversation: MeetingChatConversation,
+        meetingID: Int64,
         store: DictationStore
-    ) -> ([MeetingChatTurn]) async throws -> Void {
+    ) {
         let databaseURL = store.resolvedDatabaseURL
-        return { turns in
-            try await Task.detached(priority: .utility) {
-                try DictationStore(databaseURL: databaseURL).replaceMeetingChatTurns(
-                    meetingID: meetingID,
-                    turns: turns
-                )
+        historyLoads[meetingID] = Task { [weak self, weak conversation] in
+            let loaded = await Task.detached(priority: .userInitiated) {
+                Result { try DictationStore(databaseURL: databaseURL).meetingChatTurns(meetingID: meetingID) }
             }.value
+            if let conversation {
+                switch loaded {
+                case let .success(turns):
+                    conversation.adoptPersistedTurns(turns)
+                case let .failure(error):
+                    conversation.reportHistoryLoadFailure(error)
+                }
+            }
+            self?.historyLoads[meetingID] = nil
         }
     }
 
-    /// A failed read must not turn the next send into a destructive whole-history overwrite.
-    /// Retrying the read first lets transient failures recover while malformed payloads stay
-    /// untouched for a future repair path.
+    /// Awaits the history load started when this meeting's conversation was first resolved.
+    ///
+    /// The UI does not need this — the conversation is `@Observable` and fills itself in — but
+    /// a caller that wants history on screen before the panel appears can await it, and a test
+    /// asserting on loaded history has no other way to know the read finished.
+    func historyLoad(for meetingID: Int64) async {
+        await historyLoads[meetingID]?.value
+    }
+
+    /// Re-reads stored history and merges before writing, so a send can never overwrite turns
+    /// this conversation does not know about.
+    ///
+    /// Once the only persistence path. It began as failure-only recovery — a failed read must
+    /// not turn the next send into a destructive whole-history overwrite — and the asynchronous
+    /// load generalised it: until that read lands, *every* conversation is one that has not yet
+    /// seen its own history, so blind replacement is unsafe on the success path too.
     private func recoveryPersistenceHandler(
         for meetingID: Int64,
         store: DictationStore

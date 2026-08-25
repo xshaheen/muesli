@@ -381,7 +381,9 @@ struct MeetingChatConversationTests {
             send: stubTransport("The launch moved to Friday.")
         )
 
-        let reloaded = MeetingChatConversations(store: store).conversation(for: meetingID)
+        let reloadedRegistry = MeetingChatConversations(store: store)
+        let reloaded = reloadedRegistry.conversation(for: meetingID)
+        await reloadedRegistry.historyLoad(for: meetingID)
 
         #expect(reloaded.turns.count == 2)
         #expect(reloaded.turns[0].role == .user)
@@ -405,7 +407,11 @@ struct MeetingChatConversationTests {
             send: failingTransport(.notConfigured(backend: "OpenAI"))
         )
 
-        let reloaded = MeetingChatConversations(store: store).conversation(for: meetingID)
+        let reloadedRegistry = MeetingChatConversations(store: store)
+        let reloaded = reloadedRegistry.conversation(for: meetingID)
+        // History now arrives off the caller's thread, so the assertion waits for the read
+        // rather than assuming it already happened inside `conversation(for:)`.
+        await reloadedRegistry.historyLoad(for: meetingID)
         #expect(reloaded.turns.count == 1)
         #expect(reloaded.turns[0].wasAnswered == false)
         #expect(reloaded.requestMessages(transcript: "T", systemPrompt: "P").count == 1)
@@ -445,7 +451,9 @@ struct MeetingChatConversationTests {
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
         let malformedJSON = "not valid JSON"
         try setRawChatHistory(malformedJSON, meetingID: meetingID, store: store)
-        let conversation = MeetingChatConversations(store: store).conversation(for: meetingID)
+        let registry = MeetingChatConversations(store: store)
+        let conversation = registry.conversation(for: meetingID)
+        await registry.historyLoad(for: meetingID)
 
         #expect(conversation.lastError?.contains("could not be loaded") == true)
         await conversation.send(
@@ -573,5 +581,75 @@ struct MeetingChatConversationTests {
     @Test("copying an empty conversation yields nothing rather than stray labels")
     func copyEmptyConversation() {
         #expect(MeetingChatConversation().transcriptForCopying().isEmpty)
+    }
+}
+
+/// The panel resolves a conversation from inside SwiftUI's `body`, on the main thread, while
+/// the meeting that owns the panel is writing to the same SQLite database. These pin the
+/// contract that makes that safe: resolving is a cache operation, never disk I/O.
+@MainActor
+@Suite("Meeting chat conversation loading")
+struct MeetingChatConversationLoadingTests {
+
+    private func stubTransport(_ reply: String) -> ([MeetingChatMessage], AppConfig) async throws -> String {
+        { _, _ in reply }
+    }
+
+    private func temporaryDatabaseURL() -> URL {
+        URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("muesli-chat-load-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("muesli.db")
+    }
+
+    /// The defect this suite exists for. `DictationStore.openDatabase` creates the database
+    /// and sets a five-second busy timeout, so doing this work on the caller's thread lets a
+    /// contended write freeze the UI for seconds. The file's existence is the observable
+    /// proof of whether the read happened synchronously.
+    @Test("resolving a conversation does no database work on the caller's thread")
+    func resolvingDoesNotOpenTheDatabaseSynchronously() {
+        let databaseURL = temporaryDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: databaseURL.deletingLastPathComponent()) }
+
+        let registry = MeetingChatConversations(store: DictationStore(databaseURL: databaseURL))
+        _ = registry.conversation(for: 4242)
+
+        #expect(
+            !FileManager.default.fileExists(atPath: databaseURL.path),
+            "resolving a conversation opened SQLite on the caller's thread"
+        )
+    }
+
+    /// History that arrives after the view already holds the conversation must not displace a
+    /// question asked while the read was in flight — and must not be dropped either.
+    @Test("history loaded after a send is merged, not overwritten")
+    func lateHistoryMergesWithInFlightTurns() async {
+        let conversation = MeetingChatConversation()
+        await conversation.send(
+            displayText: "asked before history arrived",
+            transcript: "T",
+            systemPrompt: "P",
+            config: AppConfig(),
+            send: stubTransport("reply")
+        )
+        let liveIDs = conversation.turns.map(\.id)
+
+        conversation.adoptPersistedTurns([
+            MeetingChatTurn(role: .user, displayText: "older question"),
+            MeetingChatTurn(role: .assistant, displayText: "older answer"),
+        ])
+
+        #expect(conversation.turns.count == 4, "stored history and the in-flight exchange must both survive")
+        #expect(conversation.turns[0].displayText == "older question", "history belongs before what came after it")
+        #expect(conversation.turns.suffix(2).map(\.id) == liveIDs, "the in-flight exchange must keep its order")
+    }
+
+    @Test("adopting history a conversation already has changes nothing")
+    func adoptingKnownHistoryIsIdempotent() {
+        let existing = MeetingChatTurn(role: .user, displayText: "already here")
+        let conversation = MeetingChatConversation(turns: [existing])
+
+        conversation.adoptPersistedTurns([existing])
+
+        #expect(conversation.turns.count == 1)
     }
 }
