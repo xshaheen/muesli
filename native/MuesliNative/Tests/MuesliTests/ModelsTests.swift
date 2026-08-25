@@ -3220,10 +3220,11 @@ struct AppConfigAppearanceTests {
         #expect(config.pauseMediaDuringDictation == false)
     }
 
-    @Test("recordingColorHex defaults to Catppuccin Mocha base")
+    @Test("recordingColorHex defaults to the explicit default marker")
     func recordingColorHexDefault() {
         let config = AppConfig()
-        #expect(config.recordingColorHex == "1e1e2e")
+        #expect(config.recordingColorHex == AppConfig.defaultAccentMarker)
+        #expect(config.accentOverrideHex == nil)
     }
 
     @Test("soundEnabled round-trips through JSON")
@@ -3287,7 +3288,7 @@ struct AppConfigAppearanceTests {
     func recordingColorHexFallsBackOnMissingKey() throws {
         let json = Data("{}".utf8)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: json)
-        #expect(decoded.recordingColorHex == "1e1e2e")
+        #expect(decoded.recordingColorHex == AppConfig.defaultAccentMarker)
     }
 
     @Test("soundEnabled CodingKey is sound_enabled")

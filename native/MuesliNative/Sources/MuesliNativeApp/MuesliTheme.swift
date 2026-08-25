@@ -81,8 +81,10 @@ enum MuesliTheme {
 
     // MARK: - Accent
 
-    static let defaultAccentDarkHex = 0x6BA3F7
-    static let defaultAccentLightHex = 0x2563EB
+    /// Coral is the product accent. Presets remain selectable but are scoped to selection and
+    /// highlight; every semantic state owns its own token so a preset cannot recolour state.
+    static let defaultAccentDarkHex = 0xFF7043
+    static let defaultAccentLightHex = 0xE8542A
     static let defaultAccent    = Color.adaptive(dark: defaultAccentDarkHex, light: defaultAccentLightHex)
     static var accentOverrideHex: String?
     static var accent: Color {

@@ -65,28 +65,24 @@ struct SidebarView: View {
     }
 
     private var updateCTAForeground: Color {
-        let accentHex = appState.config.recordingColorHex
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "#", with: "")
-            .lowercased()
-
         let defaultAccentHex = colorScheme == .dark
             ? MuesliTheme.defaultAccentDarkHex
             : MuesliTheme.defaultAccentLightHex
 
-        let value: UInt64
-        if accentHex == "1e1e2e" {
-            value = UInt64(defaultAccentHex)
-        } else {
-            guard accentHex.count == 6,
-                  let parsedValue = UInt64(accentHex, radix: 16) else {
-                value = UInt64(defaultAccentHex)
-                return foregroundColor(forAccentHex: value)
-            }
-            value = parsedValue
+        guard let override = appState.config.accentOverrideHex else {
+            return foregroundColor(forAccentHex: UInt64(defaultAccentHex))
         }
 
-        return foregroundColor(forAccentHex: value)
+        let accentHex = override
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "#", with: "")
+            .lowercased()
+
+        guard accentHex.count == 6, let parsedValue = UInt64(accentHex, radix: 16) else {
+            return foregroundColor(forAccentHex: UInt64(defaultAccentHex))
+        }
+
+        return foregroundColor(forAccentHex: parsedValue)
     }
 
     private func foregroundColor(forAccentHex value: UInt64) -> Color {

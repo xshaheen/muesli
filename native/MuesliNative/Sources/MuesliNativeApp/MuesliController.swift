@@ -702,9 +702,7 @@ final class MuesliController: NSObject {
         self.dictationAudioRoutingController.selectedInputDeviceUID = loadedConfig.dictationInputDeviceUID
         self.dictationAudioRoutingController.selectedMeetingInputDeviceUID = loadedConfig.meetingInputDeviceUID
         self.config = loadedConfig
-        if loadedConfig.recordingColorHex != "1e1e2e" {
-            MuesliTheme.accentOverrideHex = loadedConfig.recordingColorHex
-        }
+        MuesliTheme.accentOverrideHex = loadedConfig.accentOverrideHex
         self.selectedBackend = loadedBackend
         let configuredMeetingBackend = BackendOption.resolve(
             backend: loadedConfig.meetingTranscriptionBackend,
@@ -1902,7 +1900,7 @@ final class MuesliController: NSObject {
         let hotkeyTriggerThresholdChanged = config.hotkeyTriggerThresholdMS != previousHotkeyTriggerThresholdMS
             || config.computerUseHotkeyTriggerThresholdMS != previousComputerUseHotkeyTriggerThresholdMS
             || config.meetingRecordingHotkeyTriggerThresholdMS != previousMeetingRecordingHotkeyTriggerThresholdMS
-        MuesliTheme.accentOverrideHex = config.recordingColorHex == "1e1e2e" ? nil : config.recordingColorHex
+        MuesliTheme.accentOverrideHex = config.accentOverrideHex
         selectedBackend = BackendOption.all.first(where: {
             $0.backend == config.sttBackend && $0.model == config.sttModel
         }) ?? .whisper

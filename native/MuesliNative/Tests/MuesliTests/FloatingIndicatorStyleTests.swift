@@ -74,7 +74,7 @@ struct FloatingIndicatorStyleTests {
 struct FloatingMeetingPanelStyleTests {
     @Test("semantic accents stay limited to the established state palette")
     func semanticAccentPalette() {
-        #expect(MuesliTheme.defaultAccentDarkHex == 0x6BA3F7)
+        #expect(MuesliTheme.defaultAccentDarkHex == 0xFF7043)
         #expect(MuesliTheme.recordingHex == 0xFF7043)
         #expect(MuesliTheme.transcribingHex == 0xFFB04D)
         #expect(MuesliTheme.dangerHex == 0xFF6961)

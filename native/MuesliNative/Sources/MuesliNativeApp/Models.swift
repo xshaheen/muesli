@@ -1808,6 +1808,17 @@ enum DictationRecordingSavePolicy: String, Codable, CaseIterable {
 }
 
 struct AppConfig: Codable {
+    /// Stored in `recording_color_hex` to mean "use the product default accent". Deliberately
+    /// not a hex value so it can never collide with a selectable preset.
+    static let defaultAccentMarker = "default"
+    /// The pre-Spark default, which doubled as the "Dark" preset.
+    static let legacyDefaultAccentHex = "1e1e2e"
+
+    /// The user's accent choice, or `nil` when they are on the product default.
+    var accentOverrideHex: String? {
+        recordingColorHex == AppConfig.defaultAccentMarker ? nil : recordingColorHex
+    }
+
     var dictationHotkey: HotkeyConfig = .default
     var computerUseHotkey: HotkeyConfig = .computerUseDefault
     var enableComputerUseHotkey: Bool = false
@@ -1907,7 +1918,14 @@ struct AppConfig: Codable {
     var soundEnabled: Bool = true
     var pauseMediaDuringDictation: Bool = false
     var muteSystemAudioDuringDictation: Bool = false
-    var recordingColorHex: String = "1e1e2e"   // Catppuccin Mocha base, without #
+    /// `defaultAccentMarker` rather than a colour: the old default `1e1e2e` was also a
+    /// selectable preset, so a deliberate Dark pick and an untouched default were the same
+    /// bytes and could not be told apart. The marker is not a valid hex, so it can never
+    /// collide with a preset again.
+    var recordingColorHex: String = AppConfig.defaultAccentMarker
+    /// One-time gate for the `1e1e2e` migration below. Without it the migration re-fires on
+    /// every launch and erases a Dark selection made after the upgrade.
+    var accentSelectionMigrated: Bool = false
     var menuBarIcon: String = "muesli"
     var showHotkeyInMenuBar: Bool = true
     var showNextMeetingInMenuBar: Bool = true
@@ -2062,6 +2080,7 @@ struct AppConfig: Codable {
         case pauseMediaDuringDictation = "pause_media_during_dictation"
         case muteSystemAudioDuringDictation = "mute_system_audio_during_dictation"
         case recordingColorHex = "recording_color_hex"
+        case accentSelectionMigrated = "accent_selection_migrated"
         case menuBarIcon = "menu_bar_icon"
         case showHotkeyInMenuBar = "show_hotkey_in_menu_bar"
         case showNextMeetingInMenuBar = "show_next_meeting_in_menu_bar"
@@ -2398,6 +2417,16 @@ struct AppConfig: Codable {
         pauseMediaDuringDictation = (try? c.decode(Bool.self, forKey: .pauseMediaDuringDictation)) ?? defaults.pauseMediaDuringDictation
         muteSystemAudioDuringDictation = (try? c.decode(Bool.self, forKey: .muteSystemAudioDuringDictation)) ?? defaults.muteSystemAudioDuringDictation
         recordingColorHex = (try? c.decode(String.self, forKey: .recordingColorHex)) ?? defaults.recordingColorHex
+        accentSelectionMigrated =
+            (try? c.decode(Bool.self, forKey: .accentSelectionMigrated)) ?? defaults.accentSelectionMigrated
+        if !accentSelectionMigrated {
+            // The legacy value meant "no override" to every shipping build, so mapping it to
+            // the marker keeps existing installs rendering exactly as they do today.
+            if recordingColorHex == AppConfig.legacyDefaultAccentHex {
+                recordingColorHex = AppConfig.defaultAccentMarker
+            }
+            accentSelectionMigrated = true
+        }
         menuBarIcon = (try? c.decode(String.self, forKey: .menuBarIcon)) ?? defaults.menuBarIcon
         showHotkeyInMenuBar =
             (try? c.decode(Bool.self, forKey: .showHotkeyInMenuBar))

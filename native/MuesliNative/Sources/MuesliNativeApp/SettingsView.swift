@@ -412,6 +412,7 @@ struct SettingsView: View {
     }
 
     private static let accentPresets: [(hex: String, name: String)] = [
+        (AppConfig.defaultAccentMarker, "Default"),
         ("2563eb", "Blue"),
         ("ef4444", "Red"),
         ("f59e0b", "Amber"),
@@ -1755,7 +1756,11 @@ struct SettingsView: View {
                     controller.updateConfig { $0.recordingColorHex = preset.hex }
                 } label: {
                     Circle()
-                        .fill(Color(hex: preset.hex))
+                        .fill(
+                            preset.hex == AppConfig.defaultAccentMarker
+                                ? MuesliTheme.defaultAccent
+                                : Color(hex: preset.hex)
+                        )
                         .frame(width: 22, height: 22)
                         .overlay(
                             Circle().strokeBorder(Color.white.opacity(isSelected ? 0.9 : 0), lineWidth: 2)
