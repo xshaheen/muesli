@@ -2,35 +2,81 @@ import SwiftUI
 import MuesliCore
 
 enum MuesliTheme {
+    // MARK: - Ramp (warm charcoal / warm paper)
+
+    /// The Contextual Spark ramp, shared in value with the floating surfaces so the window
+    /// and the Mini read as one product. `raisedDarkHex` is deliberately the same number as
+    /// `DictationMiniPalette.glassTintHex`: a card in the window and the capsule beside the
+    /// caret sit at one value. The two are kept as independent literals and pinned together
+    /// by test rather than by reference, so the window does not depend on a floating surface
+    /// it is otherwise forbidden to touch.
+    enum Ramp {
+        static let inkWellDarkHex = 0x0E_0E_0D
+        static let deepDarkHex    = 0x14_13_12
+        static let baseDarkHex    = 0x1A_19_18
+        static let raisedDarkHex  = 0x21_1F_1E
+        static let hoverDarkHex   = 0x2A_28_26
+        static let surfaceDarkHex = 0x32_31_2F
+        static let selectedDarkHex = 0x3A_38_35
+
+        static let baseLightHex    = 0xFF_FD_FB
+        static let deepLightHex    = 0xF7_F4_EF
+        static let raisedLightHex  = 0xF0_EC_E5
+        static let hoverLightHex   = 0xE7_E2_D9
+        static let surfaceLightHex = 0xD9_D3_C8
+        static let selectedLightHex = 0xE3_DA_CF
+    }
+
+    /// Ink and hairline. The opacity ladder is unchanged from the values the app shipped
+    /// with; only the colour the alphas are applied to moves, from pure white/black to the
+    /// warm off-white and near-black of the Spark palette.
+    enum Ink {
+        static let darkHex  = 0xF3_F2_EF
+        static let lightHex = 0x1A_19_18
+
+        static let primaryDarkAlpha: CGFloat = 0.92
+        static let primaryLightAlpha: CGFloat = 0.88
+        static let secondaryDarkAlpha: CGFloat = 0.62
+        static let secondaryLightAlpha: CGFloat = 0.55
+        static let tertiaryDarkAlpha: CGFloat = 0.40
+        static let tertiaryLightAlpha: CGFloat = 0.33
+        static let hairlineDarkAlpha: CGFloat = 0.07
+        static let hairlineLightAlpha: CGFloat = 0.08
+
+        static var dark: NSColor { .colorWith(hex: darkHex, alpha: 1) }
+        static var light: NSColor { .colorWith(hex: lightHex, alpha: 1) }
+    }
+
     // MARK: - Colors — Backgrounds (layered)
 
-    static let backgroundDeep   = Color.adaptive(dark: 0x111214, light: 0xF5F5F7)
-    static let backgroundBase   = Color.adaptive(dark: 0x161719, light: 0xFFFFFF)
-    static let backgroundRaised = Color.adaptive(dark: 0x1C1D20, light: 0xF0F0F2)
-    static let backgroundHover  = Color.adaptive(dark: 0x232528, light: 0xE8E8EC)
+    static let backgroundInkWell = Color.adaptive(dark: Ramp.inkWellDarkHex, light: Ramp.surfaceLightHex)
+    static let backgroundDeep   = Color.adaptive(dark: Ramp.deepDarkHex, light: Ramp.deepLightHex)
+    static let backgroundBase   = Color.adaptive(dark: Ramp.baseDarkHex, light: Ramp.baseLightHex)
+    static let backgroundRaised = Color.adaptive(dark: Ramp.raisedDarkHex, light: Ramp.raisedLightHex)
+    static let backgroundHover  = Color.adaptive(dark: Ramp.hoverDarkHex, light: Ramp.hoverLightHex)
 
     // MARK: - Surfaces (interactive elements)
 
-    static let surfacePrimary   = Color.adaptive(dark: 0x262830, light: 0xE5E5EA)
-    static let surfaceSelected  = Color.adaptive(dark: 0x2E3340, light: 0xD6DFFE)
+    static let surfacePrimary   = Color.adaptive(dark: Ramp.surfaceDarkHex, light: Ramp.surfaceLightHex)
+    static let surfaceSelected  = Color.adaptive(dark: Ramp.selectedDarkHex, light: Ramp.selectedLightHex)
     static let surfaceBorder    = Color.adaptiveAlpha(
-        dark: .white, darkAlpha: 0.07,
-        light: .black, lightAlpha: 0.08
+        dark: Ink.dark, darkAlpha: Ink.hairlineDarkAlpha,
+        light: Ink.light, lightAlpha: Ink.hairlineLightAlpha
     )
 
     // MARK: - Text hierarchy
 
     static let textPrimary = Color.adaptiveAlpha(
-        dark: .white, darkAlpha: 0.92,
-        light: .black, lightAlpha: 0.88
+        dark: Ink.dark, darkAlpha: Ink.primaryDarkAlpha,
+        light: Ink.light, lightAlpha: Ink.primaryLightAlpha
     )
     static let textSecondary = Color.adaptiveAlpha(
-        dark: .white, darkAlpha: 0.62,
-        light: .black, lightAlpha: 0.55
+        dark: Ink.dark, darkAlpha: Ink.secondaryDarkAlpha,
+        light: Ink.light, lightAlpha: Ink.secondaryLightAlpha
     )
     static let textTertiary = Color.adaptiveAlpha(
-        dark: .white, darkAlpha: 0.40,
-        light: .black, lightAlpha: 0.33
+        dark: Ink.dark, darkAlpha: Ink.tertiaryDarkAlpha,
+        light: Ink.light, lightAlpha: Ink.tertiaryLightAlpha
     )
 
     // MARK: - Accent
