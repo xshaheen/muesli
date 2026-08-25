@@ -117,7 +117,7 @@ struct MeetingChatView: View {
         Text(hasTranscript
              ? "Ask anything about this meeting."
              : "Nothing has been transcribed yet.")
-            .font(.system(size: isCompact ? 11 : 12))
+            .font(MuesliTheme.font(size: isCompact ? 11 : 12))
             .foregroundStyle(MuesliTheme.textTertiary)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.vertical, 12)
@@ -202,7 +202,7 @@ struct MeetingChatView: View {
                 Image(systemName: copiedTurnText == text ? "checkmark" : "doc.on.doc")
                 Text(copiedTurnText == text ? "Copied" : "Copy")
             }
-            .font(.system(size: isCompact ? 10 : 11))
+            .font(MuesliTheme.font(size: isCompact ? 10 : 11))
             .foregroundStyle(MuesliTheme.textTertiary)
         }
         .buttonStyle(.plain)
@@ -216,7 +216,7 @@ struct MeetingChatView: View {
                 .controlSize(.small)
                 .tint(usesNeutralGlassStyle ? Color.white.opacity(0.70) : MuesliTheme.accent)
             Text("Thinking…")
-                .font(.system(size: isCompact ? 11 : 12))
+                .font(MuesliTheme.font(size: isCompact ? 11 : 12))
                 .foregroundStyle(MuesliTheme.textTertiary)
         }
         .padding(.vertical, 2)
@@ -226,7 +226,7 @@ struct MeetingChatView: View {
     /// meeting should not take over the screen.
     private func errorRow(_ message: String) -> some View {
         Text(message)
-            .font(.system(size: isCompact ? 11 : 12))
+            .font(MuesliTheme.font(size: isCompact ? 11 : 12))
             .foregroundStyle(MuesliTheme.textSecondary)
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
@@ -273,7 +273,7 @@ struct MeetingChatView: View {
                 ForEach(MeetingChatRecipes.visible()) { recipe in
                     Button { run(recipe) } label: {
                         Text(recipe.name)
-                            .font(.system(size: isCompact ? 10 : 11, weight: .medium))
+                            .font(MuesliTheme.font(size: isCompact ? 10 : 11, weight: .medium))
                             .foregroundStyle(MuesliTheme.textSecondary)
                             .lineLimit(1)
                             .fixedSize()
@@ -307,7 +307,7 @@ struct MeetingChatView: View {
                         }
                     } label: {
                         Text("All recipes")
-                            .font(.system(size: isCompact ? 10 : 11))
+                            .font(MuesliTheme.font(size: isCompact ? 10 : 11))
                             .foregroundStyle(MuesliTheme.textTertiary)
                     }
                     .menuStyle(.borderlessButton)
@@ -343,7 +343,7 @@ struct MeetingChatView: View {
         return HStack(spacing: 8) {
             TextField("Ask anything", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: isCompact ? 12 : 13))
+                .font(MuesliTheme.font(size: isCompact ? 12 : 13))
                 .lineLimit(1 ... 4)
                 .environment(\.layoutDirection, inputDirection.layoutDirection)
                 .multilineTextAlignment(.leading)

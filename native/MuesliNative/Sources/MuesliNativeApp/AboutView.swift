@@ -60,7 +60,7 @@ struct AboutView: View {
                                 Image(systemName: "heart.fill")
                                     .font(.system(size: 12))
                                 Text("Donate")
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .font(MuesliTheme.font(size: 13, weight: .semibold))
                             }
                             .foregroundStyle(.white)
                             .padding(.horizontal, MuesliTheme.spacing20)
@@ -156,7 +156,7 @@ struct AboutView: View {
     @ViewBuilder
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 11, weight: .semibold))
+            .font(MuesliTheme.font(size: 11, weight: .semibold))
             .foregroundStyle(MuesliTheme.textTertiary)
             .textCase(.uppercase)
             .padding(.leading, 2)
@@ -306,7 +306,7 @@ struct AboutView: View {
     private func acknowledgement(name: String, description: String) -> some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
             Text(name)
-                .font(.system(size: 14, weight: .semibold))
+                .font(MuesliTheme.font(size: 14, weight: .semibold))
                 .foregroundStyle(MuesliTheme.textPrimary)
             Text(description)
                 .font(MuesliTheme.callout())
@@ -326,7 +326,7 @@ struct AboutView: View {
                         .font(.system(size: 11))
                 }
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(MuesliTheme.font(size: 13, weight: .medium))
             }
             .foregroundStyle(MuesliTheme.textPrimary)
             .padding(.horizontal, MuesliTheme.spacing16)

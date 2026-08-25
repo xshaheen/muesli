@@ -337,7 +337,7 @@ struct LiveTranscriptView: View {
                     Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 11, weight: .semibold))
                     Text(didCopy ? "Copied" : "Copy")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(MuesliTheme.font(size: 12, weight: .semibold))
                 }
                 .foregroundStyle(didCopy ? MuesliTheme.success : MuesliTheme.textPrimary)
                 .padding(.horizontal, MuesliTheme.spacing12)

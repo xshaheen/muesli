@@ -430,7 +430,7 @@ struct SidebarView: View {
                         Image(systemName: updateCTA.icon)
                             .font(.system(size: 9, weight: .bold))
                         Text(updateCTA.label)
-                            .font(.system(size: 11, weight: .bold))
+                            .font(MuesliTheme.font(size: 11, weight: .bold))
                             .lineLimit(1)
                     }
                     .foregroundStyle(updateCTA.foreground)

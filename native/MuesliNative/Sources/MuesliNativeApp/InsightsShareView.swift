@@ -17,10 +17,10 @@ struct InsightsShareSheet: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Share your activity")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(MuesliTheme.font(size: 20, weight: .semibold))
                         .tracking(-0.4)
                     Text("A private snapshot with no transcripts or account details")
-                        .font(.system(size: 12))
+                        .font(MuesliTheme.font(size: 12))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -51,9 +51,9 @@ struct InsightsShareSheet: View {
                         .foregroundStyle(MuesliTheme.danger)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("The image couldn’t be saved")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(MuesliTheme.font(size: 12, weight: .semibold))
                         Text(saveErrorMessage)
-                            .font(.system(size: 11))
+                            .font(MuesliTheme.font(size: 11))
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
@@ -253,7 +253,7 @@ private struct InsightsShareCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top) {
                     Text(rangeLabel.uppercased())
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(MuesliTheme.font(size: 14, weight: .semibold))
                         .tracking(1.9)
                         .foregroundStyle(pale.opacity(0.82))
                     Spacer()
@@ -273,7 +273,7 @@ private struct InsightsShareCard: View {
                     .monospacedDigit()
                     .foregroundStyle(pale)
                 Text("WORDS CAPTURED")
-                    .font(.system(size: 18, weight: .bold))
+                    .font(MuesliTheme.font(size: 18, weight: .bold))
                     .tracking(2.8)
                     .foregroundStyle(muted)
 
@@ -297,12 +297,12 @@ private struct InsightsShareCard: View {
 
                 HStack {
                     Text("Private by design. Made on this Mac.")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(MuesliTheme.font(size: 15, weight: .medium))
                         .foregroundStyle(pale.opacity(0.88))
                         .shadow(color: Color.black.opacity(0.48), radius: 3, y: 1)
                     Spacer()
                     Text("muesli.works")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(MuesliTheme.font(size: 15, weight: .semibold))
                         .foregroundStyle(cyan)
                         .shadow(color: Color.black.opacity(0.48), radius: 3, y: 1)
                 }
@@ -319,7 +319,7 @@ private struct InsightsShareCard: View {
                 .monospacedDigit()
                 .foregroundStyle(pale)
             Text(label)
-                .font(.system(size: 12, weight: .bold))
+                .font(MuesliTheme.font(size: 12, weight: .bold))
                 .tracking(1.7)
                 .foregroundStyle(muted)
         }

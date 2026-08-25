@@ -107,7 +107,7 @@ struct DictationRowView: View {
 
                         if let styleBadge {
                             Text(styleBadge.label)
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(MuesliTheme.font(size: 10, weight: .semibold))
                                 .foregroundStyle(MuesliTheme.accent)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
@@ -118,7 +118,7 @@ struct DictationRowView: View {
                         }
 
                         Text(record.rawText)
-                            .font(.system(size: 14, weight: .regular))
+                            .font(MuesliTheme.font(size: 14, weight: .regular))
                             .foregroundStyle(MuesliTheme.textPrimary)
                             .lineLimit(nil)
                             .fixedSize(horizontal: false, vertical: true)
@@ -297,7 +297,7 @@ struct AudioOnlyDictationRowView: View {
 
             VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                 Text(record.terminalOutcome.detailTitle)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(MuesliTheme.font(size: 14, weight: .medium))
                     .foregroundStyle(MuesliTheme.textPrimary)
                 Text("Recording-only local history · \(RecordingArtifactAvailability(record.availability).displaySummary)")
                     .font(MuesliTheme.caption())

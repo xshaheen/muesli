@@ -670,7 +670,7 @@ struct MeetingDetailView: View {
                 contentToolbar(for: meeting)
 
                 TextEditor(text: $editableTranscript)
-                    .font(.system(size: 14))
+                    .font(MuesliTheme.font(size: 14))
                     .foregroundStyle(MuesliTheme.textPrimary)
                     .scrollContentBackground(.hidden)
                     .padding(MuesliTheme.spacing24)
@@ -941,7 +941,7 @@ struct MeetingDetailView: View {
                     ProgressView()
                         .controlSize(.small)
                     Text("Re-transcribing...")
-                        .font(.system(size: 11))
+                        .font(MuesliTheme.font(size: 11))
                         .foregroundStyle(MuesliTheme.textTertiary)
                 }
                 .padding(.horizontal, MuesliTheme.spacing8)
@@ -1025,7 +1025,7 @@ struct MeetingDetailView: View {
                 Image(systemName: iconName(forSelectionOn: meeting, appliedTemplate: appliedTemplate))
                     .font(.system(size: 10, weight: .semibold))
                 Text(templateLabel)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(MuesliTheme.font(size: 11, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: 120, alignment: .leading)
@@ -1061,7 +1061,7 @@ struct MeetingDetailView: View {
                     Image(systemName: "doc.on.doc")
                         .font(.system(size: 10, weight: .semibold))
                     Text(copyButtonLabel)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(MuesliTheme.font(size: 12, weight: .semibold))
                 }
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .padding(.horizontal, MuesliTheme.spacing12)
@@ -1087,7 +1087,7 @@ struct MeetingDetailView: View {
         HStack(spacing: MuesliTheme.spacing8) {
             if canEditManualNotes(for: meeting) {
                 Text(manualNotesSaveStatus.label)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(MuesliTheme.font(size: 12, weight: .medium))
                     .foregroundStyle(MuesliTheme.textTertiary)
             }
 
@@ -1120,7 +1120,7 @@ struct MeetingDetailView: View {
                 .fill(color)
                 .frame(width: 7, height: 7)
             Text(label)
-                .font(.system(size: 12, weight: .semibold))
+                .font(MuesliTheme.font(size: 12, weight: .semibold))
                 .foregroundStyle(MuesliTheme.textSecondary)
         }
         .padding(.horizontal, MuesliTheme.spacing8)
@@ -1296,7 +1296,7 @@ struct MeetingDetailView: View {
                 Image(systemName: systemImage)
                     .font(.system(size: 10))
                 Text(label)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(MuesliTheme.font(size: 11, weight: .medium))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
@@ -1327,7 +1327,7 @@ struct MeetingDetailView: View {
                 .frame(width: 14, height: 14)
                 .accessibilityLabel("Preparing transcription")
             Text(appState.meetingStartStatus ?? "Meeting transcription will start shortly.")
-                .font(.system(size: 12, weight: .semibold))
+                .font(MuesliTheme.font(size: 12, weight: .semibold))
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .lineLimit(1)
         }
@@ -1357,7 +1357,7 @@ struct MeetingDetailView: View {
                 Image(systemName: isPaused ? "play.fill" : "pause.fill")
                     .font(.system(size: 10, weight: .semibold))
                 Text(isPaused ? "Resume" : "Pause")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(MuesliTheme.font(size: 12, weight: .semibold))
             }
             .foregroundStyle(isPaused ? MuesliTheme.backgroundBase : MuesliTheme.textPrimary)
             .padding(.horizontal, MuesliTheme.spacing12)
@@ -1389,7 +1389,7 @@ struct MeetingDetailView: View {
                     Image(systemName: "record.circle")
                         .font(.system(size: 10, weight: .semibold))
                     Text("Resume")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(MuesliTheme.font(size: 12, weight: .semibold))
                 }
                 .foregroundStyle(MuesliTheme.backgroundBase)
                 .padding(.horizontal, MuesliTheme.spacing12)
@@ -1444,7 +1444,7 @@ struct MeetingDetailView: View {
                 Image(systemName: "stop.fill")
                     .font(.system(size: 10, weight: .semibold))
                 Text("Stop")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(MuesliTheme.font(size: 12, weight: .semibold))
             }
             .foregroundStyle(.white)
             .padding(.horizontal, MuesliTheme.spacing12)
@@ -1469,7 +1469,7 @@ struct MeetingDetailView: View {
             Image(systemName: iconName(for: snapshot))
                 .font(.system(size: 10))
             Text(snapshot.name)
-                .font(.system(size: 11, weight: .medium))
+                .font(MuesliTheme.font(size: 11, weight: .medium))
                 .lineLimit(1)
         }
         // Without this the chip is the flexible element beside a fixed-width metadata
@@ -1497,7 +1497,7 @@ struct MeetingDetailView: View {
                     )
                 }
                 Text("Thread \u{00B7} \(threadContext.count) meetings")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(MuesliTheme.font(size: 11, weight: .medium))
                     .foregroundStyle(MuesliTheme.textTertiary)
                 switch threadContext.successors.count {
                 case 0:
@@ -1513,7 +1513,7 @@ struct MeetingDetailView: View {
                 default:
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Follow-ups (\(threadContext.successors.count))")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(MuesliTheme.font(size: 11, weight: .medium))
                             .foregroundStyle(MuesliTheme.textTertiary)
                         ForEach(threadContext.successors) { successor in
                             threadLink(
@@ -1536,7 +1536,7 @@ struct MeetingDetailView: View {
                 Image(systemName: icon)
                     .font(.system(size: 9, weight: .semibold))
                 Text(text)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(MuesliTheme.font(size: 11, weight: .medium))
                     .lineLimit(1)
             }
             .foregroundStyle(MuesliTheme.accent)
@@ -1558,7 +1558,7 @@ struct MeetingDetailView: View {
                 Image(systemName: hasFolder ? "folder.fill" : "folder.badge.plus")
                     .font(.system(size: 10))
                 Text(currentFolder?.name ?? "Add to folder")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(MuesliTheme.font(size: 11, weight: .medium))
             }
             .foregroundStyle(hasFolder ? MuesliTheme.accent : MuesliTheme.textSecondary)
             .padding(.horizontal, MuesliTheme.spacing8)

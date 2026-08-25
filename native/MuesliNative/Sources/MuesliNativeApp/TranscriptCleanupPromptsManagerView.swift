@@ -222,7 +222,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                             .foregroundStyle(MuesliTheme.textPrimary)
                         if isActive {
                             Text("Active")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(MuesliTheme.font(size: 10, weight: .semibold))
                                 .foregroundStyle(MuesliTheme.accent)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
@@ -464,7 +464,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                         .font(.system(size: 11, weight: .semibold))
                 }
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(MuesliTheme.font(size: 12, weight: .semibold))
             }
             .foregroundStyle(isDestructive ? MuesliTheme.danger : MuesliTheme.textPrimary)
             .padding(.horizontal, MuesliTheme.spacing12)

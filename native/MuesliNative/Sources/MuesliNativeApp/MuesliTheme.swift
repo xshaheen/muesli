@@ -138,16 +138,39 @@ enum MuesliTheme {
     static let danger           = Color(hex: dangerHex)
     static let success          = Color(hex: successHex)
 
-    // MARK: - Typography (SF Pro via .system())
+    // MARK: - Typography (Inter, bridged through AppFonts)
 
-    static func title1() -> Font { .system(size: 28, weight: .bold) }
-    static func title2() -> Font { .system(size: 22, weight: .semibold) }
-    static func title3() -> Font { .system(size: 18, weight: .semibold) }
-    static func headline() -> Font { .system(size: 15, weight: .semibold) }
-    static func body() -> Font { .system(size: 14, weight: .regular) }
-    static func callout() -> Font { .system(size: 13, weight: .regular) }
-    static func caption() -> Font { .system(size: 12, weight: .regular) }
-    static func captionMedium() -> Font { .system(size: 12, weight: .medium) }
+    /// Text runs go through `AppFonts`, which already owns the family-name candidates and the
+    /// system-font fallback. `Font.custom` would duplicate that fallback and fail silently to
+    /// a default face when Inter is missing.
+    ///
+    /// SF Symbols deliberately do *not* use this: their glyph metrics come from the system
+    /// face, so sizing them through a text font would distort them.
+    static func font(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        Font(nsFont(size: size, weight: weight))
+    }
+
+    /// Durations, counts, clocks, versions and paths. Tabular figures stop numbers shifting
+    /// width as they tick.
+    static func mono(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight, design: .monospaced).monospacedDigit()
+    }
+
+    static func nsFont(size: CGFloat, weight: Font.Weight) -> NSFont {
+        if weight == .bold || weight == .heavy || weight == .black { return AppFonts.bold(size) }
+        if weight == .semibold { return AppFonts.semibold(size) }
+        if weight == .medium { return AppFonts.medium(size) }
+        return AppFonts.regular(size)
+    }
+
+    static func title1() -> Font { font(size: 28, weight: .bold) }
+    static func title2() -> Font { font(size: 22, weight: .semibold) }
+    static func title3() -> Font { font(size: 18, weight: .semibold) }
+    static func headline() -> Font { font(size: 15, weight: .semibold) }
+    static func body() -> Font { font(size: 14, weight: .regular) }
+    static func callout() -> Font { font(size: 13, weight: .regular) }
+    static func caption() -> Font { font(size: 12, weight: .regular) }
+    static func captionMedium() -> Font { font(size: 12, weight: .medium) }
 
     // MARK: - Spacing (4pt grid)
 

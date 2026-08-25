@@ -125,7 +125,7 @@ struct DictionaryView: View {
                         Image(systemName: "plus")
                             .font(.system(size: 11, weight: .bold))
                         Text("Add new")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(MuesliTheme.font(size: 13, weight: .medium))
                     }
                     .foregroundStyle(MuesliTheme.textPrimary)
                     .padding(.horizontal, MuesliTheme.spacing12)
@@ -618,7 +618,7 @@ private struct ThresholdEditor: View {
                         .frame(width: 48)
                         .onSubmit(commitDraftPercent)
                     Text("%")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(MuesliTheme.font(size: 12, weight: .medium))
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }
             }

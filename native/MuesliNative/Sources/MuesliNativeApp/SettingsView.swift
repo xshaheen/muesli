@@ -601,7 +601,7 @@ struct SettingsView: View {
                 }
             }
             .buttonStyle(.plain)
-            .font(.system(size: 11, weight: .medium))
+            .font(MuesliTheme.font(size: 11, weight: .medium))
             .foregroundStyle(MuesliTheme.accent)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
@@ -883,7 +883,7 @@ struct SettingsView: View {
                     }
                 } else {
                     Text("Download from Models")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(MuesliTheme.font(size: 12, weight: .medium))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .multilineTextAlignment(.trailing)
                         .frame(width: meetingControlWidth, alignment: .trailing)
@@ -984,7 +984,7 @@ struct SettingsView: View {
                 settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
                     if Gemma4LiteRTModelStore.isAvailableLocally() {
                         Text("Gemma 4 E2B (Downloaded)")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(MuesliTheme.font(size: 12, weight: .medium))
                             .foregroundStyle(MuesliTheme.textSecondary)
                             .frame(width: meetingControlWidth, alignment: .trailing)
                     } else {
@@ -1738,7 +1738,7 @@ struct SettingsView: View {
                             controller.resetMaraudersMap()
                         } label: {
                             Text("Mischief Managed")
-                                .font(.system(size: 11))
+                                .font(MuesliTheme.font(size: 11))
                                 .foregroundColor(MuesliTheme.textSecondary)
                         }
                         .buttonStyle(.plain)
@@ -1824,7 +1824,7 @@ struct SettingsView: View {
                         .fill(.white)
                         .frame(width: 10, height: 10)
                     Text("Signed in · Sign Out")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(MuesliTheme.font(size: 11, weight: .medium))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                 }
@@ -1840,7 +1840,7 @@ struct SettingsView: View {
                 ProgressView()
                     .controlSize(.small)
                 Text("Signing in...")
-                    .font(.system(size: 11))
+                    .font(MuesliTheme.font(size: 11))
                     .foregroundStyle(MuesliTheme.textSecondary)
             }
         } else {
@@ -1859,7 +1859,7 @@ struct SettingsView: View {
                             .fill(.white)
                             .frame(width: 10, height: 10)
                         Text("Sign in with ChatGPT")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(MuesliTheme.font(size: 11, weight: .medium))
                             .foregroundStyle(.white)
                             .lineLimit(1)
                     }
@@ -1873,7 +1873,7 @@ struct SettingsView: View {
 
                 if let chatGPTSignInError {
                     Text(chatGPTSignInError)
-                        .font(.system(size: 10))
+                        .font(MuesliTheme.font(size: 10))
                         .foregroundStyle(MuesliTheme.danger)
                         .lineLimit(2)
                 }
@@ -1892,7 +1892,7 @@ struct SettingsView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(.white)
                     Text("Connected · Disconnect")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(MuesliTheme.font(size: 11, weight: .medium))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                 }
@@ -1908,7 +1908,7 @@ struct SettingsView: View {
                 ProgressView()
                     .controlSize(.small)
                 Text("Connecting...")
-                    .font(.system(size: 11))
+                    .font(MuesliTheme.font(size: 11))
                     .foregroundStyle(MuesliTheme.textSecondary)
             }
         } else if !appState.isGoogleCalendarVerified {
@@ -1918,7 +1918,7 @@ struct SettingsView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(.white.opacity(0.4))
                     Text("Connect Google Calendar")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(MuesliTheme.font(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.4))
                         .lineLimit(1)
                 }
@@ -1929,7 +1929,7 @@ struct SettingsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
 
                 Text("Google OAuth verification pending")
-                    .font(.system(size: 10))
+                    .font(MuesliTheme.font(size: 10))
                     .foregroundStyle(MuesliTheme.textTertiary)
             }
         } else {
@@ -1948,7 +1948,7 @@ struct SettingsView: View {
                             .font(.system(size: 10))
                             .foregroundStyle(.white)
                         Text("Connect Google Calendar")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(MuesliTheme.font(size: 11, weight: .medium))
                             .foregroundStyle(.white)
                             .lineLimit(1)
                     }
@@ -1962,7 +1962,7 @@ struct SettingsView: View {
 
                 if let googleCalSignInError {
                     Text(googleCalSignInError)
-                        .font(.system(size: 10))
+                        .font(MuesliTheme.font(size: 10))
                         .foregroundStyle(MuesliTheme.danger)
                         .lineLimit(2)
                 }
@@ -2179,7 +2179,7 @@ struct SettingsView: View {
             Spacer()
             if granted {
                 Text("Granted")
-                    .font(.system(size: 11))
+                    .font(MuesliTheme.font(size: 11))
                     .foregroundStyle(MuesliTheme.success)
             } else {
                 Button("Grant") {
@@ -2224,7 +2224,7 @@ struct SettingsView: View {
                 handleScreenContextToggle(true)
             } label: {
                 Text("Grant")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(MuesliTheme.font(size: 13, weight: .semibold))
                     .foregroundStyle(MuesliTheme.accent)
                     .frame(width: width)
                     .frame(minHeight: 32)
@@ -2252,7 +2252,7 @@ struct SettingsView: View {
                 refreshPermissionStatuses()
             } label: {
                 Text("Grant")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(MuesliTheme.font(size: 13, weight: .semibold))
                     .foregroundStyle(MuesliTheme.accent)
                     .frame(width: width)
                     .frame(minHeight: 32)
@@ -2379,7 +2379,7 @@ struct SettingsView: View {
     private func settingsSection(_ title: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(MuesliTheme.font(size: 11, weight: .semibold))
                 .foregroundStyle(MuesliTheme.textTertiary)
                 .textCase(.uppercase)
                 .padding(.leading, 2)
@@ -2513,7 +2513,7 @@ struct SettingsView: View {
                 Text(title)
                     .lineLimit(1)
             }
-            .font(.system(size: 12, weight: .medium))
+            .font(MuesliTheme.font(size: 12, weight: .medium))
             .foregroundStyle(isDestructive ? MuesliTheme.danger : MuesliTheme.textPrimary)
             .padding(.horizontal, 10)
             .frame(height: 26)
@@ -2565,7 +2565,7 @@ struct SettingsView: View {
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .frame(width: 14)
                 Text(app.name)
-                    .font(.system(size: 12))
+                    .font(MuesliTheme.font(size: 12))
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -2699,12 +2699,12 @@ struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(group.title)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(MuesliTheme.font(size: 12, weight: .semibold))
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .lineLimit(1)
 
                     Text("\(group.subtitle) • \(group.items.count) \(group.items.count == 1 ? "calendar" : "calendars")")
-                        .font(.system(size: 11))
+                        .font(MuesliTheme.font(size: 11))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .lineLimit(1)
                 }
@@ -2766,7 +2766,7 @@ struct SettingsView: View {
                     .fill(item.colorHex.map { Color(hex: $0) } ?? MuesliTheme.textTertiary)
                     .frame(width: 8, height: 8)
                 Text(item.title)
-                    .font(.system(size: 12))
+                    .font(MuesliTheme.font(size: 12))
                     .foregroundStyle(item.isEnabled ? MuesliTheme.textPrimary : MuesliTheme.textTertiary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -2836,12 +2836,12 @@ struct SettingsView: View {
 
                 if appState.config.autoExportMarkdownFolderPath.isEmpty {
                     Text("Choose a folder…")
-                        .font(.system(size: 12))
+                        .font(MuesliTheme.font(size: 12))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .lineLimit(1)
                 } else {
                     Text(appState.config.autoExportMarkdownFolderPath)
-                        .font(.system(size: 12))
+                        .font(MuesliTheme.font(size: 12))
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -2909,12 +2909,12 @@ struct SettingsView: View {
 
                 if appState.config.meetingHookPath.isEmpty {
                     Text("Choose a script…")
-                        .font(.system(size: 12))
+                        .font(MuesliTheme.font(size: 12))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .lineLimit(1)
                 } else {
                     Text(appState.config.meetingHookPath)
-                        .font(.system(size: 12))
+                        .font(MuesliTheme.font(size: 12))
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -3047,7 +3047,7 @@ struct SettingsView: View {
                 ProgressView()
                     .controlSize(.small)
                 Text("Loading models")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(MuesliTheme.font(size: 12, weight: .medium))
                     .foregroundStyle(MuesliTheme.textTertiary)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -3060,7 +3060,7 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 if let openRouterFreeModelsError {
                     Text(openRouterFreeModelsError)
-                        .font(.system(size: 11))
+                        .font(MuesliTheme.font(size: 11))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .lineLimit(1)
                 }
@@ -3117,7 +3117,7 @@ struct SettingsView: View {
                 .fill(key.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.success)
                 .frame(width: 6, height: 6)
             Text(key.isEmpty ? "No API key configured" : "Key configured")
-                .font(.system(size: 11))
+                .font(MuesliTheme.font(size: 11))
                 .foregroundStyle(key.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.success)
         }
         .frame(minHeight: 20)
