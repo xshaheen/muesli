@@ -106,7 +106,7 @@ struct InsightsShareSheet: View {
         }
         .padding(24)
         .frame(minWidth: 760, idealWidth: 880, minHeight: 530)
-        .background(.regularMaterial)
+        .background(MuesliTheme.backgroundBase)
         .task {
             image = InsightsShareRenderer.render(snapshot: snapshot, rangeLabel: rangeLabel)
         }

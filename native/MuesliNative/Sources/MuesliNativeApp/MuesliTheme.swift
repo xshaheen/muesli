@@ -40,8 +40,12 @@ enum MuesliTheme {
         static let secondaryLightAlpha: CGFloat = 0.55
         static let tertiaryDarkAlpha: CGFloat = 0.40
         static let tertiaryLightAlpha: CGFloat = 0.33
+        static let disabledDarkAlpha: CGFloat = 0.22
+        static let disabledLightAlpha: CGFloat = 0.22
         static let hairlineDarkAlpha: CGFloat = 0.07
         static let hairlineLightAlpha: CGFloat = 0.08
+        /// Increase Contrast lifts the hairline to the same weight the floating surfaces use.
+        static let hairlineHighContrastAlpha: CGFloat = 0.80
 
         static var dark: NSColor { .colorWith(hex: darkHex, alpha: 1) }
         static var light: NSColor { .colorWith(hex: lightHex, alpha: 1) }
@@ -59,9 +63,21 @@ enum MuesliTheme {
 
     static let surfacePrimary   = Color.adaptive(dark: Ramp.surfaceDarkHex, light: Ramp.surfaceLightHex)
     static let surfaceSelected  = Color.adaptive(dark: Ramp.selectedDarkHex, light: Ramp.selectedLightHex)
-    static let surfaceBorder    = Color.adaptiveAlpha(
-        dark: Ink.dark, darkAlpha: Ink.hairlineDarkAlpha,
-        light: Ink.light, lightAlpha: Ink.hairlineLightAlpha
+    /// Pure resolver so the accessibility branch is testable without an AppKit appearance.
+    static func hairlineAlpha(isDark: Bool, increaseContrast: Bool) -> CGFloat {
+        if increaseContrast { return Ink.hairlineHighContrastAlpha }
+        return isDark ? Ink.hairlineDarkAlpha : Ink.hairlineLightAlpha
+    }
+
+    static let surfaceBorder = Color.adaptiveHairline(
+        dark: Ink.dark,
+        light: Ink.light,
+        alpha: hairlineAlpha(isDark:increaseContrast:)
+    )
+
+    static let textDisabled = Color.adaptiveAlpha(
+        dark: Ink.dark, darkAlpha: Ink.disabledDarkAlpha,
+        light: Ink.light, lightAlpha: Ink.disabledLightAlpha
     )
 
     // MARK: - Text hierarchy
@@ -171,6 +187,29 @@ extension Color {
                 blue: CGFloat(hex & 0xFF) / 255.0,
                 alpha: 1.0
             )
+        })
+    }
+
+    /// Resolves both appearance and the Increase Contrast accessibility appearances, so a
+    /// hairline can strengthen when the setting is on. `bestMatch` reports the high-contrast
+    /// appearances as distinct names, which is what makes this observable without polling
+    /// `NSWorkspace`.
+    static func adaptiveHairline(
+        dark: NSColor,
+        light: NSColor,
+        alpha: @escaping (Bool, Bool) -> CGFloat
+    ) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let match = appearance.bestMatch(from: [
+                .aqua,
+                .darkAqua,
+                .accessibilityHighContrastAqua,
+                .accessibilityHighContrastDarkAqua,
+            ])
+            let isDark = match == .darkAqua || match == .accessibilityHighContrastDarkAqua
+            let increaseContrast = match == .accessibilityHighContrastAqua
+                || match == .accessibilityHighContrastDarkAqua
+            return (isDark ? dark : light).withAlphaComponent(alpha(isDark, increaseContrast))
         })
     }
 
