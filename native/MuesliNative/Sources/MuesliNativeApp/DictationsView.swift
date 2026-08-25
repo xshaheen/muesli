@@ -758,7 +758,7 @@ private struct BridgeSyncIcon: View {
     private func updateRotation(animated: Bool) {
         guard isAnimating else {
             if animated {
-                withAnimation(.easeOut(duration: 0.15)) {
+                withAnimation(MuesliTheme.Motion.easedOut(0.15)) {
                     rotationDegrees = 0
                 }
             } else {
@@ -768,7 +768,10 @@ private struct BridgeSyncIcon: View {
         }
 
         rotationDegrees = 0
-        withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+        // Under Reduce Motion the resolver returns nil, so the value settles at 360 with no
+        // interpolation -- the same orientation as 0, so the spinner holds a still frame
+        // instead of turning.
+        withAnimation(MuesliTheme.Motion.repeating(0.9, autoreverses: false)) {
             rotationDegrees = 360
         }
     }

@@ -2111,7 +2111,7 @@ private struct MarqueeTitleTextField: View {
             if marqueeOffset != 0 {
                 let runID = UUID()
                 marqueeRunID = runID
-                withAnimation(.easeOut(duration: 0.18)) {
+                withAnimation(MuesliTheme.Motion.easedOut(0.18)) {
                     marqueeOffset = 0
                 }
             }
@@ -2124,6 +2124,9 @@ private struct MarqueeTitleTextField: View {
         marqueeOffset = 0
         let distance = overflowDistance + 28
         let duration = min(max(Double(distance) / 42.0, 3.0), 12.0)
+        // A marquee is pure movement, so Reduce Motion stops it rather than shortening it.
+        // The title stays at its start offset and truncates, which is the still equivalent.
+        guard !MuesliTheme.Motion.reduceMotion else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             guard marqueeRunID == runID, shouldShowMarquee else { return }
             withAnimation(.linear(duration: duration).repeatForever(autoreverses: false)) {

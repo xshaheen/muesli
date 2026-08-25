@@ -386,7 +386,7 @@ struct SettingsView: View {
         guard let target,
               target == .liveCaptionsSetting || target == .cloudCleanupSetting else { return }
         DispatchQueue.main.async {
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(MuesliTheme.Motion.eased(0.2)) {
                 proxy.scrollTo(target.rawValue, anchor: .center)
             }
         }

@@ -61,7 +61,7 @@ struct InsightsView: View {
                 if reduceMotion {
                     proxy.scrollTo(initialSection, anchor: .top)
                 } else {
-                    withAnimation(.easeInOut(duration: 0.28)) {
+                    withAnimation(MuesliTheme.Motion.eased(0.28)) {
                         proxy.scrollTo(initialSection, anchor: .top)
                     }
                 }
@@ -468,7 +468,7 @@ private struct InsightsLoadingStatus: View {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_200_000_000)
                 guard !Task.isCancelled else { return }
-                withAnimation(.easeInOut(duration: 0.28)) {
+                withAnimation(MuesliTheme.Motion.eased(0.28)) {
                     messageIndex = (messageIndex + 1) % InsightsLoadingCopy.messages.count
                 }
             }

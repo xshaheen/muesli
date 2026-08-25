@@ -231,7 +231,7 @@ struct SidebarView: View {
             let isSelected = appState.selectedTab == .meetings
             HStack(spacing: MuesliTheme.spacing12) {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.15)) {
+                    withAnimation(MuesliTheme.Motion.eased(0.15)) {
                         meetingsExpanded = true
                     }
                     controller.showMeetingsHome()
@@ -252,7 +252,7 @@ struct SidebarView: View {
                 .buttonStyle(.plain)
 
                 Button {
-                    withAnimation(.easeInOut(duration: 0.15)) {
+                    withAnimation(MuesliTheme.Motion.eased(0.15)) {
                         meetingsExpanded.toggle()
                     }
                 } label: {
@@ -409,7 +409,7 @@ struct SidebarView: View {
     private func sidebarItem(tab: DashboardTab, icon: String, label: String, updateCTA: UpdateCTA? = nil) -> some View {
         let isSelected = appState.selectedTab == tab
         Button {
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(MuesliTheme.Motion.eased(0.15)) {
                 appState.selectedTab = tab
             }
         } label: {
@@ -571,7 +571,7 @@ struct SidebarView: View {
     }
 
     private func toggleFolderCollapse(_ folderID: Int64) {
-        withAnimation(.easeInOut(duration: 0.12)) {
+        withAnimation(MuesliTheme.Motion.eased(0.12)) {
             if collapsedFolderIDs.contains(folderID) {
                 collapsedFolderIDs.remove(folderID)
             } else {
@@ -582,7 +582,7 @@ struct SidebarView: View {
 
     private func createNewFolder() {
         if let id = controller.createFolder(name: "New Folder") {
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(MuesliTheme.Motion.eased(0.15)) {
                 meetingsExpanded = true
             }
             renamingFolderID = id
@@ -593,7 +593,7 @@ struct SidebarView: View {
 
     private func createNewSubfolder(parentID: Int64) {
         if let id = controller.createSubfolder(name: "New Folder", parentID: parentID) {
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(MuesliTheme.Motion.eased(0.15)) {
                 meetingsExpanded = true
                 collapsedFolderIDs.remove(parentID)
             }
@@ -699,7 +699,7 @@ private struct FolderDropDelegate: DropDelegate {
             insertionIndex = adjustedTargetIndex
         }
 
-        withAnimation(.easeInOut(duration: 0.15)) {
+        withAnimation(MuesliTheme.Motion.eased(0.15)) {
             folders.insert(contentsOf: movedFolders, at: insertionIndex)
             dragOrderedFolders = folders
         }

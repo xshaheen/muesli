@@ -102,7 +102,7 @@ struct MeetingChatView: View {
     private static let errorAnchor = "chat-error"
 
     private func scrollToEnd(_ proxy: ScrollViewProxy) {
-        withAnimation(.easeOut(duration: 0.2)) {
+        withAnimation(MuesliTheme.Motion.easedOut(0.2)) {
             if conversation.lastError != nil {
                 proxy.scrollTo(Self.errorAnchor, anchor: .bottom)
             } else if conversation.isSending {

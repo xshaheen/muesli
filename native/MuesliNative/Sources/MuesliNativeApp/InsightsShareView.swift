@@ -149,11 +149,11 @@ struct InsightsShareSheet: View {
     }
 
     private func showConfirmation(_ message: String) {
-        withAnimation(.easeOut(duration: 0.16)) { confirmation = message }
+        withAnimation(MuesliTheme.Motion.easedOut(0.16)) { confirmation = message }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             guard confirmation == message else { return }
-            withAnimation(.easeOut(duration: 0.16)) { confirmation = nil }
+            withAnimation(MuesliTheme.Motion.easedOut(0.16)) { confirmation = nil }
         }
     }
 }

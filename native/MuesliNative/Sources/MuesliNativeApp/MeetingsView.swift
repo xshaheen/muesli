@@ -536,7 +536,7 @@ struct MeetingsView: View {
 
     private func hideEventButton(_ event: UnifiedCalendarEvent) -> some View {
         Button {
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(MuesliTheme.Motion.easedOut(0.2)) {
                 controller.hideCalendarEvent(event)
             }
         } label: {

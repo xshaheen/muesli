@@ -140,7 +140,7 @@ struct DictationRowView: View {
                 HStack(spacing: 8) {
                     if record.computerUseTrace != nil {
                         Button {
-                            withAnimation(.easeInOut(duration: 0.15)) {
+                            withAnimation(MuesliTheme.Motion.eased(0.15)) {
                                 isExpanded.toggle()
                             }
                         } label: {
@@ -184,7 +184,7 @@ struct DictationRowView: View {
         .padding(.vertical, MuesliTheme.spacing16)
         .background(isHovered ? MuesliTheme.backgroundHover : MuesliTheme.backgroundRaised)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(MuesliTheme.Motion.eased(0.15)) {
                 isHovered = hovering
             }
         }
@@ -192,7 +192,7 @@ struct DictationRowView: View {
             if let onOpen {
                 onOpen()
             } else if record.computerUseTrace != nil {
-                withAnimation(.easeInOut(duration: 0.15)) {
+                withAnimation(MuesliTheme.Motion.eased(0.15)) {
                     isExpanded.toggle()
                 }
             } else {

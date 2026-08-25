@@ -289,7 +289,7 @@ struct LiveTranscriptView: View {
                         partialOthers: partialOthers
                     )
                     DispatchQueue.main.async {
-                        withAnimation(.easeOut(duration: 0.15)) {
+                        withAnimation(MuesliTheme.Motion.easedOut(0.15)) {
                             proxy.scrollTo(LiveTranscriptFeedView.bottomAnchorID, anchor: .bottom)
                         }
                     }
@@ -368,7 +368,7 @@ struct LiveTranscriptView: View {
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
         DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.15)) {
+            withAnimation(MuesliTheme.Motion.easedOut(0.15)) {
                 proxy.scrollTo(LiveTranscriptFeedView.bottomAnchorID, anchor: .bottom)
             }
         }

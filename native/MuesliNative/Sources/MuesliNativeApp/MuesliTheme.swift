@@ -202,11 +202,64 @@ enum MuesliTheme {
     // MARK: - Motion
 
     /// Lifted verbatim from the shipped floating surfaces so both move alike.
+    ///
+    /// Under Reduce Motion these resolvers return `nil` rather than a shorter animation. That
+    /// distinction is the whole point: a shortened animation still interpolates a changed
+    /// offset, scale or position, so the user still sees movement. `nil` applies the state
+    /// change with no interpolation at all, and a repeating animation never starts.
     enum Motion {
         static let morph: TimeInterval = 0.16
         static let popIn: TimeInterval = 0.26
         static let fade: TimeInterval = 0.14
         static let hoverGrace: TimeInterval = 0.4
+
+        /// Pure form, for tests and for callers that already hold the environment value.
+        static func eased(_ duration: TimeInterval, reduceMotion: Bool) -> Animation? {
+            reduceMotion ? nil : .easeInOut(duration: duration)
+        }
+
+        static func easedOut(_ duration: TimeInterval, reduceMotion: Bool) -> Animation? {
+            reduceMotion ? nil : .easeOut(duration: duration)
+        }
+
+        static func repeating(
+            _ duration: TimeInterval,
+            autoreverses: Bool,
+            reduceMotion: Bool
+        ) -> Animation? {
+            guard !reduceMotion else { return nil }
+            return .linear(duration: duration).repeatForever(autoreverses: autoreverses)
+        }
+
+        static func pulsing(
+            _ duration: TimeInterval,
+            reduceMotion: Bool
+        ) -> Animation? {
+            guard !reduceMotion else { return nil }
+            return .easeInOut(duration: duration).repeatForever(autoreverses: true)
+        }
+
+        /// Ambient form for call sites with no environment access, such as controller
+        /// callbacks. Reads the workspace setting directly.
+        @MainActor static var reduceMotion: Bool {
+            NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        }
+
+        @MainActor static func eased(_ duration: TimeInterval) -> Animation? {
+            eased(duration, reduceMotion: reduceMotion)
+        }
+
+        @MainActor static func easedOut(_ duration: TimeInterval) -> Animation? {
+            easedOut(duration, reduceMotion: reduceMotion)
+        }
+
+        @MainActor static func repeating(_ duration: TimeInterval, autoreverses: Bool) -> Animation? {
+            repeating(duration, autoreverses: autoreverses, reduceMotion: reduceMotion)
+        }
+
+        @MainActor static func pulsing(_ duration: TimeInterval) -> Animation? {
+            pulsing(duration, reduceMotion: reduceMotion)
+        }
     }
 }
 

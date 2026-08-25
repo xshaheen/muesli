@@ -55,7 +55,7 @@ struct SearchResultsView: View {
     private func tabButton(_ tab: SearchTab, count: Int) -> some View {
         let isSelected = selectedTab == tab
         Button {
-            withAnimation(.easeInOut(duration: 0.15)) { selectedTab = tab }
+            withAnimation(MuesliTheme.Motion.eased(0.15)) { selectedTab = tab }
         } label: {
             HStack(spacing: 6) {
                 Text(tab.rawValue)
@@ -199,7 +199,7 @@ private struct SearchDictationRow: View {
         .padding(.vertical, MuesliTheme.spacing12)
         .background(isHovered ? MuesliTheme.backgroundHover : Color.clear)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
+            withAnimation(MuesliTheme.Motion.eased(0.15)) { isHovered = hovering }
         }
         .onTapGesture(perform: onCopy)
     }
@@ -245,7 +245,7 @@ private struct SearchMeetingRow: View {
         .padding(.vertical, MuesliTheme.spacing12)
         .background(isHovered ? MuesliTheme.backgroundHover : Color.clear)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
+            withAnimation(MuesliTheme.Motion.eased(0.15)) { isHovered = hovering }
         }
         .onTapGesture(perform: onSelect)
     }
