@@ -210,9 +210,9 @@ struct SidebarView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
         .padding(.horizontal, sidebarRowOuterPadding)
@@ -276,7 +276,7 @@ struct SidebarView: View {
             .padding(.vertical, MuesliTheme.spacing8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .fill(isSelected ? MuesliTheme.surfaceSelected : Color.clear)
             )
             .contentShape(Rectangle())
@@ -393,11 +393,11 @@ struct SidebarView: View {
             .padding(.horizontal, sidebarRowHorizontalPadding)
             .padding(.vertical, MuesliTheme.spacing8)
             .background(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .fill(MuesliTheme.backgroundRaised)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
             .padding(.horizontal, sidebarRowOuterPadding)
@@ -448,7 +448,7 @@ struct SidebarView: View {
             .padding(.vertical, MuesliTheme.spacing8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .fill(isSelected ? MuesliTheme.surfaceSelected : Color.clear)
             )
             .contentShape(Rectangle())
@@ -487,7 +487,7 @@ struct SidebarView: View {
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                 .fill(isSelected ? MuesliTheme.surfaceSelected.opacity(0.6) : Color.clear)
         )
         .contentShape(Rectangle())
@@ -536,7 +536,7 @@ struct SidebarView: View {
         .padding(.horizontal, sidebarRowHorizontalPadding)
         .padding(.vertical, 6)
         .background(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                 .fill(MuesliTheme.surfaceSelected.opacity(0.6))
         )
     }

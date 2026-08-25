@@ -72,7 +72,7 @@ struct SearchResultsView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(isSelected ? MuesliTheme.backgroundHover : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         }
         .buttonStyle(.plain)
     }

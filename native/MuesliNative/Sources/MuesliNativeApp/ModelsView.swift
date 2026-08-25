@@ -250,14 +250,14 @@ struct ModelsView: View {
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .padding(.vertical, 4)
                 .background(MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(MuesliTheme.spacing16)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
         .padding(.top, MuesliTheme.spacing8)
@@ -399,7 +399,7 @@ struct ModelsView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(MuesliTheme.success.opacity(0.15))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 } else if isLiveCaptionModelDownloaded {
                     Text("Ready")
                         .font(.system(size: 11, weight: .medium))
@@ -407,7 +407,7 @@ struct ModelsView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 }
             }
 
@@ -469,7 +469,7 @@ struct ModelsView: View {
                         .padding(.horizontal, MuesliTheme.spacing12)
                         .padding(.vertical, 4)
                         .background(MuesliTheme.accentSubtle)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     }
 
                     Button {
@@ -492,15 +492,15 @@ struct ModelsView: View {
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, 4)
                     .background(MuesliTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 }
             }
         }
         .padding(MuesliTheme.spacing16)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(isActive ? MuesliTheme.accent.opacity(0.6) : MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
@@ -624,9 +624,9 @@ struct ModelsView: View {
         }
         .padding(MuesliTheme.spacing16)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
         .id(FeatureTourTarget.experimentalModels.rawValue)
@@ -716,7 +716,7 @@ struct ModelsView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(MuesliTheme.success.opacity(0.15))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 } else if isDownloaded {
                     Text("Downloaded")
                         .font(.system(size: 11, weight: .medium))
@@ -724,7 +724,7 @@ struct ModelsView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 }
             }
 
@@ -747,7 +747,7 @@ struct ModelsView: View {
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, 4)
                     .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 } else if isDownloaded {
                     if !isActive {
                         Button("Set Active") {
@@ -759,7 +759,7 @@ struct ModelsView: View {
                         .padding(.horizontal, MuesliTheme.spacing12)
                         .padding(.vertical, 4)
                         .background(MuesliTheme.accentSubtle)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     }
 
                     Button {
@@ -781,15 +781,15 @@ struct ModelsView: View {
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, 4)
                     .background(MuesliTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 }
             }
         }
         .padding(MuesliTheme.spacing16)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(isActive ? MuesliTheme.accent.opacity(0.5) : MuesliTheme.surfaceBorder, lineWidth: isActive ? 1.5 : 1)
         )
     }
@@ -885,9 +885,9 @@ struct ModelsView: View {
         }
         .padding(MuesliTheme.spacing16)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(isActive ? MuesliTheme.accent.opacity(0.5) : MuesliTheme.surfaceBorder, lineWidth: isActive ? 1.5 : 1)
         )
     }
@@ -901,7 +901,7 @@ struct ModelsView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(MuesliTheme.success.opacity(0.15))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         } else if isDownloaded {
             Text("Downloaded")
                 .font(.system(size: 11, weight: .medium))
@@ -909,7 +909,7 @@ struct ModelsView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         }
     }
 
@@ -1018,7 +1018,7 @@ struct ModelsView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: 24, height: 24)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 .padding(.top, 2)
         }
     }
@@ -1057,7 +1057,7 @@ struct ModelsView: View {
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .padding(.vertical, 4)
                 .background(MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             } else if isDownloaded {
                 if !isActive {
                     Button(actionTitle) {
@@ -1073,7 +1073,7 @@ struct ModelsView: View {
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, 4)
                     .background(activationDisabledReason == nil ? MuesliTheme.accentSubtle : MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     .disabled(activationDisabledReason != nil)
                     .help(activationDisabledReason ?? actionTitle)
                 }
@@ -1097,7 +1097,7 @@ struct ModelsView: View {
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .padding(.vertical, 4)
                 .background(MuesliTheme.accentSubtle)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
         }
     }
@@ -1135,7 +1135,7 @@ struct ModelsView: View {
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .background(MuesliTheme.accent)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                         }
 
                         Text(option.sizeLabel)
@@ -1158,7 +1158,7 @@ struct ModelsView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(MuesliTheme.success.opacity(0.15))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 } else if isDownloaded {
                     Text(downloadedLabel)
                         .font(.system(size: 11, weight: .medium))
@@ -1166,7 +1166,7 @@ struct ModelsView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 }
             }
 
@@ -1226,9 +1226,9 @@ struct ModelsView: View {
         }
         .padding(MuesliTheme.spacing16)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(isActive ? MuesliTheme.accent.opacity(0.5) : MuesliTheme.surfaceBorder, lineWidth: isActive ? 1.5 : 1)
         )
     }
@@ -1248,7 +1248,7 @@ struct ModelsView: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(MuesliTheme.surfacePrimary)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
 
                         Text(option.sizeLabel)
                             .font(MuesliTheme.caption())
@@ -1264,9 +1264,9 @@ struct ModelsView: View {
         }
         .padding(MuesliTheme.spacing16)
         .background(MuesliTheme.backgroundRaised.opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder.opacity(0.5), lineWidth: 1)
         )
         .opacity(0.6)

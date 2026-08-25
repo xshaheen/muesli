@@ -58,9 +58,9 @@ struct LiveTranscriptBubble: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(bubbleBackground)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(
                         bubbleBorder,
                         style: StrokeStyle(lineWidth: 1, dash: isPartial ? [4, 3] : [])
@@ -343,9 +343,9 @@ struct LiveTranscriptView: View {
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .frame(height: 30)
                 .background(MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                         .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                 }
             }

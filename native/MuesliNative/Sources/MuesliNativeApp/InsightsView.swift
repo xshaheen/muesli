@@ -177,7 +177,7 @@ struct InsightsView: View {
         .padding(26)
         .background(
             ZStack {
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(MuesliTheme.backgroundRaised)
                 LinearGradient(
                     colors: [MuesliTheme.accent.opacity(0.13), Color.cyan.opacity(0.025), .clear],
@@ -208,7 +208,7 @@ struct InsightsView: View {
             HStack(spacing: 8) {
                 Text("QUIET")
                 ForEach(0..<5, id: \.self) { level in
-                    RoundedRectangle(cornerRadius: 3)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(InsightsPalette.intensity(level))
                         .frame(width: 15, height: 15)
                 }
@@ -237,10 +237,10 @@ struct InsightsView: View {
                 }
                 GeometryReader { geometry in
                     HStack(spacing: 3) {
-                        RoundedRectangle(cornerRadius: 4)
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .fill(MuesliTheme.accent)
                             .frame(width: max(4, geometry.size.width * dictationShare))
-                        RoundedRectangle(cornerRadius: 4)
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .fill(Color.cyan.opacity(0.75))
                     }
                 }
@@ -265,8 +265,8 @@ struct InsightsView: View {
             .padding(20)
             .frame(width: 300, alignment: .leading)
             .background(MuesliTheme.backgroundDeep.opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(MuesliTheme.surfaceBorder))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(MuesliTheme.surfaceBorder))
         }
         .insightsPanel()
     }
@@ -313,13 +313,13 @@ struct InsightsView: View {
         VStack(spacing: 18) {
             InsightsLoadingStatus()
             ForEach(0..<4, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(MuesliTheme.backgroundRaised)
                     .frame(height: index == 0 ? 235 : 190)
                     .overlay(alignment: .topLeading) {
                         VStack(alignment: .leading, spacing: 12) {
-                            RoundedRectangle(cornerRadius: 3).fill(MuesliTheme.surfacePrimary).frame(width: 130, height: 12)
-                            RoundedRectangle(cornerRadius: 5).fill(MuesliTheme.surfacePrimary).frame(width: 230, height: 30)
+                            RoundedRectangle(cornerRadius: 3, style: .continuous).fill(MuesliTheme.surfacePrimary).frame(width: 130, height: 12)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous).fill(MuesliTheme.surfacePrimary).frame(width: 230, height: 30)
                         }.padding(24)
                     }
                     .opacity(0.72)
@@ -371,7 +371,7 @@ struct InsightsView: View {
     }
 
     private var panelBorder: some View {
-        RoundedRectangle(cornerRadius: 14)
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
             .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
     }
 
@@ -461,8 +461,8 @@ private struct InsightsLoadingStatus: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(MuesliTheme.surfaceBorder))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(MuesliTheme.surfaceBorder))
         .task {
             guard !reduceMotion else { return }
             while !Task.isCancelled {
@@ -662,7 +662,7 @@ private struct ActivityHeatmapCell: View {
     }
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 3)
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
             .fill(InsightsPalette.intensity(level))
             .frame(width: size, height: size)
             .overlay {
@@ -672,7 +672,7 @@ private struct ActivityHeatmapCell: View {
             }
             .overlay {
                 if isHovered {
-                    RoundedRectangle(cornerRadius: 3)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .strokeBorder(InsightsPalette.secondaryText, lineWidth: 1.5)
                 }
             }
@@ -810,8 +810,8 @@ private extension View {
         self
             .padding(22)
             .background(MuesliTheme.backgroundRaised.opacity(0.82))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
             .shadow(color: Color.black.opacity(0.07), radius: 14, y: 7)
     }
 }

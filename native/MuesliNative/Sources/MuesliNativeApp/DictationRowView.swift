@@ -98,7 +98,7 @@ struct DictationRowView: View {
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
                                 .background(MuesliTheme.accentSubtle)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                         }
 
                         if let syncOriginBadgeLabel {
@@ -112,7 +112,7 @@ struct DictationRowView: View {
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
                                 .background(MuesliTheme.accentSubtle)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                                 .help(styleBadge.accessibilityDescription)
                                 .accessibilityLabel(styleBadge.accessibilityDescription)
                         }

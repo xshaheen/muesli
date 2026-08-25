@@ -191,9 +191,9 @@ struct DictationsView: View {
                                         }
                                     }
                                 }
-                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
                                 .overlay(
-                                    RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                                    RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                                         .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                                 )
                             }
@@ -276,9 +276,9 @@ struct DictationsView: View {
                     )
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }
@@ -346,7 +346,7 @@ struct DictationsView: View {
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .frame(width: 28, height: 28)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help("Show iPhone setup QR")
@@ -368,7 +368,7 @@ struct DictationsView: View {
                     .padding(.horizontal, 12)
                     .frame(height: 28)
                     .background(MuesliTheme.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
             .disabled(bridgeActionDisabled)
@@ -382,16 +382,16 @@ struct DictationsView: View {
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .frame(width: 28, height: 28)
                     .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
             .help("Hide iOS companion prompt")
         }
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
         .onAppear {
@@ -600,7 +600,7 @@ struct DictationsView: View {
             .padding(.horizontal, 12)
             .frame(height: 30)
             .background(isRecording ? MuesliTheme.recording : MuesliTheme.accent)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(appState.dictationState == .transcribing)
@@ -803,7 +803,7 @@ private struct IPhoneBridgeQRCodeSheet: View {
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .frame(width: 28, height: 28)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
@@ -813,7 +813,7 @@ private struct IPhoneBridgeQRCodeSheet: View {
                     .frame(width: 148, height: 148)
                     .padding(MuesliTheme.spacing8)
                     .background(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
 
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
                     Label("Same iCloud account", systemImage: "icloud")

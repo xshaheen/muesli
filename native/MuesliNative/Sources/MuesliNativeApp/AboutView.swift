@@ -67,7 +67,7 @@ struct AboutView: View {
                             .padding(.vertical, MuesliTheme.spacing8)
                             .frame(width: actionButtonWidth)
                             .background(MuesliTheme.success)
-                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                         }
                         .buttonStyle(.plain)
                     }
@@ -169,9 +169,9 @@ struct AboutView: View {
         }
         .padding(MuesliTheme.spacing20)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
@@ -283,9 +283,9 @@ struct AboutView: View {
         }
         .padding(MuesliTheme.spacing16)
         .background(banner.tint.opacity(0.14))
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(banner.tint.opacity(0.45), lineWidth: 1)
         )
     }
@@ -333,9 +333,9 @@ struct AboutView: View {
             .padding(.vertical, MuesliTheme.spacing8)
             .frame(width: actionButtonWidth)
             .background(MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }

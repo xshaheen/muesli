@@ -33,11 +33,11 @@ struct InsightsShareSheet: View {
                     Image(nsImage: image)
                         .resizable()
                         .aspectRatio(1200 / 630, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.12)))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.12)))
                         .shadow(color: .black.opacity(0.22), radius: 24, y: 12)
                 } else {
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(.quaternary)
                         .aspectRatio(1200 / 630, contentMode: .fit)
                         .overlay { ProgressView().controlSize(.small) }
@@ -68,8 +68,8 @@ struct InsightsShareSheet: View {
                 }
                 .padding(10)
                 .background(MuesliTheme.danger.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(MuesliTheme.danger.opacity(0.18)))
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(MuesliTheme.danger.opacity(0.18)))
             }
 
             HStack(spacing: 10) {
@@ -261,8 +261,8 @@ private struct InsightsShareCard: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 9)
                         .background(Color(red: 0.035, green: 0.050, blue: 0.068).opacity(0.44))
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.12)))
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.white.opacity(0.12)))
                 }
 
                 Spacer(minLength: 34)
@@ -290,8 +290,8 @@ private struct InsightsShareCard: View {
                 }
                 .padding(.vertical, 24)
                 .background(Color(red: 0.035, green: 0.050, blue: 0.068).opacity(0.48))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.16)))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.white.opacity(0.16)))
 
                 Spacer(minLength: 30)
 
@@ -346,7 +346,7 @@ private struct MuesliShareMark: View {
                     .resizable()
                     .interpolation(.high)
                     .frame(width: 54, height: 54)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             Text("muesli")
                 .font(Font(AppFonts.bold(30)))

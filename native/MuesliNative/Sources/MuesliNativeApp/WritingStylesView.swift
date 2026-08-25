@@ -205,7 +205,7 @@ struct WritingStylesView: View {
             Text(draft.postProcessorSystemPrompt).font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(MuesliTheme.textSecondary).textSelection(.enabled)
                 .padding(MuesliTheme.spacing12).background(MuesliTheme.backgroundRaised)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         }
     }
 
@@ -247,7 +247,7 @@ struct WritingStylesView: View {
             if selectedGroupID == group.id { Image(systemName: "checkmark").foregroundStyle(MuesliTheme.accent) }
         }
         .padding(MuesliTheme.spacing12).background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
     }
 
     private func selectedGroupPane(_ group: DictationStyleGroup) -> some View {
@@ -303,7 +303,7 @@ struct WritingStylesView: View {
             }
         }
         .padding(MuesliTheme.spacing16).background(MuesliTheme.surfacePrimary.opacity(0.55))
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
     }
 
     private var exceptionsPane: some View {
@@ -338,7 +338,7 @@ struct WritingStylesView: View {
                         .accessibilityLabel("Remove exact exception for \(exception.target)")
                 }
                 .padding(MuesliTheme.spacing12).background(MuesliTheme.backgroundRaised)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 .accessibilityElement(children: .contain)
             }
         }
@@ -385,7 +385,7 @@ struct WritingStylesView: View {
             }
         }
         .padding(MuesliTheme.spacing12).background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
     }
 
     private var styleEditor: some View {
@@ -396,12 +396,12 @@ struct WritingStylesView: View {
                 .accessibilityLabel("Style instructions")
                 .accessibilityHint("Describe how Muesli should clean up dictation that uses this style")
                 .frame(minHeight: 120).padding(MuesliTheme.spacing8).background(MuesliTheme.backgroundBase)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                .overlay(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall).strokeBorder(MuesliTheme.surfaceBorder))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous).strokeBorder(MuesliTheme.surfaceBorder))
             HStack { Spacer(); Button("Cancel") { editingStyleID = nil }; Button("Apply style changes") { saveEditedStyle() } }
         }
         .padding(MuesliTheme.spacing12).background(MuesliTheme.surfacePrimary.opacity(0.55))
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
     }
 
     private func pane<Content: View>(title: String, subtitle: String, @ViewBuilder content: () -> Content) -> some View {
@@ -415,7 +415,7 @@ struct WritingStylesView: View {
     private func statusMessage(_ text: String, color: Color) -> some View {
         Text(text).font(MuesliTheme.caption()).foregroundStyle(color)
             .padding(MuesliTheme.spacing12).background(MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .accessibilityLabel(text)
             .focusable()
     }

@@ -495,7 +495,7 @@ struct SessionDiagnosticsView: View {
         .padding(MuesliTheme.spacing12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
     }
 
     private func diagnosticValue(_ label: String, _ value: String) -> some View {

@@ -204,7 +204,7 @@ struct FeatureTourOverlay: View {
                 )
                 .allowsHitTesting(false)
 
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(MuesliTheme.accent, lineWidth: 2)
                 .frame(width: expandedSpotlight.width, height: expandedSpotlight.height)
                 .position(x: expandedSpotlight.midX, y: expandedSpotlight.midY)
@@ -297,9 +297,9 @@ struct FeatureTourOverlay: View {
         }
         .padding(MuesliTheme.spacing20)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.45), radius: 24, x: 0, y: 12)
@@ -373,9 +373,9 @@ struct FeatureTourInvitationView: View {
             .padding(MuesliTheme.spacing24)
             .frame(width: 460)
             .background(MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
             .shadow(color: Color.black.opacity(0.5), radius: 28, x: 0, y: 14)

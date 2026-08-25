@@ -606,7 +606,7 @@ struct SettingsView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
             .background(MuesliTheme.accentSubtle)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .help("Open Login Items in System Settings")
         }
         .padding(.leading, MuesliTheme.spacing16)
@@ -1132,9 +1132,9 @@ struct SettingsView: View {
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(MuesliTheme.surfacePrimary.opacity(0.7))
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                         .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                 )
 
@@ -1798,11 +1798,11 @@ struct SettingsView: View {
                         .foregroundStyle(isSelected ? MuesliTheme.accent : MuesliTheme.textSecondary)
                         .frame(width: 26, height: 26)
                         .background(
-                            RoundedRectangle(cornerRadius: 5)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(isSelected ? MuesliTheme.surfaceSelected : Color.clear)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 5)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .strokeBorder(Color.white.opacity(isSelected ? 0.3 : 0.08), lineWidth: 1)
                         )
                     }
@@ -1832,7 +1832,7 @@ struct SettingsView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
                 .background(MuesliTheme.success)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
         } else if isSigningInChatGPT {
@@ -1867,7 +1867,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(MuesliTheme.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 }
                 .buttonStyle(.plain)
 
@@ -1900,7 +1900,7 @@ struct SettingsView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
                 .background(MuesliTheme.success)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
         } else if isSigningInGoogleCal {
@@ -1926,7 +1926,7 @@ struct SettingsView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
                 .background(MuesliTheme.textTertiary.opacity(0.3))
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
 
                 Text("Google OAuth verification pending")
                     .font(.system(size: 10))
@@ -1956,7 +1956,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(MuesliTheme.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 }
                 .buttonStyle(.plain)
 
@@ -2191,7 +2191,7 @@ struct SettingsView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 3)
                 .background(MuesliTheme.accentSubtle)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             Button {
                 openPrivacyPane(pane)
@@ -2229,7 +2229,7 @@ struct SettingsView: View {
                     .frame(width: width)
                     .frame(minHeight: 32)
                     .background(MuesliTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
         }
@@ -2257,7 +2257,7 @@ struct SettingsView: View {
                     .frame(width: width)
                     .frame(minHeight: 32)
                     .background(MuesliTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
         }
@@ -2389,9 +2389,9 @@ struct SettingsView: View {
             }
             .padding(MuesliTheme.spacing16)
             .background(MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }
@@ -2518,9 +2518,9 @@ struct SettingsView: View {
             .padding(.horizontal, 10)
             .frame(height: 26)
             .background(isDestructive ? MuesliTheme.danger.opacity(0.1) : MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(isDestructive ? MuesliTheme.danger.opacity(0.25) : MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }
@@ -2573,9 +2573,9 @@ struct SettingsView: View {
             .padding(.horizontal, 8)
             .frame(height: 28)
             .background(isMuted ? MuesliTheme.accentSubtle : MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(isMuted ? MuesliTheme.accent.opacity(0.35) : MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }
@@ -2774,9 +2774,9 @@ struct SettingsView: View {
             .padding(.horizontal, 8)
             .frame(height: 28)
             .background(MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }
@@ -2852,9 +2852,9 @@ struct SettingsView: View {
             .padding(.horizontal, 10)
             .frame(height: 28)
             .background(MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
             .help(appState.config.autoExportMarkdownFolderPath.isEmpty ? "No destination folder selected" : appState.config.autoExportMarkdownFolderPath)
@@ -2868,9 +2868,9 @@ struct SettingsView: View {
                         .foregroundStyle(MuesliTheme.textSecondary)
                         .frame(width: 28, height: 28)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                         )
                 }
@@ -2887,9 +2887,9 @@ struct SettingsView: View {
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .frame(width: 28, height: 28)
                     .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                             .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                     )
             }
@@ -2925,9 +2925,9 @@ struct SettingsView: View {
             .padding(.horizontal, 10)
             .frame(height: 28)
             .background(MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
             .frame(maxWidth: .infinity)
@@ -2942,9 +2942,9 @@ struct SettingsView: View {
                         .foregroundStyle(MuesliTheme.textSecondary)
                         .frame(width: 28, height: 28)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                         )
                 }
@@ -2960,9 +2960,9 @@ struct SettingsView: View {
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .frame(width: 28, height: 28)
                     .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                             .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                     )
             }
@@ -3146,9 +3146,9 @@ struct SettingsView: View {
                 .padding(.horizontal, MuesliTheme.spacing16)
                 .padding(.vertical, MuesliTheme.spacing8)
                 .background(isDestructive ? MuesliTheme.danger.opacity(0.1) : MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                         .strokeBorder(
                             isDestructive ? MuesliTheme.danger.opacity(0.2) : MuesliTheme.surfaceBorder,
                             lineWidth: 1

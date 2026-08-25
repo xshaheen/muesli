@@ -99,6 +99,30 @@ struct WindowMaterialBoundaryTests {
     }
 }
 
+@Suite("Corner geometry")
+struct CornerGeometryTests {
+    @Test("the radius scale is ordered by role")
+    func radiusScaleIsOrdered() {
+        #expect(MuesliTheme.cornerChip < MuesliTheme.cornerSmall)
+        #expect(MuesliTheme.cornerSmall < MuesliTheme.cornerMedium)
+        #expect(MuesliTheme.cornerMedium < MuesliTheme.cornerLarge)
+        #expect(MuesliTheme.cornerLarge < MuesliTheme.cornerXL)
+    }
+
+    @Test("no main-window view draws a default-curve rounded rectangle")
+    func noDefaultCurveRectangles() throws {
+        // The default circular curve is the most visible difference between the window and
+        // the floating surfaces, so this is a gate rather than a convention.
+        let pattern = try NSRegularExpression(pattern: #"RoundedRectangle\(cornerRadius: [^,)]+\)"#)
+
+        for file in try mainWindowSourceFiles() {
+            let range = NSRange(file.source.startIndex..., in: file.source)
+            let matches = pattern.numberOfMatches(in: file.source, range: range)
+            #expect(matches == 0, "\(file.name) has \(matches) default-curve rounded rectangle(s)")
+        }
+    }
+}
+
 @Suite("Floating surface ownership boundary")
 struct FloatingSurfaceOwnershipTests {
     @Test("the floating surfaces keep their own shipped palette")

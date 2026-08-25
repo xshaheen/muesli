@@ -90,9 +90,9 @@ struct DictionaryView: View {
                         .padding(.horizontal, MuesliTheme.spacing12)
                         .padding(.vertical, MuesliTheme.spacing8)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                         )
                 }
@@ -107,9 +107,9 @@ struct DictionaryView: View {
                         .padding(.horizontal, MuesliTheme.spacing12)
                         .padding(.vertical, MuesliTheme.spacing8)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                         )
                 }
@@ -131,9 +131,9 @@ struct DictionaryView: View {
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, MuesliTheme.spacing8)
                     .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                             .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                     )
                 }
@@ -251,9 +251,9 @@ struct DictionaryView: View {
             }
         }
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
@@ -334,9 +334,9 @@ struct DictionaryView: View {
             }
         }
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
@@ -576,9 +576,9 @@ private struct ThresholdEditor: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                         .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                 )
         }

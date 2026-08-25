@@ -161,10 +161,30 @@ enum MuesliTheme {
 
     // MARK: - Corner radii
 
+    /// One continuous-curve scale by role. The continuous curve is not decoration: the default
+    /// circular curve is the most visible difference between the window and the floating
+    /// surfaces at a glance.
+    static let cornerChip: CGFloat = 4
     static let cornerSmall: CGFloat = 6
     static let cornerMedium: CGFloat = 10
     static let cornerLarge: CGFloat = 14
-    static let cornerXL: CGFloat = 20
+    static let cornerXL: CGFloat = 22
+
+    /// Prefer this over constructing a `RoundedRectangle` inline: it owns the curve so a call
+    /// site names the role instead of repeating the style argument.
+    static func shape(_ radius: CGFloat) -> RoundedRectangle {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+    }
+
+    // MARK: - Motion
+
+    /// Lifted verbatim from the shipped floating surfaces so both move alike.
+    enum Motion {
+        static let morph: TimeInterval = 0.16
+        static let popIn: TimeInterval = 0.26
+        static let fade: TimeInterval = 0.14
+        static let hoverGrace: TimeInterval = 0.4
+    }
 }
 
 // MARK: - Color Helpers

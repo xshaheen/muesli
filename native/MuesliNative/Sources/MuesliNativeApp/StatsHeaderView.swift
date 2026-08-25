@@ -82,9 +82,9 @@ private struct StatCard: View {
             .frame(maxWidth: .infinity)
             .padding(MuesliTheme.spacing16)
             .background(isHovered ? MuesliTheme.backgroundHover : MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                     .strokeBorder(isHovered ? MuesliTheme.accent.opacity(0.38) : MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }

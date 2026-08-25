@@ -33,9 +33,9 @@ struct MeetingPreparationBanner: View {
         }
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }

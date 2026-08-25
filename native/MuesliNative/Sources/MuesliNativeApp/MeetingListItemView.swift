@@ -113,9 +113,9 @@ struct MeetingListItemView: View {
         .padding(MuesliTheme.spacing16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isSelected ? MuesliTheme.surfaceSelected : MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
                 .strokeBorder(
                     isSelected ? MuesliTheme.accent.opacity(0.35) : MuesliTheme.surfaceBorder,
                     lineWidth: 1
