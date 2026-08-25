@@ -54,6 +54,26 @@ struct MeetingSelectableText: NSViewRepresentable {
         nsView: MeetingSelectableTextField,
         context: Context
     ) -> CGSize? {
+        Self.size(
+            for: attributedText,
+            proposal: proposal,
+            fillsAvailableWidth: fillsAvailableWidth
+        )
+    }
+
+    /// The rendered size, as a function of the text and the proposal and nothing else.
+    ///
+    /// This deliberately takes no view. SwiftUI calls `sizeThatFits` repeatedly while
+    /// resolving one layout, and `updateNSView` assigns `attributedStringValue` — so a size
+    /// derived from the live field's `fittingSize` answers from whatever the *previous* pass
+    /// left behind. Consecutive passes then disagree, each disagreement schedules another,
+    /// and layout never settles: the app spins at 100% inside `AG::Subgraph::update` with the
+    /// main thread pinned. Purity here is not tidiness, it is the termination condition.
+    static func size(
+        for attributedText: NSAttributedString,
+        proposal: ProposedViewSize,
+        fillsAvailableWidth: Bool
+    ) -> CGSize {
         let unconstrained = attributedText.boundingRect(
             with: NSSize(width: 10_000, height: CGFloat.greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading]
@@ -69,10 +89,29 @@ struct MeetingSelectableText: NSViewRepresentable {
             with: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading]
         )
-        // The attributed-string bounds can be one point shorter than the native
-        // field cell. Returning that smaller height clips the final transcript line.
-        let height = max(bounds.height, nsView.fittingSize.height)
+        // The attributed-string bounds can be one point shorter than the native field cell,
+        // and returning that smaller height clips the final line. The cell's own metrics are
+        // still what settle it — measured through a field this call configures itself, so the
+        // answer depends on the text and width rather than on the view being laid out.
+        let height = max(bounds.height, fittingHeight(for: attributedText, width: width))
         return CGSize(width: width, height: max(1, ceil(height)))
+    }
+
+    /// A field kept aside purely for measurement, never installed in a hierarchy.
+    private static let sizingField = MeetingSelectableTextField()
+
+    /// The height AppKit's own field reports for this text at this width.
+    ///
+    /// Deliberately still `fittingSize` — that is the measurement that accounts for the cell
+    /// insets the raw attributed-string bounds omit, and swapping it for `cellSize(forBounds:)`
+    /// silently drops the anti-clipping guarantee, because that never exceeds the bounds.
+    /// What changed is *whose* state it reads: this call sets both the text and the width on a
+    /// field of its own first, so the answer is fixed by its arguments. Reading the field being
+    /// laid out instead is what made consecutive passes disagree.
+    private static func fittingHeight(for attributedText: NSAttributedString, width: CGFloat) -> CGFloat {
+        sizingField.attributedStringValue = attributedText
+        sizingField.frame = NSRect(x: 0, y: 0, width: width, height: 0)
+        return sizingField.fittingSize.height
     }
 }
 
