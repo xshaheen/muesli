@@ -541,7 +541,7 @@ private struct DictionaryWordEditorRow: View {
             DictionaryIconButton(
                 systemName: "trash",
                 label: "Delete word",
-                tint: MuesliTheme.recording,
+                tint: MuesliTheme.danger,
                 weight: .regular
             ) {
                 controller.removeCustomWord(id: word.id)

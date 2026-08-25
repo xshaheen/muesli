@@ -168,7 +168,7 @@ struct MeetingTemplatesManagerView: View {
                     .overlay {
                         RoundedRectangle(cornerRadius: 6)
                             .strokeBorder(
-                                showNameValidationError ? MuesliTheme.recording.opacity(0.75) : .clear,
+                                showNameValidationError ? MuesliTheme.danger.opacity(0.75) : .clear,
                                 lineWidth: 1
                             )
                     }
@@ -180,7 +180,7 @@ struct MeetingTemplatesManagerView: View {
                 if showNameValidationError {
                     Text("Enter a template name.")
                         .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.recording)
+                        .foregroundStyle(MuesliTheme.danger)
                 }
             }
 
@@ -206,7 +206,7 @@ struct MeetingTemplatesManagerView: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                             .strokeBorder(
-                                showPromptValidationError ? MuesliTheme.recording.opacity(0.75) : MuesliTheme.surfaceBorder,
+                                showPromptValidationError ? MuesliTheme.danger.opacity(0.75) : MuesliTheme.surfaceBorder,
                                 lineWidth: 1
                             )
                     )
@@ -218,7 +218,7 @@ struct MeetingTemplatesManagerView: View {
                 if showPromptValidationError {
                     Text("Enter the prompt instructions for this template.")
                         .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.recording)
+                        .foregroundStyle(MuesliTheme.danger)
                 }
             }
 
@@ -378,15 +378,15 @@ struct MeetingTemplatesManagerView: View {
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
             }
-            .foregroundStyle(isDestructive ? MuesliTheme.recording : MuesliTheme.textPrimary)
+            .foregroundStyle(isDestructive ? MuesliTheme.danger : MuesliTheme.textPrimary)
             .padding(.horizontal, MuesliTheme.spacing12)
             .padding(.vertical, 7)
-            .background(isDestructive ? MuesliTheme.recording.opacity(0.1) : MuesliTheme.surfacePrimary)
+            .background(isDestructive ? MuesliTheme.danger.opacity(0.1) : MuesliTheme.surfacePrimary)
             .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             .overlay(
                 RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                     .strokeBorder(
-                        isDestructive ? MuesliTheme.recording.opacity(0.2) : MuesliTheme.surfaceBorder,
+                        isDestructive ? MuesliTheme.danger.opacity(0.2) : MuesliTheme.surfaceBorder,
                         lineWidth: 1
                     )
             )

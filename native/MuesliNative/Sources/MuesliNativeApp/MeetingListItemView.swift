@@ -266,7 +266,7 @@ struct MeetingListItemView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(
                     isHovering
-                        ? MuesliTheme.recording.opacity(0.85)
+                        ? MuesliTheme.danger.opacity(0.85)
                         : MuesliTheme.textTertiary
                 )
                 .frame(width: 24, height: 24)

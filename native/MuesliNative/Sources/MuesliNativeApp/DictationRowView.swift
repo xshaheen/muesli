@@ -172,7 +172,7 @@ struct DictationRowView: View {
                         Button { showDeleteConfirmation = true } label: {
                             Image(systemName: "trash")
                                 .font(.system(size: 12))
-                                .foregroundStyle(.red.opacity(0.6))
+                                .foregroundStyle(MuesliTheme.danger.opacity(0.6))
                         }
                         .buttonStyle(.plain)
                     }
@@ -256,7 +256,7 @@ struct DictationRowView: View {
         case "timed_out", "timedout":
             return MuesliTheme.transcribing
         case "failed", "unsupported":
-            return MuesliTheme.recording
+            return MuesliTheme.danger
         default:
             return MuesliTheme.textTertiary
         }
@@ -313,7 +313,7 @@ struct AudioOnlyDictationRowView: View {
             } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 12))
-                    .foregroundStyle(.red.opacity(0.6))
+                    .foregroundStyle(MuesliTheme.danger.opacity(0.6))
             }
             .buttonStyle(.plain)
             .opacity(isHovered ? 1 : 0)

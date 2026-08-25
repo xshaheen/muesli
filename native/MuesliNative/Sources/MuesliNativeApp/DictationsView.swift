@@ -442,8 +442,10 @@ struct DictationsView: View {
         switch bridgeState {
         case .active:
             return MuesliTheme.success
-        case .needsICloud, .error:
+        case .needsICloud:
             return MuesliTheme.transcribing
+        case .error:
+            return MuesliTheme.danger
         default:
             return MuesliTheme.accent
         }

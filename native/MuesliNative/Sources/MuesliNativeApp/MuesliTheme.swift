@@ -108,11 +108,17 @@ enum MuesliTheme {
 
     // MARK: - Semantic
 
-    static let recordingHex     = 0xEF4444
-    static let transcribingHex  = 0xF59E0B
+    /// One token per state. `recording` and `danger` were a single red before, which meant a
+    /// delete button and a live recording could not be recoloured independently -- most uses
+    /// of the old token were destructive controls and validation errors, not recording.
+    static let recordingHex     = 0xFF7043
+    static let transcribingHex  = 0xFFB04D
+    static let dangerHex        = 0xFF6961
+    static let successHex       = 0x48E57B
     static let recording        = Color(hex: recordingHex)
     static let transcribing     = Color(hex: transcribingHex)
-    static let success          = Color(hex: 0x34D399)
+    static let danger           = Color(hex: dangerHex)
+    static let success          = Color(hex: successHex)
 
     // MARK: - Typography (SF Pro via .system())
 

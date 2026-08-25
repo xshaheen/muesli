@@ -585,7 +585,7 @@ struct SettingsView: View {
         HStack(spacing: MuesliTheme.spacing8) {
             Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(MuesliTheme.recording)
+                .foregroundStyle(MuesliTheme.danger)
             Text("Requires approval in System Settings")
                 .font(MuesliTheme.caption())
                 .foregroundStyle(MuesliTheme.textTertiary)
@@ -821,7 +821,7 @@ struct SettingsView: View {
                 if let errorMessage = languageProfileEditor.errorMessage {
                     Text(errorMessage)
                         .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.recording)
+                        .foregroundStyle(MuesliTheme.danger)
                 } else if languageProfileEditor.didSave {
                     Label("Saved", systemImage: "checkmark.circle.fill")
                         .font(MuesliTheme.caption())
@@ -1173,7 +1173,7 @@ struct SettingsView: View {
             if let dictationStyleSettingsError {
                 Text(dictationStyleSettingsError)
                     .font(MuesliTheme.caption())
-                    .foregroundStyle(MuesliTheme.recording)
+                    .foregroundStyle(MuesliTheme.danger)
                     .accessibilityLabel("Style settings error: \(dictationStyleSettingsError)")
             }
         }
@@ -1869,7 +1869,7 @@ struct SettingsView: View {
                 if let chatGPTSignInError {
                     Text(chatGPTSignInError)
                         .font(.system(size: 10))
-                        .foregroundStyle(.red)
+                        .foregroundStyle(MuesliTheme.danger)
                         .lineLimit(2)
                 }
             }
@@ -1958,7 +1958,7 @@ struct SettingsView: View {
                 if let googleCalSignInError {
                     Text(googleCalSignInError)
                         .font(.system(size: 10))
-                        .foregroundStyle(.red)
+                        .foregroundStyle(MuesliTheme.danger)
                         .lineLimit(2)
                 }
             }
@@ -2165,7 +2165,7 @@ struct SettingsView: View {
         HStack {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(granted ? MuesliTheme.success : MuesliTheme.recording)
+                    .fill(granted ? MuesliTheme.success : MuesliTheme.danger)
                     .frame(width: 8, height: 8)
                 Text(name)
                     .font(MuesliTheme.body())
@@ -2509,14 +2509,14 @@ struct SettingsView: View {
                     .lineLimit(1)
             }
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(isDestructive ? MuesliTheme.recording : MuesliTheme.textPrimary)
+            .foregroundStyle(isDestructive ? MuesliTheme.danger : MuesliTheme.textPrimary)
             .padding(.horizontal, 10)
             .frame(height: 26)
-            .background(isDestructive ? MuesliTheme.recording.opacity(0.1) : MuesliTheme.surfacePrimary)
+            .background(isDestructive ? MuesliTheme.danger.opacity(0.1) : MuesliTheme.surfacePrimary)
             .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             .overlay(
                 RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                    .strokeBorder(isDestructive ? MuesliTheme.recording.opacity(0.25) : MuesliTheme.surfaceBorder, lineWidth: 1)
+                    .strokeBorder(isDestructive ? MuesliTheme.danger.opacity(0.25) : MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -3136,16 +3136,16 @@ struct SettingsView: View {
                 }
             }
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(isDestructive ? MuesliTheme.recording : MuesliTheme.textPrimary)
+                .foregroundStyle(isDestructive ? MuesliTheme.danger : MuesliTheme.textPrimary)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, MuesliTheme.spacing16)
                 .padding(.vertical, MuesliTheme.spacing8)
-                .background(isDestructive ? MuesliTheme.recording.opacity(0.1) : MuesliTheme.surfacePrimary)
+                .background(isDestructive ? MuesliTheme.danger.opacity(0.1) : MuesliTheme.surfacePrimary)
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 .overlay(
                     RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                         .strokeBorder(
-                            isDestructive ? MuesliTheme.recording.opacity(0.2) : MuesliTheme.surfaceBorder,
+                            isDestructive ? MuesliTheme.danger.opacity(0.2) : MuesliTheme.surfaceBorder,
                             lineWidth: 1
                         )
                 )

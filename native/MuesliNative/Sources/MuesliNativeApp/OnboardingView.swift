@@ -404,7 +404,7 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(modelDownloadIndicatorTitle)
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(modelDownloadError == nil ? MuesliTheme.textSecondary : MuesliTheme.recording)
+                    .foregroundStyle(modelDownloadError == nil ? MuesliTheme.textSecondary : MuesliTheme.danger)
                     .lineLimit(1)
                 Text(modelDownloadIndicatorDetail(progress: progress))
                     .font(.system(size: 10, weight: .medium, design: .rounded))
@@ -1334,7 +1334,7 @@ struct OnboardingView: View {
                     if let modelDownloadError {
                         Text(modelDownloadError)
                             .font(.system(size: 11))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(MuesliTheme.danger)
                             .lineLimit(2)
 
                         Button("Retry Download") {
@@ -1383,7 +1383,7 @@ struct OnboardingView: View {
                     if let dictationTestError {
                         Text(dictationTestError)
                             .font(.system(size: 11))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(MuesliTheme.danger)
                             .lineLimit(2)
                     }
 
@@ -1541,7 +1541,7 @@ struct OnboardingView: View {
                     if let chatGPTSignInError {
                         Text(chatGPTSignInError)
                             .font(.system(size: 11))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(MuesliTheme.danger)
                             .lineLimit(2)
                     }
                 }
@@ -2054,7 +2054,7 @@ struct OnboardingView: View {
                     if let googleCalSignInError {
                         Text(googleCalSignInError)
                             .font(.system(size: 11))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(MuesliTheme.danger)
                             .multilineTextAlignment(.center)
                     }
                 } else {

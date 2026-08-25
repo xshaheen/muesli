@@ -63,7 +63,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                     if let operationErrorMessage {
                         Text(operationErrorMessage)
                             .font(MuesliTheme.caption())
-                            .foregroundStyle(MuesliTheme.recording)
+                            .foregroundStyle(MuesliTheme.danger)
                             .accessibilityLabel("Style settings error: \(operationErrorMessage)")
                     }
                 }
@@ -265,7 +265,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                     .overlay {
                         RoundedRectangle(cornerRadius: 6)
                             .strokeBorder(
-                                nameValidationMessage == nil ? .clear : MuesliTheme.recording.opacity(0.75),
+                                nameValidationMessage == nil ? .clear : MuesliTheme.danger.opacity(0.75),
                                 lineWidth: 1
                             )
                     }
@@ -277,7 +277,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                 if let nameValidationMessage {
                     Text(nameValidationMessage)
                         .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.recording)
+                        .foregroundStyle(MuesliTheme.danger)
                 }
             }
 
@@ -296,7 +296,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                             .strokeBorder(
-                                showPromptValidationError ? MuesliTheme.recording.opacity(0.75) : MuesliTheme.surfaceBorder,
+                                showPromptValidationError ? MuesliTheme.danger.opacity(0.75) : MuesliTheme.surfaceBorder,
                                 lineWidth: 1
                             )
                     )
@@ -308,7 +308,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                 if showPromptValidationError {
                     Text("Enter cleanup instructions for this style.")
                         .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.recording)
+                        .foregroundStyle(MuesliTheme.danger)
                 }
             }
 
@@ -466,15 +466,15 @@ struct TranscriptCleanupPromptsManagerView: View {
                 Text(title)
                     .font(.system(size: 12, weight: .semibold))
             }
-            .foregroundStyle(isDestructive ? MuesliTheme.recording : MuesliTheme.textPrimary)
+            .foregroundStyle(isDestructive ? MuesliTheme.danger : MuesliTheme.textPrimary)
             .padding(.horizontal, MuesliTheme.spacing12)
             .frame(height: 28)
-            .background(isDestructive ? MuesliTheme.recording.opacity(0.1) : MuesliTheme.surfacePrimary)
+            .background(isDestructive ? MuesliTheme.danger.opacity(0.1) : MuesliTheme.surfacePrimary)
             .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             .overlay(
                 RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                     .strokeBorder(
-                        isDestructive ? MuesliTheme.recording.opacity(0.2) : MuesliTheme.surfaceBorder,
+                        isDestructive ? MuesliTheme.danger.opacity(0.2) : MuesliTheme.surfaceBorder,
                         lineWidth: 1
                     )
             )

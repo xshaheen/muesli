@@ -477,7 +477,7 @@ struct ModelsView: View {
                     } label: {
                         Image(systemName: "trash")
                             .font(.system(size: 12))
-                            .foregroundStyle(.red.opacity(0.6))
+                            .foregroundStyle(MuesliTheme.danger.opacity(0.6))
                             .frame(width: 20, height: 20)
                     }
                     .buttonStyle(.plain)
@@ -767,7 +767,7 @@ struct ModelsView: View {
                     } label: {
                         Image(systemName: "trash")
                             .font(.system(size: 12))
-                            .foregroundStyle(.red.opacity(0.6))
+                            .foregroundStyle(MuesliTheme.danger.opacity(0.6))
                             .frame(width: 20, height: 20)
                     }
                     .buttonStyle(.plain)
@@ -1083,7 +1083,7 @@ struct ModelsView: View {
                 } label: {
                     Image(systemName: "trash")
                         .font(.system(size: 12))
-                        .foregroundStyle(.red.opacity(0.6))
+                        .foregroundStyle(MuesliTheme.danger.opacity(0.6))
                         .frame(width: 20, height: 20)
                 }
                 .buttonStyle(.plain)

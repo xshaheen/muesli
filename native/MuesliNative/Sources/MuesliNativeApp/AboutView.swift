@@ -256,7 +256,7 @@ struct AboutView: View {
                 icon: "xmark.octagon.fill",
                 title: "Update check failed",
                 message: "\(message) Use the menu bar icon > Check for Updates... to try again.",
-                tint: MuesliTheme.recording
+                tint: MuesliTheme.danger
             )
         }
     }

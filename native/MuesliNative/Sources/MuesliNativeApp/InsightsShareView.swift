@@ -48,7 +48,7 @@ struct InsightsShareSheet: View {
             if let saveErrorMessage {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(MuesliTheme.danger)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("The image couldn’t be saved")
                             .font(.system(size: 12, weight: .semibold))
@@ -67,9 +67,9 @@ struct InsightsShareSheet: View {
                     .accessibilityLabel("Dismiss save error")
                 }
                 .padding(10)
-                .background(Color.red.opacity(0.08))
+                .background(MuesliTheme.danger.opacity(0.08))
                 .clipShape(RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.red.opacity(0.18)))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(MuesliTheme.danger.opacity(0.18)))
             }
 
             HStack(spacing: 10) {

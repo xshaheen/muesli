@@ -179,8 +179,8 @@ struct WritingStylesView: View {
     @ViewBuilder private func detail(validationMessage: String?) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-                if let errorMessage { statusMessage(errorMessage, color: MuesliTheme.recording) }
-                if let validationMessage { statusMessage(validationMessage, color: MuesliTheme.recording) }
+                if let errorMessage { statusMessage(errorMessage, color: MuesliTheme.danger) }
+                if let validationMessage { statusMessage(validationMessage, color: MuesliTheme.danger) }
                 if !draft.adaptiveDictationStylesEnabled {
                     statusMessage("Adaptive Styles is off. Your global default remains active; groups and exceptions are saved but inactive.", color: MuesliTheme.textSecondary)
                 }
@@ -602,7 +602,7 @@ struct WritingStylesView: View {
     private func importPreviewSheet(_ preview: DictationStyleRulesetPreview) -> some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
             Text("Review Writing Styles import").font(MuesliTheme.title2())
-            Text(preview.privacyWarningText).font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.recording).accessibilityLabel(preview.privacyWarningText)
+            Text(preview.privacyWarningText).font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.danger).accessibilityLabel(preview.privacyWarningText)
             Text("\(preview.additions.count) additions · \(preview.changes.count) changes · \(preview.removals.count) removals").font(MuesliTheme.callout())
             Text(preview.rulesWillBeActive ? "Imported group routing will be active immediately." : "Imported groups will remain inactive until Adaptive Styles is enabled locally.").font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
             ScrollView { VStack(alignment: .leading, spacing: MuesliTheme.spacing8) { ForEach(preview.additions + preview.changes + preview.removals + preview.effectiveChanges, id: \.self) { Text($0).font(MuesliTheme.caption()) }; Text("Global instructions").font(MuesliTheme.captionMedium()); Text(preview.ruleset.globalDefault.prompt).font(.system(size: 12, design: .monospaced)).textSelection(.enabled); ForEach(preview.ruleset.customStyles) { style in Text(style.name).font(MuesliTheme.captionMedium()); Text(style.prompt).font(.system(size: 12, design: .monospaced)).textSelection(.enabled) } } }
