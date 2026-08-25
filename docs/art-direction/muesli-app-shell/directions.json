@@ -31,19 +31,53 @@
       "thesis": "The app window inherits Spark's palette, geometry and motion but never its material, and settings regroup around the object being configured rather than the feature that first needed it.",
       "anchors": ["Contextual Spark palette", "SettingsView row inventory", "competitor information architecture"],
       "artifact": "spark-app-system-01.html",
-      "status": "candidate",
+      "status": "selected",
       "created_at_utc": "2026-08-24T00:00:00Z",
+      "selected_at_utc": "2026-08-25T00:00:00Z",
+      "selection_basis": "D1 owner-directed on 2026-08-25 (C, overriding the recommended B); D2-D5 taken at their recommended values after going unanswered, reversible by document edit because nothing is implemented in code",
       "variants": [
         {"id": "A-continuum", "thesis": "One window; settings nest as a sidebar section.", "status": "alternative"},
-        {"id": "B-workbench", "thesis": "Content window plus a native preferences window, each with a short sidebar.", "status": "recommended"},
-        {"id": "C-modes", "thesis": "A per-context Mode becomes the primary object and absorbs most per-feature settings.", "status": "deferred-next"}
+        {"id": "B-workbench", "thesis": "Content window plus a native preferences window, each with a short sidebar.", "status": "alternative"},
+        {"id": "C-modes", "thesis": "A per-context Mode becomes the primary object and absorbs most per-feature settings.", "status": "selected"}
       ],
-      "open_decisions": [
-        {"id": "D1", "question": "Which shell?", "lean": "B now, C next"},
-        {"id": "D2", "question": "Does the user-selectable accent survive?", "lean": "keep presets, scope them to selection and highlight only"},
-        {"id": "D3", "question": "Inter or SF Pro in the app window?", "lean": "Inter, SF Pro left on AppKit-drawn system controls"},
-        {"id": "D4", "question": "Does the light appearance go warm?", "lean": "yes"},
-        {"id": "D5", "question": "How far does the credentials registry go in v1?", "lean": "full registry with tolerant config migration"}
+      "cost_correction": {
+        "at": "2026-08-25",
+        "claim_retracted": "C requires a new persisted object and is not a one-release change",
+        "evidence": "DictationStyleGroup is {id,name,styleID,matchers[]}; DictationStyleMatcher is {kind:bundle_id|hostname,pattern}; DictationStyleResolver.resolve already ships the full precedence ladder with normalisation, collision detection, quarantine and a LegacyProjection; WritingStylesView is already the routing editor",
+        "revised": "C is a payload widening on an existing persisted object plus promotion of an existing editor from a modal sheet to the sidebar"
+      },
+      "ia_correction": {
+        "at": "2026-08-25",
+        "was": "Library listed Styles and Prompts as separate items",
+        "is": "WritingStylesView is routing, TranscriptCleanupPromptsManagerView is prompt bodies; under C the routing half becomes Modes. Library is Dictionary, Prompts, Templates"
+      },
+      "decisions": [
+        {"id": "D1", "question": "Which shell?", "taken": "C (Modes) now", "state": "decided", "basis": "owner-directed 2026-08-25, overriding the recommended B"},
+        {"id": "D2", "question": "Does the user-selectable accent survive?", "taken": "option 2 - presets survive, scoped to selection and highlight only; semantic signals stay coral", "state": "provisional"},
+        {"id": "D3", "question": "Inter or SF Pro in the app window?", "taken": "option 1 - Inter, SF Pro left on AppKit-drawn system controls", "state": "provisional"},
+        {"id": "D4", "question": "Does the light appearance go warm?", "taken": "option 1 - warm paper in both appearances", "state": "provisional"},
+        {"id": "D5", "question": "How far does the credentials registry go in v1?", "taken": "option 1 - full registry, conditional on a tolerant config migration; falls back to option 2 only after asking the owner", "state": "provisional-conditional", "note": "C strengthens this: a Mode references a provider assignment and never holds a credential"},
+        {"id": "D6", "question": "Under C, where do the remaining global settings live?", "taken": "option 2 - split, global settings in a Cmd-comma preferences window", "state": "provisional-close-call", "opened_by": "D1 = C", "note": "genuinely close; option 1 (one window) is viable because C shrinks global settings"}
+      ],
+      "mode_object": {
+        "required_fields": ["matchers"],
+        "inherited_fields": ["hotkey", "model", "languages", "dictionary scope", "cleanup on/off + prompt", "cleanup provider", "app context / OCR"],
+        "never_holds": ["credentials - references an AI Providers assignment"],
+        "precedence": [
+          "explicitly invoked Mode - single dictation, non-persisting (added by C)",
+          "exact exception on hostname (ships)",
+          "exact exception on bundle ID (ships)",
+          "best matching Mode by hostname (ships as group)",
+          "best matching Mode by bundle ID (ships as group)",
+          "legacy domain rule, app rule, category (ships)",
+          "global defaults (ships)"
+        ],
+        "migration_bar": "behaviour-identical on day one; a user who never opens Modes cannot tell the release happened",
+        "failure_mode_to_avoid": "shipping Modes while Writing Styles remains reachable - two editors writing one ruleset"
+      },
+      "not_in_scope": [
+        "onboarding flow redesign - consumes these surfaces, should follow",
+        "meeting detail document treatment - separate node"
       ],
       "generation": {
         "capability": "x-frontend-design",

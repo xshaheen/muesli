@@ -222,7 +222,7 @@
     <span>SettingsView.swift 3,448 lines</span>
     <span>6 panes &middot; ~90 rows</span>
     <span>competitors: 5</span>
-    <span>status: proposal</span>
+    <span>status: selected &mdash; shell C (Modes)</span>
   </div>
 </div>
 
@@ -608,6 +608,7 @@
         <div class="it" style="color:var(--ink-4)"><span class="gl">+</span>New mode</div>
         <div class="grp">Library</div>
         <div class="it"><span class="gl">&#9776;</span>Dictionary</div>
+        <div class="it"><span class="gl">&#9998;</span>Prompts</div>
         <div class="it"><span class="gl">&#9744;</span>Templates</div>
         <div class="it"><span class="gl">&#9881;</span>Settings</div>
       </div>
@@ -637,15 +638,84 @@
     </div>
   </div>
   <div class="verdict"><div class="k">Gains</div><div class="v">Answers the question people actually have &mdash; &ldquo;why did it write it that way <em>here</em>&rdquo; &mdash; in one screen. Settings shrink dramatically because most rows are per-context, not global. It is the only variant that turns Muesli&rsquo;s 11-model range into a visible advantage rather than a picker.</div></div>
-  <div class="verdict"><div class="k">Costs</div><div class="v">The largest change by far: a new persisted object, migration from <code>DictationStyleResolver</code>&rsquo;s per-app rules, resolution precedence to design and test, and a real risk of ending up with two overlapping systems if the migration is partial. Not a one-release change.</div></div>
+  <div class="verdict"><div class="k">Costs</div><div class="v">Still the largest surface change, and the resolution rules become user-visible in a way they are not today. But <b>not a new persisted object</b> &mdash; see the correction below.</div></div>
 
-  <div class="callout"><p><strong>Recommendation: B now, C next.</strong> B is the correct macOS shape and it is what unlocks the credentials registry &mdash; the single biggest usability win in this document &mdash; without betting the release on a new persisted object. C is the right two-releases-out destination, and B&rsquo;s <b>Connected&thinsp;/&thinsp;Used&nbsp;by</b> page is exactly the layer a Mode later overrides. A is the fallback if a second window is judged too costly.</p></div>
+  <div class="callout"><p><span class="tag coral">selected</span> <strong>C, now.</strong> Owner-directed on 25&nbsp;Aug, overriding my recommendation of B.</p>
+  <p style="margin-top:10px"><strong>And I priced C wrong.</strong> I called it &ldquo;a new persisted object&hellip; not a one-release change&rdquo; from the mockup, before reading the style system. Having read it: <code>DictationStyleGroup</code> is already <code>{ id, name, styleID, matchers[] }</code>, where a matcher is a bundle&nbsp;ID or a hostname &mdash; that is a Mode with a one-field payload. <code>DictationStyleResolver.resolve</code> already ships the precedence ladder (exact hostname exception &rarr; exact bundle exception &rarr; best hostname group &rarr; best bundle group &rarr; legacy domain/app rules &rarr; category), with normalisation, collision detection, quarantine on malformed config and a legacy projection. <code>WritingStylesView</code> is already the routing editor for it &mdash; its own subtitle reads &ldquo;Choose a global style, reusable app groups, and exact exceptions.&rdquo;</p>
+  <p style="margin-top:10px">So C is not <em>build a mode system</em>. It is <b>widen the payload a group carries</b> from one <code>styleID</code> to a full Mode, and promote the routing editor that already exists from a modal sheet to the sidebar. That is materially cheaper than I told you, and it makes C the better call rather than merely the braver one.</p></div>
+</section>
+
+<!-- ============================== MODE OBJECT ============================== -->
+<section id="mode" data-nav="The Mode object">
+  <h2>06 &middot; The Mode object</h2>
+  <h3>Most of it already ships &mdash; under a smaller name</h3>
+  <p class="lede">Choosing C makes this the load-bearing object, so it needs a real definition rather than a mockup. The good news from the source: the routing half is built, tested and shipping as &ldquo;Writing Styles&rdquo;. What C adds is payload and prominence.</p>
+
+  <h4>What exists today</h4>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Shipped today</th><th>Shape</th><th>Becomes</th></tr></thead>
+    <tbody>
+      <tr><td><code>DictationStyleGroup</code></td><td><code>{ id, name, styleID, matchers[] }</code></td><td><b>Mode</b> &mdash; same identity and matchers, wider payload</td></tr>
+      <tr><td><code>DictationStyleMatcher</code></td><td><code>{ id, kind: bundle_id&#124;hostname, pattern }</code></td><td>unchanged &mdash; this is &ldquo;Applies when&rdquo;</td></tr>
+      <tr><td><code>DictationStyleExactException</code></td><td><code>{ id, kind, target, styleID }</code></td><td>Mode override pinned to one app or host</td></tr>
+      <tr><td><code>DictationStyleResolver.resolve</code></td><td>the precedence ladder, normalisation, collision checks, quarantine</td><td>unchanged &mdash; returns a Mode instead of a style</td></tr>
+      <tr><td><code>WritingStylesView</code></td><td>modal sheet: &ldquo;global style, reusable app groups, exact exceptions&rdquo;</td><td>the <b>Modes</b> sidebar and inspector</td></tr>
+      <tr><td><code>TranscriptCleanupPromptsManagerView</code></td><td>&ldquo;Manage Cleanup Styles&rdquo; &mdash; the prompt bodies, built-ins read-only</td><td>stays as <b>Library &rsaquo; Prompts</b></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout"><p><strong>A correction to my own IA.</strong> Section&nbsp;07 originally listed <em>Styles</em> and <em>Prompts</em> as two library items. They are two halves of one system: Writing&nbsp;Styles is the <em>routing</em> (which app gets which prompt), Cleanup&nbsp;Prompts is the <em>bodies</em>. Under C the routing half is promoted to Modes and stops being a library item at all. Library is <b>Dictionary &middot; Prompts &middot; Templates</b> &mdash; three, not four.</p></div>
+
+  <h4>Anatomy &mdash; and what is inherited rather than copied</h4>
+  <p>Every field below defaults to <em>inherit</em>. A Mode stores only what it overrides, so a new Mode is one matcher and one changed row, not a full configuration to fill in. This is what keeps the object from becoming the settings sprawl it is meant to fix.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Field</th><th>Default</th><th>Why it is per-mode</th></tr></thead>
+    <tbody>
+      <tr><td><b>Matchers</b></td><td>&mdash; required</td><td>the only field with no global fallback</td></tr>
+      <tr><td><b>Hotkey</b></td><td>inherit (the global dictation hotkey)</td><td>a mode you want on demand rather than by context</td></tr>
+      <tr><td><b>Model</b></td><td>inherit</td><td>Parakeet for code, a multilingual model for chat &mdash; the reason 11 models exist</td></tr>
+      <tr><td><b>Languages</b></td><td>inherit the language profile</td><td>English-only in an IDE, code-switching in messages</td></tr>
+      <tr><td><b>Dictionary scope</b></td><td>global list</td><td>adds terms; never replaces the global list</td></tr>
+      <tr><td><b>Cleanup on/off + prompt</b></td><td>inherit</td><td>this is today&rsquo;s <code>styleID</code>, unchanged</td></tr>
+      <tr><td><b>Cleanup provider</b></td><td>inherit the assignment</td><td>references <b>AI Providers</b> &mdash; a Mode never holds a credential</td></tr>
+      <tr><td><b>App context / OCR</b></td><td>inherit</td><td>on in an editor, off in a password-adjacent app</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="callout"><p><strong>This makes D5 more necessary, not less.</strong> If a Mode could hold its own API key, four duplicated credential blocks would become <em>N</em> duplicated credential blocks. A Mode assigns a provider by reference; the registry stays the single place a key is ever pasted.</p></div>
+
+  <h4>Precedence &mdash; shipped, and now visible</h4>
+  <div class="tree">1. exact exception on <b>hostname</b>          <s>ships today</s>
+2. exact exception on <b>bundle ID</b>         <s>ships today</s>
+3. best matching <b>Mode</b> by hostname       <s>ships today (group)</s>
+4. best matching <b>Mode</b> by bundle ID      <s>ships today (group)</s>
+5. legacy domain rule &rarr; app rule &rarr; category  <s>ships today, pre-ruleset configs</s>
+6. <b>global defaults</b>                      <s>ships today</s>
+
+<em>added by C:</em> an explicitly invoked Mode (its own hotkey, or picked from
+the Mini&rsquo;s menu) wins over 1&ndash;6 for that one dictation and does not persist.</div>
+  <p>Hostname beats bundle ID at every tier, which is already the shipped behaviour and the right one: a browser is a container, the site is the context. The inspector states the winning tier in plain language (&ldquo;<em>active in Cursor &mdash; matched by app</em>&rdquo;), because the single largest complaint about mode systems is not knowing which one fired.</p>
+
+  <h4>What stays global under C</h4>
+  <p>C shrinks settings but does not empty them. Global keeps everything that is not per-context: launch and menu bar, microphone and audio session, the model <em>library</em> (downloads, updates, disk), the language profile that Modes inherit, the provider registry, meetings in full (a meeting has no focused app to match on), permissions and privacy, appearance, hotkeys, and diagnostics. What leaves global is the per-context half of Dictation &mdash; model, languages, cleanup, style, dictionary scope, app context &mdash; which is exactly the set that a Mode overrides.</p>
+
+  <h4>Migration &mdash; the part to get right</h4>
+  <ul>
+    <li><b>Ruleset configs</b> (<code>dictation_style_ruleset_initialized = true</code>): each group becomes a Mode with the same id, name and matchers; every other field is <em>inherit</em>. Behaviour is bit-identical on day one &mdash; a user who never opens Modes sees no change.</li>
+    <li><b>Pre-ruleset configs</b>: the legacy app and domain rules keep resolving through tier&nbsp;5 exactly as they do now. They are not force-migrated; the existing <code>LegacyProjection</code> already models this and should keep doing so.</li>
+    <li><b>Quarantine</b>: malformed <code>dictation_style_groups</code> already falls back to empty with a stored reason. That path must survive the widening, and the reason should surface in Modes rather than only in config.</li>
+    <li><b>The trap:</b> shipping Modes while leaving Writing&nbsp;Styles reachable would be two editors writing one ruleset. The sheet is removed in the same change that adds the sidebar, not after it.</li>
+  </ul>
 </section>
 
 <!-- ============================== SETTINGS IA ============================== -->
 <section id="ia" data-nav="Settings IA">
-  <h2>06 &middot; Settings reorganisation</h2>
+  <h2>07 &middot; Settings reorganisation</h2>
   <h3>From six panes to nine sections, with nothing configured twice</h3>
+  <div class="callout"><p><strong>Read this under C.</strong> The map below was drawn for the Workbench shell. It survives the switch to Modes almost intact &mdash; the destinations are the same &mdash; with one change: the per-context half of <b>Dictation</b> (model, languages, cleanup, style, dictionary scope, app context) moves into the <b>Mode</b> inspector rather than the Dictation section, leaving global defaults behind. Section&nbsp;06 lists exactly which fields those are.</p></div>
 
   <div class="grid g2" style="align-items:start">
     <div>
@@ -701,9 +771,13 @@
 <b>Advanced</b>         computer use, post-meeting hooks,
                  experimental, backup &amp; restore
 
-<s>main sidebar &mdash; content and libraries only</s>
+<s>main sidebar &mdash; content, modes and libraries</s>
 Dictations &middot; Meetings &middot; <em>Insights</em>
-Library: Dictionary &middot; <em>Styles</em> &middot; <em>Templates</em> &middot; <em>Prompts</em></div>
+<em>Modes:</em> Code &middot; Email &middot; Notes &middot; Arabic &middot; + New
+Library: Dictionary &middot; <em>Prompts</em> &middot; <em>Templates</em>
+
+<s>Styles is not a library item under C &mdash; its routing half</s>
+<s>becomes Modes, its prompt bodies are Library &rsaquo; Prompts.</s></div>
     </div>
   </div>
 
@@ -738,7 +812,8 @@ Library: Dictionary &middot; <em>Styles</em> &middot; <em>Templates</em> &middot
       <tr><td><b>Appearance</b> &rsaquo; Marauder&rsquo;s Map</td><td>2</td><td>Appearance &rsaquo; Extras</td><td>unchanged</td></tr>
       <tr><td><b>Models</b> tab, <b>Shortcuts</b> tab</td><td>&mdash;</td><td>Settings sections</td><td>they were always settings wearing a sidebar badge</td></tr>
       <tr><td><b>Dictionary</b> tab</td><td>&mdash;</td><td>Library &rsaquo; Dictionary</td><td>curated content, stays in the main window</td></tr>
-      <tr><td>Writing Styles, Meeting Templates, Cleanup Prompts <span class="tag amber">modal</span></td><td>&mdash;</td><td>Library</td><td>editable collections should not live in sheets</td></tr>
+      <tr><td>Writing Styles <span class="tag amber">modal</span></td><td>&mdash;</td><td><b>Modes</b> (sidebar)</td><td>it is already the routing editor &mdash; promoted, not rebuilt; the sheet is removed in the same change</td></tr>
+      <tr><td>Meeting Templates, Cleanup Prompts <span class="tag amber">modal</span></td><td>&mdash;</td><td>Library</td><td>editable collections should not live in sheets</td></tr>
       <tr><td>Insights <span class="tag amber">orphaned</span></td><td>&mdash;</td><td>Main sidebar</td><td>a whole 817-line view with no navigation entry</td></tr>
     </tbody>
   </table>
@@ -749,15 +824,23 @@ Library: Dictionary &middot; <em>Styles</em> &middot; <em>Templates</em> &middot
 
 <!-- ============================== DECISIONS ============================== -->
 <section id="dec" data-nav="Decisions">
-  <h2>07 &middot; Open decisions</h2>
-  <h3>Five calls that need your judgment, each with a lean</h3>
+  <h2>08 &middot; Decisions</h2>
+  <h3>D1 decided by the owner; four provisional; one newly opened</h3>
+  <div class="callout"><p><strong>Status &middot; 25&nbsp;Aug 2026.</strong> <b>D1 is settled: C, now</b> &mdash; owner-directed, overriding my recommendation. D2&ndash;D5 were put to the owner and not answered within the session, so each stands at its recommended value; they are <em>provisional</em>, and since nothing is implemented in code yet, reversing one costs a document edit. <b>D6 is new</b> &mdash; choosing C created a question that B had already answered. Reply with the identifier and option (for example &ldquo;D6&nbsp;1&rdquo;) to change any of them.</p></div>
 
   <div class="dec">
     <div class="q">D1 &mdash; Which shell?</div>
     <div class="opt"><span class="n">A</span><span>Continuum &mdash; one window, settings nested in the sidebar. Cheapest; least native.</span></div>
     <div class="opt"><span class="n">B</span><span>Workbench &mdash; content window plus a real &#8984;, preferences window. Native; one more window to own.</span></div>
     <div class="opt"><span class="n">C</span><span>Modes &mdash; the per-context profile becomes the primary object. Highest ceiling; largest migration.</span></div>
-    <div class="rec"><b>Lean: B, with C as the next destination.</b> B is what Mac users expect from &#8984;, and it is enough to land the credentials registry. C should be planned, not attempted in the same release.</div>
+    <div class="rec"><b>Decided &mdash; C, now.</b> <span class="tag coral">owner-directed 25&nbsp;Aug</span> Overrides my recommendation of B. Reading the style system afterwards showed I had over-priced C: <code>DictationStyleGroup</code>, its matchers, the precedence ladder and the routing editor all ship today, so C is a payload widening plus a promotion rather than a new object. Section&nbsp;06 is the resulting design. B&rsquo;s <b>Connected&thinsp;/&thinsp;Used&nbsp;by</b> registry page survives unchanged inside C and matters more there, not less.</div>
+  </div>
+
+  <div class="dec">
+    <div class="q">D6 &mdash; Under C, where do the remaining global settings live? <span class="tag amber">new, created by choosing C</span></div>
+    <div class="opt"><span class="n">1</span><span>One window &mdash; Settings is a sidebar item below Library, the way the C mockup draws it. Modes and settings sit in the same place; no second window.</span></div>
+    <div class="opt"><span class="n">2</span><span>Split &mdash; Modes and libraries in the main window, global settings in a &#8984;, preferences window. Keeps B&rsquo;s native shape underneath C.</span></div>
+    <div class="rec"><b>Lean: 2, but this one is genuinely close and I would rather you called it.</b> C shrinks global settings enough that option&nbsp;1 stops being crowded, which was the whole objection to A. Against that, &#8984;, is muscle memory and a Mode inspector sitting beside a global settings page invites exactly the &ldquo;which layer am I editing&rdquo; confusion that mode systems are known for &mdash; a separate window makes the layer boundary physical. <b>Unanswered, I will build option&nbsp;2.</b></div>
   </div>
 
   <div class="dec">
@@ -765,32 +848,35 @@ Library: Dictionary &middot; <em>Styles</em> &middot; <em>Templates</em> &middot
     <div class="opt"><span class="n">1</span><span>Coral becomes the fixed product accent; the 7 presets are removed. Strongest identity, removes a shipped preference.</span></div>
     <div class="opt"><span class="n">2</span><span>Coral is the default; presets stay but are scoped to <em>selection and highlight only</em> &mdash; the record dot, the Mini and every semantic signal stay coral regardless.</span></div>
     <div class="opt"><span class="n">3</span><span>Status quo &mdash; the accent tints everything, and the Mini keeps its separate ownership.</span></div>
-    <div class="rec"><b>Lean: 2.</b> The Mini already owns its palette independently of <code>recordingColorHex</code> and that boundary is documented in the mini-indicator brief; option 2 makes the app follow the same rule instead of inventing a third. Removing a preference people already set (option 1) is a real regression for no design gain.</div>
+    <div class="rec"><b>Taken &mdash; 2.</b> The Mini already owns its palette independently of <code>recordingColorHex</code> and that boundary is documented in the mini-indicator brief; option 2 makes the app follow the same rule instead of inventing a third. Removing a preference people already set (option 1) is a real regression for no design gain.</div>
   </div>
 
   <div class="dec">
     <div class="q">D3 &mdash; Inter or SF Pro in the app window?</div>
     <div class="opt"><span class="n">1</span><span>Inter everywhere &mdash; matches the floating surfaces; already bundled and registered by <code>AppFonts</code>.</span></div>
     <div class="opt"><span class="n">2</span><span>SF Pro in the window, Inter on the floating surfaces &mdash; most native, but keeps two identities.</span></div>
-    <div class="rec"><b>Lean: 1, with SF Pro kept for AppKit-drawn system controls</b> we do not render ourselves (menus, popup buttons). Mixing is invisible at those sizes; the headline type is what carries identity.</div>
+    <div class="rec"><b>Taken &mdash; 1, with SF Pro kept for AppKit-drawn system controls</b> we do not render ourselves (menus, popup buttons). Mixing is invisible at those sizes; the headline type is what carries identity.</div>
   </div>
 
   <div class="dec">
     <div class="q">D4 &mdash; Does the light appearance go warm?</div>
     <div class="opt"><span class="n">1</span><span>Warm paper &mdash; <code>#f7f4ef</code> ground, warm greys, coral accent. One identity in both appearances.</span></div>
     <div class="opt"><span class="n">2</span><span>Keep neutral grey light mode; only dark mode goes warm.</span></div>
-    <div class="rec"><b>Lean: 1.</b> Half a redesign reads as a bug. The warm light ramp above is contrast-checked against the same ink ladder the app already uses.</div>
+    <div class="rec"><b>Taken &mdash; 1.</b> Half a redesign reads as a bug. The warm light ramp above is contrast-checked against the same ink ladder the app already uses.</div>
   </div>
 
   <div class="dec">
     <div class="q">D5 &mdash; How far does the credentials registry go in v1?</div>
     <div class="opt"><span class="n">1</span><span>Full registry &mdash; providers stored once, four assignment rows, migration from the four existing config key sets.</span></div>
     <div class="opt"><span class="n">2</span><span>Presentation only &mdash; one AI Providers page that still writes to today&rsquo;s four separate key sets, deduplicating the UI but not the storage.</span></div>
-    <div class="rec"><b>Lean: 1 if the config migration is tolerant</b> (read old keys, write new, keep decoding both for a release). Option&nbsp;2 keeps the &ldquo;paste the key twice&rdquo; bug alive under a nicer surface, which is the worst of both.</div>
+    <div class="rec"><b>Taken &mdash; 1, conditional on a tolerant config migration</b> (read the four legacy key sets, write the registry, keep decoding both for one release &mdash; the pattern already used for <code>show_dictation_focus_reminder</code> &rarr; <code>show_dictation_idle_dot</code>). Option&nbsp;2 keeps the &ldquo;paste the key twice&rdquo; bug alive under a nicer surface, which is the worst of both. <b>If the migration turns out not to be tolerable, this drops to option&nbsp;2 rather than shipping a lossy rewrite &mdash; and that is a decision I will bring back to you rather than take.</b></div>
   </div>
 
-  <h4>What I need from you</h4>
-  <p>D1 and D5 change the shape of the work and are worth a real answer. D2, D3 and D4 have safe leans &mdash; if you say nothing I will build them as recommended. Mark up this page or reply with the letters.</p>
+  <h4>What this settles, and what it does not</h4>
+  <p><b>Settled enough to plan against:</b> the palette, geometry and motion (inherited, not invented), the Modes shell, the Mode object&rsquo;s anatomy, inheritance and precedence, the migration from the shipped style ruleset, the nine settings sections and the row-by-row map. That is a complete implementation brief.</p>
+  <p><b>Deliberately not settled here:</b> the onboarding flow, which consumes these surfaces and should follow rather than lead; and the meeting detail view&rsquo;s document treatment (Granola&rsquo;s &ldquo;the note is the product&rdquo; idea, recorded in the research as its own node).</p>
+  <p><b>The one thing I would not ship blind:</b> Modes changes what happens when someone dictates, not just where a setting lives. The migration must be behaviour-identical on day one &mdash; a user who never opens Modes should not be able to tell the release happened. That is a testable property, and it is the acceptance bar I would hold the implementation to.</p>
+  <div class="callout"><p><strong>Next step, when you want it.</strong> The natural follow-on is a unified implementation plan under <code>docs/plans/</code> &mdash; dependency-ordered units for the token migration, the settings sidebar, the provider registry with its config migration, and the library promotion. Nothing in this node touches Swift yet.</p></div>
 </section>
 
 <footer>
