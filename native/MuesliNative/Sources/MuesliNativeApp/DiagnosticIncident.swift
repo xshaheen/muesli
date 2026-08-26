@@ -34,8 +34,8 @@ enum DiagnosticIncidentKind: String, Codable, CaseIterable, Sendable {
     var userImpact: DiagnosticUserImpact {
         switch self {
         case .manualReport: return .informational
-        case .meetingRecordingSaveFailed, .meetingMicrophoneCaptureFailed, .meetingSystemAudioCaptureFailed:
-            return .degradedResult
+        case .meetingRecordingSaveFailed, .meetingMicrophoneCaptureFailed,
+             .meetingSystemAudioCaptureFailed: return .degradedResult
         default: return .operationBlocked
         }
     }

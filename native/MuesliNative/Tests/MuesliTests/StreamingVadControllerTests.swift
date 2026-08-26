@@ -151,6 +151,9 @@ struct StreamingVadControllerTests {
         // @MainActor suites monopolize for seconds when the full run is parallel.
         let deadline = ContinuousClock.now + .seconds(15)
         while boundaryProbe.count < 1, ContinuousClock.now < deadline {
+            // The controller deliberately delivers boundaries on the main queue.
+            // Yield there so this non-main-actor test exercises that delivery.
+            await MainActor.run {}
             try? await Task.sleep(for: .milliseconds(20))
         }
         controller.stop()

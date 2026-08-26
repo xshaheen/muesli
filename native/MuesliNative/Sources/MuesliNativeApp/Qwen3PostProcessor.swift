@@ -143,17 +143,28 @@ enum Qwen3PostProcessorOutputCleaner {
         return expansion > 2.0 && trimmed.count > 200
     }
 
+    /// LLM.swift represents a genuinely empty generation as `...`; S1-mini
+    /// documents an empty result as the correct normalization for noise-only input.
+    static func isS1MiniEmptyOutput(_ cleaned: String) -> Bool {
+        let normalized = normalizedPlaceholderOutput(cleaned)
+        return normalized == "..." || normalized == ". . ."
+    }
+
     private static func isPlaceholderOutput(_ text: String) -> Bool {
-        let normalized = text
-            .replacingOccurrences(of: "…", with: "...")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if normalized == "..." || normalized == ". . ." {
+        let normalized = normalizedPlaceholderOutput(text)
+        if isS1MiniEmptyOutput(normalized) {
             return true
         }
         let punctuationOnly = normalized.allSatisfy { character in
             character.isWhitespace || ".…-_,;:!?()[]{}".contains(character)
         }
         return punctuationOnly && normalized.count <= 8
+    }
+
+    private static func normalizedPlaceholderOutput(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "…", with: "...")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -163,6 +174,7 @@ enum Qwen3PostProcessorConfig {
     static let legacyDirectoryEnvOverride = "MUESLI_QWEN3_POSTPROC_DIR"
     // Dictation-only cleanup cap. Keep bounded to avoid slow local inference; long dictations may be truncated by LLM.swift.
     static let maxContextTokens: Int32 = 1024
+    static let quilMaxContextTokens: Int32 = 4096
     static let defaultAppContextCharacterLimit = 1_200
     static let safeSystemPromptFallback = PostProcessorOption.defaultSystemPrompt
 
@@ -177,6 +189,12 @@ enum Qwen3PostProcessorConfig {
         }
         parts += "<USER-INPUT>\n\(text)\n</USER-INPUT>"
         return parts
+    }
+
+    /// S1-mini is a dedicated normalizer rather than an instruction-following
+    /// chat model. Its training contract requires these exact control values.
+    static func formatS1MiniInput(_ text: String) -> String {
+        "[Styling: semi-formal] [Structure: prose] [Context: general]\n\(text)"
     }
 
     /// Checks for a local development env-var override and returns the resolved GGUF URL if present.
@@ -202,34 +220,6 @@ enum Qwen3PostProcessorConfig {
         ) else { return nil }
         for case let f as URL in e where f.pathExtension.lowercased() == "gguf" { return f }
         return nil
-    }
-}
-
-enum Qwen3PostProcessorError: LocalizedError {
-    case unavailable(String)
-    case emptyOutput
-    case rejectedOutput
-
-    var errorDescription: String? {
-        switch self {
-        case .unavailable(let message):
-            message
-        case .emptyOutput:
-            "Qwen3 GGUF returned an empty transcript cleanup response."
-        case .rejectedOutput:
-            "Qwen3 GGUF output was rejected by transcript safety checks."
-        }
-    }
-}
-
-struct Qwen3RequestTemplatePlan: Equatable {
-    let requestPrompt: String
-    let resetPrompt: String
-
-    init(requestPrompt: String) {
-        let trimmed = requestPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.requestPrompt = trimmed.isEmpty ? Qwen3PostProcessorConfig.safeSystemPromptFallback : requestPrompt
-        resetPrompt = Qwen3PostProcessorConfig.safeSystemPromptFallback
     }
 }
 
@@ -279,37 +269,75 @@ actor InferenceGate {
     }
 }
 
+enum Qwen3PostProcessorError: LocalizedError {
+    case unavailable(String)
+    case emptyOutput
+    case rejectedOutput
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable(let message):
+            message
+        case .emptyOutput:
+            "Qwen3 GGUF returned an empty transcript cleanup response."
+        case .rejectedOutput:
+            "Qwen3 GGUF output was rejected by transcript safety checks."
+        }
+    }
+}
+
+/// A request's system prompt, plus the neutral prompt the bot is reset to once the
+/// request finishes, so one request's style never leaks into the next.
+struct Qwen3RequestTemplatePlan: Equatable {
+    let requestPrompt: String
+    let resetPrompt: String
+
+    init(requestPrompt: String) {
+        let trimmed = requestPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.requestPrompt = trimmed.isEmpty ? Qwen3PostProcessorConfig.safeSystemPromptFallback : requestPrompt
+        resetPrompt = Qwen3PostProcessorConfig.safeSystemPromptFallback
+    }
+}
+
 @available(macOS 15, *)
 private actor Qwen3PostProcessorManager {
     private let modelURL: URL
+    private let systemPrompt: String
+    private let inputFormat: PostProcessorOption.InputFormat
+    private let maxTokenCount: Int32
     private var bot: LLM?
     private let inferenceGate = InferenceGate()
 
-    init(modelURL: URL) {
+    init(
+        modelURL: URL,
+        systemPrompt: String,
+        inputFormat: PostProcessorOption.InputFormat,
+        maxTokenCount: Int32
+    ) {
         self.modelURL = modelURL
+        self.systemPrompt = systemPrompt
+        self.inputFormat = inputFormat
+        self.maxTokenCount = maxTokenCount
     }
 
     func warm() throws {
         _ = try loadBot()
     }
 
-    func process(
-        _ text: String,
-        systemPrompt: String,
-        appContext: String? = nil
-    ) async throws -> String {
+    func process(_ text: String, appContext: String? = nil) async throws -> String {
         // Actors can re-enter while respond() awaits; serialize access to the cached mutable LLM.
         try await inferenceGate.acquire()
-        // Reset the cached LLM before releasing the gate; a queued waiter starts
-        // generating the moment release() hands it over.
-        var loadedBot: LLM?
         do {
             try Task.checkCancellation()
             let bot = try loadBot()
-            loadedBot = bot
-            let templatePlan = Qwen3RequestTemplatePlan(requestPrompt: systemPrompt)
-            bot.useResolvedTemplate(systemPrompt: templatePlan.requestPrompt)
-            let formattedInput = Qwen3PostProcessorConfig.formatInput(text, appContext: appContext)
+            defer { bot.reset() }
+            let formattedInput: String
+            switch inputFormat {
+            case .configurable:
+                formattedInput = Qwen3PostProcessorConfig.formatInput(text, appContext: appContext)
+            case .s1Mini:
+                formattedInput = Qwen3PostProcessorConfig.formatS1MiniInput(text)
+            }
             await bot.respond(to: formattedInput, thinking: .suppressed)
             let raw = bot.output
             let cleaned = Qwen3PostProcessorOutputCleaner.clean(raw)
@@ -317,22 +345,40 @@ private actor Qwen3PostProcessorManager {
             Qwen3PostProcessorLogging.logVerbose("Qwen3 GGUF raw output: \(raw)")
             Qwen3PostProcessorLogging.logVerbose("Qwen3 GGUF cleaned output: \(cleaned)")
             let result: String
-            if cleaned.isEmpty, !Qwen3DeletionCueDetector.containsDeletionCue(text) {
+            let acceptsS1MiniEmptyOutput = inputFormat == .s1Mini && (
+                cleaned.isEmpty || Qwen3PostProcessorOutputCleaner.isS1MiniEmptyOutput(cleaned)
+            )
+            if !acceptsS1MiniEmptyOutput,
+               cleaned.isEmpty,
+               !Qwen3DeletionCueDetector.containsDeletionCue(text) {
                 throw Qwen3PostProcessorError.emptyOutput
-            } else if !cleaned.isEmpty,
+            } else if !acceptsS1MiniEmptyOutput,
+                      !cleaned.isEmpty,
                       Qwen3PostProcessorOutputCleaner.shouldFallbackToInput(cleaned: cleaned, input: text) {
                 Qwen3PostProcessorLogging.logVerbose("Qwen3 GGUF output rejected; falling back to deterministic cleanup")
                 throw Qwen3PostProcessorError.rejectedOutput
             } else {
-                result = cleaned
+                result = acceptsS1MiniEmptyOutput ? "" : cleaned
             }
-            bot.reset()
-            bot.useResolvedTemplate(systemPrompt: templatePlan.resetPrompt)
             await inferenceGate.release()
             return result
         } catch {
-            loadedBot?.reset()
-            loadedBot?.useResolvedTemplate(systemPrompt: Qwen3PostProcessorConfig.safeSystemPromptFallback)
+            await inferenceGate.release()
+            throw error
+        }
+    }
+
+    func generate(_ userPrompt: String) async throws -> String {
+        try await inferenceGate.acquire()
+        do {
+            try Task.checkCancellation()
+            let bot = try loadBot()
+            defer { bot.reset() }
+            await bot.respond(to: userPrompt, thinking: .suppressed)
+            let raw = bot.output
+            await inferenceGate.release()
+            return raw
+        } catch {
             await inferenceGate.release()
             throw error
         }
@@ -349,13 +395,13 @@ private actor Qwen3PostProcessorManager {
             repeatPenalty: 1.0,
             repetitionLookback: 64,
             historyLimit: 0,
-            maxTokenCount: Qwen3PostProcessorConfig.maxContextTokens
+            maxTokenCount: maxTokenCount
         ) else {
             throw Qwen3PostProcessorError.unavailable(
                 "Failed to load Qwen3 GGUF model at \(modelURL.path)"
             )
         }
-        loaded.useResolvedTemplate(systemPrompt: Qwen3PostProcessorConfig.safeSystemPromptFallback)
+        loaded.useResolvedTemplate(systemPrompt: systemPrompt)
         bot = loaded
         return loaded
     }
@@ -363,65 +409,87 @@ private actor Qwen3PostProcessorManager {
 
 @available(macOS 15, *)
 actor Qwen3PostProcessor {
+    struct Configuration: Hashable, Sendable {
+        let modelURL: URL
+        let systemPrompt: String
+        let inputFormat: PostProcessorOption.InputFormat
+        var maxTokenCount: Int32 = Qwen3PostProcessorConfig.maxContextTokens
+    }
+
     private struct LoadTaskState {
         let id = UUID()
-        let modelURL: URL
+        let configuration: Configuration
         let task: Task<Qwen3PostProcessorManager, Error>
     }
 
-    private var modelURL: URL
-    private var systemPrompt: String
-    private var manager: Qwen3PostProcessorManager?
-    private var loadTask: LoadTaskState?
+    private var activeConfiguration: Configuration
+    private var managers: [Configuration: Qwen3PostProcessorManager] = [:]
+    private var loadTasks: [Configuration: LoadTaskState] = [:]
 
-    init(modelURL: URL, systemPrompt: String) {
+    init(modelURL: URL, systemPrompt: String, inputFormat: PostProcessorOption.InputFormat) {
         // Local development env-var override takes precedence.
-        self.modelURL = Qwen3PostProcessorConfig.devOverrideURL() ?? modelURL
-        self.systemPrompt = systemPrompt
+        self.activeConfiguration = Configuration(
+            modelURL: Qwen3PostProcessorConfig.devOverrideURL() ?? modelURL,
+            systemPrompt: systemPrompt,
+            inputFormat: inputFormat
+        )
     }
 
-    /// Update global defaults. Only a model URL change discards resident weights;
-    /// prompt changes are request-scoped and applied inside the inference gate.
-    func reconfigure(modelURL: URL, systemPrompt: String) {
-        let resolved = Qwen3PostProcessorConfig.devOverrideURL() ?? modelURL
-        let shouldReload = Self.requiresModelReload(current: self.modelURL, next: resolved)
-        self.modelURL = resolved
-        self.systemPrompt = systemPrompt
-        guard shouldReload else { return }
-        manager = nil
-        loadTask?.task.cancel()
-        loadTask = nil
+    /// Sets the configuration used by future preloads. Existing dictations keep
+    /// their captured configuration, so a settings change cannot alter an
+    /// in-flight cleanup request.
+    func reconfigure(modelURL: URL, systemPrompt: String, inputFormat: PostProcessorOption.InputFormat) {
+        let previousConfiguration = activeConfiguration
+        activeConfiguration = Configuration(
+            modelURL: Qwen3PostProcessorConfig.devOverrideURL() ?? modelURL,
+            systemPrompt: systemPrompt,
+            inputFormat: inputFormat
+        )
+        // An in-flight request holds its manager locally. Releasing a stale
+        // cache entry avoids retaining every model a user has switched away from.
+        if previousConfiguration != activeConfiguration {
+            managers[previousConfiguration] = nil
+        }
     }
 
-    /// Whether the GGUF weights are resident (or on their way in). Lets the idle
+    /// Whether any GGUF weights are resident (or on their way in). Lets the idle
     /// unload skip — and stay silent about — a model that was never loaded.
     var isLoaded: Bool {
-        manager != nil || loadTask != nil
+        !managers.isEmpty || !loadTasks.isEmpty
     }
 
     func prepare() async throws {
-        _ = try await loadManager()
+        _ = try await loadManager(for: activeConfiguration)
     }
 
     func process(
         _ text: String,
-        modelURL requestedModelURL: URL? = nil,
-        systemPrompt: String? = nil,
-        appContext: String? = nil
+        appContext: String? = nil,
+        configuration: Configuration
     ) async throws -> String {
-        let requestPrompt = systemPrompt ?? self.systemPrompt
-        let manager = if let requestedModelURL {
-            try await loadManager(for: requestedModelURL)
-        } else {
-            try await loadManager()
-        }
-        return try await manager.process(
-            text,
-            systemPrompt: requestPrompt,
-            appContext: appContext
-        )
+        let effectiveConfiguration = Self.effectiveConfiguration(for: configuration)
+        let manager = try await loadManager(for: effectiveConfiguration)
+        return try await manager.process(text, appContext: appContext)
     }
 
+    func generate(
+        _ userPrompt: String,
+        configuration: Configuration
+    ) async throws -> String {
+        let effectiveConfiguration = Self.effectiveConfiguration(for: configuration)
+        let manager = try await loadManager(for: effectiveConfiguration)
+        defer {
+            // Quill uses a distinct system prompt. Do not retain a second LLM
+            // instance after the one-shot rewrite completes.
+            if effectiveConfiguration != activeConfiguration {
+                managers[effectiveConfiguration] = nil
+            }
+        }
+        return try await manager.generate(userPrompt)
+    }
+
+    /// Only a different model file forces resident weights to be dropped; a prompt
+    /// or format change is request-scoped and keyed through `Configuration`.
     static func requiresModelReload(current: URL, next: URL) -> Bool {
         current != next
     }
@@ -433,96 +501,70 @@ actor Qwen3PostProcessor {
         devOverride ?? requested
     }
 
+    nonisolated static func effectiveConfiguration(for configuration: Configuration) -> Configuration {
+        Configuration(
+            modelURL: Qwen3PostProcessorConfig.devOverrideURL() ?? configuration.modelURL,
+            systemPrompt: configuration.systemPrompt,
+            inputFormat: configuration.inputFormat,
+            maxTokenCount: configuration.maxTokenCount
+        )
+    }
+
     func shutdown() {
-        manager = nil
-        loadTask?.task.cancel()
-        loadTask = nil
-    }
-
-    private func loadManager() async throws -> Qwen3PostProcessorManager {
-        if let manager { return manager }
-        if let loadTask { return try await finishLoad(loadTask) }
-
-        let url = modelURL
-        let task = makeLoadTask(modelURL: url)
-        let state = LoadTaskState(modelURL: url, task: task)
-        loadTask = state
-        return try await finishLoad(state)
-    }
-
-    /// Returns a manager bound to the request's model even if settings reconfigure
-    /// the global default while ASR or model loading is suspended. A request for
-    /// the current model still reuses its resident weights.
-    private func loadManager(for requestedModelURL: URL) async throws -> Qwen3PostProcessorManager {
-        let requestedModelURL = Self.resolvedRequestModelURL(requested: requestedModelURL)
-        if requestedModelURL == modelURL {
-            if let loadTask, loadTask.modelURL == requestedModelURL {
-                do {
-                    return try await finishRequestLoad(loadTask, cacheIfCurrent: true)
-                } catch is CancellationError {
-                    // A concurrent settings change cancelled the global preload.
-                    // Retry below against the request's URL, not the new default.
-                    return try await loadManager(for: requestedModelURL)
-                }
-            }
-            return try await loadManager()
+        managers.removeAll()
+        for task in loadTasks.values {
+            task.task.cancel()
         }
+        loadTasks.removeAll()
+    }
 
-        let url = requestedModelURL
-        let task = makeLoadTask(modelURL: url)
-        let state = LoadTaskState(modelURL: url, task: task)
-        return try await finishRequestLoad(state, cacheIfCurrent: url == modelURL)
+    private func loadManager(for configuration: Configuration) async throws -> Qwen3PostProcessorManager {
+        if let manager = managers[configuration] { return manager }
+        if let loadTask = loadTasks[configuration] { return try await finishLoad(loadTask) }
+
+        let url = configuration.modelURL
+        let prompt = configuration.systemPrompt
+        let inputFormat = configuration.inputFormat
+        let maxTokenCount = configuration.maxTokenCount
+        let task = Task<Qwen3PostProcessorManager, Error> {
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                throw Qwen3PostProcessorError.unavailable(
+                    "Post-processor model not found at \(url.path). Download it from the Models tab."
+                )
+            }
+            let manager = Qwen3PostProcessorManager(
+                modelURL: url,
+                systemPrompt: prompt,
+                inputFormat: inputFormat,
+                maxTokenCount: maxTokenCount
+            )
+            try await manager.warm()
+            return manager
+        }
+        let state = LoadTaskState(configuration: configuration, task: task)
+        loadTasks[configuration] = state
+        return try await finishLoad(state)
     }
 
     private func finishLoad(_ state: LoadTaskState) async throws -> Qwen3PostProcessorManager {
         do {
             let loaded = try await state.task.value
-            guard state.modelURL == modelURL else {
-                if loadTask?.id == state.id {
-                    loadTask = nil
+            if let manager = managers[state.configuration] { return manager }
+            if state.configuration != activeConfiguration {
+                if loadTasks[state.configuration]?.id == state.id {
+                    loadTasks[state.configuration] = nil
                 }
-                return try await loadManager()
+                // The caller owns this manager while its cleanup runs. Do not
+                // retain it after a settings switch.
+                return loaded
             }
-            if let manager { return manager }
-            guard loadTask?.id == state.id else { throw CancellationError() }
-            manager = loaded
-            loadTask = nil
+            guard loadTasks[state.configuration]?.id == state.id else { throw CancellationError() }
+            managers[state.configuration] = loaded
+            loadTasks[state.configuration] = nil
             return loaded
         } catch {
-            if loadTask?.id == state.id {
-                loadTask = nil
-            }
-            throw error
-        }
-    }
-
-    private func makeLoadTask(modelURL: URL) -> Task<Qwen3PostProcessorManager, Error> {
-        Task<Qwen3PostProcessorManager, Error> {
-            guard FileManager.default.fileExists(atPath: modelURL.path) else {
-                throw Qwen3PostProcessorError.unavailable(
-                    "Post-processor model not found at \(modelURL.path). Download it from the Models tab."
-                )
-            }
-            let manager = Qwen3PostProcessorManager(modelURL: modelURL)
-            try await manager.warm()
-            return manager
-        }
-    }
-
-    private func finishRequestLoad(
-        _ state: LoadTaskState,
-        cacheIfCurrent: Bool
-    ) async throws -> Qwen3PostProcessorManager {
-        do {
-            let loaded = try await state.task.value
-            if cacheIfCurrent, state.modelURL == modelURL {
-                if let manager { return manager }
-                manager = loaded
-            }
-            return loaded
-        } catch {
-            if loadTask?.id == state.id {
-                loadTask = nil
+            if loadTasks[state.configuration]?.id == state.id {
+                loadTasks[state.configuration] = nil
             }
             throw error
         }

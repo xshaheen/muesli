@@ -45,8 +45,8 @@ struct TypographyTests {
         #expect(MuesliTheme.captionMedium() == MuesliTheme.font(size: 12, weight: .medium))
         #expect(MuesliTheme.callout() == MuesliTheme.font(size: 13, weight: .regular))
         #expect(MuesliTheme.headline() == MuesliTheme.font(size: 15, weight: .semibold))
-        #expect(MuesliTheme.title1() == MuesliTheme.font(size: 28, weight: .bold))
-        #expect(MuesliTheme.title2() == MuesliTheme.font(size: 22, weight: .semibold))
+        #expect(MuesliTheme.title1() == MuesliTheme.font(size: 26, weight: .bold))
+        #expect(MuesliTheme.title2() == MuesliTheme.font(size: 20, weight: .semibold))
         #expect(MuesliTheme.title3() == MuesliTheme.font(size: 18, weight: .semibold))
     }
 

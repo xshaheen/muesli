@@ -53,8 +53,21 @@ enum MuesliTheme {
 
     // MARK: - Colors — Backgrounds (layered)
 
+    // dev extracted the deep hexes so AppKit window chrome could share them, and darkened the
+    // dark value to 0x0B0C0E. The extraction is kept and re-pointed at the Spark ramp; the
+    // darkening is superseded, because the ramp's ordering is what the window ground now comes
+    // from and #141312 is its deep step.
+    static let backgroundDeepDarkHex = Ramp.deepDarkHex
+    static let backgroundDeepLightHex = Ramp.deepLightHex
+
     static let backgroundInkWell = Color.adaptive(dark: Ramp.inkWellDarkHex, light: Ramp.surfaceLightHex)
-    static let backgroundDeep   = Color.adaptive(dark: Ramp.deepDarkHex, light: Ramp.deepLightHex)
+    static let backgroundDeep   = Color.adaptive(dark: backgroundDeepDarkHex, light: backgroundDeepLightHex)
+
+    /// AppKit counterpart of `backgroundDeep`, for window chrome that cannot use SwiftUI colors.
+    static let backgroundDeepNSColor = NSColor.adaptive(
+        dark: backgroundDeepDarkHex,
+        light: backgroundDeepLightHex
+    )
     static let backgroundBase   = Color.adaptive(dark: Ramp.baseDarkHex, light: Ramp.baseLightHex)
     static let backgroundRaised = Color.adaptive(dark: Ramp.raisedDarkHex, light: Ramp.raisedLightHex)
     static let backgroundHover  = Color.adaptive(dark: Ramp.hoverDarkHex, light: Ramp.hoverLightHex)
@@ -163,8 +176,10 @@ enum MuesliTheme {
         return AppFonts.regular(size)
     }
 
-    static func title1() -> Font { font(size: 28, weight: .bold) }
-    static func title2() -> Font { font(size: 22, weight: .semibold) }
+    // Sizes follow dev's tightening of the two display steps (28 -> 26, 22 -> 20); the family
+    // is the Spark change.
+    static func title1() -> Font { font(size: 26, weight: .bold) }
+    static func title2() -> Font { font(size: 20, weight: .semibold) }
     static func title3() -> Font { font(size: 18, weight: .semibold) }
     static func headline() -> Font { font(size: 15, weight: .semibold) }
     static func body() -> Font { font(size: 14, weight: .regular) }
@@ -173,6 +188,10 @@ enum MuesliTheme {
     static func captionMedium() -> Font { font(size: 12, weight: .medium) }
 
     // MARK: - Spacing (4pt grid)
+
+    /// Top padding for page content and for the sidebar header, so a page's heading lines up
+    /// with the app name in the sidebar.
+    static let pageTop: CGFloat = 8
 
     static let spacing4: CGFloat = 4
     static let spacing8: CGFloat = 8
@@ -275,15 +294,7 @@ extension Color {
     }
 
     static func adaptive(dark: Int, light: Int) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            let hex = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
-            return NSColor(
-                red: CGFloat((hex >> 16) & 0xFF) / 255.0,
-                green: CGFloat((hex >> 8) & 0xFF) / 255.0,
-                blue: CGFloat(hex & 0xFF) / 255.0,
-                alpha: 1.0
-            )
-        })
+        Color(nsColor: NSColor.adaptive(dark: dark, light: light))
     }
 
     /// Resolves both appearance and the Increase Contrast accessibility appearances, so a
@@ -315,5 +326,35 @@ extension Color {
                 ? dark.withAlphaComponent(darkAlpha)
                 : light.withAlphaComponent(lightAlpha)
         })
+    }
+}
+
+extension NSColor {
+    static func adaptive(dark: Int, light: Int) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let hex = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            return NSColor(
+                red: CGFloat((hex >> 16) & 0xFF) / 255.0,
+                green: CGFloat((hex >> 8) & 0xFF) / 255.0,
+                blue: CGFloat(hex & 0xFF) / 255.0,
+                alpha: 1.0
+            )
+        }
+    }
+}
+
+/// Page heading used by every dashboard page, so titles stay identical across tabs.
+struct PageTitle: View {
+    let text: String
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var body: some View {
+        Text(text)
+            .font(MuesliTheme.title1())
+            .foregroundStyle(MuesliTheme.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

@@ -256,6 +256,23 @@ public struct LiveTranscriptCheckpointEntry: Sendable, Equatable {
     }
 }
 
+public struct DictationTargetApplication: Identifiable, Hashable, Sendable {
+    public let name: String
+    public let bundleID: String?
+
+    public init(name: String, bundleID: String?) {
+        self.name = name
+        self.bundleID = bundleID
+    }
+
+    public var id: String {
+        if let bundleID, !bundleID.isEmpty {
+            return "bundle:\(bundleID)"
+        }
+        return "name:\(name.lowercased())"
+    }
+}
+
 public struct DictationRecord: Identifiable, Codable, Sendable {
     public let id: Int64
     public let timestamp: String
@@ -264,6 +281,8 @@ public struct DictationRecord: Identifiable, Codable, Sendable {
     public let appContext: String
     public let wordCount: Int
     public let source: String
+    public let targetAppName: String?
+    public let targetAppBundleID: String?
     public let computerUseTrace: ComputerUseTraceRecord?
     public let dictationStyleID: String?
     public let dictationStyleName: String?
@@ -278,6 +297,8 @@ public struct DictationRecord: Identifiable, Codable, Sendable {
         appContext: String,
         wordCount: Int,
         source: String = "dictation",
+        targetAppName: String? = nil,
+        targetAppBundleID: String? = nil,
         computerUseTrace: ComputerUseTraceRecord? = nil,
         dictationStyleID: String? = nil,
         dictationStyleName: String? = nil,
@@ -291,6 +312,8 @@ public struct DictationRecord: Identifiable, Codable, Sendable {
         self.appContext = appContext
         self.wordCount = wordCount
         self.source = source
+        self.targetAppName = targetAppName
+        self.targetAppBundleID = targetAppBundleID
         self.computerUseTrace = computerUseTrace
         self.dictationStyleID = dictationStyleID
         self.dictationStyleName = dictationStyleName
@@ -320,6 +343,10 @@ public struct DictationRecord: Identifiable, Codable, Sendable {
         wordCount = try container.decode(Int.self, forKey: .wordCount)
         source = try container.decode(String.self, forKey: .source)
         computerUseTrace = try container.decodeIfPresent(ComputerUseTraceRecord.self, forKey: .computerUseTrace)
+        // Local-only provenance: deliberately absent from the wire format, so a
+        // decoded record carries none of it.
+        targetAppName = nil
+        targetAppBundleID = nil
         dictationStyleID = nil
         dictationStyleName = nil
         dictationStyleSelectionSource = nil
@@ -336,6 +363,29 @@ public struct DictationRecord: Identifiable, Codable, Sendable {
         try container.encode(wordCount, forKey: .wordCount)
         try container.encode(source, forKey: .source)
         try container.encodeIfPresent(computerUseTrace, forKey: .computerUseTrace)
+    }
+}
+
+public enum TimelineEntry: Identifiable, Sendable {
+    case dictation(DictationRecord)
+    case meeting(MeetingRecord)
+
+    public var id: String {
+        switch self {
+        case .dictation(let record):
+            return "dictation:\(record.id)"
+        case .meeting(let record):
+            return "meeting:\(record.id)"
+        }
+    }
+
+    public var timestamp: String {
+        switch self {
+        case .dictation(let record):
+            return record.timestamp
+        case .meeting(let record):
+            return record.startTime
+        }
     }
 }
 
@@ -553,8 +603,9 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
     public let followUpToRecordName: String?
     /// Screen/OCR context captured during the meeting and fed to the original
     /// summary. Retained so a later regeneration reproduces that call rather
-    /// than silently producing notes without it.
-    public let visualContext: String
+    /// than silently producing notes without it. Nil when nothing was ever captured,
+    /// which the summary path distinguishes from an empty capture.
+    public let visualContext: String?
     /// The predecessor's notes as they were when the original summary ran.
     /// Snapshotted rather than re-derived from `followUpToID`, because the
     /// predecessor's notes may have changed since.
@@ -585,7 +636,7 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         followUpToID: Int64? = nil,
         followUpToRecordName: String? = nil,
         cleanedTranscript: String = "",
-        visualContext: String = "",
+        visualContext: String? = nil,
         previousMeetingNotes: String = "",
         notesSource: MeetingNotesSource = .raw
     ) {
@@ -689,7 +740,7 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
             followUpToID: try c.decodeIfPresent(Int64.self, forKey: .followUpToID),
             followUpToRecordName: try c.decodeIfPresent(String.self, forKey: .followUpToRecordName),
             cleanedTranscript: (try? c.decode(String.self, forKey: .cleanedTranscript)) ?? "",
-            visualContext: (try? c.decode(String.self, forKey: .visualContext)) ?? "",
+            visualContext: try c.decodeIfPresent(String.self, forKey: .visualContext),
             previousMeetingNotes: (try? c.decode(String.self, forKey: .previousMeetingNotes)) ?? "",
             notesSource: (try? c.decode(MeetingNotesSource.self, forKey: .notesSource)) ?? .raw
         )
@@ -717,7 +768,7 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         try c.encode(source, forKey: .source)
         try c.encodeIfPresent(followUpToID, forKey: .followUpToID)
         try c.encodeIfPresent(followUpToRecordName, forKey: .followUpToRecordName)
-        try c.encode(visualContext, forKey: .visualContext)
+        try c.encodeIfPresent(visualContext, forKey: .visualContext)
         try c.encode(previousMeetingNotes, forKey: .previousMeetingNotes)
         try c.encode(notesSource, forKey: .notesSource)
     }
@@ -744,6 +795,48 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
 
     public var appliedTemplateKind: MeetingTemplateKind {
         selectedTemplateKind ?? .auto
+    }
+}
+
+public struct MeetingParticipant: Identifiable, Equatable, Sendable {
+    public let meetingID: Int64
+    public let participantIdentifier: String
+    public let displayName: String
+    public let emailAddress: String?
+    public let insertionOrder: Int
+
+    public var id: String {
+        "\(meetingID):\(participantIdentifier)"
+    }
+
+    public init(
+        meetingID: Int64,
+        participantIdentifier: String,
+        displayName: String,
+        emailAddress: String? = nil,
+        insertionOrder: Int
+    ) {
+        self.meetingID = meetingID
+        self.participantIdentifier = participantIdentifier
+        self.displayName = displayName
+        self.emailAddress = emailAddress
+        self.insertionOrder = insertionOrder
+    }
+}
+
+public struct MeetingParticipantDraft: Equatable, Sendable {
+    public let participantIdentifier: String
+    public let displayName: String
+    public let emailAddress: String?
+
+    public init(
+        participantIdentifier: String,
+        displayName: String,
+        emailAddress: String? = nil
+    ) {
+        self.participantIdentifier = participantIdentifier
+        self.displayName = displayName
+        self.emailAddress = emailAddress
     }
 }
 

@@ -40,7 +40,9 @@ case "${shard}" in
       ComputerUseCursorOverlayTests
       FloatingMeetingPanelStyleTests
       DictationMiniPlacementTests
+      WindowAppearanceTests
       OpenAILogoShapeTests
+      StandardMenuShortcutTests
       MeetingChunkCollectorTests
       AppConfigTests
       DictationStyleResolverTests
@@ -59,11 +61,13 @@ case "${shard}" in
       CustomWordDictionaryTests
       ModelDownloadCoordinatorTests
       IndicASRBackendTests
+      ContributionMilestoneTests
     )
     ;;
   dictation-transcription)
     filters=(
       FluidAudioTranscriberTests
+      AppleSpeechAnalyzerBackendTests
       BackendCoverageTests
       FillerWordFilterTests
       JaroWinklerTests
@@ -72,6 +76,7 @@ case "${shard}" in
       DeltaPasteTests
       TranscriptAccumulationTests
       StreamingDictationControllerLifecycleTests
+      DictationAttributionPolicyTests
       NemotronDictationModePolicyTests
       Nemotron35StreamStateTests
       Nemotron35BackendMetadataTests
@@ -85,6 +90,7 @@ case "${shard}" in
       DiarizerPreloadDiagnosticsTests
       DiarizerPreloadCoordinationTests
       PasteControllerTests
+      QuilTransformationTests
       BackendOptionTests
       SummaryModelPresetTests
       HotkeyMonitorTests
@@ -128,8 +134,11 @@ case "${shard}" in
       DiagnosticIncidentTests
       DiagnosticIncidentReporterTests
       DictationAudioRouteControllerTests
+      MeetingContactIdentityTests
       MeetingDetectorTests
       MeetingActivityDetectionPolicyTests
+      MeetingParticipantStoreTests
+      MeetingProcessingStageTests
       MeetingRecordingWriterTests
       MeetingRecordingElapsedClockTests
       MeetingRecordButtonTests

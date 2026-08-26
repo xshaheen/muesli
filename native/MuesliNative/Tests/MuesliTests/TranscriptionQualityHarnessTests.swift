@@ -400,6 +400,7 @@ struct TranscriptionQualityRunnerTests {
     @Test("every shipped backend has a reviewed language configuration")
     func everyBackendHasAReviewedLanguageConfiguration() throws {
         let expected: [String: String] = [
+            "FluidInference/parakeet-unified-en-0.6b-coreml": "pinned:en",
             "FluidInference/parakeet-tdt-0.6b-v3-coreml": "automatic",
             "FluidInference/parakeet-tdt-0.6b-v2-coreml": "pinned:en",
             "tiny": "automatic",
@@ -414,14 +415,27 @@ struct TranscriptionQualityRunnerTests {
             "phequals/indic-conformer-600m-multilingual-coreml-rnnt": "pinned:hi",
         ]
         for backend in BackendOption.all {
-            // Gemma is keyed off its store's repo id, which is resolved rather than literal.
-            let want = backend.backend == "gemma4-litert"
-                ? "automatic"
-                : try #require(expected[backend.model], "unclassified backend \(backend.model)")
-            #expect(
-                TranscriptionQualityEligibility.languageConfiguration(for: backend) == want,
-                "\(backend.label) [\(backend.model)]"
-            )
+            let configuration = TranscriptionQualityEligibility.languageConfiguration(for: backend)
+            switch backend.backend {
+            case "gemma4-litert":
+                // Gemma is keyed off its store's repo id, which is resolved rather than literal.
+                #expect(configuration == "automatic", "\(backend.label)")
+            case "apple-speech":
+                // Apple Speech decodes in the host's system language and has no detection step,
+                // so the reviewed answer is "pinned", never `automatic` — and it cannot be a
+                // fixed literal, which would only hold on an English host.
+                #expect(
+                    TranscriptionQualityLanguageConfiguration(rawValue: configuration) != .automatic,
+                    "\(backend.label)"
+                )
+                #expect(
+                    configuration == "pinned:\(TranscriptionQualityEligibility.hostSpeechLanguageCode)",
+                    "\(backend.label)"
+                )
+            default:
+                let want = try #require(expected[backend.model], "unclassified backend \(backend.model)")
+                #expect(configuration == want, "\(backend.label) [\(backend.model)]")
+            }
         }
     }
 

@@ -204,7 +204,7 @@ enum ChatGPTResponsesClient {
             "instructions": instructions.joined(separator: "\n\n"),
             "input": input,
         ]
-        if let maxOutputTokens {
+        if let maxOutputTokens, maxOutputTokens > 0 {
             body["max_output_tokens"] = maxOutputTokens
         }
         if let effort = SummaryModelPreset.reasoningEffort(for: model) {

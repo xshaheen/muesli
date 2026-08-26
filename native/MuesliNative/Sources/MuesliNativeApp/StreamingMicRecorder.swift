@@ -16,6 +16,17 @@ protocol StreamingDictationRecording: AnyObject {
     func stop() -> URL?
     func cancel()
     func currentPower() -> Float
+
+    /// Permanently disqualify this recorder instance from ever starting
+    /// capture again. Unlike cancel() (which disposes but allows re-prepare),
+    /// this is terminal and synchronous, so a stale handoff worker that calls
+    /// start() after meeting teardown loses the race no matter the
+    /// interleaving. Default no-op for recorders that don't need it.
+    func invalidateForTeardown()
+}
+
+extension StreamingDictationRecording {
+    func invalidateForTeardown() {}
 }
 
 protocol StreamingDictationLatencyReporting: AnyObject {
@@ -56,6 +67,10 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
     private let directoryName: String
     private let recoversFromInputConfigurationChanges: Bool
     private let graphLock = NSRecursiveLock()
+    /// Published independently of graphLock: invalidateForTeardown() must land
+    /// even while a worker is blocked in engine startup holding graphLock, so
+    /// the post-start self-check observes it before start() returns.
+    private let teardownInvalidation = OSAllocatedUnfairLock(initialState: false)
     private let lock = OSAllocatedUnfairLock(initialState: FileState())
     private let failureLock = OSAllocatedUnfairLock(initialState: FailureState())
     private let failureCallbackQueue = DispatchQueue(label: "com.muesli.streaming-mic-recorder-failures")
@@ -65,8 +80,13 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
     private var isGraphPrepared = false
     private var configurationChangeObserver: (any NSObjectProtocol)?
     private let configurationChangeQueue: DispatchQueue
+    /// Settle debounce for engine config-change restarts. A route transition
+    /// fires a burst of notifications while the daemon negotiates, and
+    /// restarting mid-churn reliably fails tap installation (measured live on
+    /// macOS 26.5.2, aged daemon). The current engine keeps its state during
+    /// the window; we restart once after the notifications stop.
     private let configurationChangeSettleDelay: TimeInterval
-    private let scheduleConfigurationChangeRestart: (TimeInterval, DispatchWorkItem) -> Void
+    private let configurationChangeRestartScheduler: (TimeInterval, DispatchWorkItem) -> Void
     /// Confined to `configurationChangeQueue`.
     private var pendingConfigurationChangeRestart: DispatchWorkItem?
 
@@ -89,7 +109,7 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
     init(
         directoryName: String = "muesli-meeting-mic",
         recoversFromInputConfigurationChanges: Bool = false,
-        configurationChangeSettleDelay: TimeInterval = 0.5,
+        configurationChangeSettleDelay: TimeInterval = 1.5,
         configurationChangeRestartScheduler: ((TimeInterval, DispatchWorkItem) -> Void)? = nil
     ) {
         self.directoryName = directoryName
@@ -97,7 +117,7 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
         self.configurationChangeSettleDelay = configurationChangeSettleDelay
         let queue = DispatchQueue(label: "com.muesli.streaming-mic-recorder-config-change")
         self.configurationChangeQueue = queue
-        self.scheduleConfigurationChangeRestart = configurationChangeRestartScheduler ?? { delay, work in
+        self.configurationChangeRestartScheduler = configurationChangeRestartScheduler ?? { delay, work in
             queue.asyncAfter(deadline: .now() + delay, execute: work)
         }
     }
@@ -112,6 +132,11 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
     func prepare() throws {
         graphLock.lock()
         defer { graphLock.unlock() }
+        guard !isPermanentlyInvalidated else {
+            throw NSError(domain: "StreamingMicRecorder", code: 9, userInfo: [
+                NSLocalizedDescriptionKey: "Recorder was invalidated by teardown",
+            ])
+        }
 
         try prepareLocked()
     }
@@ -160,6 +185,11 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
         graphLock.lock()
         defer { graphLock.unlock() }
 
+        guard !isPermanentlyInvalidated else {
+            throw NSError(domain: "StreamingMicRecorder", code: 9, userInfo: [
+                NSLocalizedDescriptionKey: "Recorder was invalidated by teardown",
+            ])
+        }
         guard !runState.isRunning else { return }
         try prepareLocked()
         let recordingID = UUID()
@@ -174,6 +204,26 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
         installConfigurationChangeObserverIfNeeded(recordingID: recordingID)
         do {
             try startEngineWithTapLocked(recordingID: recordingID)
+            // Engine start can block while the daemon negotiates the route;
+            // teardown may have landed during that window. Synchronously stop
+            // what just started rather than letting capture outlive teardown.
+            if isPermanentlyInvalidated {
+                removeTapIfNeeded()
+                stopEngineSafely()
+                removeConfigurationChangeObserverIfNeeded()
+                clearFailureState()
+                let state = lock.withLock { state -> FileState in
+                    let old = state
+                    state = FileState()
+                    return old
+                }
+                if let url = state.fileURL {
+                    try? FileManager.default.removeItem(at: url)
+                }
+                throw NSError(domain: "StreamingMicRecorder", code: 9, userInfo: [
+                    NSLocalizedDescriptionKey: "Recorder was invalidated by teardown",
+                ])
+            }
             runState.markStarted()
         } catch {
             removeTapIfNeeded()
@@ -359,14 +409,15 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
     /// restarting the engine once per notification oscillates the capture
     /// graph: the mic indicator flaps and every reopen of a Bluetooth mic
     /// re-triggers its profile negotiation, muting system audio for seconds.
-    /// Coalesce the burst and restart once after the route settles.
+    /// Each notification resets the settle timer, so the restart fires once
+    /// after the burst quiets.
     func debounceConfigurationChangeRestart(recordingID: UUID) {
         pendingConfigurationChangeRestart?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.handleEngineConfigurationChange(recordingID: recordingID)
         }
         pendingConfigurationChangeRestart = work
-        scheduleConfigurationChangeRestart(configurationChangeSettleDelay, work)
+        configurationChangeRestartScheduler(configurationChangeSettleDelay, work)
     }
 
     private func removeConfigurationChangeObserverIfNeeded() {
@@ -492,6 +543,16 @@ final class StreamingMicRecorder: StreamingDictationRecording, StreamingDictatio
         lock.withLock { state in
             state.isPaused = false
         }
+    }
+
+    /// Terminal and synchronous: this instance must never start capture again
+    /// after meeting teardown. Distinct from cancel(), which permits reuse.
+    func invalidateForTeardown() {
+        teardownInvalidation.withLock { $0 = true }
+    }
+
+    private var isPermanentlyInvalidated: Bool {
+        teardownInvalidation.withLock { $0 }
     }
 
     func cancel() {

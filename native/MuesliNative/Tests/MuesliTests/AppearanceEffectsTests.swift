@@ -42,6 +42,28 @@ struct SoundControllerTests {
         SoundController.playDictationSuccess(enabled: true)
         SoundController.playDictationFailure(enabled: true)
     }
+
+    @Test("Quill lifecycle sounds are distinct bundled assets")
+    func quillLifecycleAssets() throws {
+        let activationURL = try #require(
+            SoundController.bundledLifecycleSoundURL(named: "quill-activate")
+        )
+        let releaseURL = try #require(
+            SoundController.bundledLifecycleSoundURL(named: "quill-release")
+        )
+        let activationData = try Data(contentsOf: activationURL)
+        let releaseData = try Data(contentsOf: releaseURL)
+
+        #expect(!activationData.isEmpty)
+        #expect(!releaseData.isEmpty)
+        #expect(activationData != releaseData)
+    }
+
+    @Test("disabled Quill lifecycle sounds do not play")
+    func quillLifecycleDisabled() {
+        SoundController.playQuillStart(enabled: false)
+        SoundController.playQuillRelease(enabled: false)
+    }
 }
 
 @Suite("MenuBarIconRenderer")

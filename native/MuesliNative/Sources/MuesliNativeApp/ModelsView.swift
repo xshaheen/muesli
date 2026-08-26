@@ -39,6 +39,7 @@ struct ModelsView: View {
     @State private var selectedParakeetModel: String
     @State private var selectedWhisperModel: String
     @State private var showExperimental: Bool
+    @State private var appleSpeechLanguageOptions: [AppleSpeechLanguageOption] = [.system]
     @State private var isLiveCaptionModelDownloaded = false
     @State private var isDownloadingLiveCaptionModel = false
     @State private var isCancellingLiveCaptionModelDownload = false
@@ -60,7 +61,7 @@ struct ModelsView: View {
         self.controller = controller
 
         let active = appState.selectedBackend
-        _selectedParakeetModel = State(initialValue: BackendOption.parakeetFamily.contains(active) ? active.model : BackendOption.parakeetMultilingual.model)
+        _selectedParakeetModel = State(initialValue: BackendOption.parakeetFamily.contains(active) ? active.model : BackendOption.parakeetUnified.model)
         _selectedWhisperModel = State(initialValue: BackendOption.whisperFamily.contains(active) ? active.model : BackendOption.whisperSmall.model)
         _showExperimental = State(initialValue: appState.activeFeatureTourTarget == .experimentalModels)
     }
@@ -84,6 +85,8 @@ struct ModelsView: View {
                     }
                     .pickerStyle(.segmented)
                     .frame(maxWidth: 520)
+                    .id(FeatureTourTarget.modelLibrary.rawValue)
+                    .featureTourTarget(.modelLibrary)
 
                     // Above the category switch, not inside one arm: a retired backend can
                     // move the meeting transcription model while leaving dictation alone,
@@ -93,14 +96,19 @@ struct ModelsView: View {
 
                     selectedCategoryContent
                 }
-                .padding(MuesliTheme.spacing32)
+                .padding(.horizontal, MuesliTheme.spacing32)
+            .padding(.top, MuesliTheme.pageTop)
+            .padding(.bottom, MuesliTheme.spacing32)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .onAppear {
                 revealFeatureTourTargetIfNeeded(using: proxy)
             }
             .onChange(of: activeFeatureTourTarget) { _, target in
-                guard target == .streamingModels || target == .experimentalModels else { return }
+                guard target == .modelLibrary
+                        || target == .appleSpeechCard
+                        || target == .streamingModels
+                        || target == .experimentalModels else { return }
                 revealFeatureTourTargetIfNeeded(using: proxy)
             }
         }
@@ -112,6 +120,7 @@ struct ModelsView: View {
             syncSelectionsFromActiveBackend()
             checkNemotron35Update()
             refreshRetiredCaches()
+            loadAppleSpeechLanguageOptions()
         }
         .onChange(of: appState.selectedBackend.model) { _, _ in
             syncSelectionsFromActiveBackend()
@@ -176,10 +185,23 @@ struct ModelsView: View {
     private var selectedCategoryContent: some View {
         switch appState.selectedModelsCategory {
         case .dictation:
+            ForEach(BackendOption.systemManaged, id: \.model) { option in
+                let featureTourTarget: FeatureTourTarget? = option.backend == BackendOption.appleSpeechAnalyzer.backend
+                    ? .appleSpeechCard
+                    : nil
+                modelCard(
+                    option: option,
+                    logo: logoForBackend(option),
+                    downloadedLabel: "Available"
+                )
+                .id(featureTourTarget?.rawValue ?? option.model)
+                .featureTourTarget(featureTourTarget)
+            }
+
             familyCard(
                 title: "Parakeet Family",
                 subtitle: "The most responsive choices for everyday dictation, with multilingual and English-only options.",
-                defaultBadge: "Default: v3",
+                defaultBadge: "Recommended: Unified",
                 logo: "nvidia-logo",
                 selection: $selectedParakeetModel,
                 options: BackendOption.parakeetFamily
@@ -313,6 +335,12 @@ struct ModelsView: View {
     private func revealFeatureTourTargetIfNeeded(using proxy: ScrollViewProxy) {
         let target: FeatureTourTarget
         switch activeFeatureTourTarget {
+        case .modelLibrary:
+            target = .modelLibrary
+            appState.selectedModelsCategory = .dictation
+        case .appleSpeechCard:
+            target = .appleSpeechCard
+            appState.selectedModelsCategory = .dictation
         case .streamingModels:
             target = .streamingModels
             appState.selectedModelsCategory = .streaming
@@ -632,6 +660,13 @@ struct ModelsView: View {
         .id(FeatureTourTarget.experimentalModels.rawValue)
     }
 
+    private var appleSpeechLanguageSelection: Binding<String> {
+        Binding(
+            get: { appState.config.resolvedAppleSpeechLanguage },
+            set: { controller.selectAppleSpeechLanguage($0) }
+        )
+    }
+
     private var postProcessorSection: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
@@ -649,7 +684,9 @@ struct ModelsView: View {
             .padding(.top, MuesliTheme.spacing8)
 
             VStack(spacing: MuesliTheme.spacing12) {
-                gemmaCleanupModelCard
+                ForEach(Gemma4LiteRTModel.allCases) { model in
+                    gemmaCleanupModelCard(model)
+                }
 
                 ForEach(PostProcessorOption.all) { option in
                     postProcModelCard(option)
@@ -658,8 +695,8 @@ struct ModelsView: View {
         }
     }
 
-    private var gemmaCleanupModelCard: some View {
-        let option = BackendOption.gemma4E2BLiteRT
+    private func gemmaCleanupModelCard(_ model: Gemma4LiteRTModel) -> some View {
+        let option = BackendOption.gemma4LiteRT(model)
         let isDownloaded = downloadedModels.contains(option.model)
         let isCompatible = TranscriptCleanupBackendOption.gemma4LiteRT
             .isCompatible(with: appState.selectedBackend)
@@ -667,11 +704,13 @@ struct ModelsView: View {
         return modelCard(
             option: option,
             logo: "google-logo",
-            isActive: isDownloaded && appState.selectedPostProcessorBackend == .gemma4LiteRT,
+            isActive: isDownloaded
+                && appState.selectedPostProcessorBackend == .gemma4LiteRT
+                && appState.config.postProcessorGemmaModel == model.repoID,
             onSetActive: {
-                controller.selectPostProcessorBackend(.gemma4LiteRT)
+                controller.selectGemma4PostProcessor(model)
             },
-            description: "An experimental local option for filler removal, formatting, and obvious transcript errors. It uses the same download as Gemma 4 dictation.",
+            description: "An experimental local option for filler removal, formatting, and obvious transcript errors. It shares the \(model.label) download with dictation and Quill.",
             activeLabel: "Cleanup Active",
             downloadedLabel: isCompatible ? "Downloaded" : "Used for Dictation",
             actionTitle: "Use for Cleanup",
@@ -690,7 +729,7 @@ struct ModelsView: View {
 
         return VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
-                brandLogo("qwen-logo")
+                brandLogo(option.logoResourceName)
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                     HStack(spacing: MuesliTheme.spacing8) {
                         Text(option.label)
@@ -1010,7 +1049,13 @@ struct ModelsView: View {
 
     @ViewBuilder
     private func brandLogo(_ name: String?) -> some View {
-        if let name,
+        if name == "apple-system-logo" {
+            Image(systemName: "apple.logo")
+                .font(.system(size: 24, weight: .medium))
+                .foregroundStyle(MuesliTheme.textPrimary)
+                .frame(width: 24, height: 24)
+                .padding(.top, 2)
+        } else if let name,
            let url = Bundle.main.url(forResource: name, withExtension: "png")
                 ?? Bundle.main.url(forResource: name, withExtension: "svg"),
            let nsImage = NSImage(contentsOf: url) {
@@ -1026,12 +1071,14 @@ struct ModelsView: View {
     private func logoForBackend(_ option: BackendOption) -> String? {
         switch option.backend {
         case "fluidaudio": return "nvidia-logo"
+        case "parakeet-unified": return "nvidia-logo"
         case "whisper": return "openai-logo"
         case "cohere": return "cohere-logo"
         case "nemotron35": return "nvidia-logo"
         case "indicasr": return "ai4bharat-logo"
         case "sensevoice": return "qwen-logo"
         case "gemma4-litert": return "google-logo"
+        case "apple-speech": return "apple-system-logo"
         default: return nil
         }
     }
@@ -1078,15 +1125,17 @@ struct ModelsView: View {
                     .help(activationDisabledReason ?? actionTitle)
                 }
 
-                Button {
-                    modelToDelete = option
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12))
-                        .foregroundStyle(MuesliTheme.danger.opacity(0.6))
-                        .frame(width: 20, height: 20)
+                if !option.isSystemManaged {
+                    Button {
+                        modelToDelete = option
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12))
+                            .foregroundStyle(MuesliTheme.danger.opacity(0.6))
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             } else {
                 Button("Download") {
                     startDownload(option)
@@ -1180,6 +1229,27 @@ struct ModelsView: View {
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .frame(maxWidth: 300, alignment: .leading)
+            }
+
+            // Apple Speech takes a full locale identifier (en-GB, pt-BR, ...), which
+            // the language profile's ISO language codes cannot express, so it keeps
+            // its own picker sourced from the locales the OS reports as supported.
+            if option.backend == BackendOption.appleSpeechAnalyzer.backend {
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    Text("Locale")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: 64, alignment: .leading)
+
+                    Picker("", selection: appleSpeechLanguageSelection) {
+                        ForEach(appleSpeechLanguageOptions) { language in
+                            Text(language.label).tag(language.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 220, alignment: .leading)
+                }
             }
 
             if option.backend == BackendOption.nemotron35Multilingual.backend {
@@ -1455,7 +1525,8 @@ struct ModelsView: View {
                 try await controller.transcriptionCoordinator.preloadRequired(
                     backend: option,
                     includeMeetingHelpers: false,
-                    meetingHelperTrigger: .modelLibrary
+                    meetingHelperTrigger: .modelLibrary,
+                    appleSpeechLanguage: appState.config.resolvedAppleSpeechLanguage
                 ) { progress, message in
                     DispatchQueue.main.async {
                         guard downloadGenerations[option.model] == generation else { return }
@@ -1568,6 +1639,23 @@ struct ModelsView: View {
         downloadTasks[option.model] = task
     }
 
+    private func loadAppleSpeechLanguageOptions() {
+        guard #available(macOS 26.0, *), AppleSpeechAnalyzerTranscriber.isSupportedOnCurrentSystem else {
+            appleSpeechLanguageOptions = [.system]
+            return
+        }
+
+        Task {
+            var options = await AppleSpeechLanguageOption.supportedOptions()
+            let selectedIdentifier = appState.config.resolvedAppleSpeechLanguage
+            if selectedIdentifier != AppleSpeechLanguageOption.systemIdentifier,
+               !options.contains(where: { $0.id == selectedIdentifier }) {
+                options.append(.locale(Locale(identifier: selectedIdentifier)))
+            }
+            appleSpeechLanguageOptions = options
+        }
+    }
+
     private func cancelDownload(_ option: BackendOption) {
         let modelID = option.model
         let task = downloadTasks[modelID]
@@ -1627,13 +1715,14 @@ struct ModelsView: View {
            appState.config.resolvedMeetingLiveCaptionBackend == .nemotron35 {
             controller.updateConfig { $0.enableLiveStreamingPartials = false }
         }
-        if !appState.selectedPostProcessorBackend.isCompatible(with: option) {
+        if appState.selectedPostProcessorBackend == .gemma4LiteRT,
+           appState.config.postProcessorGemmaModel == option.model {
             controller.selectPostProcessorBackend(.local)
         }
         if appState.selectedBackend == option {
             let fallback = downloadedModels
                 .compactMap { model in BackendOption.all.first(where: { $0.model == model && $0 != option }) }
-                .first ?? .parakeetMultilingual
+                .first ?? (option == .parakeetUnified ? .parakeetMultilingual : .parakeetUnified)
             controller.selectBackend(fallback)
         }
         let task = downloadTasks[option.model]

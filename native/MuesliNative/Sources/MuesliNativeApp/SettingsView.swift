@@ -18,6 +18,46 @@ private struct MicrophoneOption: Identifiable {
     var id: String { uid ?? "__automatic__" }
 }
 
+private enum OnDeviceCleanupModel: Identifiable {
+    case gguf(PostProcessorOption)
+    case gemma4(Gemma4LiteRTModel)
+
+    var id: String {
+        switch self {
+        case let .gguf(option): option.id
+        case let .gemma4(model): model.repoID
+        }
+    }
+
+    var label: String {
+        switch self {
+        case let .gguf(option): option.label
+        case let .gemma4(model): model.label
+        }
+    }
+
+    var quilLabel: String {
+        switch self {
+        case let .gguf(option): option.quilLabel
+        case let .gemma4(model): model.label
+        }
+    }
+
+    var quilBackend: TranscriptCleanupBackendOption {
+        switch self {
+        case .gguf: .local
+        case .gemma4: .gemma4LiteRT
+        }
+    }
+
+    var quilModelID: String {
+        switch self {
+        case let .gguf(option): option.id
+        case let .gemma4(model): model.repoID
+        }
+    }
+}
+
 struct SettingsView: View {
     private enum FinalTranscriptOption {
         case liveNemotron
@@ -132,8 +172,8 @@ struct SettingsView: View {
 
     private var disabledDictationBackendLabels: Set<String> {
         guard !appState.selectedPostProcessorBackend.isCompatible(with: .gemma4E2BLiteRT),
-              dictationBackendOptions.contains(.gemma4E2BLiteRT) else { return [] }
-        return [BackendOption.gemma4E2BLiteRT.label]
+              dictationBackendOptions.contains(where: { $0.backend == "gemma4-litert" }) else { return [] }
+        return Set(dictationBackendOptions.filter { $0.backend == "gemma4-litert" }.map(\.label))
     }
 
     private var meetingBackendOptions: [BackendOption] {
@@ -197,13 +237,62 @@ struct SettingsView: View {
     }
 
     private var cleanupBackendOptions: [TranscriptCleanupBackendOption] {
-        TranscriptCleanupBackendOption.all
+        TranscriptCleanupBackendOption.all.filter { !$0.isGemma4LiteRT }
     }
 
-    private var disabledCleanupBackendLabels: Set<String> {
-        Set(cleanupBackendOptions.lazy
-            .filter { !$0.isCompatible(with: appState.selectedBackend) }
-            .map(\.label))
+    private var selectedQuilBackend: TranscriptCleanupBackendOption {
+        TranscriptCleanupBackendOption.resolved(appState.config.quilBackend)
+    }
+
+    private var selectedQuilModelSource: QuilModelSourceOption {
+        QuilModelSourceOption.resolved(for: selectedQuilBackend)
+    }
+
+    private var quilLocalModels: [OnDeviceCleanupModel] {
+        var models = downloadedPostProcOptions
+            .filter(\.supportsQuil)
+            .map(OnDeviceCleanupModel.gguf)
+        for model in Gemma4LiteRTModel.allCases where Gemma4LiteRTModelStore.isAvailableLocally(model: model) {
+            models.append(.gemma4(model))
+        }
+        return models
+    }
+
+    private var selectedQuilLocalModelLabel: String {
+        if selectedQuilBackend == .gemma4LiteRT {
+            return Gemma4LiteRTModel.resolved(appState.config.quilModel).label
+        }
+        return quilLocalModels.first(where: { $0.id == appState.config.quilModel })?.quilLabel
+            ?? quilLocalModels.first?.quilLabel
+            ?? "No compatible model"
+    }
+
+    private var selectedCleanupBackendLabel: String {
+        appState.selectedPostProcessorBackend.isOnDevice
+            ? TranscriptCleanupBackendOption.local.label
+            : appState.selectedPostProcessorBackend.label
+    }
+
+    private var onDeviceCleanupModels: [OnDeviceCleanupModel] {
+        var models = downloadedPostProcOptions
+            .filter { $0.isCompatible(with: appState.selectedBackend) }
+            .map(OnDeviceCleanupModel.gguf)
+        if TranscriptCleanupBackendOption.gemma4LiteRT.isCompatible(with: appState.selectedBackend) {
+            for model in Gemma4LiteRTModel.allCases where Gemma4LiteRTModelStore.isAvailableLocally(model: model) {
+                models.append(.gemma4(model))
+            }
+        }
+        return models
+    }
+
+    private var selectedOnDeviceCleanupModelLabel: String {
+        if appState.selectedPostProcessorBackend == .gemma4LiteRT {
+            return Gemma4LiteRTModel.resolved(appState.config.postProcessorGemmaModel).label
+        }
+        let selectedID = appState.activePostProcessor.id
+        return onDeviceCleanupModels.first(where: { $0.id == selectedID })?.label
+            ?? onDeviceCleanupModels.first?.label
+            ?? ""
     }
 
     private var selectedCleanupPromptName: String {
@@ -211,16 +300,21 @@ struct SettingsView: View {
             ?? TranscriptCleanupPrompts.builtIns[0].name
     }
 
+    private var cleanupModelUsesFixedPrompt: Bool {
+        appState.selectedPostProcessorBackend == .local
+            && appState.activePostProcessor.inputFormat == .s1Mini
+    }
+
+    private var gemmaCleanupIsUnavailable: Bool {
+        Gemma4LiteRTModel.allCases.contains { Gemma4LiteRTModelStore.isAvailableLocally(model: $0) }
+            && !TranscriptCleanupBackendOption.gemma4LiteRT.isCompatible(with: appState.selectedBackend)
+    }
+
     private var cleanupBackendDescription: String {
-        if appState.selectedPostProcessorBackend == .local {
-            return downloadedPostProcOptions.isEmpty
+        if appState.selectedPostProcessorBackend.isOnDevice {
+            return onDeviceCleanupModels.isEmpty
                 ? "Download a cleanup model from Models to refine dictations on this Mac."
                 : "Refines dictated text on this Mac."
-        }
-        if appState.selectedPostProcessorBackend == .gemma4LiteRT {
-            return Gemma4LiteRTModelStore.isAvailableLocally()
-                ? "Uses the downloaded Gemma 4 model to refine dictated text on this Mac."
-                : "Download Gemma 4 E2B from Models to use it for cleanup."
         }
         return "Sends dictated text to \(appState.selectedPostProcessorBackend.label) and may add latency."
     }
@@ -271,7 +365,9 @@ struct SettingsView: View {
                     settingsPanePicker
                     paneContent
                 }
-                .padding(MuesliTheme.spacing32)
+                .padding(.horizontal, MuesliTheme.spacing32)
+            .padding(.top, MuesliTheme.pageTop)
+            .padding(.bottom, MuesliTheme.spacing32)
             }
             .background(MuesliTheme.backgroundBase)
             .onAppear {
@@ -937,65 +1033,204 @@ struct SettingsView: View {
 
     private var dictationCleanupSettingsSection: some View {
         settingsSection("Dictation Cleanup") {
-            settingsRow(
-                "Cleanup backend",
-                description: cleanupBackendDescription,
-                controlWidth: meetingControlWidth
-            ) {
-                settingsMenu(
-                    selection: appState.selectedPostProcessorBackend.label,
-                    options: cleanupBackendOptions.map(\.label),
-                    disabledOptions: disabledCleanupBackendLabels
-                ) { label in
-                    if let option = cleanupBackendOptions.first(where: { $0.label == label }) {
-                        controller.selectPostProcessorBackend(option)
-                    }
+            settingsRow("AI transcript cleanup") {
+                settingsSwitch(isOn: appState.config.enablePostProcessor) { newValue in
+                    controller.setPostProcessorEnabled(newValue)
                 }
             }
-            .id(FeatureTourTarget.cloudCleanupSetting.rawValue)
-            .featureTourTarget(.cloudCleanupSetting)
-            if !disabledCleanupBackendLabels.isEmpty {
-                settingsDescription("Gemma 4 cleanup is unavailable while Gemma 4 is the dictation model.")
-            }
-            if appState.selectedPostProcessorBackend == .local {
+            if appState.config.enablePostProcessor {
                 Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
-                    if downloadedPostProcOptions.isEmpty {
-                        compactActionButton("View cleanup models", systemImage: "arrow.right") {
-                            controller.showModels(category: .postProcessing)
+                if cleanupModelUsesFixedPrompt {
+                    fixedCleanupPromptNotice
+                } else {
+                    cleanupPromptSettings
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow(
+                    "Cleanup source",
+                    description: cleanupBackendDescription,
+                    controlWidth: meetingControlWidth
+                ) {
+                    settingsMenu(
+                        selection: selectedCleanupBackendLabel,
+                        options: cleanupBackendOptions.map(\.label)
+                    ) { label in
+                        if let option = cleanupBackendOptions.first(where: { $0.label == label }) {
+                            controller.selectPostProcessorBackend(option)
                         }
-                        .frame(width: meetingControlWidth, alignment: .trailing)
-                    } else {
-                        let selection = downloadedPostProcOptions.contains(where: { $0.id == appState.activePostProcessor.id })
-                            ? appState.activePostProcessor.label
-                            : (downloadedPostProcOptions.first?.label ?? "")
-                        settingsMenu(
-                            selection: selection,
-                            options: downloadedPostProcOptions.map(\.label)
-                        ) { label in
-                            if let option = downloadedPostProcOptions.first(where: { $0.label == label }) {
-                                controller.selectPostProcessor(option)
+                    }
+                }
+                .id(FeatureTourTarget.cloudCleanupSetting.rawValue)
+                .featureTourTarget(.cloudCleanupSetting)
+                if appState.selectedPostProcessorBackend.isOnDevice {
+                    Divider().background(MuesliTheme.surfaceBorder)
+                    settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
+                        if onDeviceCleanupModels.isEmpty {
+                            compactActionButton("View cleanup models", systemImage: "arrow.right") {
+                                controller.showModels(category: .postProcessing)
+                            }
+                            .frame(width: meetingControlWidth, alignment: .trailing)
+                        } else {
+                            FixedWidthPopUp(
+                                selection: selectedOnDeviceCleanupModelLabel,
+                                options: onDeviceCleanupModels.map(\.label),
+                                onSelectIndex: { index in
+                                    guard onDeviceCleanupModels.indices.contains(index) else { return }
+                                    switch onDeviceCleanupModels[index] {
+                                    case let .gguf(option):
+                                        controller.selectPostProcessor(option)
+                                    case let .gemma4(model):
+                                        controller.selectGemma4PostProcessor(model)
+                                    }
+                                }
+                            )
+                            .frame(height: 24)
+                        }
+                    }
+                    if gemmaCleanupIsUnavailable {
+                        Text("Gemma 4 is unavailable for cleanup while a Gemma 4 model is selected for dictation.")
+                            .font(MuesliTheme.body())
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else {
+                    hostedCleanupSettings(for: appState.selectedPostProcessorBackend)
+                }
+            }
+        }
+    }
+
+    private var quilSettingsSection: some View {
+        settingsSection("Quill", icon: QuillIcon.image()) {
+            settingsRow(
+                "Rewrite selected text",
+                description: "Highlight text to transform it. With no selection, Quill generates and pastes at the cursor."
+            ) {
+                settingsSwitch(isOn: appState.config.enableQuilMode) { newValue in
+                    _ = controller.updateQuilModeEnabled(newValue)
+                }
+            }
+            if appState.config.enableQuilMode {
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow(
+                    "Play Quill sounds",
+                    description: "Play the activation and release cues for Quill mode."
+                ) {
+                    settingsSwitch(isOn: appState.config.quilSoundEnabled) { newValue in
+                        controller.updateConfig { $0.quilSoundEnabled = newValue }
+                    }
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Model source", controlWidth: meetingControlWidth) {
+                    settingsMenu(
+                        selection: selectedQuilModelSource.label,
+                        options: QuilModelSourceOption.all.map(\.label)
+                    ) { label in
+                        guard let source = QuilModelSourceOption.all.first(where: { $0.label == label }) else {
+                            return
+                        }
+                        if source == .localModels {
+                            if !selectedQuilBackend.isOnDevice {
+                                selectQuilLocalModel(quilLocalModels.first)
+                            }
+                        } else if let backend = source.hostedBackend {
+                            controller.updateConfig {
+                                $0.quilBackend = backend.backend
+                                $0.quilModel = TranscriptCleanupClient.defaultModel(for: backend)
                             }
                         }
                     }
                 }
-            } else if appState.selectedPostProcessorBackend == .gemma4LiteRT {
-                Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
-                    if Gemma4LiteRTModelStore.isAvailableLocally() {
-                        Text("Gemma 4 E2B (Downloaded)")
-                            .font(MuesliTheme.font(size: 12, weight: .medium))
-                            .foregroundStyle(MuesliTheme.textSecondary)
+                if selectedQuilBackend.isOnDevice {
+                    Divider().background(MuesliTheme.surfaceBorder)
+                    settingsRow("Quill model", controlWidth: meetingControlWidth) {
+                        if quilLocalModels.isEmpty {
+                            compactActionButton("View local models", systemImage: "arrow.right") {
+                                controller.showModels(category: .postProcessing)
+                            }
                             .frame(width: meetingControlWidth, alignment: .trailing)
-                    } else {
-                        compactActionButton("View Gemma model", systemImage: "arrow.right") {
-                            controller.showModels(category: .postProcessing)
+                        } else {
+                            FixedWidthPopUp(
+                                selection: selectedQuilLocalModelLabel,
+                                options: quilLocalModels.map(\.quilLabel),
+                                onSelectIndex: { index in
+                                    guard quilLocalModels.indices.contains(index) else { return }
+                                    selectQuilLocalModel(quilLocalModels[index])
+                                }
+                            )
+                            .frame(height: 24)
                         }
-                        .frame(width: meetingControlWidth, alignment: .trailing)
                     }
+                } else {
+                    hostedQuilSettings(for: selectedQuilBackend)
                 }
-            } else {
-                hostedCleanupSettings(for: appState.selectedPostProcessorBackend)
+            }
+        }
+    }
+
+    private func selectQuilLocalModel(_ model: OnDeviceCleanupModel?) {
+        controller.updateConfig {
+            let resolved = model ?? .gguf(PostProcessorOption.defaultQuilOption)
+            $0.quilBackend = resolved.quilBackend.backend
+            $0.quilModel = resolved.quilModelID
+        }
+    }
+
+    @ViewBuilder
+    private func hostedQuilSettings(for backend: TranscriptCleanupBackendOption) -> some View {
+        if backend == .hosted(.chatGPT) {
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow("Account", controlWidth: meetingControlWidth) {
+                chatGPTAccountControl(selectMeetingSummaryBackend: false)
+            }
+        } else if backend == .hosted(.openAI) {
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow("API Key", controlWidth: meetingControlWidth) {
+                PastableSecureField(
+                    text: appState.config.openAIAPIKey,
+                    placeholder: "sk-...",
+                    onChange: { value in controller.updateConfig { $0.openAIAPIKey = value } }
+                ).frame(height: 22)
+            }
+        } else if backend == .hosted(.openRouter) {
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow("API Key", controlWidth: meetingControlWidth) {
+                PastableSecureField(
+                    text: appState.config.openRouterAPIKey,
+                    placeholder: "sk-or-...",
+                    onChange: { value in controller.updateConfig { $0.openRouterAPIKey = value } }
+                ).frame(height: 22)
+            }
+        } else if backend == .hosted(.ollama) {
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow("Ollama URL", controlWidth: meetingControlWidth) {
+                PastableTextField(
+                    text: appState.config.ollamaURL,
+                    placeholder: "http://localhost:11434",
+                    onChange: { value in controller.updateConfig { $0.ollamaURL = value } }
+                ).frame(height: 22)
+            }
+        } else if backend == .hosted(.lmStudio) {
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow("LM Studio URL", controlWidth: meetingControlWidth) {
+                PastableTextField(
+                    text: appState.config.lmStudioURL,
+                    placeholder: "http://localhost:1234",
+                    onChange: { value in controller.updateConfig { $0.lmStudioURL = value } }
+                ).frame(height: 22)
+            }
+        } else if backend == .hosted(.customLLM) {
+            customLLMSettingsRows(model: appState.config.quilModel) { value in
+                controller.updateConfig { $0.quilModel = value }
+            }
+        }
+        if backend != .hosted(.customLLM) {
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow("Quill model", controlWidth: meetingControlWidth) {
+                settingsModelTextField(
+                    currentModel: appState.config.quilModel,
+                    placeholder: TranscriptCleanupClient.defaultModel(for: backend)
+                ) { value in controller.updateConfig { $0.quilModel = value } }
             }
         }
     }
@@ -1217,6 +1452,19 @@ struct SettingsView: View {
         }
     }
 
+    private var fixedCleanupPromptNotice: some View {
+        settingsRow(
+            "Cleanup prompt",
+            description: "S1-mini uses Superwhisper’s built-in normalization instructions.",
+            controlWidth: meetingControlWidth
+        ) {
+            Text("Built in")
+                .font(MuesliTheme.body())
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .frame(width: meetingControlWidth, alignment: .trailing)
+        }
+    }
+
     private var meetingSummarySettingsSection: some View {
         settingsSection("Meeting Summaries") {
             settingsRow("Summary backend", controlWidth: meetingControlWidth) {
@@ -1392,14 +1640,6 @@ struct SettingsView: View {
                     }
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("AI transcript cleanup") {
-                    settingsSwitch(isOn: appState.config.enablePostProcessor) { newValue in
-                        controller.setPostProcessorEnabled(newValue)
-                    }
-                }
-                Divider().background(MuesliTheme.surfaceBorder)
-                cleanupPromptSettings
-                Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow(
                     "Dictionary suggestions",
                     description: "Suggest words after corrections by briefly reading focused app text via Accessibility."
@@ -1412,6 +1652,8 @@ struct SettingsView: View {
             }
 
             dictationCleanupSettingsSection
+
+            quilSettingsSection
 
             settingsSection("Advanced") {
                 settingsRow("Pause media during dictation") {
@@ -1619,6 +1861,19 @@ struct SettingsView: View {
                     }
                     settingsDescription("At start time avoids early calendar-only prompts before you join.")
                 }
+
+                Divider().background(MuesliTheme.surfaceBorder)
+
+                settingsRow("Default action") {
+                    settingsMenu(
+                        selection: appState.config.meetingJoinDefaultAction.buttonLabel,
+                        options: MeetingJoinDefaultAction.allCases.map(\.buttonLabel)
+                    ) { label in
+                        guard let action = meetingJoinDefaultAction(for: label) else { return }
+                        controller.updateConfig { $0.meetingJoinDefaultAction = action }
+                    }
+                }
+                settingsDescription("Primary button for notifications and Coming Up. Pick “Transcribe Only” if you join in another browser.")
 
                 Divider().background(MuesliTheme.surfaceBorder)
 
@@ -2376,13 +2631,26 @@ struct SettingsView: View {
     // MARK: - Layout Primitives
 
     @ViewBuilder
-    private func settingsSection(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+    private func settingsSection(
+        _ title: String,
+        icon: NSImage? = nil,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-            Text(title)
-                .font(MuesliTheme.font(size: 11, weight: .semibold))
-                .foregroundStyle(MuesliTheme.textTertiary)
-                .textCase(.uppercase)
-                .padding(.leading, 2)
+            HStack(spacing: 5) {
+                if let icon {
+                    Image(nsImage: icon)
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 12, height: 12)
+                }
+                Text(title)
+                    .font(MuesliTheme.font(size: 11, weight: .semibold))
+                    .textCase(.uppercase)
+            }
+            .foregroundStyle(MuesliTheme.textTertiary)
+            .padding(.leading, 2)
 
             VStack(alignment: .leading, spacing: 0) {
                 content()
@@ -3231,6 +3499,14 @@ struct SettingsView: View {
             assertionFailure("Unexpected scheduled meeting notification lead time label: \(label)")
         }
         return leadTime
+    }
+
+    private func meetingJoinDefaultAction(for label: String) -> MeetingJoinDefaultAction? {
+        let action = MeetingJoinDefaultAction.allCases.first { $0.buttonLabel == label }
+        if action == nil {
+            assertionFailure("Unexpected meeting join default action label: \(label)")
+        }
+        return action
     }
 }
 
