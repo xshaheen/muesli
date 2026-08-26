@@ -482,7 +482,7 @@ struct SettingsView: View {
         guard let target,
               target == .liveCaptionsSetting || target == .cloudCleanupSetting else { return }
         DispatchQueue.main.async {
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(MuesliTheme.Motion.eased(0.2)) {
                 proxy.scrollTo(target.rawValue, anchor: .center)
             }
         }
@@ -508,6 +508,7 @@ struct SettingsView: View {
     }
 
     private static let accentPresets: [(hex: String, name: String)] = [
+        (AppConfig.defaultAccentMarker, "Default"),
         ("2563eb", "Blue"),
         ("ef4444", "Red"),
         ("f59e0b", "Amber"),
@@ -681,7 +682,7 @@ struct SettingsView: View {
         HStack(spacing: MuesliTheme.spacing8) {
             Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(MuesliTheme.recording)
+                .foregroundStyle(MuesliTheme.danger)
             Text("Requires approval in System Settings")
                 .font(MuesliTheme.caption())
                 .foregroundStyle(MuesliTheme.textTertiary)
@@ -696,12 +697,12 @@ struct SettingsView: View {
                 }
             }
             .buttonStyle(.plain)
-            .font(.system(size: 11, weight: .medium))
+            .font(MuesliTheme.font(size: 11, weight: .medium))
             .foregroundStyle(MuesliTheme.accent)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
             .background(MuesliTheme.accentSubtle)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .help("Open Login Items in System Settings")
         }
         .padding(.leading, MuesliTheme.spacing16)
@@ -917,7 +918,7 @@ struct SettingsView: View {
                 if let errorMessage = languageProfileEditor.errorMessage {
                     Text(errorMessage)
                         .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.recording)
+                        .foregroundStyle(MuesliTheme.danger)
                 } else if languageProfileEditor.didSave {
                     Label("Saved", systemImage: "checkmark.circle.fill")
                         .font(MuesliTheme.caption())
@@ -978,7 +979,7 @@ struct SettingsView: View {
                     }
                 } else {
                     Text("Download from Models")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(MuesliTheme.font(size: 12, weight: .medium))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .multilineTextAlignment(.trailing)
                         .frame(width: meetingControlWidth, alignment: .trailing)
@@ -1366,9 +1367,9 @@ struct SettingsView: View {
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(MuesliTheme.surfacePrimary.opacity(0.7))
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                         .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                 )
 
@@ -1408,7 +1409,7 @@ struct SettingsView: View {
             if let dictationStyleSettingsError {
                 Text(dictationStyleSettingsError)
                     .font(MuesliTheme.caption())
-                    .foregroundStyle(MuesliTheme.recording)
+                    .foregroundStyle(MuesliTheme.danger)
                     .accessibilityLabel("Style settings error: \(dictationStyleSettingsError)")
             }
         }
@@ -1992,7 +1993,7 @@ struct SettingsView: View {
                             controller.resetMaraudersMap()
                         } label: {
                             Text("Mischief Managed")
-                                .font(.system(size: 11))
+                                .font(MuesliTheme.font(size: 11))
                                 .foregroundColor(MuesliTheme.textSecondary)
                         }
                         .buttonStyle(.plain)
@@ -2010,7 +2011,11 @@ struct SettingsView: View {
                     controller.updateConfig { $0.recordingColorHex = preset.hex }
                 } label: {
                     Circle()
-                        .fill(Color(hex: preset.hex))
+                        .fill(
+                            preset.hex == AppConfig.defaultAccentMarker
+                                ? MuesliTheme.defaultAccent
+                                : Color(hex: preset.hex)
+                        )
                         .frame(width: 22, height: 22)
                         .overlay(
                             Circle().strokeBorder(Color.white.opacity(isSelected ? 0.9 : 0), lineWidth: 2)
@@ -2048,11 +2053,11 @@ struct SettingsView: View {
                         .foregroundStyle(isSelected ? MuesliTheme.accent : MuesliTheme.textSecondary)
                         .frame(width: 26, height: 26)
                         .background(
-                            RoundedRectangle(cornerRadius: 5)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(isSelected ? MuesliTheme.surfaceSelected : Color.clear)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 5)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .strokeBorder(Color.white.opacity(isSelected ? 0.3 : 0.08), lineWidth: 1)
                         )
                     }
@@ -2074,7 +2079,7 @@ struct SettingsView: View {
                         .fill(.white)
                         .frame(width: 10, height: 10)
                     Text("Signed in · Sign Out")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(MuesliTheme.font(size: 11, weight: .medium))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                 }
@@ -2082,7 +2087,7 @@ struct SettingsView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
                 .background(MuesliTheme.success)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
         } else if isSigningInChatGPT {
@@ -2090,7 +2095,7 @@ struct SettingsView: View {
                 ProgressView()
                     .controlSize(.small)
                 Text("Signing in...")
-                    .font(.system(size: 11))
+                    .font(MuesliTheme.font(size: 11))
                     .foregroundStyle(MuesliTheme.textSecondary)
             }
         } else {
@@ -2109,7 +2114,7 @@ struct SettingsView: View {
                             .fill(.white)
                             .frame(width: 10, height: 10)
                         Text("Sign in with ChatGPT")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(MuesliTheme.font(size: 11, weight: .medium))
                             .foregroundStyle(.white)
                             .lineLimit(1)
                     }
@@ -2117,14 +2122,14 @@ struct SettingsView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(MuesliTheme.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 }
                 .buttonStyle(.plain)
 
                 if let chatGPTSignInError {
                     Text(chatGPTSignInError)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.red)
+                        .font(MuesliTheme.font(size: 10))
+                        .foregroundStyle(MuesliTheme.danger)
                         .lineLimit(2)
                 }
             }
@@ -2142,7 +2147,7 @@ struct SettingsView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(.white)
                     Text("Connected · Disconnect")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(MuesliTheme.font(size: 11, weight: .medium))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                 }
@@ -2150,7 +2155,7 @@ struct SettingsView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
                 .background(MuesliTheme.success)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
         } else if isSigningInGoogleCal {
@@ -2158,7 +2163,7 @@ struct SettingsView: View {
                 ProgressView()
                     .controlSize(.small)
                 Text("Connecting...")
-                    .font(.system(size: 11))
+                    .font(MuesliTheme.font(size: 11))
                     .foregroundStyle(MuesliTheme.textSecondary)
             }
         } else if !appState.isGoogleCalendarVerified {
@@ -2168,7 +2173,7 @@ struct SettingsView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(.white.opacity(0.4))
                     Text("Connect Google Calendar")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(MuesliTheme.font(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.4))
                         .lineLimit(1)
                 }
@@ -2176,10 +2181,10 @@ struct SettingsView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
                 .background(MuesliTheme.textTertiary.opacity(0.3))
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
 
                 Text("Google OAuth verification pending")
-                    .font(.system(size: 10))
+                    .font(MuesliTheme.font(size: 10))
                     .foregroundStyle(MuesliTheme.textTertiary)
             }
         } else {
@@ -2198,7 +2203,7 @@ struct SettingsView: View {
                             .font(.system(size: 10))
                             .foregroundStyle(.white)
                         Text("Connect Google Calendar")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(MuesliTheme.font(size: 11, weight: .medium))
                             .foregroundStyle(.white)
                             .lineLimit(1)
                     }
@@ -2206,14 +2211,14 @@ struct SettingsView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(MuesliTheme.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 }
                 .buttonStyle(.plain)
 
                 if let googleCalSignInError {
                     Text(googleCalSignInError)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.red)
+                        .font(MuesliTheme.font(size: 10))
+                        .foregroundStyle(MuesliTheme.danger)
                         .lineLimit(2)
                 }
             }
@@ -2420,7 +2425,7 @@ struct SettingsView: View {
         HStack {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(granted ? MuesliTheme.success : MuesliTheme.recording)
+                    .fill(granted ? MuesliTheme.success : MuesliTheme.danger)
                     .frame(width: 8, height: 8)
                 Text(name)
                     .font(MuesliTheme.body())
@@ -2429,7 +2434,7 @@ struct SettingsView: View {
             Spacer()
             if granted {
                 Text("Granted")
-                    .font(.system(size: 11))
+                    .font(MuesliTheme.font(size: 11))
                     .foregroundStyle(MuesliTheme.success)
             } else {
                 Button("Grant") {
@@ -2441,7 +2446,7 @@ struct SettingsView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 3)
                 .background(MuesliTheme.accentSubtle)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             Button {
                 openPrivacyPane(pane)
@@ -2474,12 +2479,12 @@ struct SettingsView: View {
                 handleScreenContextToggle(true)
             } label: {
                 Text("Grant")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(MuesliTheme.font(size: 13, weight: .semibold))
                     .foregroundStyle(MuesliTheme.accent)
                     .frame(width: width)
                     .frame(minHeight: 32)
                     .background(MuesliTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
         }
@@ -2502,12 +2507,12 @@ struct SettingsView: View {
                 refreshPermissionStatuses()
             } label: {
                 Text("Grant")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(MuesliTheme.font(size: 13, weight: .semibold))
                     .foregroundStyle(MuesliTheme.accent)
                     .frame(width: width)
                     .frame(minHeight: 32)
                     .background(MuesliTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
         }
@@ -2641,7 +2646,7 @@ struct SettingsView: View {
                         .frame(width: 12, height: 12)
                 }
                 Text(title)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(MuesliTheme.font(size: 11, weight: .semibold))
                     .textCase(.uppercase)
             }
             .foregroundStyle(MuesliTheme.textTertiary)
@@ -2652,9 +2657,9 @@ struct SettingsView: View {
             }
             .padding(MuesliTheme.spacing16)
             .background(MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }
@@ -2776,15 +2781,15 @@ struct SettingsView: View {
                 Text(title)
                     .lineLimit(1)
             }
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(isDestructive ? MuesliTheme.recording : MuesliTheme.textPrimary)
+            .font(MuesliTheme.font(size: 12, weight: .medium))
+            .foregroundStyle(isDestructive ? MuesliTheme.danger : MuesliTheme.textPrimary)
             .padding(.horizontal, 10)
             .frame(height: 26)
-            .background(isDestructive ? MuesliTheme.recording.opacity(0.1) : MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .background(isDestructive ? MuesliTheme.danger.opacity(0.1) : MuesliTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                    .strokeBorder(isDestructive ? MuesliTheme.recording.opacity(0.25) : MuesliTheme.surfaceBorder, lineWidth: 1)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
+                    .strokeBorder(isDestructive ? MuesliTheme.danger.opacity(0.25) : MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -2828,7 +2833,7 @@ struct SettingsView: View {
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .frame(width: 14)
                 Text(app.name)
-                    .font(.system(size: 12))
+                    .font(MuesliTheme.font(size: 12))
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -2836,9 +2841,9 @@ struct SettingsView: View {
             .padding(.horizontal, 8)
             .frame(height: 28)
             .background(isMuted ? MuesliTheme.accentSubtle : MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(isMuted ? MuesliTheme.accent.opacity(0.35) : MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }
@@ -2962,12 +2967,12 @@ struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(group.title)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(MuesliTheme.font(size: 12, weight: .semibold))
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .lineLimit(1)
 
                     Text("\(group.subtitle) • \(group.items.count) \(group.items.count == 1 ? "calendar" : "calendars")")
-                        .font(.system(size: 11))
+                        .font(MuesliTheme.font(size: 11))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .lineLimit(1)
                 }
@@ -3029,7 +3034,7 @@ struct SettingsView: View {
                     .fill(item.colorHex.map { Color(hex: $0) } ?? MuesliTheme.textTertiary)
                     .frame(width: 8, height: 8)
                 Text(item.title)
-                    .font(.system(size: 12))
+                    .font(MuesliTheme.font(size: 12))
                     .foregroundStyle(item.isEnabled ? MuesliTheme.textPrimary : MuesliTheme.textTertiary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -3037,9 +3042,9 @@ struct SettingsView: View {
             .padding(.horizontal, 8)
             .frame(height: 28)
             .background(MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }
@@ -3099,12 +3104,12 @@ struct SettingsView: View {
 
                 if appState.config.autoExportMarkdownFolderPath.isEmpty {
                     Text("Choose a folder…")
-                        .font(.system(size: 12))
+                        .font(MuesliTheme.font(size: 12))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .lineLimit(1)
                 } else {
                     Text(appState.config.autoExportMarkdownFolderPath)
-                        .font(.system(size: 12))
+                        .font(MuesliTheme.font(size: 12))
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -3115,9 +3120,9 @@ struct SettingsView: View {
             .padding(.horizontal, 10)
             .frame(height: 28)
             .background(MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
             .help(appState.config.autoExportMarkdownFolderPath.isEmpty ? "No destination folder selected" : appState.config.autoExportMarkdownFolderPath)
@@ -3131,9 +3136,9 @@ struct SettingsView: View {
                         .foregroundStyle(MuesliTheme.textSecondary)
                         .frame(width: 28, height: 28)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                         )
                 }
@@ -3150,9 +3155,9 @@ struct SettingsView: View {
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .frame(width: 28, height: 28)
                     .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                             .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                     )
             }
@@ -3172,12 +3177,12 @@ struct SettingsView: View {
 
                 if appState.config.meetingHookPath.isEmpty {
                     Text("Choose a script…")
-                        .font(.system(size: 12))
+                        .font(MuesliTheme.font(size: 12))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .lineLimit(1)
                 } else {
                     Text(appState.config.meetingHookPath)
-                        .font(.system(size: 12))
+                        .font(MuesliTheme.font(size: 12))
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -3188,9 +3193,9 @@ struct SettingsView: View {
             .padding(.horizontal, 10)
             .frame(height: 28)
             .background(MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
             .frame(maxWidth: .infinity)
@@ -3205,9 +3210,9 @@ struct SettingsView: View {
                         .foregroundStyle(MuesliTheme.textSecondary)
                         .frame(width: 28, height: 28)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                         )
                 }
@@ -3223,9 +3228,9 @@ struct SettingsView: View {
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .frame(width: 28, height: 28)
                     .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                             .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                     )
             }
@@ -3310,7 +3315,7 @@ struct SettingsView: View {
                 ProgressView()
                     .controlSize(.small)
                 Text("Loading models")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(MuesliTheme.font(size: 12, weight: .medium))
                     .foregroundStyle(MuesliTheme.textTertiary)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -3323,7 +3328,7 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 if let openRouterFreeModelsError {
                     Text(openRouterFreeModelsError)
-                        .font(.system(size: 11))
+                        .font(MuesliTheme.font(size: 11))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .lineLimit(1)
                 }
@@ -3380,7 +3385,7 @@ struct SettingsView: View {
                 .fill(key.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.success)
                 .frame(width: 6, height: 6)
             Text(key.isEmpty ? "No API key configured" : "Key configured")
-                .font(.system(size: 11))
+                .font(MuesliTheme.font(size: 11))
                 .foregroundStyle(key.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.success)
         }
         .frame(minHeight: 20)
@@ -3404,16 +3409,16 @@ struct SettingsView: View {
                 }
             }
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(isDestructive ? MuesliTheme.recording : MuesliTheme.textPrimary)
+                .foregroundStyle(isDestructive ? MuesliTheme.danger : MuesliTheme.textPrimary)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, MuesliTheme.spacing16)
                 .padding(.vertical, MuesliTheme.spacing8)
-                .background(isDestructive ? MuesliTheme.recording.opacity(0.1) : MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .background(isDestructive ? MuesliTheme.danger.opacity(0.1) : MuesliTheme.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                         .strokeBorder(
-                            isDestructive ? MuesliTheme.recording.opacity(0.2) : MuesliTheme.surfaceBorder,
+                            isDestructive ? MuesliTheme.danger.opacity(0.2) : MuesliTheme.surfaceBorder,
                             lineWidth: 1
                         )
                 )

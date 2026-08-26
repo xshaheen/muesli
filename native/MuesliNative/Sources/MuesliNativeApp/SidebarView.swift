@@ -72,28 +72,24 @@ struct SidebarView: View {
     }
 
     private var updateCTAForeground: Color {
-        let accentHex = appState.config.recordingColorHex
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "#", with: "")
-            .lowercased()
-
         let defaultAccentHex = colorScheme == .dark
             ? MuesliTheme.defaultAccentDarkHex
             : MuesliTheme.defaultAccentLightHex
 
-        let value: UInt64
-        if accentHex == "1e1e2e" {
-            value = UInt64(defaultAccentHex)
-        } else {
-            guard accentHex.count == 6,
-                  let parsedValue = UInt64(accentHex, radix: 16) else {
-                value = UInt64(defaultAccentHex)
-                return foregroundColor(forAccentHex: value)
-            }
-            value = parsedValue
+        guard let override = appState.config.accentOverrideHex else {
+            return foregroundColor(forAccentHex: UInt64(defaultAccentHex))
         }
 
-        return foregroundColor(forAccentHex: value)
+        let accentHex = override
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "#", with: "")
+            .lowercased()
+
+        guard accentHex.count == 6, let parsedValue = UInt64(accentHex, radix: 16) else {
+            return foregroundColor(forAccentHex: UInt64(defaultAccentHex))
+        }
+
+        return foregroundColor(forAccentHex: parsedValue)
     }
 
     private func foregroundColor(forAccentHex value: UInt64) -> Color {
@@ -154,7 +150,7 @@ struct SidebarView: View {
 
     private func collapsedItem(tab: DashboardTab, icon: String, label: String) -> some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(MuesliTheme.Motion.eased(0.15)) {
                 if tab == .timeline {
                     controller.showTimelineHome()
                 } else if tab == .meetings {
@@ -172,7 +168,7 @@ struct SidebarView: View {
                 .foregroundStyle(appState.selectedTab == tab ? MuesliTheme.accent : MuesliTheme.textSecondary)
                 .frame(width: 40, height: 36)
                 .background(appState.selectedTab == tab ? MuesliTheme.surfacePrimary : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         }
         .buttonStyle(.plain)
         .help(label)
@@ -309,9 +305,9 @@ struct SidebarView: View {
         .padding(.horizontal, sidebarRowHorizontalPadding)
         .frame(height: 32)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
         .padding(.horizontal, sidebarRowOuterPadding)
@@ -330,7 +326,7 @@ struct SidebarView: View {
             let isSelected = appState.selectedTab == .meetings
             HStack(spacing: MuesliTheme.spacing12) {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.15)) {
+                    withAnimation(MuesliTheme.Motion.eased(0.15)) {
                         meetingsExpanded = true
                     }
                     controller.showMeetingsHome()
@@ -351,7 +347,7 @@ struct SidebarView: View {
                 .buttonStyle(.plain)
 
                 Button {
-                    withAnimation(.easeInOut(duration: 0.15)) {
+                    withAnimation(MuesliTheme.Motion.eased(0.15)) {
                         meetingsExpanded.toggle()
                     }
                 } label: {
@@ -375,7 +371,7 @@ struct SidebarView: View {
             .padding(.vertical, MuesliTheme.spacing8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .fill(isSelected ? MuesliTheme.surfaceSelected : Color.clear)
             )
             .contentShape(Rectangle())
@@ -495,11 +491,11 @@ struct SidebarView: View {
             .padding(.horizontal, sidebarRowHorizontalPadding)
             .padding(.vertical, MuesliTheme.spacing8)
             .background(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .fill(MuesliTheme.backgroundRaised)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
             .padding(.horizontal, sidebarRowOuterPadding)
@@ -511,7 +507,7 @@ struct SidebarView: View {
     private func sidebarItem(tab: DashboardTab, icon: String, label: String, updateCTA: UpdateCTA? = nil) -> some View {
         let isSelected = appState.selectedTab == tab
         Button {
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(MuesliTheme.Motion.eased(0.15)) {
                 if tab == .timeline {
                     controller.showTimelineHome()
                 } else {
@@ -535,7 +531,7 @@ struct SidebarView: View {
                         Image(systemName: updateCTA.icon)
                             .font(.system(size: 9, weight: .bold))
                         Text(updateCTA.label)
-                            .font(.system(size: 11, weight: .bold))
+                            .font(MuesliTheme.font(size: 11, weight: .bold))
                             .lineLimit(1)
                     }
                     .foregroundStyle(updateCTA.foreground)
@@ -553,7 +549,7 @@ struct SidebarView: View {
             .padding(.vertical, MuesliTheme.spacing8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .fill(isSelected ? MuesliTheme.surfaceSelected : Color.clear)
             )
             .contentShape(Rectangle())
@@ -593,7 +589,7 @@ struct SidebarView: View {
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                 .fill(isSelected ? MuesliTheme.surfaceSelected.opacity(0.6) : Color.clear)
         )
         .contentShape(Rectangle())
@@ -642,7 +638,7 @@ struct SidebarView: View {
         .padding(.horizontal, sidebarRowHorizontalPadding)
         .padding(.vertical, 6)
         .background(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                 .fill(MuesliTheme.surfaceSelected.opacity(0.6))
         )
     }
@@ -677,7 +673,7 @@ struct SidebarView: View {
     }
 
     private func toggleFolderCollapse(_ folderID: Int64) {
-        withAnimation(.easeInOut(duration: 0.12)) {
+        withAnimation(MuesliTheme.Motion.eased(0.12)) {
             if collapsedFolderIDs.contains(folderID) {
                 collapsedFolderIDs.remove(folderID)
             } else {
@@ -688,7 +684,7 @@ struct SidebarView: View {
 
     private func createNewFolder() {
         if let id = controller.createFolder(name: "New Folder") {
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(MuesliTheme.Motion.eased(0.15)) {
                 meetingsExpanded = true
             }
             renamingFolderID = id
@@ -699,7 +695,7 @@ struct SidebarView: View {
 
     private func createNewSubfolder(parentID: Int64) {
         if let id = controller.createSubfolder(name: "New Folder", parentID: parentID) {
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(MuesliTheme.Motion.eased(0.15)) {
                 meetingsExpanded = true
                 collapsedFolderIDs.remove(parentID)
             }
@@ -805,7 +801,7 @@ private struct FolderDropDelegate: DropDelegate {
             insertionIndex = adjustedTargetIndex
         }
 
-        withAnimation(.easeInOut(duration: 0.15)) {
+        withAnimation(MuesliTheme.Motion.eased(0.15)) {
             folders.insert(contentsOf: movedFolders, at: insertionIndex)
             dragOrderedFolders = folders
         }

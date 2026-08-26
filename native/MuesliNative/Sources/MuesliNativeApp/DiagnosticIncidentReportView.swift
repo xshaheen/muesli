@@ -36,9 +36,9 @@ struct DiagnosticIncidentReportView: View {
                 }
                 .padding(MuesliTheme.spacing12)
                 .background(Color.orange.opacity(0.10))
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                         .stroke(Color.orange.opacity(0.24), lineWidth: 1)
                 )
             }
@@ -58,9 +58,9 @@ struct DiagnosticIncidentReportView: View {
             }
             .frame(minHeight: 240)
             .background(MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .stroke(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
 

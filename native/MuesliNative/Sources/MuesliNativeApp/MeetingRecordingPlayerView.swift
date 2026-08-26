@@ -411,9 +411,9 @@ struct RecordingArtifactPlayerView: View {
         .padding(.horizontal, MuesliTheme.spacing12)
         .padding(.vertical, MuesliTheme.spacing8)
         .background(MuesliTheme.backgroundRaised.opacity(0.74))
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
         .task(id: artifactID) {

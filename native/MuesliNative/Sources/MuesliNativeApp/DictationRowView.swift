@@ -106,7 +106,7 @@ struct DictationRowView: View {
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
                                 .background(MuesliTheme.accentSubtle)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                         }
 
                         if isQuilTransformation {
@@ -123,7 +123,7 @@ struct DictationRowView: View {
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
                                 .background(MuesliTheme.accentSubtle)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                         }
 
                         if let syncOriginBadgeLabel {
@@ -132,18 +132,18 @@ struct DictationRowView: View {
 
                         if let styleBadge {
                             Text(styleBadge.label)
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(MuesliTheme.font(size: 10, weight: .semibold))
                                 .foregroundStyle(MuesliTheme.accent)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
                                 .background(MuesliTheme.accentSubtle)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                                 .help(styleBadge.accessibilityDescription)
                                 .accessibilityLabel(styleBadge.accessibilityDescription)
                         }
 
                         Text(record.rawText)
-                            .font(.system(size: 14, weight: .regular))
+                            .font(MuesliTheme.font(size: 14, weight: .regular))
                             .foregroundStyle(MuesliTheme.textPrimary)
                             .lineLimit(nil)
                             .fixedSize(horizontal: false, vertical: true)
@@ -172,7 +172,7 @@ struct DictationRowView: View {
                 HStack(spacing: 8) {
                     if hasExpandableDetails {
                         Button {
-                            withAnimation(.easeInOut(duration: 0.15)) {
+                            withAnimation(MuesliTheme.Motion.eased(0.15)) {
                                 isExpanded.toggle()
                             }
                         } label: {
@@ -204,7 +204,7 @@ struct DictationRowView: View {
                         Button { showDeleteConfirmation = true } label: {
                             Image(systemName: "trash")
                                 .font(.system(size: 12))
-                                .foregroundStyle(.red.opacity(0.6))
+                                .foregroundStyle(MuesliTheme.danger.opacity(0.6))
                         }
                         .buttonStyle(.plain)
                     }
@@ -216,7 +216,7 @@ struct DictationRowView: View {
         .padding(.vertical, MuesliTheme.spacing16)
         .background(isHovered ? MuesliTheme.backgroundHover : MuesliTheme.backgroundRaised)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(MuesliTheme.Motion.eased(0.15)) {
                 isHovered = hovering
             }
         }
@@ -224,7 +224,7 @@ struct DictationRowView: View {
             if let onOpen {
                 onOpen()
             } else if hasExpandableDetails {
-                withAnimation(.easeInOut(duration: 0.15)) {
+                withAnimation(MuesliTheme.Motion.eased(0.15)) {
                     isExpanded.toggle()
                 }
             } else {
@@ -294,7 +294,7 @@ struct DictationRowView: View {
         case "timed_out", "timedout":
             return MuesliTheme.transcribing
         case "failed", "unsupported":
-            return MuesliTheme.recording
+            return MuesliTheme.danger
         default:
             return MuesliTheme.textTertiary
         }
@@ -335,7 +335,7 @@ struct AudioOnlyDictationRowView: View {
 
             VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                 Text(record.terminalOutcome.detailTitle)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(MuesliTheme.font(size: 14, weight: .medium))
                     .foregroundStyle(MuesliTheme.textPrimary)
                 Text("Recording-only local history · \(RecordingArtifactAvailability(record.availability).displaySummary)")
                     .font(MuesliTheme.caption())
@@ -351,7 +351,7 @@ struct AudioOnlyDictationRowView: View {
             } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 12))
-                    .foregroundStyle(.red.opacity(0.6))
+                    .foregroundStyle(MuesliTheme.danger.opacity(0.6))
             }
             .buttonStyle(.plain)
             .opacity(isHovered ? 1 : 0)

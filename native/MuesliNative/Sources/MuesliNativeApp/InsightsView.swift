@@ -64,7 +64,7 @@ struct InsightsView: View {
                 if reduceMotion {
                     proxy.scrollTo(initialSection, anchor: .top)
                 } else {
-                    withAnimation(.easeInOut(duration: 0.28)) {
+                    withAnimation(MuesliTheme.Motion.eased(0.28)) {
                         proxy.scrollTo(initialSection, anchor: .top)
                     }
                 }
@@ -102,11 +102,11 @@ struct InsightsView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("INSIGHTS")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(MuesliTheme.font(size: 11, weight: .bold))
                     .tracking(1.8)
                     .foregroundStyle(MuesliTheme.accent)
                 Text("Private and on-device")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(MuesliTheme.font(size: 13, weight: .medium))
                     .foregroundStyle(InsightsPalette.secondaryText)
             }
         }
@@ -154,7 +154,7 @@ struct InsightsView: View {
         VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 6) {
                     Text("Your time with Muesli")
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(MuesliTheme.font(size: 18, weight: .semibold))
                         .tracking(-0.4)
                         .foregroundStyle(MuesliTheme.textPrimary)
                     Text(data.lifetime.totalWords.formatted())
@@ -163,7 +163,7 @@ struct InsightsView: View {
                         .monospacedDigit()
                         .foregroundStyle(MuesliTheme.textPrimary)
                     Text("Total words dictated")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(MuesliTheme.font(size: 15, weight: .medium))
                         .foregroundStyle(InsightsPalette.secondaryText)
             }
 
@@ -180,7 +180,7 @@ struct InsightsView: View {
         .padding(26)
         .background(
             ZStack {
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(MuesliTheme.backgroundRaised)
                 LinearGradient(
                     colors: [MuesliTheme.accent.opacity(0.13), Color.cyan.opacity(0.025), .clear],
@@ -211,13 +211,13 @@ struct InsightsView: View {
             HStack(spacing: 8) {
                 Text("QUIET")
                 ForEach(0..<5, id: \.self) { level in
-                    RoundedRectangle(cornerRadius: 3)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(InsightsPalette.intensity(level))
                         .frame(width: 15, height: 15)
                 }
                 Text("LOUD")
             }
-            .font(.system(size: 9, weight: .bold))
+            .font(MuesliTheme.font(size: 9, weight: .bold))
             .tracking(1.2)
             .foregroundStyle(InsightsPalette.tertiaryText)
         }
@@ -240,10 +240,10 @@ struct InsightsView: View {
                 }
                 GeometryReader { geometry in
                     HStack(spacing: 3) {
-                        RoundedRectangle(cornerRadius: 4)
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .fill(MuesliTheme.accent)
                             .frame(width: max(4, geometry.size.width * dictationShare))
-                        RoundedRectangle(cornerRadius: 4)
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .fill(Color.cyan.opacity(0.75))
                     }
                 }
@@ -258,7 +258,7 @@ struct InsightsView: View {
 
             VStack(alignment: .leading, spacing: 16) {
                 Text("OVERVIEW")
-                    .font(.system(size: 10, weight: .bold)).tracking(1.5)
+                    .font(MuesliTheme.font(size: 10, weight: .bold)).tracking(1.5)
                     .foregroundStyle(InsightsPalette.tertiaryText)
                 readout("Dictation sessions", format(data.selected.dictationSessions))
                 readout("Completed meetings", format(data.selected.meetings))
@@ -268,8 +268,8 @@ struct InsightsView: View {
             .padding(20)
             .frame(width: 300, alignment: .leading)
             .background(MuesliTheme.backgroundDeep.opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(MuesliTheme.surfaceBorder))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(MuesliTheme.surfaceBorder))
         }
         .insightsPanel()
     }
@@ -282,13 +282,13 @@ struct InsightsView: View {
                     .tracking(-3)
                     .monospacedDigit()
                 Text("CURRENT STREAK")
-                    .font(.system(size: 11, weight: .bold)).tracking(1.8)
+                    .font(MuesliTheme.font(size: 11, weight: .bold)).tracking(1.8)
                     .foregroundStyle(MuesliTheme.accent)
             }
             VStack(alignment: .leading, spacing: 14) {
                 panelTitle("STREAKS", subtitle: "Your consecutive dictation days")
                 Text(streakMessage(data))
-                    .font(.system(size: 17, weight: .medium))
+                    .font(MuesliTheme.font(size: 17, weight: .medium))
                     .foregroundStyle(InsightsPalette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 18) {
@@ -316,13 +316,13 @@ struct InsightsView: View {
         VStack(spacing: 18) {
             InsightsLoadingStatus()
             ForEach(0..<4, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(MuesliTheme.backgroundRaised)
                     .frame(height: index == 0 ? 235 : 190)
                     .overlay(alignment: .topLeading) {
                         VStack(alignment: .leading, spacing: 12) {
-                            RoundedRectangle(cornerRadius: 3).fill(MuesliTheme.surfacePrimary).frame(width: 130, height: 12)
-                            RoundedRectangle(cornerRadius: 5).fill(MuesliTheme.surfacePrimary).frame(width: 230, height: 30)
+                            RoundedRectangle(cornerRadius: 3, style: .continuous).fill(MuesliTheme.surfacePrimary).frame(width: 130, height: 12)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous).fill(MuesliTheme.surfacePrimary).frame(width: 230, height: 30)
                         }.padding(24)
                     }
                     .opacity(0.72)
@@ -374,7 +374,7 @@ struct InsightsView: View {
     }
 
     private var panelBorder: some View {
-        RoundedRectangle(cornerRadius: 14)
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
             .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
     }
 
@@ -385,7 +385,7 @@ struct InsightsView: View {
     private func heroDatum(_ label: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(value).font(.system(size: 18, weight: .semibold)).monospacedDigit()
-            Text(label.uppercased()).font(.system(size: 9, weight: .bold)).tracking(1.3).foregroundStyle(InsightsPalette.tertiaryText)
+            Text(label.uppercased()).font(MuesliTheme.font(size: 9, weight: .bold)).tracking(1.3).foregroundStyle(InsightsPalette.tertiaryText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 18)
@@ -393,8 +393,8 @@ struct InsightsView: View {
 
     private func panelTitle(_ title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 11, weight: .bold)).tracking(1.8).foregroundStyle(MuesliTheme.textPrimary)
-            Text(subtitle).font(.system(size: 12, weight: .regular)).foregroundStyle(InsightsPalette.secondaryText)
+            Text(title).font(MuesliTheme.font(size: 11, weight: .bold)).tracking(1.8).foregroundStyle(MuesliTheme.textPrimary)
+            Text(subtitle).font(MuesliTheme.font(size: 12, weight: .regular)).foregroundStyle(InsightsPalette.secondaryText)
         }
     }
 
@@ -403,7 +403,7 @@ struct InsightsView: View {
             Circle().fill(color).frame(width: 7, height: 7)
             Text(label).foregroundStyle(InsightsPalette.secondaryText)
             Text(format(value)).fontWeight(.semibold).monospacedDigit()
-        }.font(.system(size: 12))
+        }.font(MuesliTheme.font(size: 12))
     }
 
     private func readout(_ label: String, _ value: String) -> some View {
@@ -411,7 +411,7 @@ struct InsightsView: View {
             Text(label).foregroundStyle(InsightsPalette.tertiaryText)
             Spacer()
             Text(value).foregroundStyle(MuesliTheme.textPrimary).monospacedDigit()
-        }.font(.system(size: 12, weight: .medium))
+        }.font(MuesliTheme.font(size: 12, weight: .medium))
     }
 
     private func streakMessage(_ data: InsightsSnapshot) -> String {
@@ -446,14 +446,14 @@ private struct InsightsLoadingStatus: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Building your Insights")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(MuesliTheme.font(size: 14, weight: .semibold))
                     .foregroundStyle(MuesliTheme.textPrimary)
                 ZStack(alignment: .leading) {
                     Text(InsightsLoadingCopy.messages[messageIndex])
                         .id(messageIndex)
                         .transition(.opacity)
                 }
-                .font(.system(size: 12, weight: .medium))
+                .font(MuesliTheme.font(size: 12, weight: .medium))
                 .foregroundStyle(InsightsPalette.secondaryText)
             }
             Spacer()
@@ -464,14 +464,14 @@ private struct InsightsLoadingStatus: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(MuesliTheme.surfaceBorder))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(MuesliTheme.surfaceBorder))
         .task {
             guard !reduceMotion else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_200_000_000)
                 guard !Task.isCancelled else { return }
-                withAnimation(.easeInOut(duration: 0.28)) {
+                withAnimation(MuesliTheme.Motion.eased(0.28)) {
                     messageIndex = (messageIndex + 1) % InsightsLoadingCopy.messages.count
                 }
             }
@@ -556,7 +556,7 @@ private struct ActivityHeatmap: View {
                     Color.clear.frame(width: 24, height: monthLabelHeight)
                     ForEach(Array(weekdayLabels.enumerated()), id: \.offset) { _, label in
                         Text(label)
-                            .font(.system(size: 9, weight: .medium))
+                            .font(MuesliTheme.font(size: 9, weight: .medium))
                             .foregroundStyle(InsightsPalette.tertiaryText)
                             .frame(width: 24, height: cell, alignment: .trailing)
                     }
@@ -575,7 +575,7 @@ private struct ActivityHeatmap: View {
                                             calendar: calendar
                                         ) {
                                             Text(marker.formatted(.dateTime.month(.abbreviated)))
-                                                .font(.system(size: 9, weight: .medium))
+                                                .font(MuesliTheme.font(size: 9, weight: .medium))
                                                 .foregroundStyle(InsightsPalette.tertiaryText)
                                                 .fixedSize()
                                         }
@@ -665,7 +665,7 @@ private struct ActivityHeatmapCell: View {
     }
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 3)
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
             .fill(InsightsPalette.intensity(level))
             .frame(width: size, height: size)
             .overlay {
@@ -675,7 +675,7 @@ private struct ActivityHeatmapCell: View {
             }
             .overlay {
                 if isHovered {
-                    RoundedRectangle(cornerRadius: 3)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .strokeBorder(InsightsPalette.secondaryText, lineWidth: 1.5)
                 }
             }
@@ -683,10 +683,10 @@ private struct ActivityHeatmapCell: View {
             .popover(isPresented: $isHovered, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(countText)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(MuesliTheme.font(size: 12, weight: .semibold))
                         .foregroundStyle(MuesliTheme.textPrimary)
                     Text(dateText)
-                        .font(.system(size: 11))
+                        .font(MuesliTheme.font(size: 11))
                         .foregroundStyle(InsightsPalette.secondaryText)
                 }
                 .padding(.horizontal, 12)
@@ -713,7 +713,7 @@ private struct WordCloudPanel: View {
                 .foregroundStyle(InsightsPalette.tertiaryText)
             if words.isEmpty {
                 Text("No words to show for this time period.")
-                    .font(.system(size: 13))
+                    .font(MuesliTheme.font(size: 13))
                     .foregroundStyle(InsightsPalette.tertiaryText)
                     .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
             } else {
@@ -813,8 +813,8 @@ private extension View {
         self
             .padding(22)
             .background(MuesliTheme.backgroundRaised.opacity(0.82))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
             .shadow(color: Color.black.opacity(0.07), radius: 14, y: 7)
     }
 }

@@ -33,7 +33,7 @@ struct MWaveformIcon: View {
             HStack(alignment: .center, spacing: spacing) {
                 ForEach(0..<count, id: \.self) { i in
                     let barHeight = max(geo.size.height * mults[i], barWidth)
-                    RoundedRectangle(cornerRadius: cornerRadius)
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .frame(width: barWidth, height: barHeight)
                 }
             }

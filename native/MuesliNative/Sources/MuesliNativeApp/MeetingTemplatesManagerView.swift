@@ -107,9 +107,9 @@ struct MeetingTemplatesManagerView: View {
         .padding(.horizontal, MuesliTheme.spacing12)
         .padding(.vertical, 10)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
@@ -145,9 +145,9 @@ struct MeetingTemplatesManagerView: View {
         }
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
@@ -166,9 +166,9 @@ struct MeetingTemplatesManagerView: View {
                 TextField("Customer follow-up", text: $draftTemplateName)
                     .textFieldStyle(.roundedBorder)
                     .overlay {
-                        RoundedRectangle(cornerRadius: 6)
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .strokeBorder(
-                                showNameValidationError ? MuesliTheme.recording.opacity(0.75) : .clear,
+                                showNameValidationError ? MuesliTheme.danger.opacity(0.75) : .clear,
                                 lineWidth: 1
                             )
                     }
@@ -180,7 +180,7 @@ struct MeetingTemplatesManagerView: View {
                 if showNameValidationError {
                     Text("Enter a template name.")
                         .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.recording)
+                        .foregroundStyle(MuesliTheme.danger)
                 }
             }
 
@@ -196,17 +196,17 @@ struct MeetingTemplatesManagerView: View {
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
                 TextEditor(text: $draftTemplatePrompt)
-                    .font(.system(size: 12))
+                    .font(MuesliTheme.font(size: 12))
                     .foregroundStyle(MuesliTheme.textPrimary)
                     .scrollContentBackground(.hidden)
                     .frame(minHeight: 140)
                     .padding(MuesliTheme.spacing8)
                     .background(MuesliTheme.backgroundBase)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                             .strokeBorder(
-                                showPromptValidationError ? MuesliTheme.recording.opacity(0.75) : MuesliTheme.surfaceBorder,
+                                showPromptValidationError ? MuesliTheme.danger.opacity(0.75) : MuesliTheme.surfaceBorder,
                                 lineWidth: 1
                             )
                     )
@@ -218,7 +218,7 @@ struct MeetingTemplatesManagerView: View {
                 if showPromptValidationError {
                     Text("Enter the prompt instructions for this template.")
                         .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.recording)
+                        .foregroundStyle(MuesliTheme.danger)
                 }
             }
 
@@ -234,9 +234,9 @@ struct MeetingTemplatesManagerView: View {
         }
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.surfacePrimary.opacity(0.45))
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
@@ -314,7 +314,7 @@ struct MeetingTemplatesManagerView: View {
                     .foregroundStyle(MuesliTheme.accent)
                     .frame(width: 24, height: 24)
                     .background(MuesliTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 Text(selectedIconLabel)
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
@@ -334,7 +334,7 @@ struct MeetingTemplatesManagerView: View {
                             )
                             .frame(maxWidth: .infinity, minHeight: 28)
                             .background(
-                                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                                     .fill(
                                         draftTemplateIcon == icon.symbolName
                                             ? MuesliTheme.accent.opacity(0.12)
@@ -342,7 +342,7 @@ struct MeetingTemplatesManagerView: View {
                                     )
                             )
                             .overlay(
-                                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                                     .strokeBorder(
                                         draftTemplateIcon == icon.symbolName
                                             ? MuesliTheme.accent.opacity(0.35)
@@ -376,17 +376,17 @@ struct MeetingTemplatesManagerView: View {
                 Image(systemName: systemImage)
                     .font(.system(size: 11, weight: .semibold))
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(MuesliTheme.font(size: 13, weight: .medium))
             }
-            .foregroundStyle(isDestructive ? MuesliTheme.recording : MuesliTheme.textPrimary)
+            .foregroundStyle(isDestructive ? MuesliTheme.danger : MuesliTheme.textPrimary)
             .padding(.horizontal, MuesliTheme.spacing12)
             .padding(.vertical, 7)
-            .background(isDestructive ? MuesliTheme.recording.opacity(0.1) : MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .background(isDestructive ? MuesliTheme.danger.opacity(0.1) : MuesliTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(
-                        isDestructive ? MuesliTheme.recording.opacity(0.2) : MuesliTheme.surfaceBorder,
+                        isDestructive ? MuesliTheme.danger.opacity(0.2) : MuesliTheme.surfaceBorder,
                         lineWidth: 1
                     )
             )

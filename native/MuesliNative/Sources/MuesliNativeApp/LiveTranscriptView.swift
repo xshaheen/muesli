@@ -58,9 +58,9 @@ struct LiveTranscriptBubble: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(bubbleBackground)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(
                         bubbleBorder,
                         style: StrokeStyle(lineWidth: 1, dash: isPartial ? [4, 3] : [])
@@ -289,7 +289,7 @@ struct LiveTranscriptView: View {
                         partialOthers: partialOthers
                     )
                     DispatchQueue.main.async {
-                        withAnimation(.easeOut(duration: 0.15)) {
+                        withAnimation(MuesliTheme.Motion.easedOut(0.15)) {
                             proxy.scrollTo(LiveTranscriptFeedView.bottomAnchorID, anchor: .bottom)
                         }
                     }
@@ -337,15 +337,15 @@ struct LiveTranscriptView: View {
                     Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 11, weight: .semibold))
                     Text(didCopy ? "Copied" : "Copy")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(MuesliTheme.font(size: 12, weight: .semibold))
                 }
                 .foregroundStyle(didCopy ? MuesliTheme.success : MuesliTheme.textPrimary)
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .frame(height: 30)
                 .background(MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                         .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                 }
             }
@@ -368,7 +368,7 @@ struct LiveTranscriptView: View {
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
         DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.15)) {
+            withAnimation(MuesliTheme.Motion.easedOut(0.15)) {
                 proxy.scrollTo(LiveTranscriptFeedView.bottomAnchorID, anchor: .bottom)
             }
         }

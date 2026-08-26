@@ -113,9 +113,9 @@ struct MeetingListItemView: View {
         .padding(MuesliTheme.spacing16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isSelected ? MuesliTheme.surfaceSelected : MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
                 .strokeBorder(
                     isSelected ? MuesliTheme.accent.opacity(0.35) : MuesliTheme.surfaceBorder,
                     lineWidth: 1
@@ -266,7 +266,7 @@ struct MeetingListItemView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(
                     isHovering
-                        ? MuesliTheme.recording.opacity(0.85)
+                        ? MuesliTheme.danger.opacity(0.85)
                         : MuesliTheme.textTertiary
                 )
                 .frame(width: 24, height: 24)
@@ -281,7 +281,7 @@ struct MeetingListItemView: View {
 
     private var statusBadge: some View {
         Text(record.status.displayLabel)
-            .font(.system(size: 10, weight: .semibold))
+            .font(MuesliTheme.font(size: 10, weight: .semibold))
             .foregroundStyle(record.status.displayColor)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
@@ -308,7 +308,7 @@ struct MeetingListItemView: View {
             Image(systemName: icon)
                 .font(.system(size: 10, weight: .semibold))
             Text(label)
-                .font(.system(size: 10, weight: .semibold))
+                .font(MuesliTheme.font(size: 10, weight: .semibold))
         }
         .foregroundStyle(isImportedAudio ? MuesliTheme.accent : MuesliTheme.textSecondary)
         .padding(.horizontal, 6)

@@ -22,13 +22,15 @@ extension MeetingStatus {
         case .recording:
             return MuesliTheme.recording
         case .processing:
-            return MuesliTheme.accent
+            // Work in progress is amber. It used the accent before, which made a meeting's
+            // state follow whichever accent preset the user had picked.
+            return MuesliTheme.transcribing
         case .completed:
             return MuesliTheme.success
         case .noteOnly:
             return MuesliTheme.textTertiary
         case .failed:
-            return MuesliTheme.transcribing
+            return MuesliTheme.danger
         }
     }
 }

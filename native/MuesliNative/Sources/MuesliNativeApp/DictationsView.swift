@@ -117,7 +117,7 @@ struct DictationsView: View {
                             VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
                                 HStack {
                                     Text(group.header)
-                                        .font(.system(size: 12, weight: .semibold))
+                                        .font(MuesliTheme.font(size: 12, weight: .semibold))
                                         .foregroundStyle(MuesliTheme.textTertiary)
                                         .padding(.leading, MuesliTheme.spacing4)
                                 }
@@ -156,9 +156,9 @@ struct DictationsView: View {
                                         }
                                     }
                                 }
-                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
                                 .overlay(
-                                    RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                                    RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                                         .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                                 )
                             }
@@ -220,7 +220,7 @@ struct DictationsView: View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("RECORDINGS WITHOUT TRANSCRIPT HISTORY")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(MuesliTheme.font(size: 12, weight: .semibold))
                     .foregroundStyle(MuesliTheme.textTertiary)
                 Text("Local only · excluded from sync, statistics, CLI, and text export")
                     .font(MuesliTheme.caption())
@@ -237,9 +237,9 @@ struct DictationsView: View {
                     )
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }
@@ -307,13 +307,13 @@ struct DictationsView: View {
                 Image(systemName: isRecording ? "stop.fill" : "mic.fill")
                     .font(.system(size: 12, weight: .semibold))
                 Text(isRecording ? "Stop Voice Note" : "Record Voice Note")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(MuesliTheme.font(size: 12, weight: .semibold))
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
             .frame(height: 30)
             .background(isRecording ? MuesliTheme.recording : MuesliTheme.accent)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(appState.dictationState == .transcribing)
@@ -342,7 +342,7 @@ struct DictationsView: View {
                     .font(.system(size: 11))
                 if selectedFilter != .all {
                     Text(selectedFilter.label)
-                        .font(.system(size: 11))
+                        .font(MuesliTheme.font(size: 11))
                 }
             }
             .foregroundStyle(selectedFilter != .all ? MuesliTheme.accent : MuesliTheme.textTertiary)

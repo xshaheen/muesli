@@ -55,14 +55,14 @@ struct SearchResultsView: View {
     private func tabButton(_ tab: SearchTab, count: Int) -> some View {
         let isSelected = selectedTab == tab
         Button {
-            withAnimation(.easeInOut(duration: 0.15)) { selectedTab = tab }
+            withAnimation(MuesliTheme.Motion.eased(0.15)) { selectedTab = tab }
         } label: {
             HStack(spacing: 6) {
                 Text(tab.rawValue)
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .font(MuesliTheme.font(size: 13, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? MuesliTheme.textPrimary : MuesliTheme.textTertiary)
                 Text("\(count)")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(MuesliTheme.font(size: 11, weight: .medium))
                     .foregroundStyle(isSelected ? MuesliTheme.accent : MuesliTheme.textTertiary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
@@ -72,7 +72,7 @@ struct SearchResultsView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(isSelected ? MuesliTheme.backgroundHover : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -207,7 +207,7 @@ private struct SearchDictationRow: View {
         .padding(.vertical, MuesliTheme.spacing12)
         .background(isHovered ? MuesliTheme.backgroundHover : Color.clear)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
+            withAnimation(MuesliTheme.Motion.eased(0.15)) { isHovered = hovering }
         }
         .onTapGesture(perform: onCopy)
     }
@@ -253,7 +253,7 @@ private struct SearchMeetingRow: View {
         .padding(.vertical, MuesliTheme.spacing12)
         .background(isHovered ? MuesliTheme.backgroundHover : Color.clear)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
+            withAnimation(MuesliTheme.Motion.eased(0.15)) { isHovered = hovering }
         }
         .onTapGesture(perform: onSelect)
     }

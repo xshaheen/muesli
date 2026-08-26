@@ -192,9 +192,9 @@ struct OnboardingView: View {
                         .padding(.horizontal, MuesliTheme.spacing16)
                         .padding(.vertical, MuesliTheme.spacing8)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                         )
                     }
@@ -336,12 +336,12 @@ struct OnboardingView: View {
     private func onboardingButton(_ title: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 14, weight: .medium))
+                .font(MuesliTheme.font(size: 14, weight: .medium))
                 .foregroundStyle(.white)
                 .padding(.horizontal, MuesliTheme.spacing20)
                 .padding(.vertical, MuesliTheme.spacing8)
                 .background(enabled ? MuesliTheme.accent : MuesliTheme.accent.opacity(0.4))
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
@@ -356,9 +356,9 @@ struct OnboardingView: View {
             .padding(.horizontal, MuesliTheme.spacing16)
             .padding(.vertical, MuesliTheme.spacing8)
             .background(MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
     }
@@ -413,7 +413,7 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(modelDownloadIndicatorTitle)
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(modelDownloadError == nil ? MuesliTheme.textSecondary : MuesliTheme.recording)
+                    .foregroundStyle(modelDownloadError == nil ? MuesliTheme.textSecondary : MuesliTheme.danger)
                     .lineLimit(1)
                 Text(modelDownloadIndicatorDetail(progress: progress))
                     .font(.system(size: 10, weight: .medium, design: .rounded))
@@ -424,9 +424,9 @@ struct OnboardingView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(MuesliTheme.backgroundRaised.opacity(0.94))
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.28), radius: 12, x: 0, y: 6)
@@ -650,9 +650,9 @@ struct OnboardingView: View {
                 Image(systemName: icon)
                     .font(.system(size: 20, weight: .medium))
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(MuesliTheme.font(size: 12, weight: .semibold))
                 Text(subtitle)
-                    .font(.system(size: 10))
+                    .font(MuesliTheme.font(size: 10))
                     .foregroundStyle(selected ? .white.opacity(0.72) : MuesliTheme.textTertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -660,9 +660,9 @@ struct OnboardingView: View {
             .foregroundStyle(selected ? .white : MuesliTheme.textSecondary)
             .frame(width: 132, height: 74)
             .background(selected ? MuesliTheme.accent : MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(selected ? MuesliTheme.accent : MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }
@@ -751,9 +751,9 @@ struct OnboardingView: View {
         }
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
         .padding(.top, MuesliTheme.spacing8)
@@ -780,12 +780,12 @@ struct OnboardingView: View {
                             .foregroundStyle(MuesliTheme.textPrimary)
                         if option == BackendOption.onboardingDefault {
                             Text("Recommended")
-                                .font(.system(size: 9, weight: .semibold))
+                                .font(MuesliTheme.font(size: 9, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
                                 .background(MuesliTheme.accent)
-                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                         }
                         Text(option.sizeLabel)
                             .font(MuesliTheme.caption())
@@ -800,9 +800,9 @@ struct OnboardingView: View {
             }
             .padding(MuesliTheme.spacing12)
             .background(MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                     .strokeBorder(isSelected ? MuesliTheme.accent : MuesliTheme.surfaceBorder, lineWidth: isSelected ? 1.5 : 1)
             )
         }
@@ -863,7 +863,7 @@ struct OnboardingView: View {
 
                 VStack(spacing: MuesliTheme.spacing8) {
                     Text("Permission \(displayIndex + 1) of \(total)")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(MuesliTheme.font(size: 11, weight: .semibold))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .textCase(.uppercase)
 
@@ -899,13 +899,13 @@ struct OnboardingView: View {
                                 .font(.system(size: 12, weight: .bold))
                         }
                         Text(permissionButtonTitle(for: step.name, isConfirmingGrant: isConfirmingGrant))
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(MuesliTheme.font(size: 14, weight: .semibold))
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, MuesliTheme.spacing24)
                     .padding(.vertical, MuesliTheme.spacing12)
                     .background(isConfirmingGrant ? MuesliTheme.success : MuesliTheme.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .disabled(isConfirmingGrant || isWaitingForNativePermissionPrompt(step.name))
@@ -926,14 +926,14 @@ struct OnboardingView: View {
 
                 if isWaitingForNativePermissionPrompt(step.name) {
                     Text("Respond to the macOS permission prompt")
-                        .font(.system(size: 11))
+                        .font(MuesliTheme.font(size: 11))
                         .foregroundStyle(MuesliTheme.textTertiary)
                 } else {
                     Button {
                         openSystemSettingsForPermission(at: displayIndex)
                     } label: {
                         Text("Not seeing a prompt? Open System Settings")
-                            .font(.system(size: 11))
+                            .font(MuesliTheme.font(size: 11))
                             .foregroundStyle(MuesliTheme.accent)
                     }
                     .buttonStyle(.plain)
@@ -944,7 +944,7 @@ struct OnboardingView: View {
                         openApplicationsFolder()
                     } label: {
                         Text("Need to add Muesli manually? Open Applications")
-                            .font(.system(size: 11))
+                            .font(MuesliTheme.font(size: 11))
                             .foregroundStyle(MuesliTheme.textTertiary)
                     }
                     .buttonStyle(.plain)
@@ -956,9 +956,9 @@ struct OnboardingView: View {
                     } label: {
                         VStack(spacing: 2) {
                             Text("Use Voice Notes instead")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(MuesliTheme.font(size: 12, weight: .semibold))
                             Text("Keeps the hotkey, skips paste permission")
-                                .font(.system(size: 10, weight: .medium))
+                                .font(MuesliTheme.font(size: 10, weight: .medium))
                                 .foregroundStyle(MuesliTheme.textTertiary)
                         }
                         .foregroundStyle(MuesliTheme.textSecondary)
@@ -1077,7 +1077,7 @@ struct OnboardingView: View {
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .padding(.vertical, 4)
                 .background(MuesliTheme.accentSubtle)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
         }
         .padding(.horizontal, MuesliTheme.spacing16)
@@ -1226,9 +1226,9 @@ struct OnboardingView: View {
                     .padding(.horizontal, MuesliTheme.spacing32)
                     .padding(.vertical, MuesliTheme.spacing16)
                     .background(MuesliTheme.backgroundRaised)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                             .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                     )
 
@@ -1248,9 +1248,9 @@ struct OnboardingView: View {
                 .padding(.horizontal, MuesliTheme.spacing16)
                 .padding(.vertical, MuesliTheme.spacing8)
                 .background(isRecordingHotkey ? MuesliTheme.accentSubtle : MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                         .strokeBorder(isRecordingHotkey ? MuesliTheme.accent.opacity(0.3) : MuesliTheme.surfaceBorder, lineWidth: 1)
                 )
             }
@@ -1342,8 +1342,8 @@ struct OnboardingView: View {
 
                     if let modelDownloadError {
                         Text(modelDownloadError)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.red)
+                            .font(MuesliTheme.font(size: 11))
+                            .foregroundStyle(MuesliTheme.danger)
                             .lineLimit(2)
 
                         Button("Retry Download") {
@@ -1365,9 +1365,9 @@ struct OnboardingView: View {
                         .frame(maxWidth: 400, minHeight: 60, alignment: .topLeading)
                         .padding(MuesliTheme.spacing16)
                         .background(MuesliTheme.backgroundRaised)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                                 .strokeBorder(dictationTestResult != nil ? MuesliTheme.success.opacity(0.5) : MuesliTheme.surfaceBorder, lineWidth: 1)
                         )
 
@@ -1391,8 +1391,8 @@ struct OnboardingView: View {
 
                     if let dictationTestError {
                         Text(dictationTestError)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.red)
+                            .font(MuesliTheme.font(size: 11))
+                            .foregroundStyle(MuesliTheme.danger)
                             .lineLimit(2)
                     }
 
@@ -1488,9 +1488,9 @@ struct OnboardingView: View {
                 }
             }
             .background(MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
             .frame(width: 320)
@@ -1506,19 +1506,19 @@ struct OnboardingView: View {
                             .fill(.white)
                             .frame(width: 14, height: 14)
                         Text("Signed in with ChatGPT")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(MuesliTheme.font(size: 13, weight: .medium))
                             .foregroundStyle(.white)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
                     .background(MuesliTheme.success)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 } else if isSigningInChatGPT {
                     HStack(spacing: 8) {
                         ProgressView()
                             .controlSize(.small)
                         Text("Signing in...")
-                            .font(.system(size: 12))
+                            .font(MuesliTheme.font(size: 12))
                             .foregroundStyle(MuesliTheme.textSecondary)
                     }
                 } else {
@@ -1537,20 +1537,20 @@ struct OnboardingView: View {
                                 .fill(.white)
                                 .frame(width: 14, height: 14)
                             Text("Sign in with ChatGPT")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(MuesliTheme.font(size: 13, weight: .medium))
                                 .foregroundStyle(.white)
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
                         .background(MuesliTheme.accent)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     }
                     .buttonStyle(.plain)
 
                     if let chatGPTSignInError {
                         Text(chatGPTSignInError)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.red)
+                            .font(MuesliTheme.font(size: 11))
+                            .foregroundStyle(MuesliTheme.danger)
                             .lineLimit(2)
                     }
                 }
@@ -1562,7 +1562,7 @@ struct OnboardingView: View {
 
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
                     Text("Ollama is served by default at http://localhost:11434")
-                        .font(.system(size: 11))
+                        .font(MuesliTheme.font(size: 11))
                         .foregroundStyle(MuesliTheme.textTertiary)
 
                     HStack(spacing: 4) {
@@ -1570,7 +1570,7 @@ struct OnboardingView: View {
                             .fill(MuesliTheme.success)
                             .frame(width: 6, height: 6)
                         Text("No authentication required")
-                            .font(.system(size: 11))
+                            .font(MuesliTheme.font(size: 11))
                             .foregroundStyle(MuesliTheme.success)
                     }
                 }
@@ -1598,7 +1598,7 @@ struct OnboardingView: View {
                             .fill(apiKey.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.success)
                             .frame(width: 6, height: 6)
                         Text(apiKey.isEmpty ? "No API key" : "Key entered")
-                            .font(.system(size: 11))
+                            .font(MuesliTheme.font(size: 11))
                             .foregroundStyle(apiKey.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.success)
                     }
                 }
@@ -1617,7 +1617,7 @@ struct OnboardingView: View {
                 .frame(width: 80)
                 .padding(.vertical, MuesliTheme.spacing8)
                 .background(selected ? MuesliTheme.surfacePrimary : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -2020,13 +2020,13 @@ struct OnboardingView: View {
                             Image(systemName: "calendar.badge.plus")
                                 .font(.system(size: 14))
                             Text("Connect Google Calendar")
-                                .font(.system(size: 14, weight: .medium))
+                                .font(MuesliTheme.font(size: 14, weight: .medium))
                         }
                         .foregroundStyle(.white.opacity(0.4))
                         .padding(.horizontal, MuesliTheme.spacing16)
                         .padding(.vertical, MuesliTheme.spacing8)
                         .background(MuesliTheme.textTertiary.opacity(0.3))
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
 
                         Text("Google OAuth verification pending")
                             .font(MuesliTheme.caption())
@@ -2050,20 +2050,20 @@ struct OnboardingView: View {
                             Image(systemName: "calendar.badge.plus")
                                 .font(.system(size: 14))
                             Text("Connect Google Calendar")
-                                .font(.system(size: 14, weight: .medium))
+                                .font(MuesliTheme.font(size: 14, weight: .medium))
                         }
                         .foregroundStyle(.white)
                         .padding(.horizontal, MuesliTheme.spacing16)
                         .padding(.vertical, MuesliTheme.spacing8)
                         .background(MuesliTheme.accent)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     }
                     .buttonStyle(.plain)
 
                     if let googleCalSignInError {
                         Text(googleCalSignInError)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.red)
+                            .font(MuesliTheme.font(size: 11))
+                            .foregroundStyle(MuesliTheme.danger)
                             .multilineTextAlignment(.center)
                     }
                 } else {

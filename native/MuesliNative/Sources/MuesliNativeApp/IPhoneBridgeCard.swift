@@ -61,7 +61,7 @@ struct IPhoneBridgeCard: View {
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .frame(width: 28, height: 28)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help("Show iPhone setup QR")
@@ -81,7 +81,7 @@ struct IPhoneBridgeCard: View {
                 .padding(.horizontal, 12)
                 .frame(height: 28)
                 .background(MuesliTheme.accent)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
             .disabled(actionDisabled)
@@ -95,16 +95,16 @@ struct IPhoneBridgeCard: View {
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .frame(width: 28, height: 28)
                     .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
             .help("Hide iOS companion prompt")
         }
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
         .onAppear {
@@ -160,7 +160,8 @@ struct IPhoneBridgeCard: View {
     private var bridgeIconColor: Color {
         switch bridgeState {
         case .active: return MuesliTheme.success
-        case .needsICloud, .error: return MuesliTheme.transcribing
+        case .needsICloud: return MuesliTheme.transcribing
+        case .error: return MuesliTheme.danger
         default: return MuesliTheme.accent
         }
     }
@@ -281,7 +282,7 @@ private struct BridgeSyncIcon: View {
     private func updateRotation(animated: Bool) {
         guard isAnimating else {
             if animated {
-                withAnimation(.easeOut(duration: 0.15)) { rotationDegrees = 0 }
+                withAnimation(MuesliTheme.Motion.easedOut(0.15)) { rotationDegrees = 0 }
             } else {
                 rotationDegrees = 0
             }
@@ -289,7 +290,9 @@ private struct BridgeSyncIcon: View {
         }
 
         rotationDegrees = 0
-        withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+        // Under Reduce Motion the resolver returns nil, so the value settles at 360 with no
+        // interpolation -- the same orientation as 0, so the spinner holds a still frame.
+        withAnimation(MuesliTheme.Motion.repeating(0.9, autoreverses: false)) {
             rotationDegrees = 360
         }
     }
@@ -322,7 +325,7 @@ private struct IPhoneBridgeQRCodeSheet: View {
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .frame(width: 28, height: 28)
                         .background(MuesliTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
@@ -332,7 +335,7 @@ private struct IPhoneBridgeQRCodeSheet: View {
                     .frame(width: 148, height: 148)
                     .padding(MuesliTheme.spacing8)
                     .background(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
 
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
                     Label("Same iCloud account", systemImage: "icloud")

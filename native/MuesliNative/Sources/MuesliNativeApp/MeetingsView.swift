@@ -413,7 +413,7 @@ struct MeetingsView: View {
                             Image(systemName: "arrow.triangle.2.circlepath")
                                 .font(.system(size: 9))
                             Text("Add Google to macOS Calendar for real-time sync")
-                                .font(.system(size: 11))
+                                .font(MuesliTheme.font(size: 11))
                         }
                         .foregroundStyle(MuesliTheme.accent)
                     }
@@ -432,10 +432,10 @@ struct MeetingsView: View {
                             .font(.system(size: 24, weight: .light, design: .default))
                             .foregroundStyle(group.isToday ? MuesliTheme.accent : MuesliTheme.textPrimary)
                         Text(group.dayLabel)
-                            .font(.system(size: 11, weight: .medium))
+                            .font(MuesliTheme.font(size: 11, weight: .medium))
                             .foregroundStyle(group.isToday ? MuesliTheme.accent : MuesliTheme.textSecondary)
                         Text(group.dayOfWeek)
-                            .font(.system(size: 10))
+                            .font(MuesliTheme.font(size: 10))
                             .foregroundStyle(MuesliTheme.textSecondary)
                     }
                     .frame(width: 60)
@@ -444,18 +444,18 @@ struct MeetingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(group.events) { event in
                             HStack(spacing: 8) {
-                                RoundedRectangle(cornerRadius: 1.5)
+                                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
                                     .fill(group.isToday ? MuesliTheme.accent : MuesliTheme.textSecondary.opacity(0.4))
                                     .frame(width: 3, height: 36)
 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(event.title)
-                                        .font(.system(size: 13, weight: .medium))
+                                        .font(MuesliTheme.font(size: 13, weight: .medium))
                                         .foregroundStyle(MuesliTheme.textPrimary)
                                         .lineLimit(1)
 
                                     Text(formatTimeRange(event))
-                                        .font(.system(size: 11))
+                                        .font(MuesliTheme.font(size: 11))
                                         .foregroundStyle(MuesliTheme.textSecondary)
                                 }
 
@@ -479,14 +479,14 @@ struct MeetingsView: View {
                                     }
                                 } label: {
                                     Text("Add to folder")
-                                        .font(.system(size: 10, weight: .medium))
+                                        .font(MuesliTheme.font(size: 10, weight: .medium))
                                         .foregroundStyle(MuesliTheme.textSecondary)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 3)
                                         .background(MuesliTheme.surfacePrimary)
-                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                                         .overlay(
-                                            RoundedRectangle(cornerRadius: 4)
+                                            RoundedRectangle(cornerRadius: 4, style: .continuous)
                                                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 0.5)
                                         )
                                 }
@@ -507,9 +507,9 @@ struct MeetingsView: View {
         }
         .padding(20)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
@@ -544,7 +544,7 @@ struct MeetingsView: View {
                     Image(systemName: armed.symbolName)
                         .font(.system(size: 9))
                     Text(armed.buttonLabel)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(MuesliTheme.font(size: 10, weight: .medium))
                 }
                 .foregroundStyle(.white)
                 .padding(.horizontal, 8)
@@ -575,7 +575,7 @@ struct MeetingsView: View {
             .help(alternatives.map(\.buttonLabel).joined(separator: " · "))
         }
         .fixedSize()
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 
     private func performJoinAction(
@@ -609,7 +609,7 @@ struct MeetingsView: View {
 
     private func hideEventButton(_ event: UnifiedCalendarEvent) -> some View {
         Button {
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(MuesliTheme.Motion.easedOut(0.2)) {
                 controller.hideCalendarEvent(event)
             }
         } label: {
@@ -688,14 +688,14 @@ struct MeetingsView: View {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .semibold))
                     Text("Quick Note")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(MuesliTheme.font(size: 12, weight: .semibold))
                         .lineLimit(1)
                 }
                 .foregroundStyle(MuesliTheme.backgroundBase)
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .padding(.vertical, 8)
                 .background(appState.isMeetingRecording || appState.isMeetingStarting ? MuesliTheme.surfacePrimary : MuesliTheme.accent)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
             .disabled(appState.isMeetingRecording || appState.isMeetingStarting)
@@ -709,16 +709,16 @@ struct MeetingsView: View {
                     Image(systemName: "square.and.arrow.down")
                         .font(.system(size: 11, weight: .semibold))
                     Text("Import Audio")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(MuesliTheme.font(size: 12, weight: .semibold))
                         .lineLimit(1)
                 }
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .padding(.vertical, 8)
                 .background(MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                         .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                 )
             }
@@ -737,16 +737,16 @@ struct MeetingsView: View {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 11, weight: .medium))
                     Text("Manage Templates")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(MuesliTheme.font(size: 12, weight: .semibold))
                         .lineLimit(1)
                 }
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .padding(.vertical, 8)
                 .background(MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                         .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                 )
             }
@@ -765,7 +765,7 @@ struct MeetingsView: View {
                     .frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(meeting.title)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(MuesliTheme.font(size: 13, weight: .semibold))
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .lineLimit(1)
                     Text(activeMeetingStatusText(for: meeting))
@@ -783,13 +783,13 @@ struct MeetingsView: View {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 11, weight: .semibold))
                     Text("Open Notes")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(MuesliTheme.font(size: 12, weight: .semibold))
                 }
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .padding(.vertical, 8)
                 .background(MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             }
             .buttonStyle(.plain)
 
@@ -801,15 +801,15 @@ struct MeetingsView: View {
                         Image(systemName: appState.isMeetingRecordingPaused ? "play.fill" : "pause.fill")
                             .font(.system(size: 10, weight: .semibold))
                         Text(appState.isMeetingRecordingPaused ? "Resume" : "Pause")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(MuesliTheme.font(size: 12, weight: .semibold))
                     }
                     .foregroundStyle(appState.isMeetingRecordingPaused ? MuesliTheme.backgroundBase : MuesliTheme.textPrimary)
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, 8)
                     .background(appState.isMeetingRecordingPaused ? MuesliTheme.accent : MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                             .strokeBorder(appState.isMeetingRecordingPaused ? MuesliTheme.accent.opacity(0.35) : MuesliTheme.surfaceBorder, lineWidth: 1)
                     )
                 }
@@ -823,13 +823,13 @@ struct MeetingsView: View {
                         Image(systemName: "stop.fill")
                             .font(.system(size: 10, weight: .semibold))
                         Text("Stop")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(MuesliTheme.font(size: 12, weight: .semibold))
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, 8)
                     .background(MuesliTheme.recording)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .disabled(!appState.isMeetingRecording)
@@ -837,9 +837,9 @@ struct MeetingsView: View {
         }
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
@@ -874,7 +874,7 @@ struct MeetingsView: View {
                 Image(systemName: "arrow.up.arrow.down")
                     .font(.system(size: 11))
                 Text(selectedSort.label)
-                    .font(.system(size: 11))
+                    .font(MuesliTheme.font(size: 11))
             }
             .foregroundStyle(selectedSort != .newestFirst ? MuesliTheme.accent : MuesliTheme.textSecondary)
             .padding(.horizontal, 8)
@@ -907,7 +907,7 @@ struct MeetingsView: View {
                     .font(.system(size: 11))
                 if selectedFilter != .all {
                     Text(selectedFilter.label)
-                        .font(.system(size: 11))
+                        .font(MuesliTheme.font(size: 11))
                 }
             }
             .foregroundStyle(selectedFilter != .all ? MuesliTheme.accent : MuesliTheme.textTertiary)
@@ -943,9 +943,9 @@ struct MeetingsView: View {
         .padding(MuesliTheme.spacing24)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerXL))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerXL, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerXL)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerXL, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }

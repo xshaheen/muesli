@@ -204,7 +204,7 @@ struct FeatureTourOverlay: View {
                 )
                 .allowsHitTesting(false)
 
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(MuesliTheme.accent, lineWidth: 2)
                 .frame(width: expandedSpotlight.width, height: expandedSpotlight.height)
                 .position(x: expandedSpotlight.midX, y: expandedSpotlight.midY)
@@ -244,10 +244,10 @@ struct FeatureTourOverlay: View {
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text(step.eyebrow)
-                        .font(.system(size: 10, weight: .bold))
+                        .font(MuesliTheme.font(size: 10, weight: .bold))
                         .foregroundStyle(MuesliTheme.accent)
                     Text(step.title)
-                        .font(.system(size: 18, weight: .bold))
+                        .font(MuesliTheme.font(size: 18, weight: .bold))
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -301,9 +301,9 @@ struct FeatureTourOverlay: View {
         }
         .padding(MuesliTheme.spacing20)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.45), radius: 24, x: 0, y: 12)
@@ -338,10 +338,10 @@ struct FeatureTourInvitationView: View {
 
                     VStack(alignment: .leading, spacing: 5) {
                         Text("MUESLI \(tour.displayVersion)")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(MuesliTheme.font(size: 10, weight: .bold))
                             .foregroundStyle(MuesliTheme.accent)
                         Text("Want a quick tour of what’s new?")
-                            .font(.system(size: 21, weight: .bold))
+                            .font(MuesliTheme.font(size: 21, weight: .bold))
                             .foregroundStyle(MuesliTheme.textPrimary)
                     }
 
@@ -377,9 +377,9 @@ struct FeatureTourInvitationView: View {
             .padding(MuesliTheme.spacing24)
             .frame(width: 460)
             .background(MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
             .shadow(color: Color.black.opacity(0.5), radius: 28, x: 0, y: 14)

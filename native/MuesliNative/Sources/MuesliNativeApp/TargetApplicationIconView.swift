@@ -55,7 +55,7 @@ struct TargetApplicationIconView: View {
                     .padding(size * 0.13)
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: size * 0.22))
+                    .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
             }
         }
         .frame(width: size, height: size)
@@ -107,13 +107,13 @@ struct TargetApplicationFilterMenu: View {
                         size: 16
                     )
                     Text(selection.name)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(MuesliTheme.font(size: 11, weight: .medium))
                         .lineLimit(1)
                 } else {
                     Image(systemName: "square.grid.2x2")
                         .font(.system(size: 11))
                     Text("Apps")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(MuesliTheme.font(size: 11, weight: .medium))
                 }
             }
             .foregroundStyle(selection == nil ? MuesliTheme.textTertiary : MuesliTheme.accent)

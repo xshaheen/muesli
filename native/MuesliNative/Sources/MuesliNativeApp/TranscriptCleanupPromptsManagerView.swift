@@ -63,7 +63,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                     if let operationErrorMessage {
                         Text(operationErrorMessage)
                             .font(MuesliTheme.caption())
-                            .foregroundStyle(MuesliTheme.recording)
+                            .foregroundStyle(MuesliTheme.danger)
                             .accessibilityLabel("Style settings error: \(operationErrorMessage)")
                     }
                 }
@@ -156,9 +156,9 @@ struct TranscriptCleanupPromptsManagerView: View {
         .padding(.horizontal, MuesliTheme.spacing12)
         .padding(.vertical, 10)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
@@ -222,12 +222,12 @@ struct TranscriptCleanupPromptsManagerView: View {
                             .foregroundStyle(MuesliTheme.textPrimary)
                         if isActive {
                             Text("Active")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(MuesliTheme.font(size: 10, weight: .semibold))
                                 .foregroundStyle(MuesliTheme.accent)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .background(MuesliTheme.accentSubtle)
-                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                         }
                     }
                     Text(prompt)
@@ -243,9 +243,9 @@ struct TranscriptCleanupPromptsManagerView: View {
         }
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                 .strokeBorder(isActive ? MuesliTheme.accent.opacity(0.35) : MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
@@ -263,9 +263,9 @@ struct TranscriptCleanupPromptsManagerView: View {
                 TextField("Context-aware cleanup", text: $draftPromptName)
                     .textFieldStyle(.roundedBorder)
                     .overlay {
-                        RoundedRectangle(cornerRadius: 6)
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .strokeBorder(
-                                nameValidationMessage == nil ? .clear : MuesliTheme.recording.opacity(0.75),
+                                nameValidationMessage == nil ? .clear : MuesliTheme.danger.opacity(0.75),
                                 lineWidth: 1
                             )
                     }
@@ -277,7 +277,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                 if let nameValidationMessage {
                     Text(nameValidationMessage)
                         .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.recording)
+                        .foregroundStyle(MuesliTheme.danger)
                 }
             }
 
@@ -292,11 +292,11 @@ struct TranscriptCleanupPromptsManagerView: View {
                     .frame(minHeight: 180)
                     .padding(MuesliTheme.spacing8)
                     .background(MuesliTheme.backgroundBase)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                             .strokeBorder(
-                                showPromptValidationError ? MuesliTheme.recording.opacity(0.75) : MuesliTheme.surfaceBorder,
+                                showPromptValidationError ? MuesliTheme.danger.opacity(0.75) : MuesliTheme.surfaceBorder,
                                 lineWidth: 1
                             )
                     )
@@ -308,7 +308,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                 if showPromptValidationError {
                     Text("Enter cleanup instructions for this style.")
                         .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.recording)
+                        .foregroundStyle(MuesliTheme.danger)
                 }
             }
 
@@ -324,9 +324,9 @@ struct TranscriptCleanupPromptsManagerView: View {
         }
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.surfacePrimary.opacity(0.45))
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
@@ -464,17 +464,17 @@ struct TranscriptCleanupPromptsManagerView: View {
                         .font(.system(size: 11, weight: .semibold))
                 }
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(MuesliTheme.font(size: 12, weight: .semibold))
             }
-            .foregroundStyle(isDestructive ? MuesliTheme.recording : MuesliTheme.textPrimary)
+            .foregroundStyle(isDestructive ? MuesliTheme.danger : MuesliTheme.textPrimary)
             .padding(.horizontal, MuesliTheme.spacing12)
             .frame(height: 28)
-            .background(isDestructive ? MuesliTheme.recording.opacity(0.1) : MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .background(isDestructive ? MuesliTheme.danger.opacity(0.1) : MuesliTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(
-                        isDestructive ? MuesliTheme.recording.opacity(0.2) : MuesliTheme.surfaceBorder,
+                        isDestructive ? MuesliTheme.danger.opacity(0.2) : MuesliTheme.surfaceBorder,
                         lineWidth: 1
                     )
             )

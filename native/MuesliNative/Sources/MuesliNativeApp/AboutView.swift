@@ -60,14 +60,14 @@ struct AboutView: View {
                                 Image(systemName: "heart.fill")
                                     .font(.system(size: 12))
                                 Text("Donate")
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .font(MuesliTheme.font(size: 13, weight: .semibold))
                             }
                             .foregroundStyle(.white)
                             .padding(.horizontal, MuesliTheme.spacing20)
                             .padding(.vertical, MuesliTheme.spacing8)
                             .frame(width: actionButtonWidth)
                             .background(MuesliTheme.success)
-                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                         }
                         .buttonStyle(.plain)
                     }
@@ -158,7 +158,7 @@ struct AboutView: View {
     @ViewBuilder
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 11, weight: .semibold))
+            .font(MuesliTheme.font(size: 11, weight: .semibold))
             .foregroundStyle(MuesliTheme.textTertiary)
             .textCase(.uppercase)
             .padding(.leading, 2)
@@ -171,9 +171,9 @@ struct AboutView: View {
         }
         .padding(MuesliTheme.spacing20)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
@@ -258,7 +258,7 @@ struct AboutView: View {
                 icon: "xmark.octagon.fill",
                 title: "Update check failed",
                 message: "\(message) Use the menu bar icon > Check for Updates... to try again.",
-                tint: MuesliTheme.recording
+                tint: MuesliTheme.danger
             )
         }
     }
@@ -285,9 +285,9 @@ struct AboutView: View {
         }
         .padding(MuesliTheme.spacing16)
         .background(banner.tint.opacity(0.14))
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                 .strokeBorder(banner.tint.opacity(0.45), lineWidth: 1)
         )
     }
@@ -308,7 +308,7 @@ struct AboutView: View {
     private func acknowledgement(name: String, description: String) -> some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
             Text(name)
-                .font(.system(size: 14, weight: .semibold))
+                .font(MuesliTheme.font(size: 14, weight: .semibold))
                 .foregroundStyle(MuesliTheme.textPrimary)
             Text(description)
                 .font(MuesliTheme.callout())
@@ -328,16 +328,16 @@ struct AboutView: View {
                         .font(.system(size: 11))
                 }
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(MuesliTheme.font(size: 13, weight: .medium))
             }
             .foregroundStyle(MuesliTheme.textPrimary)
             .padding(.horizontal, MuesliTheme.spacing16)
             .padding(.vertical, MuesliTheme.spacing8)
             .frame(width: actionButtonWidth)
             .background(MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }

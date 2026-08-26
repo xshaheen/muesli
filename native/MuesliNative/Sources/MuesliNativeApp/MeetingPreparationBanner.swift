@@ -13,7 +13,7 @@ struct MeetingPreparationBanner: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Preparing transcription")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(MuesliTheme.font(size: 13, weight: .semibold))
                     .foregroundStyle(MuesliTheme.textPrimary)
                 Text(status ?? "Meeting transcription will start shortly.")
                     .font(MuesliTheme.caption())
@@ -33,9 +33,9 @@ struct MeetingPreparationBanner: View {
         }
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge)
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }

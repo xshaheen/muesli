@@ -19,7 +19,7 @@ struct DashboardRootView: View {
                 controller: controller,
                 isCollapsed: isSidebarCollapsed,
                 onToggleCollapsed: {
-                    withAnimation(.easeInOut(duration: 0.22)) {
+                    withAnimation(MuesliTheme.Motion.eased(0.22)) {
                         isSidebarCollapsed.toggle()
                     }
                 }

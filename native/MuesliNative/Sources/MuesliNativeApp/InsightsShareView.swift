@@ -17,10 +17,10 @@ struct InsightsShareSheet: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Share your activity")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(MuesliTheme.font(size: 20, weight: .semibold))
                         .tracking(-0.4)
                     Text("A private snapshot with no transcripts or account details")
-                        .font(.system(size: 12))
+                        .font(MuesliTheme.font(size: 12))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -33,11 +33,11 @@ struct InsightsShareSheet: View {
                     Image(nsImage: image)
                         .resizable()
                         .aspectRatio(1200 / 630, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.12)))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.12)))
                         .shadow(color: .black.opacity(0.22), radius: 24, y: 12)
                 } else {
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(.quaternary)
                         .aspectRatio(1200 / 630, contentMode: .fit)
                         .overlay { ProgressView().controlSize(.small) }
@@ -48,12 +48,12 @@ struct InsightsShareSheet: View {
             if let saveErrorMessage {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(MuesliTheme.danger)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("The image couldn’t be saved")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(MuesliTheme.font(size: 12, weight: .semibold))
                         Text(saveErrorMessage)
-                            .font(.system(size: 11))
+                            .font(MuesliTheme.font(size: 11))
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
@@ -67,9 +67,9 @@ struct InsightsShareSheet: View {
                     .accessibilityLabel("Dismiss save error")
                 }
                 .padding(10)
-                .background(Color.red.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.red.opacity(0.18)))
+                .background(MuesliTheme.danger.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(MuesliTheme.danger.opacity(0.18)))
             }
 
             HStack(spacing: 10) {
@@ -106,7 +106,7 @@ struct InsightsShareSheet: View {
         }
         .padding(24)
         .frame(minWidth: 760, idealWidth: 880, minHeight: 530)
-        .background(.regularMaterial)
+        .background(MuesliTheme.backgroundBase)
         .task {
             image = InsightsShareRenderer.render(snapshot: snapshot, rangeLabel: rangeLabel)
         }
@@ -149,11 +149,11 @@ struct InsightsShareSheet: View {
     }
 
     private func showConfirmation(_ message: String) {
-        withAnimation(.easeOut(duration: 0.16)) { confirmation = message }
+        withAnimation(MuesliTheme.Motion.easedOut(0.16)) { confirmation = message }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             guard confirmation == message else { return }
-            withAnimation(.easeOut(duration: 0.16)) { confirmation = nil }
+            withAnimation(MuesliTheme.Motion.easedOut(0.16)) { confirmation = nil }
         }
     }
 }
@@ -253,7 +253,7 @@ private struct InsightsShareCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top) {
                     Text(rangeLabel.uppercased())
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(MuesliTheme.font(size: 14, weight: .semibold))
                         .tracking(1.9)
                         .foregroundStyle(pale.opacity(0.82))
                     Spacer()
@@ -261,8 +261,8 @@ private struct InsightsShareCard: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 9)
                         .background(Color(red: 0.035, green: 0.050, blue: 0.068).opacity(0.44))
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.12)))
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.white.opacity(0.12)))
                 }
 
                 Spacer(minLength: 34)
@@ -273,7 +273,7 @@ private struct InsightsShareCard: View {
                     .monospacedDigit()
                     .foregroundStyle(pale)
                 Text("WORDS CAPTURED")
-                    .font(.system(size: 18, weight: .bold))
+                    .font(MuesliTheme.font(size: 18, weight: .bold))
                     .tracking(2.8)
                     .foregroundStyle(muted)
 
@@ -290,19 +290,19 @@ private struct InsightsShareCard: View {
                 }
                 .padding(.vertical, 24)
                 .background(Color(red: 0.035, green: 0.050, blue: 0.068).opacity(0.48))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.16)))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.white.opacity(0.16)))
 
                 Spacer(minLength: 30)
 
                 HStack {
                     Text("Private by design. Made on this Mac.")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(MuesliTheme.font(size: 15, weight: .medium))
                         .foregroundStyle(pale.opacity(0.88))
                         .shadow(color: Color.black.opacity(0.48), radius: 3, y: 1)
                     Spacer()
                     Text("muesli.works")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(MuesliTheme.font(size: 15, weight: .semibold))
                         .foregroundStyle(cyan)
                         .shadow(color: Color.black.opacity(0.48), radius: 3, y: 1)
                 }
@@ -319,7 +319,7 @@ private struct InsightsShareCard: View {
                 .monospacedDigit()
                 .foregroundStyle(pale)
             Text(label)
-                .font(.system(size: 12, weight: .bold))
+                .font(MuesliTheme.font(size: 12, weight: .bold))
                 .tracking(1.7)
                 .foregroundStyle(muted)
         }
@@ -346,7 +346,7 @@ private struct MuesliShareMark: View {
                     .resizable()
                     .interpolation(.high)
                     .frame(width: 54, height: 54)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             Text("muesli")
                 .font(Font(AppFonts.bold(30)))

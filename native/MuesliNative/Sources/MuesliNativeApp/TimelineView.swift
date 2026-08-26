@@ -106,7 +106,7 @@ struct TimelineView: View {
                     .font(.system(size: 11))
                 if appState.timelineDateFilter != .all {
                     Text(appState.timelineDateFilter.label)
-                        .font(.system(size: 11))
+                        .font(MuesliTheme.font(size: 11))
                 }
             }
             .foregroundStyle(
@@ -161,7 +161,7 @@ struct TimelineView: View {
                 ForEach(groupedEntries) { group in
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
                         Text(group.header)
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(MuesliTheme.font(size: 12, weight: .semibold))
                             .foregroundStyle(MuesliTheme.textTertiary)
                             .padding(.leading, MuesliTheme.spacing4)
 
@@ -172,9 +172,9 @@ struct TimelineView: View {
                             }
                         }
                         .scrollTargetLayout()
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                         )
                     }
@@ -251,12 +251,12 @@ private struct TimelineMeetingRow: View {
                         .accessibilityLabel("Meeting")
 
                     Text(record.title)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(MuesliTheme.font(size: 14, weight: .semibold))
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .lineLimit(1)
 
                     Text(record.status.displayLabel)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(MuesliTheme.font(size: 10, weight: .semibold))
                         .foregroundStyle(record.status.displayColor)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -288,7 +288,7 @@ private struct TimelineMeetingRow: View {
         .background(isHovered ? MuesliTheme.backgroundHover : MuesliTheme.backgroundRaised)
         .contentShape(Rectangle())
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
+            withAnimation(MuesliTheme.Motion.eased(0.15)) { isHovered = hovering }
         }
         .onTapGesture(perform: onSelect)
         .accessibilityElement(children: .combine)

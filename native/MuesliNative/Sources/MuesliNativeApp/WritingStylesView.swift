@@ -179,8 +179,8 @@ struct WritingStylesView: View {
     @ViewBuilder private func detail(validationMessage: String?) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-                if let errorMessage { statusMessage(errorMessage, color: MuesliTheme.recording) }
-                if let validationMessage { statusMessage(validationMessage, color: MuesliTheme.recording) }
+                if let errorMessage { statusMessage(errorMessage, color: MuesliTheme.danger) }
+                if let validationMessage { statusMessage(validationMessage, color: MuesliTheme.danger) }
                 if !draft.adaptiveDictationStylesEnabled {
                     statusMessage("Adaptive Styles is off. Your global default remains active; groups and exceptions are saved but inactive.", color: MuesliTheme.textSecondary)
                 }
@@ -205,7 +205,7 @@ struct WritingStylesView: View {
             Text(draft.postProcessorSystemPrompt).font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(MuesliTheme.textSecondary).textSelection(.enabled)
                 .padding(MuesliTheme.spacing12).background(MuesliTheme.backgroundRaised)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
         }
     }
 
@@ -247,7 +247,7 @@ struct WritingStylesView: View {
             if selectedGroupID == group.id { Image(systemName: "checkmark").foregroundStyle(MuesliTheme.accent) }
         }
         .padding(MuesliTheme.spacing12).background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
     }
 
     private func selectedGroupPane(_ group: DictationStyleGroup) -> some View {
@@ -303,7 +303,7 @@ struct WritingStylesView: View {
             }
         }
         .padding(MuesliTheme.spacing16).background(MuesliTheme.surfacePrimary.opacity(0.55))
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
     }
 
     private var exceptionsPane: some View {
@@ -338,7 +338,7 @@ struct WritingStylesView: View {
                         .accessibilityLabel("Remove exact exception for \(exception.target)")
                 }
                 .padding(MuesliTheme.spacing12).background(MuesliTheme.backgroundRaised)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 .accessibilityElement(children: .contain)
             }
         }
@@ -385,7 +385,7 @@ struct WritingStylesView: View {
             }
         }
         .padding(MuesliTheme.spacing12).background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
     }
 
     private var styleEditor: some View {
@@ -396,12 +396,12 @@ struct WritingStylesView: View {
                 .accessibilityLabel("Style instructions")
                 .accessibilityHint("Describe how Muesli should clean up dictation that uses this style")
                 .frame(minHeight: 120).padding(MuesliTheme.spacing8).background(MuesliTheme.backgroundBase)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                .overlay(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall).strokeBorder(MuesliTheme.surfaceBorder))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous).strokeBorder(MuesliTheme.surfaceBorder))
             HStack { Spacer(); Button("Cancel") { editingStyleID = nil }; Button("Apply style changes") { saveEditedStyle() } }
         }
         .padding(MuesliTheme.spacing12).background(MuesliTheme.surfacePrimary.opacity(0.55))
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
     }
 
     private func pane<Content: View>(title: String, subtitle: String, @ViewBuilder content: () -> Content) -> some View {
@@ -415,7 +415,7 @@ struct WritingStylesView: View {
     private func statusMessage(_ text: String, color: Color) -> some View {
         Text(text).font(MuesliTheme.caption()).foregroundStyle(color)
             .padding(MuesliTheme.spacing12).background(MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
             .accessibilityLabel(text)
             .focusable()
     }
@@ -602,7 +602,7 @@ struct WritingStylesView: View {
     private func importPreviewSheet(_ preview: DictationStyleRulesetPreview) -> some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
             Text("Review Writing Styles import").font(MuesliTheme.title2())
-            Text(preview.privacyWarningText).font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.recording).accessibilityLabel(preview.privacyWarningText)
+            Text(preview.privacyWarningText).font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.danger).accessibilityLabel(preview.privacyWarningText)
             Text("\(preview.additions.count) additions · \(preview.changes.count) changes · \(preview.removals.count) removals").font(MuesliTheme.callout())
             Text(preview.rulesWillBeActive ? "Imported group routing will be active immediately." : "Imported groups will remain inactive until Adaptive Styles is enabled locally.").font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
             ScrollView { VStack(alignment: .leading, spacing: MuesliTheme.spacing8) { ForEach(preview.additions + preview.changes + preview.removals + preview.effectiveChanges, id: \.self) { Text($0).font(MuesliTheme.caption()) }; Text("Global instructions").font(MuesliTheme.captionMedium()); Text(preview.ruleset.globalDefault.prompt).font(.system(size: 12, design: .monospaced)).textSelection(.enabled); ForEach(preview.ruleset.customStyles) { style in Text(style.name).font(MuesliTheme.captionMedium()); Text(style.prompt).font(.system(size: 12, design: .monospaced)).textSelection(.enabled) } } }
