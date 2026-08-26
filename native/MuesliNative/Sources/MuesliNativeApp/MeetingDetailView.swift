@@ -197,6 +197,10 @@ struct MeetingDetailHeaderBarLayout: Layout {
     }
 }
 
+enum MeetingHeaderLayout {
+    static let contextControlHeight: CGFloat = 28
+}
+
 // Wrapper views that isolate observation of liveMeetingTranscript.
 // Without these, MeetingDetailView.body would observe the property and
 // re-evaluate on every chunk (every ~5s), re-rendering the entire detail view.
@@ -446,6 +450,43 @@ struct MeetingDetailView: View {
         .padding(.top, MuesliTheme.spacing16)
         .padding(.bottom, 24)
         .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private func meetingContextStrip(for meeting: MeetingRecord) -> some View {
+        HStack(alignment: .center, spacing: MuesliTheme.spacing16) {
+            folderPill(for: meeting)
+            Divider()
+                .frame(height: 20)
+            MeetingParticipantsView(
+                meetingID: meeting.id,
+                controller: controller
+            )
+        }
+    }
+
+    private func metadataItem(systemImage: String, text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .medium))
+            Text(text)
+                .font(MuesliTheme.callout())
+        }
+        .foregroundStyle(MuesliTheme.textSecondary)
+    }
+
+    private var metadataDivider: some View {
+        Text("·")
+            .font(MuesliTheme.callout())
+            .foregroundStyle(MuesliTheme.textTertiary)
+    }
+
+    @ViewBuilder
+    private func detailModePicker(for meeting: MeetingRecord) -> some View {
+        if meeting.status == .recording, showsManualNotesEditor(for: meeting) {
+            recordingModePicker
+        } else if !showsManualNotesEditor(for: meeting) {
+            documentModePicker
+        }
     }
 
     @ViewBuilder
@@ -1359,7 +1400,7 @@ struct MeetingDetailView: View {
                 Text(isPaused ? "Resume" : "Pause")
                     .font(.system(size: 12, weight: .semibold))
             }
-            .foregroundStyle(isPaused ? MuesliTheme.backgroundBase : MuesliTheme.textPrimary)
+            .foregroundStyle(isPaused ? Color.white : MuesliTheme.textPrimary)
             .padding(.horizontal, MuesliTheme.spacing12)
             .padding(.vertical, 7)
             .background(isPaused ? MuesliTheme.accent : MuesliTheme.surfacePrimary)
@@ -1391,7 +1432,7 @@ struct MeetingDetailView: View {
                     Text("Resume")
                         .font(.system(size: 12, weight: .semibold))
                 }
-                .foregroundStyle(MuesliTheme.backgroundBase)
+                .foregroundStyle(Color.white)
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .frame(height: 30)
                 .background(MuesliTheme.accent)
@@ -1414,7 +1455,7 @@ struct MeetingDetailView: View {
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(MuesliTheme.backgroundBase)
+                    .foregroundStyle(Color.white)
                     .frame(width: 28, height: 30)
                     .background(MuesliTheme.accent)
                     .overlay(alignment: .leading) {
@@ -1530,7 +1571,11 @@ struct MeetingDetailView: View {
 
     private func threadLink(icon: String, text: String, targetID: Int64) -> some View {
         Button {
-            controller.showMeetingDocument(id: targetID)
+            if appState.meetingDetailReturnDestination == .timeline {
+                controller.showTimelineMeetingDocument(id: targetID)
+            } else {
+                controller.showMeetingDocument(id: targetID)
+            }
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: icon)
@@ -1564,9 +1609,9 @@ struct MeetingDetailView: View {
             .padding(.horizontal, MuesliTheme.spacing8)
             .frame(height: 30)
             .background(hasFolder ? MuesliTheme.accentSubtle : MuesliTheme.backgroundRaised)
-            .clipShape(Capsule())
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             .overlay(
-                Capsule()
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                     .strokeBorder(hasFolder ? Color.clear : MuesliTheme.surfaceBorder, lineWidth: 1)
             )
         }

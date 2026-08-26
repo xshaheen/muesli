@@ -14,6 +14,7 @@ enum TranscribeOutputFormat: String, CaseIterable, ExpressibleByArgument {
 enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
     case parakeetV3 = "parakeet-v3"
     case parakeetV2 = "parakeet-v2"
+    case parakeetUnified = "parakeet-unified"
     case parakeetEou320ms = "parakeet-eou-320ms"
     case senseVoice = "sensevoice"
     case nemotron35 = "nemotron35"
@@ -30,7 +31,7 @@ enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
         switch self {
         case .parakeetV3: return .v3
         case .parakeetV2: return .v2
-        case .parakeetEou320ms, .senseVoice, .nemotron35,
+        case .parakeetUnified, .parakeetEou320ms, .senseVoice, .nemotron35,
              .whisperTiny, .whisperTinyEnglish,
              .whisperSmall, .whisperSmallEnglish, .whisperMediumEnglish,
              .whisperLargeTurbo:
@@ -47,7 +48,7 @@ enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
         case .whisperSmallEnglish: return "small.en"
         case .whisperMediumEnglish: return "medium.en"
         case .whisperLargeTurbo: return "large-v3-v20240930_626MB"
-        case .parakeetV3, .parakeetV2, .parakeetEou320ms, .senseVoice, .nemotron35:
+        case .parakeetV3, .parakeetV2, .parakeetUnified, .parakeetEou320ms, .senseVoice, .nemotron35:
             return nil
         }
     }
@@ -192,10 +193,10 @@ struct TranscribeCommand: AsyncParsableCommand {
     var format: TranscribeOutputFormat = .text
     @Option(
         name: .long,
-        help: "Transcription model: parakeet-v3, parakeet-v2, parakeet-eou-320ms (streaming), sensevoice, nemotron35, whisper-tiny, whisper-tiny-english, whisper-small, whisper-small-english, whisper-medium-english, or whisper-large-turbo.",
+        help: "Transcription model: parakeet-v3, parakeet-v2, parakeet-unified, parakeet-eou-320ms (streaming), sensevoice, nemotron35, whisper-tiny, whisper-tiny-english, whisper-small, whisper-small-english, whisper-medium-english, or whisper-large-turbo.",
         transform: TranscribeModel.parse
     )
-    var model: TranscribeModel = .parakeetV3
+    var model: TranscribeModel = .parakeetUnified
     @Option(name: .long, help: "Spoken language: auto, one ISO code, or comma-separated candidate ISO codes (for example en,ar).")
     var language = "auto"
     @Flag(name: .long, help: "Generate meeting notes using the configured Muesli summary backend when available.")
@@ -799,6 +800,7 @@ struct MuesliAudioFilePreparer: AudioPreparing {
 /// entirely for SenseVoice).
 struct RoutingAudioTranscriber: AudioTranscribing {
     var batch: AudioTranscribing = FluidAudioCLITranscriber()
+    var parakeetUnified: AudioTranscribing = ParakeetUnifiedCLITranscriber()
     var streaming: AudioTranscribing = StreamingEouCLITranscriber()
     var senseVoice: AudioTranscribing = SenseVoiceCLITranscriber()
     var nemotron35: AudioTranscribing = Nemotron35CLITranscriber()
@@ -822,6 +824,7 @@ struct RoutingAudioTranscriber: AudioTranscribing {
         let transcriber: AudioTranscribing
         switch model {
         case .parakeetV3, .parakeetV2: transcriber = batch
+        case .parakeetUnified: transcriber = parakeetUnified
         case .parakeetEou320ms: transcriber = streaming
         case .senseVoice: transcriber = senseVoice
         case .nemotron35: transcriber = nemotron35
@@ -915,6 +918,39 @@ actor SenseVoiceCLITranscriber: AudioTranscribing {
         }
         let start = CFAbsoluteTimeGetCurrent()
         let text = try await manager.transcribe(audioURL: wavURL)
+        progress("transcription complete in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - start))s")
+        return HeadlessTranscription(text: text, durationSeconds: nil)
+    }
+}
+
+/// Offline-batch Parakeet Unified 0.6B (FastConformer-RNNT) via the managed
+/// model directory shared with the app backend.
+actor ParakeetUnifiedCLITranscriber: AudioTranscribing {
+    private var manager: UnifiedAsrManager?
+
+    func transcribe(wavURL: URL, model: TranscribeModel, progress: @escaping (String) -> Void) async throws -> HeadlessTranscription {
+        if manager == nil {
+            progress("loading parakeet-unified")
+            let plan = ManagedASRModelPlans.parakeetUnified()
+            manager = try await ManagedASRModelDownloader.loadValidated(
+                plan,
+                progress: { fraction, message in
+                    progress(message ?? "model \(Int((fraction * 100).rounded()))%")
+                }
+            ) { modelDir in
+                progress("preparing model")
+                let mgr = UnifiedAsrManager()
+                try await mgr.loadModels(from: modelDir)
+                return mgr
+            }
+            progress("model ready")
+        }
+        guard let manager else {
+            throw CLIError.invalidInput("Parakeet Unified model was not loaded.", fix: "Run the command again after the model finishes downloading.")
+        }
+        let start = CFAbsoluteTimeGetCurrent()
+        let samples = try AudioConverter().resampleAudioFile(wavURL)
+        let text = try await manager.transcribe(samples)
         progress("transcription complete in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - start))s")
         return HeadlessTranscription(text: text, durationSeconds: nil)
     }

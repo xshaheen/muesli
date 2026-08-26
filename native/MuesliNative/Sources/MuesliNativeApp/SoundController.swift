@@ -1,12 +1,16 @@
 import AppKit
 import AudioToolbox
 
-/// Plays subtle system sounds for dictation lifecycle events.
+/// Plays subtle sounds for dictation and Quill lifecycle events.
 /// Sounds are skipped when `soundEnabled` is false.
 @MainActor
 enum SoundController {
     static func prewarmLifecycleSounds() {
         SystemSoundPlayer.prewarm(names: ["Tink", "Purr", "Pop", "Funk", "Glass"])
+        let quillSounds = ["quill-activate", "quill-release"].compactMap { name in
+            bundledLifecycleSoundURL(named: name).map { (name, $0) }
+        }
+        SystemSoundPlayer.prewarmBundled(quillSounds)
     }
 
     static func playDictationStart(enabled: Bool) {
@@ -27,6 +31,16 @@ enum SoundController {
     static func playDictationFailure(enabled: Bool) {
         guard enabled else { return }
         SystemSoundPlayer.play(named: "Funk")
+    }
+
+    static func playQuillStart(enabled: Bool) {
+        guard enabled, let url = bundledLifecycleSoundURL(named: "quill-activate") else { return }
+        SystemSoundPlayer.playBundled(named: "quill-activate", url: url)
+    }
+
+    static func playQuillRelease(enabled: Bool) {
+        guard enabled, let url = bundledLifecycleSoundURL(named: "quill-release") else { return }
+        SystemSoundPlayer.playBundled(named: "quill-release", url: url)
     }
 
     static func playModelReady(enabled: Bool) {
@@ -126,6 +140,27 @@ enum SoundController {
         }
         return nil
     }
+
+    static func bundledLifecycleSoundURL(named name: String) -> URL? {
+        for ext in ["wav", "aiff", "mp3"] {
+            if let url = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "audio") {
+                return url
+            }
+        }
+
+        // Source-tree fallback keeps focused SwiftPM tests independent of app staging.
+        var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<8 {
+            for ext in ["wav", "aiff", "mp3"] {
+                let candidate = directory.appendingPathComponent("assets/audio/\(name).\(ext)")
+                if FileManager.default.fileExists(atPath: candidate.path) {
+                    return candidate
+                }
+            }
+            directory.deleteLastPathComponent()
+        }
+        return nil
+    }
 }
 
 struct SerialSoundPlaybackQueue<Element> {
@@ -172,7 +207,16 @@ private enum SystemSoundPlayer {
         queue.async {
             registerCleanupIfNeeded()
             for name in names {
-                _ = loadSoundID(named: name)
+                _ = loadSystemSoundID(named: name)
+            }
+        }
+    }
+
+    static func prewarmBundled(_ sounds: [(name: String, url: URL)]) {
+        queue.async {
+            registerCleanupIfNeeded()
+            for sound in sounds {
+                _ = loadSoundID(at: sound.url, cacheKey: "bundled:\(sound.name)")
             }
         }
     }
@@ -180,10 +224,24 @@ private enum SystemSoundPlayer {
     static func play(named name: String) {
         queue.async {
             registerCleanupIfNeeded()
-            guard let soundID = loadSoundID(named: name) else { return }
-            if let nextSoundID = playbackQueue.enqueue(soundID) {
-                play(nextSoundID)
-            }
+            guard let soundID = loadSystemSoundID(named: name) else { return }
+            enqueue(soundID)
+        }
+    }
+
+    static func playBundled(named name: String, url: URL) {
+        queue.async {
+            registerCleanupIfNeeded()
+            guard let soundID = loadSoundID(at: url, cacheKey: "bundled:\(name)") else { return }
+            enqueue(soundID)
+        }
+    }
+
+    /// Lifecycle cues can land within milliseconds of each other; queueing keeps them
+    /// audible in order instead of letting a later cue talk over an earlier one.
+    private static func enqueue(_ soundID: SystemSoundID) {
+        if let nextSoundID = playbackQueue.enqueue(soundID) {
+            play(nextSoundID)
         }
     }
 
@@ -215,19 +273,23 @@ private enum SystemSoundPlayer {
         }
     }
 
-    private static func loadSoundID(named name: String) -> SystemSoundID? {
-        if let soundID = soundIDs[name] {
+    private static func loadSystemSoundID(named name: String) -> SystemSoundID? {
+        let url = URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff")
+        return loadSoundID(at: url, cacheKey: "system:\(name)")
+    }
+
+    private static func loadSoundID(at url: URL, cacheKey: String) -> SystemSoundID? {
+        if let soundID = soundIDs[cacheKey] {
             return soundID
         }
-        let url = URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff")
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         var soundID: SystemSoundID = 0
         let status = AudioServicesCreateSystemSoundID(url as CFURL, &soundID)
         guard status == kAudioServicesNoError else {
-            fputs("[muesli-native] failed to load system sound \(name): \(status)\n", stderr)
+            fputs("[muesli-native] failed to load sound \(url.lastPathComponent): \(status)\n", stderr)
             return nil
         }
-        soundIDs[name] = soundID
+        soundIDs[cacheKey] = soundID
         return soundID
     }
 }

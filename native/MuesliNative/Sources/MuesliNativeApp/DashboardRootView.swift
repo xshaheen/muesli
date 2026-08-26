@@ -10,17 +10,29 @@ struct DashboardRootView: View {
     let controller: MuesliController
     @State private var featureTourTargetFrames: [FeatureTourTarget: CGRect] = [:]
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var isSidebarCollapsed = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(appState: appState, controller: controller)
-                .frame(minWidth: Self.sidebarMinimumWidth)
-                .navigationSplitViewColumnWidth(
-                    min: Self.sidebarMinimumWidth,
-                    ideal: Self.sidebarIdealWidth,
-                    max: Self.sidebarMaximumWidth
-                )
-                .toolbar(removing: .sidebarToggle)
+            SidebarView(
+                appState: appState,
+                controller: controller,
+                isCollapsed: isSidebarCollapsed,
+                onToggleCollapsed: {
+                    withAnimation(.easeInOut(duration: 0.22)) {
+                        isSidebarCollapsed.toggle()
+                    }
+                }
+            )
+            .frame(minWidth: isSidebarCollapsed ? 68 : Self.sidebarMinimumWidth)
+            .navigationSplitViewColumnWidth(
+                min: isSidebarCollapsed ? 68 : Self.sidebarMinimumWidth,
+                ideal: isSidebarCollapsed ? 68 : Self.sidebarIdealWidth,
+                max: isSidebarCollapsed ? 68 : Self.sidebarMaximumWidth
+            )
+            // SidebarView draws its own collapse control, so the system chevron
+            // would be a second, competing toggle.
+            .toolbar(removing: .sidebarToggle)
         } detail: {
             detailContent
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -153,17 +165,31 @@ struct DashboardRootView: View {
                 backLabel: "Back to Search"
             )
             .id(id)
+        } else if appState.selectedTab == .timeline,
+                  appState.meetingDetailReturnDestination == .timeline,
+                  case .document(let id) = appState.meetingsNavigationState {
+            MeetingDetailView(
+                meeting: appState.selectedMeeting,
+                controller: controller,
+                appState: appState,
+                onBack: { controller.showTimelineHome() },
+                backLabel: "Back to Timeline"
+            )
+            .id(id)
         } else if appState.isSearchActive {
             SearchResultsView(appState: appState, controller: controller)
         } else {
             switch appState.selectedTab {
+            case .timeline:
+                TimelineView(appState: appState, controller: controller)
             case .dictations:
                 DictationsView(appState: appState, controller: controller)
             case .insights:
                 InsightsView(
                     initialSection: appState.insightsInitialSection,
                     loadSnapshot: { range in try await controller.insightsSnapshot(range: range) },
-                    onBack: { controller.closeInsights() }
+                    onBack: { controller.closeInsights() },
+                    backLabel: appState.insightsBackLabel
                 )
             case .meetings:
                 MeetingsView(appState: appState, controller: controller)

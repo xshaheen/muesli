@@ -211,7 +211,8 @@ enum AudioFileImportController {
                 backend: backend,
                 enablePostProcessor: false,
                 includeMeetingHelpers: true,
-                meetingHelperTrigger: .audioImport
+                meetingHelperTrigger: .audioImport,
+                appleSpeechLanguage: config.resolvedAppleSpeechLanguage
             )
             let elapsedMilliseconds = stageElapsedMilliseconds(since: preloadStartedAt)
             await sessionTrace?.recordStageCompleted(
@@ -255,6 +256,7 @@ enum AudioFileImportController {
                 at: wavURL,
                 backend: backend,
                 profile: config.languageProfile,
+                appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
                 customWords: config.customWords
             )
         } catch {

@@ -3,6 +3,13 @@ import Foundation
 import MuesliCore
 
 struct BackendOption: Equatable {
+    struct Catalog {
+        let systemManaged: [BackendOption]
+        let all: [BackendOption]
+        let onboardingDefault: BackendOption
+        let onboarding: [BackendOption]
+    }
+
     let backend: String
     let model: String
     let label: String
@@ -10,13 +17,22 @@ struct BackendOption: Equatable {
     let description: String
     let recommended: Bool
 
+    static let parakeetUnified = BackendOption(
+        backend: "parakeet-unified",
+        model: "FluidInference/parakeet-unified-en-0.6b-coreml",
+        label: "Parakeet Unified",
+        sizeLabel: "~565 MB",
+        description: "The newest Parakeet generation and the best choice for English dictation: a lower error rate than Parakeet v3 with a newer architecture. English-focused; pick Parakeet v3 for multilingual needs.",
+        recommended: true
+    )
+
     static let parakeetMultilingual = BackendOption(
         backend: "fluidaudio",
         model: "FluidInference/parakeet-tdt-0.6b-v3-coreml",
         label: "Parakeet v3",
         sizeLabel: "~450 MB",
-        description: "The best default for everyday dictation: quick enough to feel responsive, reliable in normal rooms, and able to follow 25 languages.",
-        recommended: true
+        description: "The multilingual Parakeet: quick enough to feel responsive, reliable in normal rooms, and able to follow 25 languages.",
+        recommended: false
     )
 
     static let parakeetEnglish = BackendOption(
@@ -120,10 +136,35 @@ struct BackendOption: Equatable {
 
     static let gemma4E2BLiteRT = BackendOption(
         backend: "gemma4-litert",
-        model: Gemma4LiteRTModelStore.repoID,
-        label: "Gemma 4 E2B",
-        sizeLabel: "~2.6 GB",
+        model: Gemma4LiteRTModel.e2b.repoID,
+        label: Gemma4LiteRTModel.e2b.label,
+        sizeLabel: Gemma4LiteRTModel.e2b.sizeLabel,
         description: "A research preview, not a dependable dictation model yet. It is large, slow to get ready, requires macOS 15 or later, and may produce an answer instead of a faithful transcript.",
+        recommended: false
+    )
+
+    static let gemma4E4BLiteRT = BackendOption(
+        backend: "gemma4-litert",
+        model: Gemma4LiteRTModel.e4b.repoID,
+        label: Gemma4LiteRTModel.e4b.label,
+        sizeLabel: Gemma4LiteRTModel.e4b.sizeLabel,
+        description: "A larger experimental Gemma 4 model for higher-quality local transcription and rewriting. It requires macOS 15 or later and trades additional download size and memory for stronger instruction following.",
+        recommended: false
+    )
+
+    static func gemma4LiteRT(_ model: Gemma4LiteRTModel) -> BackendOption {
+        switch model {
+        case .e2b: .gemma4E2BLiteRT
+        case .e4b: .gemma4E4BLiteRT
+        }
+    }
+
+    static let appleSpeechAnalyzer = BackendOption(
+        backend: "apple-speech",
+        model: "apple-speech-transcriber",
+        label: "Apple Speech",
+        sizeLabel: "System managed",
+        description: "Apple's private, on-device speech model for macOS 26. It is designed for dictation, meetings, distant speakers, and long recordings, while macOS manages the language assets and updates.",
         recommended: false
     )
 
@@ -131,7 +172,7 @@ struct BackendOption: Equatable {
     static let whisper = parakeetMultilingual
 
     static let parakeetFamily: [BackendOption] = [
-        .parakeetMultilingual, .parakeetEnglish,
+        .parakeetUnified, .parakeetMultilingual, .parakeetEnglish,
     ]
 
     static let whisperFamily: [BackendOption] = [
@@ -141,7 +182,7 @@ struct BackendOption: Equatable {
     ]
 
     static let experimental: [BackendOption] = [
-        .senseVoiceSmall, .indicASR, .gemma4E2BLiteRT,
+        .senseVoiceSmall, .indicASR, .gemma4E2BLiteRT, .gemma4E4BLiteRT,
     ]
 
     /// Native streaming backends used by low-latency product surfaces.
@@ -151,19 +192,56 @@ struct BackendOption: Equatable {
         .nemotron35Multilingual,
     ]
 
-    /// Models available for download and use.
-    static let all: [BackendOption] = {
-        parakeetFamily
+    static func catalog(appleSpeechAvailable: Bool) -> Catalog {
+        let systemManaged: [BackendOption] = appleSpeechAvailable ? [.appleSpeechAnalyzer] : []
+        let all = systemManaged
+            + parakeetFamily
             + whisperFamily
             + [.cohereTranscribe]
             + streaming
             + experimental
+        let onboardingDefault = systemManaged.first ?? .parakeetUnified
+        let onboardingCandidates: [BackendOption] = [
+            onboardingDefault,
+            .parakeetUnified,
+            .parakeetMultilingual,
+            .whisperTiny,
+            .whisperSmall,
+            .cohereTranscribe,
+            .nemotron35Multilingual,
+        ]
+        let onboarding = onboardingCandidates.reduce(into: [BackendOption]()) { options, option in
+            if !options.contains(option) {
+                options.append(option)
+            }
+        }
+
+        return Catalog(
+            systemManaged: systemManaged,
+            all: all,
+            onboardingDefault: onboardingDefault,
+            onboarding: onboarding
+        )
+    }
+
+    private static let currentCatalog: Catalog = {
+        if #available(macOS 26.0, *), AppleSpeechAnalyzerTranscriber.isSupportedOnCurrentSystem {
+            return catalog(appleSpeechAvailable: true)
+        }
+        return catalog(appleSpeechAvailable: false)
     }()
 
-    /// Curated first-run choices shown in onboarding's "Other models" section.
-    /// This is a deliberate hand-picked list, not a derived rule. Experimental models
-    /// are excluded by default.
-    static let onboarding: [BackendOption] = [.parakeetMultilingual, .whisperTiny, .whisperSmall, .cohereTranscribe, .nemotron35Multilingual]
+    static let systemManaged = currentCatalog.systemManaged
+
+    /// Models available for download and use.
+    static let all = currentCatalog.all
+
+    /// The first-run default uses the system-managed backend when the OS exposes it.
+    /// Parakeet remains the deterministic fallback for older or unsupported Macs.
+    static let onboardingDefault = currentCatalog.onboardingDefault
+
+    /// Curated first-run choices. Experimental models are excluded by default.
+    static let onboarding = currentCatalog.onboarding
 
     /// Models coming soon — shown greyed out in the Models tab.
     static let comingSoon: [BackendOption] = []
@@ -190,6 +268,10 @@ struct BackendOption: Equatable {
 
     var supportsMeetingTranscription: Bool {
         !isStreamingDictationBackend
+    }
+
+    var isSystemManaged: Bool {
+        backend == "apple-speech"
     }
 
     /// Multilingual WhisperKit models expose language selection (auto-detect or pinned code).
@@ -301,6 +383,8 @@ struct BackendOption: Equatable {
                 ? ManagedASRModelPlans.parakeetV2()
                 : ManagedASRModelPlans.parakeetV3()
             return plan.isAvailableLocally(fileManager: fm)
+        case "parakeet-unified":
+            return ManagedASRModelPlans.parakeetUnified().isAvailableLocally(fileManager: fm)
         case "nemotron35":
             return Nemotron35ModelStore.isModelDownloaded(fileManager: fm)
         case "cohere":
@@ -310,7 +394,12 @@ struct BackendOption: Equatable {
         case "sensevoice":
             return SenseVoiceTranscriber.isModelDownloaded(fileManager: fm)
         case "gemma4-litert":
-            return Gemma4LiteRTModelStore.isAvailableLocally()
+            return Gemma4LiteRTModelStore.isAvailableLocally(model: Gemma4LiteRTModel.resolved(model))
+        case "apple-speech":
+            if #available(macOS 26.0, *) {
+                return AppleSpeechAnalyzerTranscriber.isSupportedOnCurrentSystem
+            }
+            return false
         default:
             return false
         }
@@ -1060,12 +1149,38 @@ enum CustomLLMFormat: String, Codable, CaseIterable {
 }
 
 struct PostProcessorOption: Identifiable, Equatable {
+    enum InputFormat: Hashable {
+        /// The existing Muesli/Qwen cleanup prompt, which users may customize.
+        case configurable
+        /// S1-mini is trained on a fixed prompt and control-line contract.
+        case s1Mini
+    }
+
     let id: String
     let label: String
     let sizeLabel: String
     let description: String
     let downloadURL: URL
     let filename: String
+    let inputFormat: InputFormat
+
+    init(
+        id: String,
+        label: String,
+        sizeLabel: String,
+        description: String,
+        downloadURL: URL,
+        filename: String,
+        inputFormat: InputFormat = .configurable
+    ) {
+        self.id = id
+        self.label = label
+        self.sizeLabel = sizeLabel
+        self.description = description
+        self.downloadURL = downloadURL
+        self.filename = filename
+        self.inputFormat = inputFormat
+    }
 
     var cacheDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -1078,6 +1193,27 @@ struct PostProcessorOption: Identifiable, Equatable {
 
     var isDownloaded: Bool {
         FileManager.default.fileExists(atPath: modelURL.path)
+    }
+
+    var logoResourceName: String {
+        inputFormat == .s1Mini ? "superwhisper-logo" : "qwen-logo"
+    }
+
+    /// Quill needs a general instruction-following model. Models fine-tuned for
+    /// transcript cleanup can emit their training schema (including JSON)
+    /// instead of following an arbitrary rewrite instruction.
+    var supportsQuil: Bool {
+        self == .qwen35_0_8b
+    }
+
+    var quilLabel: String {
+        self == .qwen35_0_8b ? "Qwen 3.5 0.8B (General)" : label
+    }
+
+    /// S1-mini normalizes English transcripts only. Indic ASR always emits an
+    /// Indic-language transcript, so do not offer or run S1-mini for it.
+    func isCompatible(with transcriptionBackend: BackendOption) -> Bool {
+        inputFormat != .s1Mini || transcriptionBackend != .indicASR
     }
 
     // Fine-tuned Qwen3-0.6B trained on Muesli dictation correction data.
@@ -1111,8 +1247,19 @@ struct PostProcessorOption: Identifiable, Equatable {
         filename: "qwen35-postproc-v3-Q4_K_M.gguf"
     )
 
-    static let all: [PostProcessorOption] = [.finetunedV3, .finetunedV2, .qwen35_0_8b]
+    static let s1Mini = PostProcessorOption(
+        id: "superwhisper-s1-mini",
+        label: "S1-mini by Superwhisper",
+        sizeLabel: "~462 MB",
+        description: "English-only speech-to-text normalization with reliable filler removal, corrections, punctuation, capitalization, and written numbers, dates, times, currency, and email addresses.",
+        downloadURL: URL(string: "https://huggingface.co/superwhisper/s1-mini-GGUF/resolve/main/s1-mini-q4_k_m.gguf")!,
+        filename: "s1-mini-q4_k_m.gguf",
+        inputFormat: .s1Mini
+    )
+
+    static let all: [PostProcessorOption] = [.finetunedV3, .s1Mini, .finetunedV2, .qwen35_0_8b]
     static let defaultOption: PostProcessorOption = .finetunedV3
+    static let defaultQuilOption: PostProcessorOption = .qwen35_0_8b
 
     static var downloaded: [PostProcessorOption] {
         all.filter(\.isDownloaded)
@@ -1169,6 +1316,18 @@ struct PostProcessorOption: Identifiable, Equatable {
 
     Do not: paraphrase, reword, add words, remove meaningful words, change the meaning in any way, wrap the output in markdown, code fences, tags, labels, or commentary, or repeat the output more than once. Preserve the speaker's original phrasing.
     """
+
+    /// S1-mini was trained on this exact system prompt and rejects prompt customization.
+    static let s1MiniSystemPrompt = "You are a text normalizer for speech-to-text transcripts. The input begins with a control line specifying the styling, structure, and context settings; clean the transcript to match those settings and output only the cleaned text."
+
+    func effectiveSystemPrompt(configuredSystemPrompt: String) -> String {
+        switch inputFormat {
+        case .configurable:
+            configuredSystemPrompt
+        case .s1Mini:
+            Self.s1MiniSystemPrompt
+        }
+    }
 }
 
 struct TranscriptCleanupPromptPreset: Identifiable, Equatable {
@@ -1633,6 +1792,18 @@ struct DictionarySuggestion: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+enum IndicatorHoverStyle: String, Codable, CaseIterable {
+    case classic = "classic"
+    case shortcutPill = "shortcut_pill"
+
+    var label: String {
+        switch self {
+        case .classic: return "Classic"
+        case .shortcutPill: return "Shortcut pill"
+        }
+    }
+}
+
 enum IndicatorAnchor: String, Codable, CaseIterable {
     case topLeading = "top_leading"
     case topCenter = "top_center"
@@ -1750,6 +1921,7 @@ struct HotkeyConfig: Codable, Equatable {
     }
 
     static let `default` = HotkeyConfig()
+    static let quilDefault = HotkeyConfig(keyCode: 63, label: "Fn")
     static let computerUseDefault = HotkeyConfig(keyCode: 54, label: "Right Cmd")
     static let meetingRecordingDefault = HotkeyConfig(
         keyCode: UInt16.max,
@@ -1809,6 +1981,8 @@ enum DictationRecordingSavePolicy: String, Codable, CaseIterable {
 
 struct AppConfig: Codable {
     var dictationHotkey: HotkeyConfig = .default
+    var quilHotkey: HotkeyConfig = .quilDefault
+    var enableQuilMode: Bool = false
     var computerUseHotkey: HotkeyConfig = .computerUseDefault
     var enableComputerUseHotkey: Bool = false
     var meetingRecordingHotkey: HotkeyConfig = .meetingRecordingDefault
@@ -1817,8 +1991,8 @@ struct AppConfig: Codable {
     var enableComputerUsePlanner: Bool = true
     var computerUsePlannerModel: String = ""
     var computerUseTimeoutSeconds: Int = 120
-    var sttBackend: String = BackendOption.whisper.backend
-    var sttModel: String = BackendOption.whisper.model
+    var sttBackend: String = BackendOption.parakeetUnified.backend
+    var sttModel: String = BackendOption.parakeetUnified.model
     var dictationInputDeviceUID: String? = nil
     var meetingInputDeviceUID: String? = nil
     var cohereLanguage: String = CohereTranscribeLanguage.defaultLanguage.rawValue
@@ -1837,6 +2011,7 @@ struct AppConfig: Codable {
     /// that this particular decode rewrote a selection and the result has to reach
     /// disk. Persisting it would make every later load look like a fresh migration.
     var retiredASRBackendMigrationApplied: Bool = false
+    var appleSpeechLanguage: String = AppleSpeechLanguageOption.systemIdentifier
     var meetingTranscriptionBackend: String = BackendOption.whisper.backend
     var meetingTranscriptionModel: String = BackendOption.whisper.model
     var meetingSummaryBackend: String = MeetingSummaryBackendOption.chatGPT.backend
@@ -1847,6 +2022,7 @@ struct AppConfig: Codable {
     var upcomingMeetingsDayCount: Int = UpcomingMeetingsWindow.defaultDayCount
     var showScheduledMeetingNotifications: Bool = true
     var scheduledMeetingNotificationLeadTime: ScheduledMeetingNotificationLeadTime = .atStart
+    var meetingJoinDefaultAction: MeetingJoinDefaultAction = .fallback
     var showMeetingDetectionNotification: Bool = true
     var mutedMeetingDetectionAppBundleIDs: [String] = []
     var dictationRecordingSavePolicy: DictationRecordingSavePolicy = .never
@@ -1856,6 +2032,7 @@ struct AppConfig: Codable {
     var darkMode: Bool = true
     var enableDoubleTapDictation: Bool = true
     var hotkeyTriggerThresholdMS: Int = HotkeyTriggerTiming.defaultThresholdMilliseconds
+    var quilHotkeyTriggerThresholdMS: Int = HotkeyTriggerTiming.defaultThresholdMilliseconds
     var computerUseHotkeyTriggerThresholdMS: Int = HotkeyTriggerTiming.defaultThresholdMilliseconds
     var meetingRecordingHotkeyTriggerThresholdMS: Int = HotkeyTriggerTiming.defaultMeetingThresholdMilliseconds
     var launchAtLogin: Bool = false
@@ -1866,6 +2043,7 @@ struct AppConfig: Codable {
     /// Floating Record pill shown while a meeting app is active (requires meeting detection).
     var showMeetingRecordButton: Bool = true
     var showHotkeyOnFloatingIndicator: Bool = false
+    var indicatorHoverStyle: IndicatorHoverStyle = .classic
     var indicatorAnchor: IndicatorAnchor = .midTrailing
     var dashboardWindowFrame: WindowFrame? = nil
     var indicatorOrigin: CGPointCodable? = nil
@@ -1905,6 +2083,7 @@ struct AppConfig: Codable {
     var enableAutomaticDiagnosticIssuePrompts: Bool = false
     var folderOrder: [Int64] = []
     var soundEnabled: Bool = true
+    var quilSoundEnabled: Bool = true
     var pauseMediaDuringDictation: Bool = false
     var muteSystemAudioDuringDictation: Bool = false
     var recordingColorHex: String = "1e1e2e"   // Catppuccin Mocha base, without #
@@ -1927,10 +2106,13 @@ struct AppConfig: Codable {
     /// SHA-256 identity of the backend and resolved destination the user approved.
     /// Nil means there is no consent, including configs saved before this field.
     var meetingTranscriptCleanupConsentFingerprint: String?
+    var quilBackend: String = TranscriptCleanupBackendOption.local.backend
+    var quilModel: String = PostProcessorOption.defaultQuilOption.id
     var postProcessorBackend: String = TranscriptCleanupBackendOption.local.backend
     /// Minutes of dictation-cleanup inactivity before an on-device cleanup model is
     /// released from memory. 0 keeps it resident for the life of the process.
     var postProcessorIdleUnloadMinutes: Int = PostProcessorIdleUnloadPolicy.defaultIdleMinutes
+    var postProcessorGemmaModel: String = Gemma4LiteRTModel.e2b.repoID
     var activePostProcessorId: String = PostProcessorOption.defaultOption.id
     var postProcessorChatGPTModel: String = ""
     var postProcessorOpenAIModel: String = ""
@@ -1979,6 +2161,8 @@ struct AppConfig: Codable {
 
     enum CodingKeys: String, CodingKey {
         case dictationHotkey = "dictation_hotkey"
+        case quilHotkey = "quil_hotkey"
+        case enableQuilMode = "enable_quil_mode"
         case computerUseHotkey = "computer_use_hotkey"
         case enableComputerUseHotkey = "enable_computer_use_hotkey"
         case meetingRecordingHotkey = "meeting_recording_hotkey"
@@ -2000,6 +2184,7 @@ struct AppConfig: Codable {
         case meetingArtifactLanguagePolicy = "meeting_artifact_language_policy"
         case languageProfileNeedsConfirmation = "language_profile_needs_confirmation"
         case retiredASRBackendNotice = "retired_asr_backend_notice"
+        case appleSpeechLanguage = "apple_speech_language"
         case meetingTranscriptionBackend = "meeting_transcription_backend"
         case meetingTranscriptionModel = "meeting_transcription_model"
         case meetingSummaryBackend = "meeting_summary_backend"
@@ -2010,6 +2195,7 @@ struct AppConfig: Codable {
         case upcomingMeetingsDayCount = "upcoming_meetings_day_count"
         case showScheduledMeetingNotifications = "show_scheduled_meeting_notifications"
         case scheduledMeetingNotificationLeadTime = "scheduled_meeting_notification_lead_time"
+        case meetingJoinDefaultAction = "meeting_join_default_action"
         case showMeetingDetectionNotification = "show_meeting_detection_notification"
         case mutedMeetingDetectionAppBundleIDs = "muted_meeting_detection_app_bundle_ids"
         case dictationRecordingSavePolicy = "dictation_recording_save_policy"
@@ -2019,6 +2205,7 @@ struct AppConfig: Codable {
         case darkMode = "dark_mode"
         case enableDoubleTapDictation = "enable_double_tap_dictation"
         case hotkeyTriggerThresholdMS = "hotkey_trigger_threshold_ms"
+        case quilHotkeyTriggerThresholdMS = "quil_hotkey_trigger_threshold_ms"
         case computerUseHotkeyTriggerThresholdMS = "computer_use_hotkey_trigger_threshold_ms"
         case meetingRecordingHotkeyTriggerThresholdMS = "meeting_recording_hotkey_trigger_threshold_ms"
         case launchAtLogin = "launch_at_login"
@@ -2027,6 +2214,7 @@ struct AppConfig: Codable {
         case showDictationIdleDot = "show_dictation_idle_dot"
         case showMeetingRecordButton = "show_meeting_record_button"
         case showHotkeyOnFloatingIndicator = "show_hotkey_on_floating_indicator"
+        case indicatorHoverStyle = "indicator_hover_style"
         case indicatorAnchor = "indicator_anchor"
         case dashboardWindowFrame = "dashboard_window_frame"
         case indicatorOrigin = "indicator_origin"
@@ -2059,6 +2247,7 @@ struct AppConfig: Codable {
         case enableAutomaticDiagnosticIssuePrompts = "enable_automatic_diagnostic_issue_prompts"
         case folderOrder = "folder_order"
         case soundEnabled = "sound_enabled"
+        case quilSoundEnabled = "quil_sound_enabled"
         case pauseMediaDuringDictation = "pause_media_during_dictation"
         case muteSystemAudioDuringDictation = "mute_system_audio_during_dictation"
         case recordingColorHex = "recording_color_hex"
@@ -2074,8 +2263,11 @@ struct AppConfig: Codable {
         case enablePostProcessor = "enable_post_processor"
         case enableMeetingTranscriptCleanup = "enable_meeting_transcript_cleanup"
         case meetingTranscriptCleanupConsentFingerprint = "meeting_transcript_cleanup_consent_fingerprint"
+        case quilBackend = "quil_backend"
+        case quilModel = "quil_model"
         case postProcessorBackend = "post_processor_backend"
         case postProcessorIdleUnloadMinutes = "post_processor_idle_unload_minutes"
+        case postProcessorGemmaModel = "post_processor_gemma_model"
         case activePostProcessorId = "active_post_processor_id"
         case postProcessorChatGPTModel = "post_processor_chatgpt_model"
         case postProcessorOpenAIModel = "post_processor_openai_model"
@@ -2184,6 +2376,8 @@ struct AppConfig: Codable {
         let legacyLanguage = try decoder.container(keyedBy: LegacyLanguageCodingKeys.self)
         let defaults = AppConfig()
         dictationHotkey = (try? c.decode(HotkeyConfig.self, forKey: .dictationHotkey)) ?? defaults.dictationHotkey
+        quilHotkey = (try? c.decode(HotkeyConfig.self, forKey: .quilHotkey)) ?? defaults.quilHotkey
+        enableQuilMode = (try? c.decode(Bool.self, forKey: .enableQuilMode)) ?? defaults.enableQuilMode
         computerUseHotkey = (try? c.decode(HotkeyConfig.self, forKey: .computerUseHotkey))
             ?? HotkeyConfig.computerUseDefault(avoiding: dictationHotkey)
         let hasAppliedComputerUseHotkeyDefaultMigration = c.contains(.computerUseHotkeyDefaultDisabledMigrationApplied)
@@ -2202,6 +2396,7 @@ struct AppConfig: Codable {
         sttModel = (try? c.decode(String.self, forKey: .sttModel)) ?? defaults.sttModel
         dictationInputDeviceUID = try? c.decode(String.self, forKey: .dictationInputDeviceUID)
         meetingInputDeviceUID = try? c.decode(String.self, forKey: .meetingInputDeviceUID)
+        appleSpeechLanguage = AppleSpeechLanguageOption.normalize(try? c.decode(String.self, forKey: .appleSpeechLanguage))
         let legacyCohereLanguage = try? c.decode(String.self, forKey: .cohereLanguage)
         let legacyIndicASRLanguage = try? c.decode(String.self, forKey: .indicASRLanguage)
         let legacyNemotron35Language = try? c.decode(String.self, forKey: .nemotron35Language)
@@ -2305,6 +2500,9 @@ struct AppConfig: Codable {
         scheduledMeetingNotificationLeadTime =
             (try? c.decode(ScheduledMeetingNotificationLeadTime.self, forKey: .scheduledMeetingNotificationLeadTime))
             ?? defaults.scheduledMeetingNotificationLeadTime
+        meetingJoinDefaultAction =
+            (try? c.decode(MeetingJoinDefaultAction.self, forKey: .meetingJoinDefaultAction))
+            ?? defaults.meetingJoinDefaultAction
         showMeetingDetectionNotification = decodedShowMeetingDetectionNotification ?? defaults.showMeetingDetectionNotification
         mutedMeetingDetectionAppBundleIDs = (try? c.decode([String].self, forKey: .mutedMeetingDetectionAppBundleIDs)) ?? defaults.mutedMeetingDetectionAppBundleIDs
         dictationRecordingSavePolicy =
@@ -2324,6 +2522,9 @@ struct AppConfig: Codable {
         enableDoubleTapDictation = (try? c.decode(Bool.self, forKey: .enableDoubleTapDictation)) ?? defaults.enableDoubleTapDictation
         hotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(
             (try? c.decode(Int.self, forKey: .hotkeyTriggerThresholdMS)) ?? defaults.hotkeyTriggerThresholdMS
+        )
+        quilHotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(
+            (try? c.decode(Int.self, forKey: .quilHotkeyTriggerThresholdMS)) ?? defaults.quilHotkeyTriggerThresholdMS
         )
         computerUseHotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(
             (try? c.decode(Int.self, forKey: .computerUseHotkeyTriggerThresholdMS)) ?? hotkeyTriggerThresholdMS
@@ -2345,6 +2546,9 @@ struct AppConfig: Codable {
         showHotkeyOnFloatingIndicator =
             (try? c.decode(Bool.self, forKey: .showHotkeyOnFloatingIndicator))
             ?? defaults.showHotkeyOnFloatingIndicator
+        indicatorHoverStyle =
+            (try? c.decode(IndicatorHoverStyle.self, forKey: .indicatorHoverStyle))
+            ?? defaults.indicatorHoverStyle
         indicatorAnchor = (try? c.decode(IndicatorAnchor.self, forKey: .indicatorAnchor))
             ?? ((try? c.decodeIfPresent(CGPointCodable.self, forKey: .indicatorOrigin)) != nil ? .custom : .midTrailing)
         dashboardWindowFrame = try? c.decode(WindowFrame.self, forKey: .dashboardWindowFrame)
@@ -2395,6 +2599,7 @@ struct AppConfig: Codable {
         enableAutomaticDiagnosticIssuePrompts = (try? c.decode(Bool.self, forKey: .enableAutomaticDiagnosticIssuePrompts)) ?? defaults.enableAutomaticDiagnosticIssuePrompts
         folderOrder = (try? c.decode([Int64].self, forKey: .folderOrder)) ?? defaults.folderOrder
         soundEnabled = (try? c.decode(Bool.self, forKey: .soundEnabled)) ?? defaults.soundEnabled
+        quilSoundEnabled = (try? c.decode(Bool.self, forKey: .quilSoundEnabled)) ?? defaults.quilSoundEnabled
         pauseMediaDuringDictation = (try? c.decode(Bool.self, forKey: .pauseMediaDuringDictation)) ?? defaults.pauseMediaDuringDictation
         muteSystemAudioDuringDictation = (try? c.decode(Bool.self, forKey: .muteSystemAudioDuringDictation)) ?? defaults.muteSystemAudioDuringDictation
         recordingColorHex = (try? c.decode(String.self, forKey: .recordingColorHex)) ?? defaults.recordingColorHex
@@ -2419,12 +2624,23 @@ struct AppConfig: Codable {
             String.self,
             forKey: .meetingTranscriptCleanupConsentFingerprint
         )
+        quilBackend = TranscriptCleanupBackendOption
+            .resolved(try? c.decode(String.self, forKey: .quilBackend))
+            .backend
+        let decodedQuilModel = (try? c.decode(String.self, forKey: .quilModel)) ?? defaults.quilModel
+        quilModel = quilBackend == TranscriptCleanupBackendOption.local.backend
+            && !PostProcessorOption.resolve(id: decodedQuilModel).supportsQuil
+            ? PostProcessorOption.defaultQuilOption.id
+            : decodedQuilModel
         postProcessorBackend = TranscriptCleanupBackendOption
             .resolved(try? c.decode(String.self, forKey: .postProcessorBackend))
             .backend
         postProcessorIdleUnloadMinutes = PostProcessorIdleUnloadPolicy.resolvedIdleMinutes(
             (try? c.decode(Int.self, forKey: .postProcessorIdleUnloadMinutes)) ?? defaults.postProcessorIdleUnloadMinutes
         )
+        postProcessorGemmaModel = Gemma4LiteRTModel
+            .resolved(try? c.decode(String.self, forKey: .postProcessorGemmaModel))
+            .repoID
         activePostProcessorId = (try? c.decode(String.self, forKey: .activePostProcessorId)) ?? defaults.activePostProcessorId
         postProcessorChatGPTModel = SummaryModelPreset.supportedChatGPTModel(
             SummaryModelPreset.migratedFromGPT55(
@@ -2564,6 +2780,10 @@ struct AppConfig: Codable {
         indicASRLanguage = resolvedIndicASRLanguage.rawValue
         nemotron35Language = resolvedNemotron35Language.rawValue
         whisperLanguage = resolvedWhisperLanguage.rawValue
+    }
+
+    var resolvedAppleSpeechLanguage: String {
+        AppleSpeechLanguageOption.normalize(appleSpeechLanguage)
     }
 
     var resolvedMeetingLiveCaptionBackend: MeetingLiveCaptionBackend {

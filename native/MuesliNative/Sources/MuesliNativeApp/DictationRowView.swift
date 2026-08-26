@@ -72,6 +72,14 @@ struct DictationRowView: View {
         record.source == "cua"
     }
 
+    private var isQuilTransformation: Bool {
+        record.source == "quil"
+    }
+
+    private var hasExpandableDetails: Bool {
+        record.computerUseTrace != nil
+    }
+
     private var syncOriginBadgeLabel: String? {
         SyncOriginDisplay.badgeLabel(forDictationSource: record.source)
     }
@@ -94,6 +102,23 @@ struct DictationRowView: View {
                         if isComputerUseCommand {
                             Text("CUA")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(MuesliTheme.accent)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(MuesliTheme.accentSubtle)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
+
+                        if isQuilTransformation {
+                            HStack(spacing: 3) {
+                                Image(nsImage: QuillIcon.image())
+                                    .renderingMode(.template)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 10, height: 10)
+                                Text("QUILL")
+                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            }
                                 .foregroundStyle(MuesliTheme.accent)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
@@ -124,7 +149,7 @@ struct DictationRowView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
 
-                        if let trace = record.computerUseTrace {
+                        if let trace = record.computerUseTrace, !isQuilTransformation {
                             Text(Self.displayFinalStatus(trace.finalStatus))
                                 .font(MuesliTheme.captionMedium())
                                 .foregroundStyle(statusColor(trace.finalStatus))
@@ -137,8 +162,15 @@ struct DictationRowView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+                if let targetAppName = record.targetAppName {
+                    TargetApplicationIconView(
+                        appName: targetAppName,
+                        bundleIdentifier: record.targetAppBundleID
+                    )
+                }
+
                 HStack(spacing: 8) {
-                    if record.computerUseTrace != nil {
+                    if hasExpandableDetails {
                         Button {
                             withAnimation(.easeInOut(duration: 0.15)) {
                                 isExpanded.toggle()
@@ -151,7 +183,7 @@ struct DictationRowView: View {
                         .buttonStyle(.plain)
                     }
 
-                    if record.computerUseTrace != nil, let onCopyTrace {
+                    if !isQuilTransformation, record.computerUseTrace != nil, let onCopyTrace {
                         Button(action: onCopyTrace) {
                             Image(systemName: "list.bullet.clipboard")
                                 .font(.system(size: 12))
@@ -177,7 +209,7 @@ struct DictationRowView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .opacity(isHovered || isExpanded || record.computerUseTrace != nil ? 1 : 0)
+                .opacity(isHovered || isExpanded || hasExpandableDetails ? 1 : 0)
             }
         }
         .padding(.horizontal, MuesliTheme.spacing20)
@@ -191,7 +223,7 @@ struct DictationRowView: View {
         .onTapGesture {
             if let onOpen {
                 onOpen()
-            } else if record.computerUseTrace != nil {
+            } else if hasExpandableDetails {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     isExpanded.toggle()
                 }
@@ -217,10 +249,12 @@ struct DictationRowView: View {
                 ForEach(trace.events) { event in
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                         HStack(spacing: MuesliTheme.spacing8) {
-                            Text(event.step.map { "Step \($0)" } ?? "Run")
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                .foregroundStyle(MuesliTheme.textTertiary)
-                                .frame(width: 48, alignment: .leading)
+                            if !isQuilTransformation {
+                                Text(event.step.map { "Step \($0)" } ?? "Run")
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(MuesliTheme.textTertiary)
+                                    .frame(width: 48, alignment: .leading)
+                            }
 
                             Text(event.title)
                                 .font(MuesliTheme.captionMedium())
@@ -234,12 +268,16 @@ struct DictationRowView: View {
                         }
 
                         Text(event.body)
-                            .font(.system(size: 12, weight: .regular, design: event.kind == "model_output" ? .monospaced : .default))
+                            .font(.system(
+                                size: 12,
+                                weight: .regular,
+                                design: ["model_output", "quil_model"].contains(event.kind) ? .monospaced : .default
+                            ))
                             .foregroundStyle(MuesliTheme.textPrimary)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.leading, 56)
+                            .padding(.leading, isQuilTransformation ? 0 : 56)
                     }
                 }
             }

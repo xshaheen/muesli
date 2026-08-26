@@ -69,12 +69,17 @@ enum ModelDeletionPlan: Sendable, Equatable {
         case "sensevoice":
             SenseVoiceTranscriber.deleteModelFiles(fileManager: fileManager)
         case "gemma4-litert":
-            try Gemma4LiteRTModelStore.deleteModelFiles(fileManager: fileManager)
+            try Gemma4LiteRTModelStore.deleteModelFiles(
+                model: Gemma4LiteRTModel.resolved(model),
+                fileManager: fileManager
+            )
         case "fluidaudio":
             let plan = model.contains("v2")
                 ? ManagedASRModelPlans.parakeetV2()
                 : ManagedASRModelPlans.parakeetV3()
             try plan.delete(fileManager: fileManager)
+        case "parakeet-unified":
+            try ManagedASRModelPlans.parakeetUnified().delete(fileManager: fileManager)
         default:
             break
         }

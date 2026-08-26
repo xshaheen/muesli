@@ -139,6 +139,9 @@ enum TranscriptionQualityEligibility {
         // test on the model identifier is the same one `BackendOption.isDownloaded` uses to pick
         // the download plan.
         case "fluidaudio": return backend.model.contains("v2")
+        // Parakeet Unified ships one English checkpoint — `parakeet-unified-en-0.6b` — and its own
+        // card sends multilingual users to v3. It has no language axis to detect along.
+        case "parakeet-unified": return true
         default: return false
         }
     }
@@ -154,12 +157,24 @@ enum TranscriptionQualityEligibility {
         switch backend.backend {
         case "cohere": return "pinned:\(CohereTranscribeLanguage.defaultLanguage.rawValue)"
         case "indicasr": return "pinned:\(IndicASRLanguage.defaultLanguage.rawValue)"
+        case "apple-speech": return "pinned:\(hostSpeechLanguageCode)"
         default:
             // `nemotron35`, `sensevoice` and `gemma4-litert` all detect the language
             // themselves on their shipped defaults; `whisper` and `fluidaudio` do only in their
             // multilingual checkpoints.
             return isEnglishOnly(backend) ? "pinned:en" : "automatic"
         }
+    }
+
+    /// Apple Speech's shipped default is `AppleSpeechLanguageOption.systemIdentifier`, which
+    /// resolves to `Locale.current` — macOS reserves the assets for that one language and decodes
+    /// in it. There is no detection step to report, so recording it as `automatic` would present
+    /// it as a candidate for the Arabic cohorts and then charge the certain mismatch to model
+    /// quality instead of to the configuration, which is exactly what R17 forbids. It is pinned;
+    /// what it is pinned *to* depends on the host the sweep runs on.
+    static var hostSpeechLanguageCode: String {
+        let locale = AppleSpeechLanguageOption.requestedLocale(for: AppleSpeechLanguageOption.systemIdentifier)
+        return locale.language.languageCode?.identifier ?? "en"
     }
 }
 

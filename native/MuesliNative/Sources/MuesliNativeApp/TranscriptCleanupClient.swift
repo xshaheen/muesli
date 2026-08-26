@@ -100,7 +100,7 @@ enum TranscriptCleanupClient {
 
     static func defaultModel(for backend: TranscriptCleanupBackendOption) -> String {
         if backend == .gemma4LiteRT {
-            return Gemma4LiteRTModelStore.repoID
+            return Gemma4LiteRTModel.e2b.repoID
         }
         switch backend.llmBackend {
         case .some(.chatGPT):
@@ -122,7 +122,7 @@ enum TranscriptCleanupClient {
 
     static func configuredModel(for backend: TranscriptCleanupBackendOption, config: AppConfig) -> String {
         if backend == .gemma4LiteRT {
-            return Gemma4LiteRTModelStore.repoID
+            return Gemma4LiteRTModel.resolved(config.postProcessorGemmaModel).repoID
         }
         let raw: String
         switch backend.llmBackend {
@@ -149,7 +149,8 @@ enum TranscriptCleanupClient {
 
     static func hasRequiredSettings(for backend: TranscriptCleanupBackendOption, config: AppConfig, isChatGPTAuthenticated: Bool) -> Bool {
         if backend == .gemma4LiteRT {
-            return Gemma4LiteRTModelStore.isAvailableLocally()
+            let model = Gemma4LiteRTModel.resolved(config.postProcessorGemmaModel)
+            return Gemma4LiteRTModelStore.isAvailableLocally(model: model)
         }
         switch backend.llmBackend {
         case .some(.chatGPT):
@@ -320,6 +321,103 @@ enum TranscriptCleanupClient {
             throw TranscriptCleanupError.rejectedOutput
         }
         return TranscriptCleanupResult(rawOutput: raw, cleanedOutput: trimmed, model: model, wasTruncated: response.wasTruncated)
+    }
+
+    /// Single-shot generation against a hosted backend, without the dictation
+    /// cleanup post-processing that `clean` applies. Quill and other generation
+    /// features supply their own prompts and read the raw reply.
+    static func generate(
+        systemPrompt: String,
+        userPrompt: String,
+        backend: TranscriptCleanupBackendOption,
+        model: String,
+        config: AppConfig,
+        maxOutputTokens: Int? = nil,
+        logCategory: String = "generation"
+    ) async throws -> String {
+        guard let llmBackend = backend.llmBackend else {
+            throw TranscriptCleanupError.missingConfiguration("Local generation is handled on device.")
+        }
+        var options = TranscriptCleanupRequestOptions.dictationDefaults
+        options.maxOutputTokens = maxOutputTokens
+
+        switch llmBackend {
+        case .chatGPT:
+            return try await ChatGPTResponsesClient.respond(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                model: model,
+                logCategory: logCategory,
+                maxOutputTokens: maxOutputTokens
+            )
+        case .openAI:
+            return try await cleanWithOpenAI(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                model: model,
+                config: config,
+                options: options
+            ).text
+        case .openRouter:
+            return try await cleanWithChatCompletions(
+                backend: "OpenRouter",
+                requestURL: openRouterURL,
+                apiKey: resolvedOpenRouterAPIKey(config: config),
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                model: model,
+                options: options
+            ).text
+        case .ollama:
+            return try await cleanWithOllama(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                model: model,
+                config: config,
+                options: options
+            ).text
+        case .lmStudio:
+            guard let requestURL = MeetingSummaryClient.resolveLMStudioURL(config: cleanupConfig(config, model: model)) else {
+                throw TranscriptCleanupError.missingConfiguration("Invalid LM Studio URL: \(config.lmStudioURL)")
+            }
+            return try await cleanWithChatCompletions(
+                backend: "LM Studio",
+                requestURL: requestURL,
+                apiKey: "",
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                model: model,
+                options: options
+            ).text
+        case .customLLM:
+            let format = CustomLLMFormat(rawValue: config.customLLMFormat) ?? .openAI
+            guard let requestURL = resolveConfiguredCustomLLMURL(config: config, format: format) else {
+                throw TranscriptCleanupError.missingConfiguration("Invalid Custom LLM URL: \(config.customLLMURL)")
+            }
+            switch format {
+            case .openAI:
+                return try await cleanWithChatCompletions(
+                    backend: "Custom LLM",
+                    requestURL: requestURL,
+                    apiKey: config.customLLMAPIKey,
+                    systemPrompt: systemPrompt,
+                    userPrompt: userPrompt,
+                    model: model,
+                    options: options
+                ).text
+            case .anthropic:
+                return try await cleanWithAnthropic(
+                    requestURL: requestURL,
+                    apiKey: config.customLLMAPIKey,
+                    systemPrompt: systemPrompt,
+                    userPrompt: userPrompt,
+                    model: model,
+                    options: options
+                ).text
+            }
+        default:
+            throw TranscriptCleanupError.missingConfiguration("Unsupported transcript cleanup backend: \(backend.label)")
+        }
     }
 
     /// Normalizes a response without destroying line structure.
