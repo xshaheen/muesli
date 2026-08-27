@@ -167,7 +167,14 @@ struct MeetingChatView: View {
                         )
                 }
             }
-            .frame(maxWidth: .infinity, alignment: turn.role == .user ? .trailing : .leading)
+            // No `maxWidth: .infinity` here. The bubble hugs its text and the row's single
+            // `Spacer` takes the remainder, which is what pushes it to its side — the frame was
+            // doing the same job a second time, and an HStack holding two flexible children has
+            // to solve for both by repeated probing rather than arithmetic. That probing is what
+            // pinned the main thread in a sample of the frozen chat tab.
+            //
+            // The `Spacer(minLength: 32)` still caps the bubble: the row can never offer it more
+            // than the width left after that reservation.
             if turn.role == .assistant { Spacer(minLength: 32) }
         }
     }

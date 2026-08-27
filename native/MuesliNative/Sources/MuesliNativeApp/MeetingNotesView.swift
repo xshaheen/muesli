@@ -128,6 +128,17 @@ private final class MeetingScrollableNotesTextView: NSTextView {
 ///
 /// Extracted so chat answers look like every other piece of prose in the app
 /// instead of showing raw `**` and `-` characters.
+/// Rendered markdown for a chat answer.
+///
+/// Hugs its text rather than filling. It used to do both — `fillsAvailableWidth: true` plus a
+/// `maxWidth: .infinity` frame — which made it a second flexible child inside a bubble row that
+/// already had a flexible `Spacer`. An `HStack` cannot divide width between two flexible children
+/// analytically, so it falls back to probing them repeatedly, and a sample of the frozen chat tab
+/// was dominated by exactly that: `sizeChildrenGenerallyWithConcreteMajorProposal` under
+/// `StackLayout.placeChildren`, once per turn.
+///
+/// The bubble's width is bounded by its row's `Spacer(minLength:)`, so hugging here loses no
+/// wrapping behaviour — it only stops the row having two things to solve for at once.
 struct MeetingMarkdownContent: View {
     let markdown: String
     var bodyPointSize: CGFloat = 14
@@ -136,9 +147,8 @@ struct MeetingMarkdownContent: View {
         MeetingSelectableText(attributedText: MeetingSelectableTextContent.markdown(
             markdown,
             bodyPointSize: bodyPointSize
-        ), fillsAvailableWidth: true)
+        ))
         .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     static func contentDirection(for rawLine: String) -> NaturalTextDirection {
