@@ -87,7 +87,7 @@ struct DictionaryView: View {
                     importDictionary()
                 } label: {
                     Label("Import", systemImage: "square.and.arrow.down")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(MuesliTheme.font(size: 12, weight: .medium))
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .padding(.horizontal, MuesliTheme.spacing12)
                         .padding(.vertical, MuesliTheme.spacing8)
@@ -104,7 +104,7 @@ struct DictionaryView: View {
                     exportDictionary()
                 } label: {
                     Label("Export", systemImage: "square.and.arrow.up")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(MuesliTheme.font(size: 12, weight: .medium))
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .padding(.horizontal, MuesliTheme.spacing12)
                         .padding(.vertical, MuesliTheme.spacing8)
@@ -573,7 +573,7 @@ private struct ThresholdEditor: View {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold))
             }
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .font(MuesliTheme.mono(size: 11, weight: .medium))
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -616,7 +616,7 @@ private struct ThresholdEditor: View {
                 HStack(spacing: 4) {
                     TextField("85", text: $draftPercent)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .font(MuesliTheme.mono(size: 12, weight: .medium))
                         .frame(width: 48)
                         .onSubmit(commitDraftPercent)
                     Text("%")
@@ -642,7 +642,7 @@ private struct ThresholdEditor: View {
                 Spacer()
                 Text("99%")
             }
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .font(MuesliTheme.mono(size: 10, weight: .medium))
             .foregroundStyle(MuesliTheme.textTertiary)
         }
         .padding(MuesliTheme.spacing16)

@@ -50,7 +50,7 @@ struct DiagnosticIncidentReportView: View {
 
             ScrollView {
                 Text(incident.issueBody)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(MuesliTheme.mono(size: 12))
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)

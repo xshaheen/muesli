@@ -35,7 +35,7 @@ struct AboutView: View {
                 aboutCard {
                     aboutRow("Version") {
                         Text(version)
-                            .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                            .font(MuesliTheme.mono(size: 15, weight: .semibold))
                             .foregroundStyle(MuesliTheme.textPrimary)
                     }
 
@@ -112,7 +112,7 @@ struct AboutView: View {
 
                         HStack {
                             Text(appDataPath)
-                                .font(.system(size: 12, design: .monospaced))
+                                .font(MuesliTheme.mono(size: 12))
                                 .foregroundStyle(MuesliTheme.textTertiary)
                                 .lineLimit(2)
                                 .truncationMode(.middle)

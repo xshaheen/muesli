@@ -320,14 +320,14 @@ struct OnboardingView: View {
 
     private func goToNextStep() {
         guard currentStepIndex < orderedSteps.count - 1 else { return }
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(MuesliTheme.Motion.eased(0.2)) {
             currentStep = orderedSteps[currentStepIndex + 1]
         }
     }
 
     private func goToPreviousStep() {
         guard currentStepIndex > 0 else { return }
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(MuesliTheme.Motion.eased(0.2)) {
             currentStep = orderedSteps[currentStepIndex - 1]
         }
     }
@@ -412,11 +412,11 @@ struct OnboardingView: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(modelDownloadIndicatorTitle)
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .font(MuesliTheme.font(size: 11, weight: .semibold))
                     .foregroundStyle(modelDownloadError == nil ? MuesliTheme.textSecondary : MuesliTheme.danger)
                     .lineLimit(1)
                 Text(modelDownloadIndicatorDetail(progress: progress))
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .font(MuesliTheme.font(size: 10, weight: .medium))
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .lineLimit(1)
             }
@@ -432,7 +432,7 @@ struct OnboardingView: View {
         .shadow(color: .black.opacity(0.28), radius: 12, x: 0, y: 6)
         .frame(width: 260, alignment: .leading)
         .transition(.opacity.combined(with: .move(edge: .top)))
-        .animation(.easeInOut(duration: 0.2), value: shouldShowModelDownloadIndicator)
+        .animation(MuesliTheme.Motion.eased(0.2), value: shouldShowModelDownloadIndicator)
     }
 
     private var modelDownloadIndicatorTitle: String {
@@ -690,7 +690,7 @@ struct OnboardingView: View {
                     modelCard(option: BackendOption.onboardingDefault)
 
                     Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
+                        withAnimation(MuesliTheme.Motion.eased(0.2)) {
                             showMoreModels.toggle()
                         }
                     } label: {
@@ -711,7 +711,7 @@ struct OnboardingView: View {
                         }
 
                         Text("More models are available after onboarding.")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(MuesliTheme.font(size: 11, weight: .medium))
                             .foregroundStyle(MuesliTheme.textTertiary)
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: .infinity)
@@ -909,7 +909,7 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isConfirmingGrant || isWaitingForNativePermissionPrompt(step.name))
-                .animation(.easeInOut(duration: 0.2), value: isConfirmingGrant)
+                .animation(MuesliTheme.Motion.eased(0.2), value: isConfirmingGrant)
 
                 // Progress dots
                 HStack(spacing: 6) {
@@ -1072,7 +1072,7 @@ struct OnboardingView: View {
                     action()
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .medium))
+                .font(MuesliTheme.font(size: 12, weight: .medium))
                 .foregroundStyle(MuesliTheme.accent)
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .padding(.vertical, 4)
@@ -1082,7 +1082,7 @@ struct OnboardingView: View {
         }
         .padding(.horizontal, MuesliTheme.spacing16)
         .padding(.vertical, MuesliTheme.spacing12)
-        .animation(.easeInOut(duration: 0.25), value: granted)
+        .animation(MuesliTheme.Motion.eased(0.25), value: granted)
     }
 
     private var requiredPermissionsGranted: Bool {
@@ -1149,7 +1149,7 @@ struct OnboardingView: View {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(850))
             if recentlyGrantedPermissionName == permissionName {
-                withAnimation(.easeInOut(duration: 0.2)) {
+                withAnimation(MuesliTheme.Motion.eased(0.2)) {
                     recentlyGrantedPermissionName = nil
                 }
             }
@@ -1221,7 +1221,7 @@ struct OnboardingView: View {
             VStack(spacing: MuesliTheme.spacing16) {
                 // Current hotkey display
                 Text(selectedHotkey.label)
-                    .font(.system(size: 24, weight: .semibold, design: .rounded))
+                    .font(MuesliTheme.font(size: 24, weight: .semibold))
                     .foregroundStyle(MuesliTheme.textPrimary)
                     .padding(.horizontal, MuesliTheme.spacing32)
                     .padding(.vertical, MuesliTheme.spacing16)
@@ -1303,7 +1303,7 @@ struct OnboardingView: View {
 
                 if isSelectedModelReadyForDictationTest {
                     Text("Try saying: \"testing this one out\"")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(MuesliTheme.font(size: 13, weight: .medium))
                         .foregroundStyle(MuesliTheme.accent)
                         .padding(.top, 2)
                 }
@@ -1315,10 +1315,10 @@ struct OnboardingView: View {
                         IndeterminatePreparationBar()
                             .frame(width: 260, height: 7)
                         Text(modelDownloadStatus ?? "Preparing \(selectedBackend.label)...")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(MuesliTheme.font(size: 11, weight: .medium))
                             .foregroundStyle(MuesliTheme.textTertiary)
                         Text("This usually takes 20-60 seconds the first time.")
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .font(MuesliTheme.font(size: 10, weight: .medium))
                             .foregroundStyle(MuesliTheme.textTertiary)
                         RotatingPreparationHint(messages: modelPreparationHints)
                             .padding(.top, 2)
@@ -1326,13 +1326,13 @@ struct OnboardingView: View {
                         ProgressView(value: modelDownloadProgress, total: 1.0)
                             .frame(width: 260)
                         Text(modelDownloadStatus ?? "\(Int((modelDownloadProgress * 100).rounded()))% complete")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(MuesliTheme.font(size: 11, weight: .medium))
                             .foregroundStyle(MuesliTheme.textTertiary)
                     } else {
                         ProgressView()
                             .controlSize(.regular)
                         Text(modelDownloadStatus ?? "Preparing \(selectedBackend.label)...")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(MuesliTheme.font(size: 11, weight: .medium))
                             .foregroundStyle(MuesliTheme.textTertiary)
                     }
                     Text("The dictation test is disabled until download and warmup complete.")
@@ -1352,14 +1352,14 @@ struct OnboardingView: View {
                             ensureModelDownloadStarted()
                         }
                         .buttonStyle(.plain)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(MuesliTheme.font(size: 12, weight: .medium))
                         .foregroundStyle(MuesliTheme.accent)
                     }
                 }
             } else {
                 VStack(spacing: MuesliTheme.spacing16) {
                     Text(dictationTestResult ?? "Your transcription will appear here...")
-                        .font(dictationTestResult != nil ? .system(size: 14, design: .monospaced) : .system(size: 13, design: .rounded))
+                        .font(dictationTestResult != nil ? MuesliTheme.mono(size: 14) : MuesliTheme.font(size: 13))
                         .foregroundStyle(dictationTestResult != nil ? MuesliTheme.textPrimary : MuesliTheme.textTertiary)
                         .italic(dictationTestResult == nil)
                         .frame(maxWidth: 400, minHeight: 60, alignment: .topLeading)
@@ -1612,7 +1612,7 @@ struct OnboardingView: View {
     private func providerTab(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                .font(MuesliTheme.font(size: 12, weight: selected ? .semibold : .regular))
                 .foregroundStyle(selected ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
                 .frame(width: 80)
                 .padding(.vertical, MuesliTheme.spacing8)
@@ -1975,7 +1975,7 @@ struct OnboardingView: View {
         modelReadyIndicatorTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(6))
             guard modelReadyIndicatorBackend == backend else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(MuesliTheme.Motion.eased(0.2)) {
                 modelReadyIndicatorBackend = nil
             }
             modelReadyIndicatorTask = nil
@@ -2163,7 +2163,7 @@ private struct IndeterminatePreparationBar: View {
             }
         }
         .onAppear {
-            withAnimation(.easeInOut(duration: 1.05).repeatForever(autoreverses: true)) {
+            withAnimation(MuesliTheme.Motion.pulsing(1.05)) {
                 isAnimating = true
             }
         }
@@ -2177,7 +2177,7 @@ private struct RotatingPreparationHint: View {
 
     var body: some View {
         Text(messages.isEmpty ? "" : messages[index % messages.count])
-            .font(.system(size: 10, weight: .medium, design: .rounded))
+            .font(MuesliTheme.font(size: 10, weight: .medium))
             .foregroundStyle(MuesliTheme.textTertiary)
             .multilineTextAlignment(.center)
             .lineLimit(1)
@@ -2185,7 +2185,7 @@ private struct RotatingPreparationHint: View {
             .transition(.opacity)
             .onReceive(timer) { _ in
                 guard messages.count > 1 else { return }
-                withAnimation(.easeInOut(duration: 0.2)) {
+                withAnimation(MuesliTheme.Motion.eased(0.2)) {
                     index = (index + 1) % messages.count
                 }
             }

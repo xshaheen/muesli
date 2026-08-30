@@ -692,7 +692,7 @@ struct MeetingDetailView: View {
                 contentToolbar(for: meeting)
 
                 TextEditor(text: $editableNotes)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(MuesliTheme.mono(size: 13))
                     .foregroundStyle(MuesliTheme.textPrimary)
                     .scrollContentBackground(.hidden)
                     .padding(MuesliTheme.spacing24)
@@ -1692,7 +1692,7 @@ struct MeetingDetailView: View {
                 Button("Open Settings") {
                     controller.openHistoryWindow(tab: .settings)
                 }
-                .font(.system(size: 12, weight: .medium))
+                .font(MuesliTheme.font(size: 12, weight: .medium))
                 .foregroundStyle(MuesliTheme.accent)
                 .buttonStyle(.plain)
             }
@@ -2058,7 +2058,7 @@ private struct MarqueeTitleTextField: View {
     @State private var marqueeRunID = UUID()
     @FocusState private var isTitleFocused: Bool
 
-    private let titleFont = Font.system(size: 30, weight: .bold)
+    private let titleFont = MuesliTheme.font(size: 30, weight: .bold)
 
     private var displayText: String {
         text.isEmpty ? "Meeting Title" : text

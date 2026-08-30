@@ -1,3 +1,4 @@
+import CoreText
 import SwiftUI
 import MuesliCore
 
@@ -163,10 +164,16 @@ enum MuesliTheme {
         Font(nsFont(size: size, weight: weight))
     }
 
-    /// Durations, counts, clocks, versions and paths. Tabular figures stop numbers shifting
-    /// width as they tick.
+    /// Durations, versions, traces and paths -- anything that wants a monospaced face.
     static func mono(size: CGFloat, weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight, design: .monospaced).monospacedDigit()
+    }
+
+    /// Counts and stats that stay in the text voice but must not jitter as they change.
+    /// `Font.monospacedDigit()` can silently do nothing on a custom face, so the tabular
+    /// figures are requested from the font itself rather than from SwiftUI.
+    static func numeric(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        Font(nsFont(size: size, weight: weight).withTabularFigures())
     }
 
     static func nsFont(size: CGFloat, weight: Font.Weight) -> NSFont {
@@ -326,6 +333,22 @@ extension Color {
                 ? dark.withAlphaComponent(darkAlpha)
                 : light.withAlphaComponent(lightAlpha)
         })
+    }
+}
+
+extension NSFont {
+    /// Turns on the font's tabular-figures feature, so digits share one advance width and a
+    /// counter stops shifting its neighbours as it ticks.
+    func withTabularFigures() -> NSFont {
+        let descriptor = fontDescriptor.addingAttributes([
+            .featureSettings: [
+                [
+                    NSFontDescriptor.FeatureKey.typeIdentifier: kNumberSpacingType,
+                    NSFontDescriptor.FeatureKey.selectorIdentifier: kMonospacedNumbersSelector,
+                ]
+            ]
+        ])
+        return NSFont(descriptor: descriptor, size: pointSize) ?? self
     }
 }
 

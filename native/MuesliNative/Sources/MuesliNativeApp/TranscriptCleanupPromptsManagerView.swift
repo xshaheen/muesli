@@ -286,7 +286,7 @@ struct TranscriptCleanupPromptsManagerView: View {
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
                 TextEditor(text: $draftPrompt)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(MuesliTheme.mono(size: 12))
                     .foregroundStyle(MuesliTheme.textPrimary)
                     .scrollContentBackground(.hidden)
                     .frame(minHeight: 180)

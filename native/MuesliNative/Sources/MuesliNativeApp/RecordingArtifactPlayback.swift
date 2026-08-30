@@ -456,7 +456,7 @@ struct RecordingArtifactAvailabilityBadge: View {
         let availability = coordinator.resolution(for: owner).availability
         if availability == .available {
             Label("Recording", systemImage: "waveform")
-                .font(.system(size: 10, weight: .semibold))
+                .font(MuesliTheme.font(size: 10, weight: .semibold))
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)

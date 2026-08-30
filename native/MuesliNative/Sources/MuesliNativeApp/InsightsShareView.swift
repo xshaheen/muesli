@@ -97,7 +97,7 @@ struct InsightsShareSheet: View {
 
                 if let confirmation {
                     Label(confirmation, systemImage: "checkmark.circle.fill")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(MuesliTheme.font(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                         .transition(.opacity)
                 }
@@ -268,7 +268,7 @@ private struct InsightsShareCard: View {
                 Spacer(minLength: 34)
 
                 Text(showsNumbers ? snapshot.selected.totalWords.formatted() : "—")
-                    .font(.system(size: 108, weight: .bold, design: .rounded))
+                    .font(MuesliTheme.numeric(size: 108, weight: .bold))
                     .tracking(-5)
                     .monospacedDigit()
                     .foregroundStyle(pale)
@@ -314,7 +314,7 @@ private struct InsightsShareCard: View {
     private func shareDatum(value: String, label: String) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             Text(value)
-                .font(.system(size: 30, weight: .semibold, design: .rounded))
+                .font(MuesliTheme.numeric(size: 30, weight: .semibold))
                 .tracking(-0.8)
                 .monospacedDigit()
                 .foregroundStyle(pale)

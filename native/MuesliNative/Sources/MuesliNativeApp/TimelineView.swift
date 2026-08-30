@@ -238,7 +238,7 @@ private struct TimelineMeetingRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: MuesliTheme.spacing20) {
             Text(TimelineView.formatTime(record.startTime))
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .font(MuesliTheme.mono(size: 13, weight: .medium))
                 .foregroundStyle(MuesliTheme.textTertiary)
                 .frame(width: 80, alignment: .leading)
                 .padding(.top, 2)

@@ -92,7 +92,7 @@ struct DictationRowView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: MuesliTheme.spacing20) {
                 Text(timeOnly)
-                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .font(MuesliTheme.mono(size: 13, weight: .medium))
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .frame(width: 80, alignment: .leading)
                     .padding(.top, 2)
@@ -101,7 +101,7 @@ struct DictationRowView: View {
                     HStack(alignment: .firstTextBaseline, spacing: MuesliTheme.spacing8) {
                         if isComputerUseCommand {
                             Text("CUA")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .font(MuesliTheme.mono(size: 10, weight: .bold))
                                 .foregroundStyle(MuesliTheme.accent)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
@@ -117,7 +117,7 @@ struct DictationRowView: View {
                                     .scaledToFit()
                                     .frame(width: 10, height: 10)
                                 Text("QUILL")
-                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                    .font(MuesliTheme.mono(size: 10, weight: .bold))
                             }
                                 .foregroundStyle(MuesliTheme.accent)
                                 .padding(.horizontal, 5)
@@ -251,7 +251,7 @@ struct DictationRowView: View {
                         HStack(spacing: MuesliTheme.spacing8) {
                             if !isQuilTransformation {
                                 Text(event.step.map { "Step \($0)" } ?? "Run")
-                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .font(MuesliTheme.mono(size: 11, weight: .medium))
                                     .foregroundStyle(MuesliTheme.textTertiary)
                                     .frame(width: 48, alignment: .leading)
                             }
@@ -262,17 +262,17 @@ struct DictationRowView: View {
 
                             if let status = ComputerUseTraceFormatter.displayStatus(for: event) {
                                 Text(status)
-                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                    .font(MuesliTheme.mono(size: 10, weight: .medium))
                                     .foregroundStyle(statusColor(status))
                             }
                         }
 
                         Text(event.body)
-                            .font(.system(
-                                size: 12,
-                                weight: .regular,
-                                design: ["model_output", "quil_model"].contains(event.kind) ? .monospaced : .default
-                            ))
+                            .font(
+                                ["model_output", "quil_model"].contains(event.kind)
+                                    ? MuesliTheme.mono(size: 12)
+                                    : MuesliTheme.font(size: 12)
+                            )
                             .foregroundStyle(MuesliTheme.textPrimary)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
@@ -329,7 +329,7 @@ struct AudioOnlyDictationRowView: View {
     var body: some View {
         HStack(alignment: .center, spacing: MuesliTheme.spacing20) {
             Text(record.capturedAt.formatted(date: .omitted, time: .shortened))
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .font(MuesliTheme.mono(size: 13, weight: .medium))
                 .foregroundStyle(MuesliTheme.textTertiary)
                 .frame(width: 80, alignment: .leading)
 

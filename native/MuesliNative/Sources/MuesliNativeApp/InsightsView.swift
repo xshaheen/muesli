@@ -92,7 +92,7 @@ struct InsightsView: View {
                 Label(backLabel, systemImage: "chevron.left")
             }
             .buttonStyle(.plain)
-            .font(.system(size: 13, weight: .semibold))
+            .font(MuesliTheme.font(size: 13, weight: .semibold))
             .foregroundStyle(InsightsPalette.secondaryText)
             .keyboardShortcut(.cancelAction)
 
@@ -158,7 +158,7 @@ struct InsightsView: View {
                         .tracking(-0.4)
                         .foregroundStyle(MuesliTheme.textPrimary)
                     Text(data.lifetime.totalWords.formatted())
-                        .font(.system(size: 58, weight: .bold, design: .rounded))
+                        .font(MuesliTheme.numeric(size: 58, weight: .bold))
                         .tracking(-2.4)
                         .monospacedDigit()
                         .foregroundStyle(MuesliTheme.textPrimary)
@@ -232,7 +232,7 @@ struct InsightsView: View {
                 panelTitle("DICTATIONS AND MEETINGS", subtitle: "Activity for the selected time period")
                 HStack(alignment: .lastTextBaseline, spacing: 8) {
                     Text(format(data.selected.totalWords))
-                        .font(.system(size: 40, weight: .bold, design: .rounded))
+                        .font(MuesliTheme.numeric(size: 40, weight: .bold))
                         .tracking(-1.5)
                         .monospacedDigit()
                     Text("words")
@@ -278,7 +278,7 @@ struct InsightsView: View {
         HStack(spacing: 28) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(data.currentStreakDays)")
-                    .font(.system(size: 70, weight: .bold, design: .rounded))
+                    .font(MuesliTheme.numeric(size: 70, weight: .bold))
                     .tracking(-3)
                     .monospacedDigit()
                 Text("CURRENT STREAK")
@@ -295,7 +295,7 @@ struct InsightsView: View {
                     Label("Best: \(data.longestStreakDays) days", systemImage: "flag.checkered")
                     Label("\(data.activeDaysInRange) active days", systemImage: "calendar.badge.checkmark")
                 }
-                .font(.system(size: 12, weight: .semibold))
+                .font(MuesliTheme.font(size: 12, weight: .semibold))
                 .foregroundStyle(InsightsPalette.tertiaryText)
             }
         }
@@ -384,7 +384,7 @@ struct InsightsView: View {
 
     private func heroDatum(_ label: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(value).font(.system(size: 18, weight: .semibold)).monospacedDigit()
+            Text(value).font(MuesliTheme.numeric(size: 18, weight: .semibold))
             Text(label.uppercased()).font(MuesliTheme.font(size: 9, weight: .bold)).tracking(1.3).foregroundStyle(InsightsPalette.tertiaryText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -708,7 +708,7 @@ private struct WordCloudPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Label(title, systemImage: icon)
-                .font(.system(size: 10, weight: .bold))
+                .font(MuesliTheme.font(size: 10, weight: .bold))
                 .tracking(1.5)
                 .foregroundStyle(InsightsPalette.tertiaryText)
             if words.isEmpty {
@@ -720,10 +720,9 @@ private struct WordCloudPanel: View {
                 WordFlowLayout(spacing: 9) {
                     ForEach(displayedWords) { item in
                         Text(item.word)
-                            .font(.system(
+                            .font(MuesliTheme.font(
                                 size: InsightsWordCloudSizing.fontSize(for: item, displayedWords: displayedWords),
-                                weight: item.count == displayedWords.first?.count ? .bold : .medium,
-                                design: .rounded
+                                weight: item.count == displayedWords.first?.count ? .bold : .medium
                             ))
                             .foregroundStyle(wordColor(item))
                             .help("Used \(item.count.formatted()) times")

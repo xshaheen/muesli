@@ -202,7 +202,7 @@ struct WritingStylesView: View {
                 ForEach(styles) { style in Text(style.name).tag(style.id) }
             }
             .accessibilityHint("Changing a global style also updates its cleanup instructions")
-            Text(draft.postProcessorSystemPrompt).font(.system(size: 12, design: .monospaced))
+            Text(draft.postProcessorSystemPrompt).font(MuesliTheme.mono(size: 12))
                 .foregroundStyle(MuesliTheme.textSecondary).textSelection(.enabled)
                 .padding(MuesliTheme.spacing12).background(MuesliTheme.backgroundRaised)
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
@@ -289,7 +289,7 @@ struct WritingStylesView: View {
             ForEach(group.matchers) { matcher in
                 HStack {
                     Text(matcher.kind == .bundleID ? "App" : "Website").font(MuesliTheme.captionMedium())
-                    Text(matcher.pattern).font(.system(size: 12, design: .monospaced)).foregroundStyle(MuesliTheme.textSecondary)
+                    Text(matcher.pattern).font(MuesliTheme.mono(size: 12)).foregroundStyle(MuesliTheme.textSecondary)
                     Spacer()
                     Button(role: .destructive) { removeMatcher(matcher.id, from: group.id) } label: { Image(systemName: "trash") }
                         .accessibilityLabel("Remove matcher \(matcher.pattern)")
@@ -392,7 +392,7 @@ struct WritingStylesView: View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
             Text("Edit custom style").font(MuesliTheme.captionMedium())
             TextField("Style name", text: $styleDraftName).textFieldStyle(.roundedBorder)
-            TextEditor(text: $styleDraftPrompt).font(.system(size: 12, design: .monospaced))
+            TextEditor(text: $styleDraftPrompt).font(MuesliTheme.mono(size: 12))
                 .accessibilityLabel("Style instructions")
                 .accessibilityHint("Describe how Muesli should clean up dictation that uses this style")
                 .frame(minHeight: 120).padding(MuesliTheme.spacing8).background(MuesliTheme.backgroundBase)
@@ -605,7 +605,7 @@ struct WritingStylesView: View {
             Text(preview.privacyWarningText).font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.danger).accessibilityLabel(preview.privacyWarningText)
             Text("\(preview.additions.count) additions · \(preview.changes.count) changes · \(preview.removals.count) removals").font(MuesliTheme.callout())
             Text(preview.rulesWillBeActive ? "Imported group routing will be active immediately." : "Imported groups will remain inactive until Adaptive Styles is enabled locally.").font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
-            ScrollView { VStack(alignment: .leading, spacing: MuesliTheme.spacing8) { ForEach(preview.additions + preview.changes + preview.removals + preview.effectiveChanges, id: \.self) { Text($0).font(MuesliTheme.caption()) }; Text("Global instructions").font(MuesliTheme.captionMedium()); Text(preview.ruleset.globalDefault.prompt).font(.system(size: 12, design: .monospaced)).textSelection(.enabled); ForEach(preview.ruleset.customStyles) { style in Text(style.name).font(MuesliTheme.captionMedium()); Text(style.prompt).font(.system(size: 12, design: .monospaced)).textSelection(.enabled) } } }
+            ScrollView { VStack(alignment: .leading, spacing: MuesliTheme.spacing8) { ForEach(preview.additions + preview.changes + preview.removals + preview.effectiveChanges, id: \.self) { Text($0).font(MuesliTheme.caption()) }; Text("Global instructions").font(MuesliTheme.captionMedium()); Text(preview.ruleset.globalDefault.prompt).font(MuesliTheme.mono(size: 12)).textSelection(.enabled); ForEach(preview.ruleset.customStyles) { style in Text(style.name).font(MuesliTheme.captionMedium()); Text(style.prompt).font(MuesliTheme.mono(size: 12)).textSelection(.enabled) } } }
             HStack { Spacer(); Button("Cancel") { importPreview = nil }; Button("Replace Writing Styles") { do { try controller.replaceDictationStyleRuleset(preview); draft = appState.config; isDirty = false; importPreview = nil } catch { errorMessage = "Could not replace Writing Styles. \(error.localizedDescription)"; importPreview = nil } }.keyboardShortcut(.defaultAction) }
         }.padding(MuesliTheme.spacing24).frame(width: 620, height: 480).background(MuesliTheme.backgroundBase)
     }

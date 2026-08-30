@@ -404,7 +404,7 @@ struct RecordingArtifactPlayerView: View {
             .frame(height: 44)
 
             Text("\(formatTime(session.currentTime)) / \(formatTime(duration))")
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .font(MuesliTheme.mono(size: 12, weight: .medium))
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .frame(minWidth: 88, alignment: .trailing)
         }

@@ -267,7 +267,7 @@ struct ModelsView: View {
 
             Button(action.title, action: action.perform)
                 .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .medium))
+                .font(MuesliTheme.font(size: 12, weight: .medium))
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .padding(.vertical, 4)
@@ -481,7 +481,7 @@ struct ModelsView: View {
                     }
                     .disabled(isCancellingLiveCaptionModelDownload)
                     .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(MuesliTheme.font(size: 12, weight: .medium))
                     .foregroundStyle(MuesliTheme.textSecondary)
                 } else if isLiveCaptionModelDownloaded {
                     if !isActive {
@@ -492,7 +492,7 @@ struct ModelsView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(MuesliTheme.font(size: 12, weight: .medium))
                         .foregroundStyle(MuesliTheme.accent)
                         .padding(.horizontal, MuesliTheme.spacing12)
                         .padding(.vertical, 4)
@@ -515,7 +515,7 @@ struct ModelsView: View {
                         startLiveCaptionModelDownload()
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(MuesliTheme.font(size: 12, weight: .medium))
                     .foregroundStyle(MuesliTheme.accent)
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, 4)
@@ -781,7 +781,7 @@ struct ModelsView: View {
                         cancelPostProcDownload(option)
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(MuesliTheme.font(size: 12, weight: .medium))
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, 4)
@@ -793,7 +793,7 @@ struct ModelsView: View {
                             controller.selectPostProcessor(option)
                         }
                         .buttonStyle(.plain)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(MuesliTheme.font(size: 12, weight: .medium))
                         .foregroundStyle(MuesliTheme.accent)
                         .padding(.horizontal, MuesliTheme.spacing12)
                         .padding(.vertical, 4)
@@ -815,7 +815,7 @@ struct ModelsView: View {
                         startPostProcDownload(option)
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(MuesliTheme.font(size: 12, weight: .medium))
                     .foregroundStyle(MuesliTheme.accent)
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, 4)
@@ -963,11 +963,11 @@ struct ModelsView: View {
 
                 if let currentFile = snapshot.currentFile?.split(separator: "/").last.map(String.init), !currentFile.isEmpty {
                     Text("\(downloadPhaseLabel(snapshot.phase)): \(currentFile)")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(MuesliTheme.font(size: 11, weight: .medium))
                         .foregroundStyle(MuesliTheme.textSecondary)
                 } else {
                     Text(snapshot.message ?? downloadPhaseLabel(snapshot.phase))
-                        .font(.system(size: 11, weight: .medium))
+                        .font(MuesliTheme.font(size: 11, weight: .medium))
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }
 
@@ -1099,7 +1099,7 @@ struct ModelsView: View {
                     cancelDownload(option)
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .medium))
+                .font(MuesliTheme.font(size: 12, weight: .medium))
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .padding(.vertical, 4)
@@ -1115,7 +1115,7 @@ struct ModelsView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(MuesliTheme.font(size: 12, weight: .medium))
                     .foregroundStyle(activationDisabledReason == nil ? MuesliTheme.accent : MuesliTheme.textTertiary)
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, 4)
@@ -1141,7 +1141,7 @@ struct ModelsView: View {
                     startDownload(option)
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .medium))
+                .font(MuesliTheme.font(size: 12, weight: .medium))
                 .foregroundStyle(MuesliTheme.accent)
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .padding(.vertical, 4)

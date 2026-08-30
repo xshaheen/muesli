@@ -475,12 +475,12 @@ struct SidebarView: View {
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .font(MuesliTheme.font(size: 11, weight: .semibold))
                         .foregroundStyle(MuesliTheme.textSecondary)
                         .lineLimit(1)
                     if let detail = appState.modelPreparationDetail, !detail.isEmpty {
                         Text(detail)
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .font(MuesliTheme.font(size: 10, weight: .medium))
                             .foregroundStyle(MuesliTheme.textTertiary)
                             .lineLimit(1)
                     }

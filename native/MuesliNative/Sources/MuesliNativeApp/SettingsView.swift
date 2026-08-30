@@ -1361,7 +1361,7 @@ struct SettingsView: View {
             }
 
             Text(appState.config.postProcessorSystemPrompt)
-                .font(.system(size: 12, design: .monospaced))
+                .font(MuesliTheme.mono(size: 12))
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .lineLimit(4)
                 .padding(10)
@@ -2441,7 +2441,7 @@ struct SettingsView: View {
                     action()
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .medium))
+                .font(MuesliTheme.font(size: 11, weight: .medium))
                 .foregroundStyle(MuesliTheme.accent)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 3)
@@ -3335,7 +3335,7 @@ struct SettingsView: View {
                 Button("Load") {
                     loadOpenRouterFreeModels(force: true)
                 }
-                .font(.system(size: 12, weight: .medium))
+                .font(MuesliTheme.font(size: 12, weight: .medium))
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
@@ -3408,7 +3408,7 @@ struct SettingsView: View {
                         .symbolRenderingMode(.hierarchical)
                 }
             }
-                .font(.system(size: 13, weight: .medium))
+                .font(MuesliTheme.font(size: 13, weight: .medium))
                 .foregroundStyle(isDestructive ? MuesliTheme.danger : MuesliTheme.textPrimary)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, MuesliTheme.spacing16)

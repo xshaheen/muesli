@@ -48,13 +48,10 @@ struct MotionSourceTests {
             .appendingPathComponent("Sources")
             .appendingPathComponent("MuesliNativeApp")
 
-        // Floating surfaces own their own motion. Onboarding is out of scope for this slice
-        // and still animates directly; it is named here so the exemption is visible rather
-        // than silently folded into the exclusion list.
+        // Floating surfaces own their own motion.
         let exempt = [
             "DictationMini", "ContextualSpark", "FloatingMeeting", "FloatingIndicator",
             "MeetingRecordingPanel", "MeetingPanel",
-            "Onboarding",
             // These resolve Reduce Motion themselves through the SwiftUI environment.
             "StatsHeaderView", "FeatureTourView", "InsightsView",
             // A marquee that is skipped wholesale under Reduce Motion.

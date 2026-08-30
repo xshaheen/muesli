@@ -52,7 +52,7 @@ struct SyncOriginBadge: View {
 
     var body: some View {
         Text(label)
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
+            .font(MuesliTheme.mono(size: 10, weight: .bold))
             .foregroundStyle(MuesliTheme.accent)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)

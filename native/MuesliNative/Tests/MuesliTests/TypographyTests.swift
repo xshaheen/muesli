@@ -55,6 +55,48 @@ struct TypographyTests {
         #expect(MuesliTheme.mono(size: 12) != MuesliTheme.font(size: 12))
     }
 
+    @Test("the numeric token stays in the text voice but requests tabular figures")
+    func numericKeepsTextVoiceWithTabularFigures() {
+        // Numbers that tick must not shift their neighbours, but a counter is not code -- it
+        // should still read in the text face rather than a monospaced one.
+        let plain = MuesliTheme.nsFont(size: 18, weight: .semibold)
+        let tabular = plain.withTabularFigures()
+
+        #expect(tabular.pointSize == plain.pointSize)
+        #expect(tabular.familyName == plain.familyName)
+        #expect(MuesliTheme.numeric(size: 18, weight: .semibold) != MuesliTheme.mono(size: 18, weight: .semibold))
+    }
+
+    @Test("no main-window view falls back to the rounded system design")
+    func noRoundedSystemDesign() throws {
+        // SF Rounded was a second type voice competing with the window's own. Every text run
+        // that used it now goes through the shared font path.
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourcesDirectory = packageRoot
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("MuesliNativeApp")
+
+        let floating = [
+            "DictationMini", "ContextualSpark", "FloatingMeeting", "FloatingIndicator",
+            "MeetingRecordingPanel", "MeetingPanel",
+        ]
+        let names = try FileManager.default
+            .contentsOfDirectory(atPath: sourcesDirectory.path)
+            .filter { $0.hasSuffix(".swift") }
+            .filter { name in !floating.contains { name.hasPrefix($0) } }
+
+        for name in names {
+            let source = try String(
+                contentsOf: sourcesDirectory.appendingPathComponent(name),
+                encoding: .utf8
+            )
+            #expect(!source.contains("design: .rounded"), "\(name) still uses the rounded design")
+        }
+    }
+
     @Test("SF Symbols keep the system face")
     func symbolsAreNotRoutedThroughInter() throws {
         // 140 of the 382 sites size an SF Symbol. Routing those through a text font would
