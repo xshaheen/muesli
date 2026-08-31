@@ -108,7 +108,7 @@
 
 <p class="eyebrow">Ideation</p>
 <h1>Transcription Quality &amp; Arabic/English Handling</h1>
-<p class="lede">Seven directions for making Muesli transcribe code-switched Egyptian&nbsp;Arabic and English well — ranked, each with a basis you can check. Local-first is a hard constraint throughout; nothing here sends audio off the device.</p>
+<p class="lede">Eight directions for making Muesli transcribe code-switched Egyptian&nbsp;Arabic and English well — ranked, each with a basis you can check. Local-first is a hard constraint throughout; nothing here sends audio off the device.</p>
 
 <div class="meta">
   <span>Date <time datetime="2026-08-31">2026-08-31</time></span>
@@ -119,9 +119,9 @@
 
 <div class="stats">
   <div class="stat"><b>35</b><span>raw candidates</span></div>
-  <div class="stat"><b>7</b><span>survivors</span></div>
+  <div class="stat"><b>8</b><span>survivors</span></div>
   <div class="stat"><b>5</b><span>axes covered</span></div>
-  <div class="stat"><b>5</b><span>bases verified in repo</span></div>
+  <div class="stat"><b>38</b><span>bases verified</span></div>
 </div>
 
 <section id="grounding-context">
@@ -171,6 +171,7 @@
   <li><a href="#idea-5"><span class="n">5</span>Span-triage meeting cleanup so it runs on-device</a></li>
   <li><a href="#idea-6"><span class="n">6</span>Decide meeting duplication in audio, before transcription</a></li>
   <li><a href="#idea-7"><span class="n">7</span>Speculate-and-deoptimise: Parakeet fast, Arabic-blindness as the guard</a></li>
+  <li><a href="#idea-8"><span class="n">8</span>Catch translation in cleanup output, live</a></li>
 </ul>
 
 <article class="idea" id="idea-1">
@@ -192,11 +193,14 @@
     <dt>Rationale</dt>
     <dd>Position-blindness is a <strong>virtue</strong> for monolingual references — it is what lets garbled Arabic score as faithful Arabic while fluent English rendered from Arabic speech does not. It becomes the defect precisely as the reference approaches a balanced mixture, which is exactly the ArzEn corpus. So the instrument's blind spot is centred on the one corpus that matters most here, and “no backend passed the gate on ArzEn” is a claim resting on a number that cannot distinguish preservation from a wholesale swap. Two numbers — Arabic-token recall and Latin-token recall — also express the maintainer's field report (“good Arabic <em>with English keywords preserved</em>”) directly, which no current metric does.</dd>
 
-    <dt>Downsides</dt>
-    <dd>Changes the published ranking, so prior conclusions need restating rather than quietly superseding. The 0.90 threshold was calibrated against the old metric and will need recalibrating. Whether receipts retain enough per-sample state to recompute without a full re-run is unverified — it may cost a sweep.</dd>
+    <dt>Cost, now settled</dt>
+    <dd>Better than “the function exists”: <code>latinTokenPreservation</code> and <code>arabicTokenPreservation</code> are <strong>already computed and stored on every score</strong> (<code>TranscriptionQualityModels.swift:216-217</code>, assigned at <code>:246-251</code>) — and read by nothing outside the tests. But the receipt's stage summary drops them, carrying only <code>faithfulness</code>, confirmed against the 25-08 run's own JSON. So this needs one sweep to persist what the scorer already knows — and since the pinned pass is a sweep anyway, one run answers both questions.</dd>
 
-    <dt>Confidence</dt><dd>92% — the arithmetic is unambiguous and was read directly.</dd>
-    <dt>Complexity</dt><dd>Low–Medium — the replacement function exists; the work is gate policy and recalibration.</dd>
+    <dt>Downsides</dt>
+    <dd>Changes the published ranking, so prior conclusions need restating rather than quietly superseding. The 0.90 threshold was calibrated against the old metric and will need recalibrating — and a uniform threshold over a metric whose achievable ceiling depends on the corpus is itself a silent candidate filter, since a failed gate removes a backend from ranking entirely.</dd>
+
+    <dt>Confidence</dt><dd>92% — the arithmetic is unambiguous, read directly and independently confirmed.</dd>
+    <dt>Complexity</dt><dd>Low–Medium — the scoring exists; the work is receipt schema, gate policy, and recalibration.</dd>
   </dl>
 
   <figure>
@@ -423,7 +427,9 @@
   </div>
   <dl class="fields">
     <dt>Description</dt>
-    <dd>JIT compilers emit fast specialised code under an assumption plus a cheap guard, and on guard failure discard the result and re-run on the generic path. Map that here: Parakeet v3 is the specialised English path (0.063 WER at RTF 0.04), Nemotron pinned <code>ar</code> is the generic path. Transcribe with Parakeet first, apply a text-only guard, and re-run the same audio on Nemotron when it trips. The guard is nearly free because Parakeet's pathology <em>is</em> the detector — at 0.005 faithfulness it essentially never emits Arabic script, so Arabic audio comes back as Latin transliteration with a high out-of-lexicon rate.</dd>
+    <dd>JIT compilers emit fast specialised code under an assumption plus a cheap guard, and on guard failure discard the result and re-run on the generic path. Map that here: Parakeet v3 is the specialised English path (0.063 WER at RTF 0.04), Nemotron pinned <code>ar</code> is the generic path. Transcribe with Parakeet first, apply a text-only guard, and re-run the same audio on Nemotron when it trips.</dd>
+
+    <dd><strong>What the guard can actually be.</strong> Not faithfulness — that scores a hypothesis <em>against a reference</em>, and at inference time there is no reference. The available runtime signal is script distribution over the output alone: Parakeet's measured 0.005 faithfulness is the offline evidence that it never emits Arabic script, which is what makes an output-only script check informative here. The 0.005 figure motivates the guard; it is not the guard.</dd>
 
     <dt>Axis</dt><dd>Backend selection</dd>
 
@@ -440,6 +446,33 @@
     <dt>Complexity</dt><dd>Medium — second-pass plumbing plus a fitted heuristic.</dd>
   </dl>
 </article>
+
+<article class="idea" id="idea-8">
+  <div class="idea-head"><span class="rank">8</span><h3>Catch translation in cleanup output, live</h3></div>
+  <div class="chips">
+    <span class="chip axis">Post-ASR repair</span>
+    <span class="chip conf">Confidence 80%</span>
+    <span class="chip cx">Complexity Low–Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>The cleanup validator checks structure only — unit count, markers, prefix, and a length-ratio floor. Nothing checks whether the cleaned text stayed in the language that was spoken. Score each cleaned unit against its own raw pre-cleanup text and reject on a language shift, exactly as truncation is rejected today.</dd>
+
+    <dt>Axis</dt><dd>Post-ASR repair</dd>
+
+    <dt>Basis</dt>
+    <dd><code>direct:</code> <code>MeetingTranscriptCleanupValidator.swift:34-41</code> states the blind spot outright — “<em>Cross-language repair legitimately moves length in both directions… so the floor is set well below any plausible repair and only catches a response that stopped part-way through an utterance. Structural checks cannot see that case.</em>” <code>direct:</code> <code>TranscriptionQualityModels.swift:285-290</code> names this exact regression as the thing the measurement plan exists to catch: “<em>the recognizer preserved the spoken language and cleanup then translated it away.</em>”</dd>
+
+    <dt>Rationale</dt>
+    <dd>This is the maintainer's first and fifth complaints combined, and the project already built the detector — it just runs offline in the harness and never in the product. Crucially, the objection that sinks a runtime guard elsewhere does not apply here: idea 7's guard has no reference at inference time, but cleanup <em>does</em> — the raw pre-cleanup transcript is right there. So the score is genuinely computable at runtime, which makes this the only idea in the set that <em>prevents</em> the top complaint rather than measuring it after the fact.</dd>
+
+    <dt>Downsides</dt>
+    <dd>Ranked last only because it inherits idea 1's open question: porting the current faithfulness function would port its position-blindness, so which metric to run live is undecided until that resolves. On value alone it would rank far higher. It also adds a rejection path to a stage whose philosophy is already all-or-nothing, so a too-tight threshold silently disables cleanup.</dd>
+
+    <dt>Confidence</dt><dd>80% — blind spot and reference availability both verified; the metric choice is pending.</dd>
+    <dt>Complexity</dt><dd>Low–Medium — a per-unit check inside an existing validator.</dd>
+  </dl>
+</article>
 </section>
 
 <section id="rejection-summary">
@@ -447,7 +480,7 @@
 
 <div class="callout">
   <p class="eyebrow">Process note</p>
-  <p>The fresh-context basis verifier never returned, so filtering fell back to orchestrator-only. To compensate, the five load-bearing <code>direct:</code> citations were opened and read against the repo rather than taken on trust — those carry the “verified in repo” marker above. Bases without that marker rest on the generating agent's own verification reads.</p>
+  <p>A fresh-context basis verifier checked 38 candidates against source independently. It confirmed all five load-bearing claims — the position-blind metric, the inert setting, the annotate-only router, the twelve-character dedupe ceiling, and the hardcoded candidate capacity — and returned three corrections, two of which reshaped ideas above (idea 1's cost, idea 7's guard signal). It refuted two candidates that had already been cut on other grounds, and did not reach full depth on roughly a third of the set; those bases rest on the generating agents' own verification reads.</p>
 </div>
 
 <table>
@@ -472,12 +505,15 @@
     <tr><td>Production faithfulness telemetry from session traces</td><td>Privacy sign-off required, and idea 1 must define the metric first</td></tr>
     <tr><td>Personal corpus from auto-learned edit pairs</td><td>Privacy sign-off required; revisit after idea 1</td></tr>
     <tr><td>Compute the oracle ceiling for per-utterance routing</td><td>Folded into idea 7 as its go/no-go step</td></tr>
+    <tr><td>Stop detecting language — pin <code>ar</code> always (matrix-language framing)</td><td>Basis refuted on verification: the matrix-language model describes code-switched utterances, not a speaker's pure-English output — this doubles down on the ~3× English penalty it was meant to fix</td></tr>
+    <tr><td>Auto-download the language-appropriate model on detected mismatch</td><td>Basis refuted on verification: the cited stderr log fires on download <em>availability</em>, not language mismatch — no such detection exists to replace</td></tr>
+    <tr><td>Sweep <code>prompt_id</code> across ~100 values</td><td>Downgraded on verification: the app enum exposes 12 languages plus auto, not ~100 — the wider space needs new enum cases, not parameter tuning</td></tr>
   </tbody>
 </table>
 </section>
 
 <footer class="composition-signal">
-Composed 2026-08-31 by x-ideate · 35 raw candidates from 5 agents across 6 frames · 7 survivors · grounded in the repo at <code>xshaheen/muesli</code>, the 21-08-2026 measurement run, and three evidence dossiers.
+Composed 2026-08-31 by x-ideate · 35 raw candidates from 5 agents across 6 frames · 8 survivors · 38 bases independently verified · grounded in the repo at <code>xshaheen/muesli</code>, the 21-08-2026 measurement run, and three evidence dossiers.
 </footer>
 
 </div>
