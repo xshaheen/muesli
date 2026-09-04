@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: Transcription Quality &amp; Arabic/English Handling</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --bg:#fbfaf8; --surface:#ffffff; --surface-2:#f4f2ee; --ink:#1c1b19; --ink-2:#55524d;
+    --ink-3:#807c75; --line:#e4e0d9; --accent:#c2410c; --accent-soft:#fdf0e8; --accent-text:#9a3412;
+    --ok:#15803d; --ok-soft:#eefaf1; --warn:#a16207; --warn-soft:#fdf8e7; --info:#1d4ed8; --info-soft:#eef2fe;
+    --radius:10px; --measure:72ch;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#171614; --surface:#1f1e1b; --surface-2:#26241f; --ink:#f0ede8; --ink-2:#bab5ad;
+      --ink-3:#8e8981; --line:#33302a; --accent:#fb923c; --accent-soft:#2e1d10; --accent-text:#fdba74;
+      --ok:#4ade80; --ok-soft:#12251a; --warn:#fbbf24; --warn-soft:#2a2410; --info:#93b4fd; --info-soft:#161d33;
+    }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    font-size:15.5px; line-height:1.65; font-feature-settings:"cv05","ss01";
+  }
+  .page{max-width:940px; margin-inline:auto; padding:56px 28px 96px}
+  p,li{max-width:var(--measure)}
+  code,kbd{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.875em}
+  code{background:var(--surface-2); padding:.12em .38em; border-radius:5px}
+  a{color:var(--accent-text)}
+  .eyebrow{
+    font-size:11.5px; font-weight:600; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--ink-3); margin:0 0 8px
+  }
+  h1{font-size:31px; line-height:1.2; margin:0 0 12px; letter-spacing:-.02em; font-weight:700}
+  h2{font-size:20px; margin:56px 0 16px; letter-spacing:-.01em; padding-bottom:9px; border-bottom:1px solid var(--line)}
+  h3{font-size:16.5px; margin:0 0 4px; letter-spacing:-.005em}
+  .lede{font-size:16.5px; color:var(--ink-2)}
+  .meta{display:flex; flex-wrap:wrap; gap:8px; margin:20px 0 0}
+  .meta span{
+    background:var(--surface); border:1px solid var(--line); border-radius:999px;
+    padding:4px 12px; font-size:12.5px; color:var(--ink-2)
+  }
+  .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:12px; margin:28px 0 0}
+  .stat{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px}
+  .stat b{display:block; font-size:22px; letter-spacing:-.02em; font-weight:650}
+  .stat span{font-size:12px; color:var(--ink-3)}
+  .jump{margin:0 0 28px; padding:0; list-style:none; display:grid; gap:5px}
+  .jump a{text-decoration:none; color:var(--ink-2); font-size:14px}
+  .jump a:hover{color:var(--accent-text)}
+  .jump .n{color:var(--ink-3); font-variant-numeric:tabular-nums; margin-right:8px}
+  article.idea{
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    padding:22px 24px; margin:0 0 18px
+  }
+  .idea-head{display:flex; gap:12px; align-items:baseline; flex-wrap:wrap}
+  .rank{
+    font-variant-numeric:tabular-nums; font-weight:650; color:var(--accent-text);
+    background:var(--accent-soft); border:1px solid var(--line); border-radius:999px;
+    padding:2px 10px; font-size:12.5px
+  }
+  .chips{display:flex; gap:6px; flex-wrap:wrap; margin:12px 0 16px}
+  .chip{
+    border-radius:999px; padding:3px 11px; font-size:11.5px; font-weight:500;
+    border:1px solid var(--line); background:var(--surface-2); color:var(--ink-2)
+  }
+  .chip.axis{background:var(--info-soft); color:var(--info); border-color:transparent}
+  .chip.conf{background:var(--ok-soft); color:var(--ok); border-color:transparent}
+  .chip.cx{background:var(--warn-soft); color:var(--warn); border-color:transparent}
+  dl.fields{margin:0; display:grid; gap:14px}
+  dl.fields dt{
+    font-size:11.5px; font-weight:600; letter-spacing:.075em; text-transform:uppercase;
+    color:var(--ink-3); margin-bottom:3px
+  }
+  dl.fields dd{margin:0; color:var(--ink-2)}
+  dl.fields dd strong{color:var(--ink)}
+  .verified{
+    display:inline-block; font-size:11px; font-weight:600; letter-spacing:.05em;
+    text-transform:uppercase; color:var(--ok); background:var(--ok-soft);
+    border-radius:999px; padding:2px 9px; margin-left:6px
+  }
+  figure{margin:18px 0 4px; padding:16px; background:var(--surface-2); border-radius:var(--radius); overflow-x:auto}
+  figure svg{display:block; margin-inline:auto; max-width:100%; height:auto}
+  figcaption{font-size:12.5px; color:var(--ink-3); margin-top:10px; text-align:center}
+  table{border-collapse:collapse; width:100%; font-size:14px; margin:16px 0}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{font-size:11.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-3); font-weight:600}
+  tbody tr:last-child td{border-bottom:none}
+  .callout{
+    background:var(--warn-soft); border:1px solid var(--line); border-radius:var(--radius);
+    padding:16px 18px; margin:20px 0
+  }
+  .callout .eyebrow{color:var(--warn)}
+  .callout p{margin:0; color:var(--ink-2)}
+  footer.composition-signal{
+    margin-top:64px; padding-top:18px; border-top:1px solid var(--line);
+    font-size:12.5px; color:var(--ink-3)
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<p class="eyebrow">Ideation</p>
+<h1>Transcription Quality &amp; Arabic/English Handling</h1>
+<p class="lede">Eight directions for making Muesli transcribe code-switched Egyptian&nbsp;Arabic and English well — ranked, each with a basis you can check. Local-first is a hard constraint throughout; nothing here sends audio off the device.</p>
+
+<div class="meta">
+  <span>Date <time datetime="2026-08-31">2026-08-31</time></span>
+  <span>Topic <code>transcription-multilingual</code></span>
+  <span>Focus transcription quality &amp; Arabic/English handling</span>
+  <span>Mode repo-grounded</span>
+</div>
+
+<div class="stats">
+  <div class="stat"><b>35</b><span>raw candidates</span></div>
+  <div class="stat"><b>8</b><span>survivors</span></div>
+  <div class="stat"><b>5</b><span>axes covered</span></div>
+  <div class="stat"><b>38</b><span>bases verified</span></div>
+</div>
+
+<section id="grounding-context">
+<h2>Grounding Context</h2>
+
+<p><strong>Codebase context.</strong> Muesli is a local-first macOS dictation and meeting-transcription app; all speech-to-text runs on-device. Nine ASR backends ship, including the newly merged Apple SpeechAnalyzer (unmeasured). Cloud ASR is excluded by the product's stated identity, so every idea below stays on-device.</p>
+
+<p><strong>What the harness measured</strong> (1,182 samples per backend, four corpora, <em>automatic</em> language detection):</p>
+
+<table>
+  <thead><tr><th>Cohort</th><th>Best</th><th>Notable</th></tr></thead>
+  <tbody>
+    <tr><td>English</td><td>Cohere 0.055 · Whisper LT 0.057 · Parakeet v3 0.063</td><td>Nemotron 0.186 — ~3× Parakeet</td></tr>
+    <tr><td>Egyptian Arabic</td><td>Whisper LT 0.386 · Nemotron 0.406</td><td>Parakeet v3 faithfulness <strong>0.005</strong> — it essentially never emits Arabic script</td></tr>
+    <tr><td>Arabic–English (ArzEn)</td><td>— none passed the 0.90 gate</td><td>Best faithfulness Nemotron 0.675</td></tr>
+  </tbody>
+</table>
+
+<p>Spontaneous Arabic is roughly <strong>3× harder</strong> than read Arabic (Whisper LT 0.145 → 0.457), and Cohere collapses from 0.918 to 0.013 faithfulness across that same split.</p>
+
+<p><strong>Architecture, verified in source.</strong> The three backends condition on language in fundamentally different ways. Parakeet's <code>language</code> is decoder-side token filtering that never reaches a model input — and FluidAudio's <code>Script</code> enum has only Latin, Cyrillic and Greek, so Arabic is not modelled at all. Nemotron's <code>prompt_id</code> is a real CoreML encoder input. Whisper's <code>language</code> is a real decoder prefill token, and Whisper is the only backend that also accepts vocabulary biasing.</p>
+
+<p><strong>External context.</strong> Code-switching ASR is genuinely hard: a 2025 review of 127 end-to-end papers puts the best 2024 model at <strong>48.4% WER</strong> on a comparable Spanish–English benchmark. Muesli's best ArzEn figure (0.614) sits near that floor — these numbers are not obviously a Muesli defect. The literature's design space runs from per-segment LID cascades (cheap, breaks on intra-sentential switches) through per-token LID to intra-word LID, which Arabic–English needs because speakers switch <em>within</em> a word. One counter-signal is worth holding onto: large multilingual models tend to do <em>better</em> on code-switched data even when weaker on monolingual Arabic — an argument against aggressive pinning.</p>
+
+<p><strong>The maintainer's own report.</strong> They run Nemotron pinned to <code>ar</code> and say it produces good Egyptian Arabic <em>with English keywords preserved</em> — which the automatic-mode faithfulness figure of 0.675 does not predict. Pinned mode has never been measured.</p>
+</section>
+
+<section id="topic-axes">
+<h2>Topic Axes</h2>
+<ol>
+  <li><strong>Model conditioning</strong> — what you can tell a model before it decodes</li>
+  <li><strong>Backend selection</strong> — which model runs for which utterance</li>
+  <li><strong>Post-ASR repair</strong> — cleanup, styles, custom words</li>
+  <li><strong>Measurement</strong> — what the harness can actually settle</li>
+  <li><strong>Meeting pipeline</strong> — live vs final, speaker attribution</li>
+</ol>
+</section>
+
+<section id="ranked-ideas">
+<h2>Ranked Ideas</h2>
+
+<ul class="jump">
+  <li><a href="#idea-1"><span class="n">1</span>Make the code-switching verdict measurable</a></li>
+  <li><a href="#idea-2"><span class="n">2</span>Wire the meeting language setting to real conditioning</a></li>
+  <li><a href="#idea-3"><span class="n">3</span>Make <code>routeToBackend</code> actually select a backend</a></li>
+  <li><a href="#idea-4"><span class="n">4</span>Default-on Mixed-Language Repair for bilingual users</a></li>
+  <li><a href="#idea-5"><span class="n">5</span>Span-triage meeting cleanup so it runs on-device</a></li>
+  <li><a href="#idea-6"><span class="n">6</span>Decide meeting duplication in audio, before transcription</a></li>
+  <li><a href="#idea-7"><span class="n">7</span>Speculate-and-deoptimise: Parakeet fast, Arabic-blindness as the guard</a></li>
+  <li><a href="#idea-8"><span class="n">8</span>Catch translation in cleanup output, live</a></li>
+</ul>
+
+<article class="idea" id="idea-1">
+  <div class="idea-head"><span class="rank">1</span><h3>Make the code-switching verdict measurable</h3></div>
+  <div class="chips">
+    <span class="chip axis">Measurement</span>
+    <span class="chip conf">Confidence 92%</span>
+    <span class="chip cx">Complexity Low–Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>The faithfulness metric that gates every Arabic conclusion is position-blind: it compares two <em>global</em> script histograms. On a 50/50 code-switched utterance, a hypothesis that renders the Arabic half in English <em>and</em> the English half in Arabic keeps the same overall Arabic share and scores a perfect 1.0. Replace it on the mixed corpus with the per-script instrument already sitting in the same file — <code>tokenPreservation(script:)</code>, reported separately for Arabic and Latin — then run the pinned-language pass that has never been measured.</dd>
+
+    <dt>Axis</dt><dd>Measurement</dd>
+
+    <dt>Basis <span class="verified">verified in repo</span></dt>
+    <dd><code>direct:</code> <code>TranscriptionQualityScoring.swift:221</code> — <code>return 1 - abs(referenceShare - hypothesisShare)</code>. The docstring at <code>:205-209</code> states the design outright: it “reads two script histograms and never compares a hypothesis token against a reference token.” The replacement already exists at <code>:251</code> — <code>tokenPreservation</code>, “share of the reference's <code>script</code> tokens that survive into the hypothesis.” Two ideation frames reached this independently; the orchestrator confirmed the arithmetic by reading the function.</dd>
+
+    <dt>Rationale</dt>
+    <dd>Position-blindness is a <strong>virtue</strong> for monolingual references — it is what lets garbled Arabic score as faithful Arabic while fluent English rendered from Arabic speech does not. It becomes the defect precisely as the reference approaches a balanced mixture, which is exactly the ArzEn corpus. So the instrument's blind spot is centred on the one corpus that matters most here, and “no backend passed the gate on ArzEn” is a claim resting on a number that cannot distinguish preservation from a wholesale swap. Two numbers — Arabic-token recall and Latin-token recall — also express the maintainer's field report (“good Arabic <em>with English keywords preserved</em>”) directly, which no current metric does.</dd>
+
+    <dt>Cost, now settled</dt>
+    <dd>Better than “the function exists”: <code>latinTokenPreservation</code> and <code>arabicTokenPreservation</code> are <strong>already computed and stored on every score</strong> (<code>TranscriptionQualityModels.swift:216-217</code>, assigned at <code>:246-251</code>) — and read by nothing outside the tests. But the receipt's stage summary drops them, carrying only <code>faithfulness</code>, confirmed against the 25-08 run's own JSON. So this needs one sweep to persist what the scorer already knows — and since the pinned pass is a sweep anyway, one run answers both questions.</dd>
+
+    <dt>Downsides</dt>
+    <dd>Changes the published ranking, so prior conclusions need restating rather than quietly superseding. The 0.90 threshold was calibrated against the old metric and will need recalibrating — and a uniform threshold over a metric whose achievable ceiling depends on the corpus is itself a silent candidate filter, since a failed gate removes a backend from ranking entirely.</dd>
+
+    <dt>Confidence</dt><dd>92% — the arithmetic is unambiguous, read directly and independently confirmed.</dd>
+    <dt>Complexity</dt><dd>Low–Medium — the scoring exists; the work is receipt schema, gate policy, and recalibration.</dd>
+  </dl>
+
+  <figure>
+    <svg viewBox="0 0 660 208" role="img" aria-label="A reference utterance that is half Arabic and half English, and a hypothesis with both halves swapped, both producing a 50 percent Arabic share and therefore a faithfulness score of 1.0.">
+      <style>
+        .lbl{font:500 12px Inter,sans-serif;fill:#55524d}
+        .ttl{font:600 12.5px Inter,sans-serif;fill:#1c1b19}
+        .big{font:650 17px Inter,sans-serif}
+        .ar{fill:#c2410c}.en{fill:#1d4ed8}
+      </style>
+      <text x="16" y="20" class="ttl">Reference</text>
+      <rect x="16" y="30" width="150" height="34" rx="5" fill="#fdf0e8"/>
+      <text x="91" y="52" class="lbl ar" text-anchor="middle">Arabic span</text>
+      <rect x="170" y="30" width="150" height="34" rx="5" fill="#eef2fe"/>
+      <text x="245" y="52" class="lbl en" text-anchor="middle">English span</text>
+
+      <text x="16" y="102" class="ttl">Hypothesis — both halves swapped</text>
+      <rect x="16" y="112" width="150" height="34" rx="5" fill="#eef2fe"/>
+      <text x="91" y="134" class="lbl en" text-anchor="middle">English span</text>
+      <rect x="170" y="112" width="150" height="34" rx="5" fill="#fdf0e8"/>
+      <text x="245" y="134" class="lbl ar" text-anchor="middle">Arabic span</text>
+
+      <line x1="360" y1="24" x2="360" y2="184" stroke="#e4e0d9" stroke-width="1"/>
+
+      <text x="392" y="46" class="lbl">Arabic share, reference</text>
+      <text x="392" y="70" class="big" fill="#55524d">50%</text>
+      <text x="392" y="110" class="lbl">Arabic share, hypothesis</text>
+      <text x="392" y="134" class="big" fill="#55524d">50%</text>
+      <text x="392" y="172" class="lbl">faithfulness = 1 − |Δ| =</text>
+      <text x="576" y="172" class="big" fill="#15803d">1.0</text>
+    </svg>
+    <figcaption>Every word is in the wrong language, and the metric scores it perfect.</figcaption>
+  </figure>
+</article>
+
+<article class="idea" id="idea-2">
+  <div class="idea-head"><span class="rank">2</span><h3>Wire the meeting language setting to real conditioning</h3></div>
+  <div class="chips">
+    <span class="chip axis">Model conditioning</span>
+    <span class="chip conf">Confidence 90%</span>
+    <span class="chip cx">Complexity Low</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd><code>AppConfig.meetingSpokenLanguage</code> is a real, persisted, user-settable field with its own type and migration path — and no transcription code reads it. A user who explicitly tells Muesli “this meeting is in Arabic” changes nothing: Nemotron's <code>prompt_id</code> and Whisper's decoder-side language token never receive the signal. Feed it to both.</dd>
+
+    <dt>Axis</dt><dd>Model conditioning</dd>
+
+    <dt>Basis <span class="verified">verified in repo</span></dt>
+    <dd><code>direct:</code> a full-source grep returns ten hits for <code>meetingSpokenLanguage</code>, every one inside <code>Models.swift</code> (declaration, coding key, decode, legacy migration). Zero hits in <code>MeetingSession.swift</code>, <code>TranscriptionRuntime.swift</code>, or any backend file. Contrast with <code>NemotronRNNTEngine.swift:174</code>, where <code>prompt_id</code> is bound as a genuine <code>MLFeatureValue</code> encoder input.</dd>
+
+    <dt>Rationale</dt>
+    <dd>A user-facing setting that silently does nothing is worse than an absent one, because the user believes they have already solved the problem and stops looking. This is also the meetings analogue of the exact configuration the maintainer reports works in dictation — pinning Nemotron to <code>ar</code>. Meetings currently have no equivalent lever at all, so this is plausibly the cheapest route to making a known-good behaviour generalise.</dd>
+
+    <dt>Downsides</dt>
+    <dd>Scope needs deciding: does it feed only Nemotron's <code>prompt_id</code>, or also Whisper, Cohere and Indic language arguments? Pinning also runs against the research signal that multilingual models handle code-switching better <em>unpinned</em> — so it should ship behind idea 1's measurement rather than on intuition.</dd>
+
+    <dt>Confidence</dt><dd>90% — the inertness is verified; the benefit depends on idea 1's outcome.</dd>
+    <dt>Complexity</dt><dd>Low — the field, the UI and the conditioning inputs all already exist.</dd>
+  </dl>
+</article>
+
+<article class="idea" id="idea-3">
+  <div class="idea-head"><span class="rank">3</span><h3>Make <code>routeToBackend</code> actually select a backend</h3></div>
+  <div class="chips">
+    <span class="chip axis">Backend selection</span>
+    <span class="chip conf">Confidence 88%</span>
+    <span class="chip cx">Complexity Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Muesli has a complete language-routing layer — <code>TranscriptionLanguageRouter.resolve</code>, per-backend <code>languageCapabilities()</code>, a decision type with pinned / automatic / constrained-candidate arms. Every one of its five call sites feeds a UI string or a telemetry trace. <code>routeToBackend</code> switches <em>on</em> a backend chosen upstream and never <em>picks</em> one. Connect the decision that is already being computed to the selection that currently ignores it.</dd>
+
+    <dt>Axis</dt><dd>Backend selection</dd>
+
+    <dt>Basis <span class="verified">verified in repo</span></dt>
+    <dd><code>direct:</code> the evidence dossier's own summary line — “<em>Where the decision lands: <code>routeToBackend</code> switches on the backend, never picks one</em>” and “<em>No filter is by language</em>”. Call sites: <code>Models.swift:432</code> (builds a presentation string), <code>SessionTraceRuntime.swift:270</code> (telemetry), <code>MuesliController.swift:12868</code> and <code>TranscribeCommand.swift:427</code> (resolve, then discard). Streaming dictation bypasses the router entirely at <code>MuesliController.swift:11502</code>.</dd>
+
+    <dt>Rationale</dt>
+    <dd>This is the maintainer's third pain point stated as a mechanism: they run Nemotron globally and pay roughly 3× Parakeet's English error to keep Arabic working, because one global default is the only thing the dispatch path understands. The project's own findings document already calls per-language routing “evidence-backed” — it simply was never wired. Until it is, every future language-capability finding dead-ends in a UI label.</dd>
+
+    <dt>Downsides</dt>
+    <dd>Touches the dispatch path for every ASR call, so it is an architecture-boundary change. Routing only helps if the right model is actually downloaded, which today fails silently to a stderr line. And it must not fire mid-utterance on genuinely code-switched audio, where the research says a single multilingual model does better.</dd>
+
+    <dt>Confidence</dt><dd>88% — the gap is certain; the size of the win depends on idea 7's oracle check.</dd>
+    <dt>Complexity</dt><dd>Medium — the decision layer exists; the dispatch seam is the work.</dd>
+  </dl>
+
+  <figure>
+    <svg viewBox="0 0 660 176" role="img" aria-label="Today the language decision flows only to a UI string and a telemetry trace, while backend selection is driven separately by a single global default. The proposal connects the decision to the selection.">
+      <style>
+        .b{fill:#ffffff;stroke:#e4e0d9;stroke-width:1}
+        .t{font:500 11.5px Inter,sans-serif;fill:#55524d;text-anchor:middle}
+        .h{font:600 11px Inter,sans-serif;fill:#807c75;letter-spacing:.06em}
+        .dead{stroke:#c0bbb2;stroke-width:1.4;fill:none}
+        .live{stroke:#15803d;stroke-width:2;fill:none}
+      </style>
+      <text x="16" y="16" class="h">TODAY</text>
+      <rect x="16" y="28" width="118" height="34" rx="6" class="b"/>
+      <text x="75" y="49" class="t">resolve()</text>
+      <path class="dead" d="M134 39 H196" marker-end="url(#ag)"/>
+      <rect x="200" y="24" width="108" height="20" rx="5" class="b"/>
+      <text x="254" y="38" class="t">UI string</text>
+      <path class="dead" d="M134 51 H196" marker-end="url(#ag)"/>
+      <rect x="200" y="52" width="108" height="20" rx="5" class="b"/>
+      <text x="254" y="66" class="t">telemetry</text>
+
+      <rect x="380" y="28" width="130" height="34" rx="6" class="b"/>
+      <text x="445" y="49" class="t">global default</text>
+      <path class="dead" d="M510 45 H566" marker-end="url(#ag)"/>
+      <rect x="570" y="28" width="74" height="34" rx="6" class="b"/>
+      <text x="607" y="49" class="t">backend</text>
+
+      <line x1="16" y1="96" x2="644" y2="96" stroke="#e4e0d9"/>
+
+      <text x="16" y="122" class="h">PROPOSED</text>
+      <rect x="16" y="132" width="118" height="34" rx="6" class="b"/>
+      <text x="75" y="153" class="t">resolve()</text>
+      <path class="live" d="M134 149 H566" marker-end="url(#agg)"/>
+      <text x="350" y="143" class="t" style="fill:#15803d">selects</text>
+      <rect x="570" y="132" width="74" height="34" rx="6" class="b"/>
+      <text x="607" y="153" class="t">backend</text>
+
+      <defs>
+        <marker id="ag" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+          <path d="M0 0 L7 3.5 L0 7 z" fill="#c0bbb2"/>
+        </marker>
+        <marker id="agg" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+          <path d="M0 0 L7 3.5 L0 7 z" fill="#15803d"/>
+        </marker>
+      </defs>
+    </svg>
+    <figcaption>The decision is already computed every time — it just never reaches the choice.</figcaption>
+  </figure>
+</article>
+
+<article class="idea" id="idea-4">
+  <div class="idea-head"><span class="rank">4</span><h3>Default-on Mixed-Language Repair for bilingual users</h3></div>
+  <div class="chips">
+    <span class="chip axis">Post-ASR repair</span>
+    <span class="chip conf">Confidence 85%</span>
+    <span class="chip cx">Complexity Low</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>A prompt preset built for exactly this problem already ships: <em>Mixed-Language Repair (Arabic + English)</em>, which restores <code>البرايمريكية</code> to “primary key” and reads <code>وأنتو مين</code> in a technical discussion as “one-to-many”. It sits behind two separate opt-ins — the preset must be selected manually, and the post-processor that runs it is off by default. Detect the bilingual case (two selected languages, or dictionary entries in both scripts) and default it on for those users.</dd>
+
+    <dt>Axis</dt><dd>Post-ASR repair</dd>
+
+    <dt>Basis</dt>
+    <dd><code>direct:</code> the preset's own prompt — “<em>The speech recognizer was monolingual, so foreign-language terms were transcribed phonetically into the text's own script and are now nonsense. Your job is to restore them.</em>” <code>Models.swift:1640-1645</code> explains why it cannot be the default for everyone: “<em>The dictation default forbids paraphrasing, rewording, and adding words — correct when the recognizer heard the right language, and fatal here, because restoring <code>primary key</code> from البرايمريكية <strong>is</strong> changing the words.</em>” And <code>Models.swift:2117</code> — <code>var enablePostProcessor: Bool = false</code>.</dd>
+
+    <dt>Rationale</dt>
+    <dd>This is a discoverability problem wearing the costume of a capability gap. The repair for the maintainer's top complaint is written, shipped and tested — and a code-switching user has no obvious reason to go looking for it behind two toggles. The generic default prompt does not merely fail to help here; it actively forbids the word-level changes the repair requires.</dd>
+
+    <dt>Downsides</dt>
+    <dd>Changes default behaviour for a user segment, so the detection heuristic needs to be right — a false positive turns on word-changing repair for someone who did not ask. It also costs a model pass per dictation. And repair is downstream of the recogniser: it can restore a phonetically mangled term, but it cannot recover a span the model translated away, because translation leaves no artifact to reason from.</dd>
+
+    <dt>Confidence</dt><dd>85% — the capability is certain; the detection heuristic is the open part.</dd>
+    <dt>Complexity</dt><dd>Low — defaults and detection, no new repair logic.</dd>
+  </dl>
+</article>
+
+<article class="idea" id="idea-5">
+  <div class="idea-head"><span class="rank">5</span><h3>Span-triage meeting cleanup so it runs on-device</h3></div>
+  <div class="chips">
+    <span class="chip axis">Post-ASR repair</span>
+    <span class="chip conf">Confidence 70%</span>
+    <span class="chip cx">Complexity High</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Meeting cleanup currently sends the whole transcript to an LLM, which is why on-device backends are structurally ineligible and why the feature ships off by default on privacy grounds. Borrow the clinical move: rather than ordering every test on every patient, score each unit for repair-need — Arabic-script tokens of low lexical plausibility, or hits against a mined per-user code-switch glossary — and send only suspect spans with a small window.</dd>
+
+    <dt>Axis</dt><dd>Post-ASR repair</dd>
+
+    <dt>Basis</dt>
+    <dd><code>direct:</code> <code>MeetingTranscriptCleanupPolicy.swift:22-31</code> — on-device is ineligible because “<em><code>Qwen3PostProcessor.maxContextTokens</code> is 1024 for the entire context — prompt, transcript, and output together — which no useful chunking of a meeting transcript fits inside.</em>” <code>Models.swift:2118-2123</code> — cleanup is off because “<em>it costs a model pass per meeting, and depending on the configured endpoint it may send the full transcript of a private conversation to a third party.</em>” <code>external:</code> pretest probability and likelihood-ratio test ordering in differential diagnosis; structurally the same move LSP code actions make by attaching fixes to diagnostic ranges instead of rewriting the file.</dd>
+
+    <dt>Rationale</dt>
+    <dd>The repair task is intrinsically sparse — a handful of mangled technical terms in an otherwise-correct transcript. Whole-transcript submission pays full cost for near-zero expected edits, and creates the all-or-nothing discard the code already warns about. Span targeting does three things at once: it shrinks context to fit the 1024-token local ceiling, it converts all-or-nothing into per-span accept-or-reject, and it removes the privacy objection because nothing leaves the machine. The project's own findings say meeting cleanup outranks meeting ASR — this is what makes that lever compatible with local-first rather than in tension with it.</dd>
+
+    <dt>Downsides</dt>
+    <dd>The suspect-span detector has no calibrated prior and must bootstrap from the user's own transcripts. A clinical differential works against a closed set with published likelihood ratios; this does not. Getting the detector wrong in the quiet direction means repair silently stops happening.</dd>
+
+    <dt>Confidence</dt><dd>70% — the constraints are verified; the detector is unproven.</dd>
+    <dt>Complexity</dt><dd>High — a new scoring stage plus per-span accept/reject plumbing.</dd>
+  </dl>
+</article>
+
+<article class="idea" id="idea-6">
+  <div class="idea-head"><span class="rank">6</span><h3>Decide meeting duplication in audio, before transcription</h3></div>
+  <div class="chips">
+    <span class="chip axis">Meeting pipeline</span>
+    <span class="chip conf">Confidence 72%</span>
+    <span class="chip cx">Complexity Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>The “published as both You and the remote speaker” bug has a precise mechanism: dedupe runs only <em>within</em> the system track, and there is no mic-versus-system equivalent. The obvious fix — extend the existing text dedupe across tracks — is a trap, because that primitive refuses any segment of twelve or more visible characters. Multi-sensor track fusion suggests the better move: never associate by comparing what each sensor <em>reports</em>. Muesli already cancels system audio out of the mic; add the reverse channel to the system VAD and resolve duplication on audio, before either track is transcribed.</dd>
+
+    <dt>Axis</dt><dd>Meeting pipeline</dd>
+
+    <dt>Basis <span class="verified">verified in repo</span></dt>
+    <dd><code>direct:</code> <code>TranscriptReconciler.swift:194-211</code> — <code>dedupeSystemSegments</code> iterates system segments against system segments only. <code>TranscriptReconciler.swift:226-227</code> — <code>let segmentVisibleLength = visibleLength(of: segment.text)</code> then <code>guard segmentVisibleLength &lt; 12 else { return false }</code>, confirmed by direct read. <code>MeetingSession.swift:1856-1865</code> — “<em>AEC: clean mic using position-aligned system reference … Raw mic VAD sees speaker playback bleed and can create false <code>You</code> chunks even when AEC removed that speech from the final mic audio.</em>” <code>external:</code> registration bias estimation in multi-sensor track fusion.</dd>
+
+    <dt>Rationale</dt>
+    <dd>The twelve-character ceiling is the load-bearing detail: anyone “extending the existing dedupe” inherits a guard that excludes every ordinary sentence, ships, and finds the bug unchanged. Deciding in audio is also language-independent — a text comparison on Arabic additionally has to fight normalisation and orthographic variation, which is exactly where it is least reliable.</dd>
+
+    <dt>Downsides</dt>
+    <dd>Signal-processing work in the meeting hot path, which is riskier than a text pass and harder to test. A per-meeting registration offset has to be estimated and can drift. The cheap text fix may be good enough for short interjections, which is where duplicates are most visible.</dd>
+
+    <dt>Confidence</dt><dd>72% — mechanism verified; the audio approach is the judgement call.</dd>
+    <dt>Complexity</dt><dd>Medium — reverse-AEC on an existing pipeline, plus offset estimation.</dd>
+  </dl>
+</article>
+
+<article class="idea" id="idea-7">
+  <div class="idea-head"><span class="rank">7</span><h3>Speculate-and-deoptimise: Parakeet fast, Arabic-blindness as the guard</h3></div>
+  <div class="chips">
+    <span class="chip axis">Backend selection</span>
+    <span class="chip conf">Confidence 68%</span>
+    <span class="chip cx">Complexity Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>JIT compilers emit fast specialised code under an assumption plus a cheap guard, and on guard failure discard the result and re-run on the generic path. Map that here: Parakeet v3 is the specialised English path (0.063 WER at RTF 0.04), Nemotron pinned <code>ar</code> is the generic path. Transcribe with Parakeet first, apply a text-only guard, and re-run the same audio on Nemotron when it trips.</dd>
+
+    <dd><strong>What the guard can actually be.</strong> Not faithfulness — that scores a hypothesis <em>against a reference</em>, and at inference time there is no reference. The available runtime signal is script distribution over the output alone: Parakeet's measured 0.005 faithfulness is the offline evidence that it never emits Arabic script, which is what makes an output-only script check informative here. The 0.005 figure motivates the guard; it is not the guard.</dd>
+
+    <dt>Axis</dt><dd>Backend selection</dd>
+
+    <dt>Basis</dt>
+    <dd><code>direct:</code> the measured pair — Parakeet v3 English 0.063 at RTF 0.04, and Egyptian Arabic faithfulness 0.005, “it essentially never emits Arabic script.” <code>external:</code> Hölzle, Chambers &amp; Ungar, <em>Debugging Optimized Code with Dynamic Deoptimization</em> (PLDI 1992); HotSpot uncommon traps. <code>reasoned:</code> a deopt guard must be cheap relative to the fast path and asymmetric in cost. That asymmetry holds and dictates the tuning: a false trip on English costs one wasted Nemotron pass, a missed trip on Arabic ships gibberish — so tune to minimise misses and accept over-tripping, the opposite of a balanced classifier. Because deopt re-executes rather than patches, it never produces a half-repaired artifact.</dd>
+
+    <dt>Rationale</dt>
+    <dd>This fixes the 3× English penalty without giving up Arabic, needs no new model, and — unusually — its go/no-go is answerable before any production code exists. The guard threshold can be fitted offline against the 1,182 Parakeet hypotheses already measured, with known reference languages, so its precision and recall are knowable in advance. It also reads a property the team already measured purely as a defect and turns it into a signal.</dd>
+
+    <dt>Downsides</dt>
+    <dd>JIT guards are sound by construction; a text heuristic is not, so some Arabic will slip through. Worst-case latency is two passes. It presumes utterances are mostly monolingual — a genuinely intra-sentential switch satisfies neither path, which is where idea 1's stratification decides whether this is worth building.</dd>
+
+    <dt>Confidence</dt><dd>68% — the mechanism is sound; the guard's separability is unproven until fitted.</dd>
+    <dt>Complexity</dt><dd>Medium — second-pass plumbing plus a fitted heuristic.</dd>
+  </dl>
+</article>
+
+<article class="idea" id="idea-8">
+  <div class="idea-head"><span class="rank">8</span><h3>Catch translation in cleanup output, live</h3></div>
+  <div class="chips">
+    <span class="chip axis">Post-ASR repair</span>
+    <span class="chip conf">Confidence 80%</span>
+    <span class="chip cx">Complexity Low–Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>The cleanup validator checks structure only — unit count, markers, prefix, and a length-ratio floor. Nothing checks whether the cleaned text stayed in the language that was spoken. Score each cleaned unit against its own raw pre-cleanup text and reject on a language shift, exactly as truncation is rejected today.</dd>
+
+    <dt>Axis</dt><dd>Post-ASR repair</dd>
+
+    <dt>Basis</dt>
+    <dd><code>direct:</code> <code>MeetingTranscriptCleanupValidator.swift:34-41</code> states the blind spot outright — “<em>Cross-language repair legitimately moves length in both directions… so the floor is set well below any plausible repair and only catches a response that stopped part-way through an utterance. Structural checks cannot see that case.</em>” <code>direct:</code> <code>TranscriptionQualityModels.swift:285-290</code> names this exact regression as the thing the measurement plan exists to catch: “<em>the recognizer preserved the spoken language and cleanup then translated it away.</em>”</dd>
+
+    <dt>Rationale</dt>
+    <dd>This is the maintainer's first and fifth complaints combined, and the project already built the detector — it just runs offline in the harness and never in the product. Crucially, the objection that sinks a runtime guard elsewhere does not apply here: idea 7's guard has no reference at inference time, but cleanup <em>does</em> — the raw pre-cleanup transcript is right there. So the score is genuinely computable at runtime, which makes this the only idea in the set that <em>prevents</em> the top complaint rather than measuring it after the fact.</dd>
+
+    <dt>Downsides</dt>
+    <dd>Ranked last only because it inherits idea 1's open question: porting the current faithfulness function would port its position-blindness, so which metric to run live is undecided until that resolves. On value alone it would rank far higher. It also adds a rejection path to a stage whose philosophy is already all-or-nothing, so a too-tight threshold silently disables cleanup.</dd>
+
+    <dt>Confidence</dt><dd>80% — blind spot and reference availability both verified; the metric choice is pending.</dd>
+    <dt>Complexity</dt><dd>Low–Medium — a per-unit check inside an existing validator.</dd>
+  </dl>
+</article>
+</section>
+
+<section id="rejection-summary">
+<h2>Rejection Summary</h2>
+
+<div class="callout">
+  <p class="eyebrow">Process note</p>
+  <p>A fresh-context basis verifier checked 38 candidates against source independently. It confirmed all five load-bearing claims — the position-blind metric, the inert setting, the annotate-only router, the twelve-character dedupe ceiling, and the hardcoded candidate capacity — and returned three corrections, two of which reshaped ideas above (idea 1's cost, idea 7's guard signal). It refuted two candidates that had already been cut on other grounds, and did not reach full depth on roughly a third of the set; those bases rest on the generating agents' own verification reads.</p>
+</div>
+
+<table>
+  <thead><tr><th>Idea</th><th>Reason rejected</th></tr></thead>
+  <tbody>
+    <tr><td>Sweep <code>prompt_id</code> across its ~100 values</td><td>Folded into idea 1 — a measurement run that the metric fix must precede</td></tr>
+    <tr><td>Flip <code>constrainedCandidateCapacity</code> off zero</td><td>Duplicates idea 3's mechanism at higher inference cost</td></tr>
+    <tr><td>Diarization <code>try?</code> silently collapsing all speakers to “Others”</td><td>Real defect, but a bug report rather than a direction</td></tr>
+    <tr><td>Route language from the keyboard input source</td><td>Weaker signal than idea 7 — this user types English while speaking Arabic</td></tr>
+    <tr><td>Frontmost app as a zero-latency language prior</td><td>Overlaps idea 3; revisit once routing actually selects</td></tr>
+    <tr><td>Ship one model only (Whisper Large Turbo)</td><td>A consequence of idea 1's answer, not an independent move</td></tr>
+    <tr><td>Auto-download the language-appropriate model on mismatch</td><td>Depends on idea 3 existing first</td></tr>
+    <tr><td>Give dictation the second pass meetings already have</td><td>Depends on idea 3; also a latency product decision</td></tr>
+    <tr><td>Skip cleanup entirely on code-switched content</td><td>Dominated by ideas 4 and 5</td></tr>
+    <tr><td>Carry ASR n-best into the repair prompt</td><td>Architectural — touches every backend interface</td></tr>
+    <tr><td>S1-mini has no Arabic equivalent normalizer</td><td>Real gap, but a model-training ask rather than buildable work here</td></tr>
+    <tr><td>Script-aware punctuation instead of ASCII-only</td><td>Genuine and cheap, but a ticket rather than a direction</td></tr>
+    <tr><td>Per-segment live-vs-final transcript arbitration</td><td>Dominated by idea 1 — needs a trustworthy metric first</td></tr>
+    <tr><td>Default <code>use_live_meeting_transcript_as_final</code> on for Arabic</td><td>A config experiment inside idea 2</td></tr>
+    <tr><td>Auto-infer the language profile from locale and history</td><td>Dominated by ideas 2 and 7</td></tr>
+    <tr><td>Emit a machine-readable <code>defaultBackend(for:)</code> table</td><td>Premature until idea 3 exists</td></tr>
+    <tr><td>Production faithfulness telemetry from session traces</td><td>Privacy sign-off required, and idea 1 must define the metric first</td></tr>
+    <tr><td>Personal corpus from auto-learned edit pairs</td><td>Privacy sign-off required; revisit after idea 1</td></tr>
+    <tr><td>Compute the oracle ceiling for per-utterance routing</td><td>Folded into idea 7 as its go/no-go step</td></tr>
+    <tr><td>Stop detecting language — pin <code>ar</code> always (matrix-language framing)</td><td>Basis refuted on verification: the matrix-language model describes code-switched utterances, not a speaker's pure-English output — this doubles down on the ~3× English penalty it was meant to fix</td></tr>
+    <tr><td>Auto-download the language-appropriate model on detected mismatch</td><td>Basis refuted on verification: the cited stderr log fires on download <em>availability</em>, not language mismatch — no such detection exists to replace</td></tr>
+    <tr><td>Sweep <code>prompt_id</code> across ~100 values</td><td>Downgraded on verification: the app enum exposes 12 languages plus auto, not ~100 — the wider space needs new enum cases, not parameter tuning</td></tr>
+  </tbody>
+</table>
+</section>
+
+<footer class="composition-signal">
+Composed 2026-08-31 by x-ideate · 35 raw candidates from 5 agents across 6 frames · 8 survivors · 38 bases independently verified · grounded in the repo at <code>xshaheen/muesli</code>, the 21-08-2026 measurement run, and three evidence dossiers.
+</footer>
+
+</div>
+</body>
+</html>
