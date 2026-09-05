@@ -83,7 +83,7 @@ enum PasteController {
             PasteController.performTargetPasteCommand(in: $0)
         },
         simulatePasteAction: @escaping @MainActor () -> Bool = PasteController.simulatePaste,
-        onPasteDispatched: @escaping @MainActor () -> Void = {},
+        onPasteDispatched: @escaping @MainActor (Bool) -> Void = { _ in },
         onPasteFinished: @escaping @MainActor (NSRunningApplication?) -> Void = { _ in },
         onClipboardSettled: @escaping @MainActor () -> Void = {},
         onLifecycleEvent: @escaping @MainActor (LifecycleEvent) -> Void = { _ in }
@@ -170,7 +170,10 @@ enum PasteController {
             }
             onLifecycleEvent(didDispatchPaste ? .pasteDispatched : .pasteDispatchFailed)
             if didDispatchPaste {
-                onPasteDispatched()
+                // Report whether Muesli still owned the text it staged. The paste is
+                // never blocked on this, but a follow-up key must not fire when the
+                // destination may have received someone else's clipboard.
+                onPasteDispatched(didStageText && pasteboard.changeCount == pasteChangeCount)
             } else {
                 settleFailedDispatch()
                 return
@@ -201,7 +204,9 @@ enum PasteController {
     static func pasteAndWait(
         text: String,
         pasteboard: NSPasteboard = .general,
-        simulatePasteAction: @escaping @MainActor () -> Bool = PasteController.simulatePaste
+        simulatePasteAction: @escaping @MainActor () -> Bool = PasteController.simulatePaste,
+        shouldDispatchPaste: @escaping @MainActor () -> Bool = { true },
+        onPasteDispatched: @escaping @MainActor (Bool) -> Void = { _ in }
     ) async {
         guard !text.isEmpty else { return }
         await withCheckedContinuation { continuation in
@@ -209,7 +214,9 @@ enum PasteController {
             paste(
                 text: text,
                 pasteboard: pasteboard,
+                shouldDispatchPaste: shouldDispatchPaste,
                 simulatePasteAction: simulatePasteAction,
+                onPasteDispatched: onPasteDispatched,
                 onClipboardSettled: {
                     // `paste` settles exactly once per non-empty invocation, but guard anyway:
                     // resuming a continuation twice traps.
@@ -224,6 +231,29 @@ enum PasteController {
     /// Type text directly via CGEvent keyboard simulation without touching the clipboard.
     /// Common ASCII is posted as physical keydown+keyup events. Other text falls
     /// back to Unicode CGEvents so non-ASCII dictation still works.
+    /// Presses Return (or Command-Return) once in whatever has keyboard focus.
+    ///
+    /// Marked synthetic like every other event this file posts, so the hotkey
+    /// monitors ignore it and a dictation hotkey cannot be re-triggered by it.
+    /// Returns false when the event source cannot be created, so the caller can
+    /// treat "not pressed" as a normal outcome rather than an error.
+    @discardableResult
+    static func pressReturn(commandModifier: Bool) -> Bool {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
+        postPhysicalKey(
+            source: source,
+            keyCode: returnKeyCode,
+            flags: commandModifier ? .maskCommand : []
+        )
+        return true
+    }
+
+    static let returnKeyCode: CGKeyCode = 36
+
+    /// Scheduled after a dispatched paste and before the clipboard restore, so the
+    /// whole transaction still completes inside the awaited paste.
+    static let autoEnterDelay: TimeInterval = 0.12
+
     static func typeText(_ text: String) {
         guard !text.isEmpty else { return }
         guard let source = CGEventSource(stateID: .combinedSessionState) else {

@@ -38,6 +38,12 @@ struct DictationStyleHistoryBadgeContent: Equatable {
             "Selected from the global style"
         case .builtInFallback:
             "Selected as the built-in fallback"
+        case .modeApp:
+            "Selected by an app in this mode"
+        case .modeWebsite:
+            "Selected by a website in this mode"
+        case .defaultInstructions:
+            "Selected as the default instructions"
         }
     }
 

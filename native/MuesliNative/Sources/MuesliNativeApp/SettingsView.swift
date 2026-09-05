@@ -121,7 +121,7 @@ struct SettingsView: View {
     @State private var downloadedMeetingLiveCaptionBackends: [MeetingLiveCaptionBackend] = []
     @State private var audioInputDevices: [AudioInputDeviceInfo] = []
     @State private var permissionPollTimer: Timer?
-    @State private var isDictationStyleRulesPresented = false
+    @State private var isModesPresented = false
     @State private var notesLanguageErrorMessage: String?
     @State private var isSessionDiagnosticsPresented = false
     @State private var dictationStyleSettingsError: String?
@@ -477,11 +477,11 @@ struct SettingsView: View {
             } message: {
                 Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, then relaunch Muesli to turn suggestions on.")
             }
-            .sheet(isPresented: $isDictationStyleRulesPresented) {
-                WritingStylesView(
+            .sheet(isPresented: $isModesPresented) {
+                DictationModesView(
                     appState: appState,
                     controller: controller,
-                    onClose: { isDictationStyleRulesPresented = false }
+                    onClose: { isModesPresented = false }
                 )
             }
             .sheet(isPresented: $isSessionDiagnosticsPresented) {
@@ -1534,96 +1534,42 @@ struct SettingsView: View {
         return nil
     }
 
+    /// One entry point into the Modes screen. The captions say what is inert right
+    /// now so a user is never editing instructions that cannot reach the model.
     private var cleanupPromptSettings: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             settingsRow(
-                "Global style",
-                description: "The fallback cleanup style when no enabled Writing Styles group or exception matches.",
+                "Modes",
+                description: "Per-app and per-website instructions, and the key to press after pasting.",
                 controlWidth: meetingControlWidth
             ) {
-                FixedWidthPopUp(
-                    selection: selectedCleanupPromptName,
-                    options: cleanupPromptPresets.map(\.name),
-                    onSelectIndex: { index in
-                        guard index >= 0, index < cleanupPromptPresets.count else { return }
-                        do {
-                            try controller.selectTranscriptCleanupPrompt(id: cleanupPromptPresets[index].id)
-                            dictationStyleSettingsError = nil
-                        } catch {
-                            dictationStyleSettingsError = stylePersistenceError(error)
-                        }
-                    }
-                )
-                .frame(height: 24)
-                .accessibilityLabel("Global style")
-            }
-
-            Text(appState.config.postProcessorSystemPrompt)
-                .font(MuesliTheme.mono(size: 12))
-                .foregroundStyle(MuesliTheme.textSecondary)
-                .lineLimit(4)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(MuesliTheme.surfacePrimary.opacity(0.7))
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
-                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-                )
-
-            HStack {
-                compactActionButton("Open Writing Styles…", systemImage: "slider.horizontal.3") {
-                    isDictationStyleRulesPresented = true
+                compactActionButton("Manage modes\u{2026}", systemImage: "slider.horizontal.3") {
+                    isModesPresented = true
                 }
-                Spacer()
+                .accessibilityLabel("Manage modes")
             }
 
             settingsRow(
-                "Adaptive Styles",
-                description: "Use your Writing Styles groups and exact exceptions for normal dictation.",
+                "Match modes by website",
+                description: "Reads the address of the page you dictate into, to pick a mode. It is never stored or sent.",
                 controlWidth: meetingControlWidth
             ) {
-                HStack(spacing: MuesliTheme.spacing8) {
-                    settingsSwitch(isOn: appState.config.adaptiveDictationStylesEnabled) { enabled in
-                        persistDictationStyleConfiguration(
-                            DictationStyleSettingsModel.enabledConfiguration(from: appState.config, enabled: enabled)
-                        )
-                    }
-                    .accessibilityLabel("Adaptive Styles")
-                    compactActionButton("Open workspace…", systemImage: "app.badge") {
-                        isDictationStyleRulesPresented = true
-                    }
-                    .accessibilityLabel("Open Writing Styles workspace")
-                    .accessibilityHint("Opens global styles, groups, exact exceptions, and JSON portability")
+                settingsSwitch(isOn: appState.config.matchModesByWebsite) { enabled in
+                    controller.updateConfig { $0.matchModesByWebsite = enabled }
                 }
+                .accessibilityLabel("Match modes by website")
             }
 
             if !appState.config.enablePostProcessor {
-                Text("Cleanup is off. Styles and rules remain editable, but they are inactive until AI transcript cleanup is enabled.")
+                Text("Cleanup is off, so mode instructions are inactive. The key a mode presses after pasting still works.")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+            } else if cleanupModelUsesFixedPrompt {
+                Text("This cleanup model uses a fixed prompt, so mode instructions do not affect it. The key a mode presses after pasting still works.")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
             }
-
-            if let dictationStyleSettingsError {
-                Text(dictationStyleSettingsError)
-                    .font(MuesliTheme.caption())
-                    .foregroundStyle(MuesliTheme.danger)
-                    .accessibilityLabel("Style settings error: \(dictationStyleSettingsError)")
-            }
         }
-    }
-
-    private func persistDictationStyleConfiguration(_ candidate: AppConfig) {
-        do {
-            try controller.updateDictationStyleConfiguration { $0 = candidate }
-            dictationStyleSettingsError = nil
-        } catch {
-            dictationStyleSettingsError = stylePersistenceError(error)
-        }
-    }
-
-    private func stylePersistenceError(_ error: Error) -> String {
-        "Could not save style settings. Your previous settings are unchanged. \(error.localizedDescription)"
     }
 
     @ViewBuilder

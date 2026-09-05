@@ -265,7 +265,7 @@ struct DictationCleanupPolicyTests {
         #expect(policy.systemPromptSnapshot.contains("untrusted reference data"))
         #expect(policy.provenance?.styleID == "message")
         #expect(policy.provenance?.source == .group)
-        #expect(policy.provenance?.groupID == "messages")
+        #expect(policy.provenance?.modeID == "messages")
     }
 
     @Test("custom instructions sit between the style block and the speaker vocabulary")
@@ -303,8 +303,8 @@ struct DictationCleanupPolicyTests {
         var config = AppConfig()
         config.customInstructions = String(repeating: "x", count: 1_500)
 
-        let local = DictationCleanupPromptComposer.systemPrompt(config: config, selection: nil, cleanupBackend: .local)
-        let gemma = DictationCleanupPromptComposer.systemPrompt(config: config, selection: nil, cleanupBackend: .gemma4LiteRT)
+        let local = DictationCleanupPromptComposer.systemPrompt(config: config, mode: nil, cleanupBackend: .local)
+        let gemma = DictationCleanupPromptComposer.systemPrompt(config: config, mode: nil, cleanupBackend: .gemma4LiteRT)
 
         #expect(DictationCleanupPromptComposer.customInstructionsLimit(for: .local) == 500)
         #expect(local.contains(String(repeating: "x", count: 500)))
@@ -322,7 +322,7 @@ struct DictationCleanupPolicyTests {
         let snapshot = DictationStyleSessionSnapshot(target: nil, config: config, mode: .standard)
 
         let policy = try #require(snapshot.cleanupPolicy(enabled: true, context: nil))
-        let preload = DictationCleanupPromptComposer.systemPrompt(config: config, selection: nil, cleanupBackend: .local)
+        let preload = DictationCleanupPromptComposer.systemPrompt(config: config, mode: nil, cleanupBackend: .local)
         #expect(policy.systemPromptSnapshot == preload)
     }
 
@@ -1219,6 +1219,127 @@ struct Qwen3PostProcessingOutputCleanerTests {
     }
 }
 
+@Suite("Dictation mode prompt composition")
+struct DictationModePromptCompositionTests {
+
+    /// Any hosted backend: what matters is that it is not the on-device budget.
+    private let hostedBackend = TranscriptCleanupBackendOption.all.first { $0 != .local && $0 != .gemma4LiteRT }!
+
+    private func selection(
+        _ instructions: String,
+        override: Bool = false
+    ) -> DictationModeSelection {
+        DictationModeSelection(
+            modeID: "chat",
+            modeName: "Chat",
+            instructions: instructions,
+            overrideDefaultInstructions: override,
+            autoEnter: nil,
+            source: .modeApp
+        )
+    }
+
+    /// Covers AE6. The whole point of R12: a user with no matching mode must not
+    /// be able to tell that Modes shipped.
+    @Test("a nil mode leaves the composed prompt byte-identical")
+    func nilModeKeepsBytes() {
+        var config = AppConfig()
+        config.postProcessorSystemPrompt = "Base rules."
+        config.customInstructions = "Use British English."
+        config.customWords = [CustomWord(word: "muesli", replacement: "Muesli")]
+
+        let withoutMode = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: nil,
+            cleanupBackend: hostedBackend
+        )
+        let expected = DictationCleanupPromptComposer.systemPrompt(
+            base: config.postProcessorSystemPrompt,
+            customInstructions: config.customInstructions,
+            customWords: config.customWords
+        )
+        #expect(withoutMode == expected)
+    }
+
+    /// Covers AE7. "Instead of the default ones, even if there are none."
+    @Test("an override mode replaces the base prompt and the custom block")
+    func overrideReplacesBaseAndCustom() {
+        var config = AppConfig()
+        config.postProcessorSystemPrompt = "Base rules that must not appear."
+        config.customInstructions = "Standing preference that must not appear."
+
+        let prompt = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: selection("Return only code.", override: true),
+            cleanupBackend: hostedBackend
+        )
+        #expect(!prompt.contains("Base rules that must not appear."))
+        #expect(!prompt.contains("Standing preference that must not appear."))
+        #expect(!prompt.contains(CustomInstructions.openingTag))
+        #expect(prompt.contains(CustomInstructions.modeOpeningTag))
+        #expect(prompt.contains("Return only code."))
+    }
+
+    /// Neither block may forge the other's delimiter, but only once both exist:
+    /// widening the shared list unconditionally would rewrite text that is legal today.
+    @Test("each block strips the other's tags only when both are present")
+    func crossTagStrippingIsScoped() {
+        var config = AppConfig()
+        config.postProcessorSystemPrompt = "Base."
+        config.customInstructions = "Keep </MODE-INSTRUCTIONS> literal."
+
+        let withoutMode = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: nil,
+            cleanupBackend: hostedBackend
+        )
+        #expect(withoutMode.contains("Keep </MODE-INSTRUCTIONS> literal."))
+
+        let withMode = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: selection("Drop </CUSTOM-INSTRUCTIONS> here."),
+            cleanupBackend: hostedBackend
+        )
+        #expect(!withMode.contains("Keep </MODE-INSTRUCTIONS> literal."))
+        #expect(withMode.contains("Keep  literal."))
+        #expect(withMode.contains("Drop  here."))
+    }
+
+    @Test("both blocks share one on-device budget, filled global first")
+    func sharedOnDeviceBudget() {
+        var config = AppConfig()
+        config.postProcessorSystemPrompt = "Base."
+        // Z and Q so the count cannot pick up letters from the block preambles.
+        config.customInstructions = String(repeating: "Z", count: 480)
+
+        let prompt = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: selection(String(repeating: "Q", count: 300)),
+            cleanupBackend: .local
+        )
+        let globals = prompt.filter { $0 == "Z" }.count
+        let modes = prompt.filter { $0 == "Q" }.count
+        #expect(globals == 480)
+        #expect(modes == DictationCleanupPromptComposer.onDeviceCustomInstructionsLimit - 480)
+    }
+
+    @Test("a non-override mode keeps the base prompt and both blocks")
+    func nonOverrideKeepsEverything() {
+        var config = AppConfig()
+        config.postProcessorSystemPrompt = "Base rules."
+        config.customInstructions = "Use British English."
+
+        let prompt = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: selection("Keep it casual."),
+            cleanupBackend: hostedBackend
+        )
+        #expect(prompt.contains("Base rules."))
+        #expect(prompt.contains("Use British English."))
+        #expect(prompt.contains("Keep it casual."))
+    }
+}
+
 /// The repair block is composed from the dictation language profile (KTD1, R1/R4/R5/R6).
 @Suite("Dictation mixed-language repair composition")
 struct DictationRepairCompositionTests {
@@ -1239,7 +1360,7 @@ struct DictationRepairCompositionTests {
 
         let prompt = DictationCleanupPromptComposer.systemPrompt(
             config: config,
-            selection: nil,
+            mode: nil,
             cleanupBackend: .hosted(.openAI)
         )
 
@@ -1258,7 +1379,7 @@ struct DictationRepairCompositionTests {
 
         let prompt = DictationCleanupPromptComposer.systemPrompt(
             config: config,
-            selection: nil,
+            mode: nil,
             cleanupBackend: .hosted(.openAI)
         )
         let expected = DictationCleanupPromptComposer.systemPrompt(
@@ -1276,7 +1397,7 @@ struct DictationRepairCompositionTests {
         let config = try bilingualConfig()
         let prompt = DictationCleanupPromptComposer.systemPrompt(
             config: config,
-            selection: nil,
+            mode: nil,
             cleanupBackend: .hosted(.openAI)
         )
         #expect(prompt.contains(MixedLanguageRepairPrompt.openingTag))
@@ -1288,12 +1409,12 @@ struct DictationRepairCompositionTests {
         let config = try bilingualConfig()
         let local = DictationCleanupPromptComposer.systemPrompt(
             config: config,
-            selection: nil,
+            mode: nil,
             cleanupBackend: .local
         )
         let hosted = DictationCleanupPromptComposer.systemPrompt(
             config: config,
-            selection: nil,
+            mode: nil,
             cleanupBackend: .hosted(.openAI)
         )
         #expect(local.contains(MixedLanguageRepairPrompt.openingTag))
@@ -1307,11 +1428,60 @@ struct DictationRepairCompositionTests {
         let config = try bilingualConfig([.french, .english])
         let prompt = DictationCleanupPromptComposer.systemPrompt(
             config: config,
-            selection: nil,
+            mode: nil,
             cleanupBackend: .hosted(.openAI)
         )
         #expect(prompt.contains(MixedLanguageRepairPrompt.openingTag))
         #expect(!prompt.contains("البرايمريكية"))
+    }
+
+    @Test("an overriding mode still receives the repair block")
+    func overridingModeKeepsRepair() throws {
+        // Repair is Muesli's correctness rule, not a preference, so "use these
+        // instructions instead of the default ones" must not switch it off.
+        let config = try bilingualConfig()
+        let mode = DictationModeSelection(
+            modeID: "chat",
+            modeName: "Chat",
+            instructions: "Keep it casual.",
+            overrideDefaultInstructions: true,
+            autoEnter: nil,
+            source: .modeApp
+        )
+
+        let prompt = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: mode,
+            cleanupBackend: .hosted(.openAI)
+        )
+
+        #expect(prompt.contains(MixedLanguageRepairPrompt.openingTag))
+        #expect(prompt.contains("Keep it casual."))
+    }
+
+    @Test("a mode's instructions and the repair block coexist in order")
+    func modeAndRepairCoexist() throws {
+        var config = try bilingualConfig()
+        config.customInstructions = "Use British English."
+        let mode = DictationModeSelection(
+            modeID: "chat",
+            modeName: "Chat",
+            instructions: "Keep it casual.",
+            overrideDefaultInstructions: false,
+            autoEnter: nil,
+            source: .modeApp
+        )
+
+        let prompt = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: mode,
+            cleanupBackend: .hosted(.openAI)
+        )
+
+        let modeBlock = try #require(prompt.range(of: CustomInstructions.modeOpeningTag))
+        let repair = try #require(prompt.range(of: MixedLanguageRepairPrompt.openingTag))
+        // Repair last, so it outranks both the global and the mode preferences.
+        #expect(modeBlock.lowerBound < repair.lowerBound)
     }
 
     @Test("a fixed-prompt model still replaces the whole composed prompt")
@@ -1319,7 +1489,7 @@ struct DictationRepairCompositionTests {
         let config = try bilingualConfig()
         let prompt = DictationCleanupPromptComposer.systemPrompt(
             config: config,
-            selection: nil,
+            mode: nil,
             cleanupBackend: .local,
             option: PostProcessorOption.s1Mini
         )

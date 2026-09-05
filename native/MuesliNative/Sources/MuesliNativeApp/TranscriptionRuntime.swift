@@ -36,21 +36,32 @@ enum DictationCleanupOutcome: String, Codable, CaseIterable, Sendable {
     case skippedStreaming = "skipped_streaming"
 }
 
+/// What chose this dictation's cleanup prompt, as persisted on the history row.
+///
+/// `usedMode` is what telemetry reports: the mode's id and name stay on the
+/// device, so nothing user-authored can reach an event.
 struct DictationCleanupStyleProvenance: Equatable, Sendable {
     let styleID: String
     let styleName: String
-    let isCustom: Bool
+    let modeID: String?
     let source: DictationStyleSelectionSource
-    let categoryID: String?
-    let groupID: String?
+
+    var usedMode: Bool {
+        source != .defaultInstructions
+    }
+
+    init(selection: DictationModeSelection) {
+        styleID = selection.modeID
+        styleName = selection.modeName
+        modeID = selection.source == .defaultInstructions ? nil : selection.modeID
+        source = selection.source
+    }
 
     init(selection: DictationStyleSelectionResult) {
         styleID = selection.styleID
         styleName = selection.styleName
-        isCustom = selection.isCustom
+        modeID = selection.groupID
         source = selection.source
-        categoryID = selection.categoryID
-        groupID = selection.groupID
     }
 }
 
@@ -90,17 +101,37 @@ enum DictationCleanupPromptComposer {
         base: String,
         customInstructions: String = "",
         customInstructionsLimit: Int = CustomInstructions.maxLength,
-        mixedLanguageRepair: String? = nil,
-        customWords: [CustomWord] = []
+        customWords: [CustomWord] = [],
+        modeInstructions: String? = nil,
+        mixedLanguageRepair: String? = nil
     ) -> String {
-        var prompt = base + CustomInstructions.promptSuffix(
+        // The two blocks share one budget, filled global-first, because on-device
+        // Qwen has a single 1,024-token context for everything. Mode tags are only
+        // stripped when a mode block exists, so a no-mode prompt is unchanged.
+        let hasMode = CustomInstructions.normalized(modeInstructions ?? "").isEmpty == false
+        let customBlock = CustomInstructions.promptSuffix(
             customInstructions,
             preamble: CustomInstructions.dictationPreamble,
-            limit: customInstructionsLimit
+            limit: customInstructionsLimit,
+            extraReserved: hasMode ? CustomInstructions.modeReservedSequences : []
         )
-        // After the user's preferences and before the vocabulary: the repair rules
-        // must outrank a preference that would conflict with them, and the
-        // vocabulary is the restoration target the repair reads.
+        var prompt = base + customBlock
+        if let modeInstructions, hasMode {
+            let spent = CustomInstructions.normalized(customInstructions).count
+            let remaining = max(0, customInstructionsLimit - min(spent, customInstructionsLimit))
+            prompt += CustomInstructions.promptSuffix(
+                modeInstructions,
+                preamble: CustomInstructions.modePreamble,
+                limit: remaining,
+                openingTag: CustomInstructions.modeOpeningTag,
+                closingTag: CustomInstructions.modeClosingTag,
+                extraReserved: [CustomInstructions.closingTag, CustomInstructions.openingTag]
+            )
+        }
+        // Last before the vocabulary: the repair rules must outrank a global or mode
+        // preference that would conflict with them, and the vocabulary is the
+        // restoration target the repair reads. Not budget-shared, because this text
+        // is Muesli's own and the user cannot grow it.
         if let mixedLanguageRepair, !mixedLanguageRepair.isEmpty {
             prompt += "\n\n" + mixedLanguageRepair
         }
@@ -113,29 +144,61 @@ enum DictationCleanupPromptComposer {
     /// trained one, the same substitution the runtime preload already applies.
     static func systemPrompt(
         config: AppConfig,
-        selection: DictationStyleSelectionResult?,
+        mode: DictationModeSelection?,
         cleanupBackend: TranscriptCleanupBackendOption,
         option: PostProcessorOption? = nil
     ) -> String {
-        let base: String
-        if let selection, config.adaptiveDictationStylesEnabled {
-            base = compose(styleInstructions: selection.prompt)
-        } else {
-            base = config.postProcessorSystemPrompt
-        }
-        let composed = systemPrompt(
-            base: base,
-            customInstructions: config.customInstructions,
-            customInstructionsLimit: customInstructionsLimit(for: cleanupBackend),
-            // On-device cleanup shares a 1,024-token context with the dictated text,
-            // so it gets the compact variant.
-            mixedLanguageRepair: MixedLanguageRepairPrompt.block(
-                for: config.dictationLanguageProfile,
-                compact: cleanupBackend.isOnDevice
-            ),
-            customWords: config.customWords
+        let limit = customInstructionsLimit(for: cleanupBackend)
+        // Applies to both arms below, including an overriding mode: repair is
+        // Muesli's own correctness rule, not a preference a mode may replace.
+        // On-device cleanup shares a 1,024-token context with the dictated text,
+        // so it gets the compact variant.
+        let repair = MixedLanguageRepairPrompt.block(
+            for: config.dictationLanguageProfile,
+            compact: cleanupBackend.isOnDevice
         )
+        let composed: String
+        if let mode, mode.overrideDefaultInstructions,
+           CustomInstructions.normalized(mode.instructions).isEmpty == false {
+            // "Instead of the default ones, even if there are none": the mode text
+            // replaces the base prompt AND the standing preferences, so the model
+            // is told one thing rather than two that disagree.
+            composed = systemPrompt(
+                base: compose(modeInstructions: mode.instructions, limit: limit),
+                customInstructions: "",
+                customInstructionsLimit: limit,
+                customWords: config.customWords,
+                mixedLanguageRepair: repair
+            )
+        } else {
+            composed = systemPrompt(
+                base: config.postProcessorSystemPrompt,
+                customInstructions: config.customInstructions,
+                customInstructionsLimit: limit,
+                customWords: config.customWords,
+                modeInstructions: mode?.instructions,
+                mixedLanguageRepair: repair
+            )
+        }
         return option?.effectiveSystemPrompt(configuredSystemPrompt: composed) ?? composed
+    }
+
+    /// The override arm's base: the fixed safety envelope plus the mode's own
+    /// block, so an override still cannot talk the model out of preserving meaning.
+    static func compose(modeInstructions: String, limit: Int = CustomInstructions.maxLength) -> String {
+        let block = CustomInstructions.promptBlock(
+            modeInstructions,
+            preamble: CustomInstructions.modePreamble,
+            limit: limit,
+            openingTag: CustomInstructions.modeOpeningTag,
+            closingTag: CustomInstructions.modeClosingTag,
+            extraReserved: [CustomInstructions.closingTag, CustomInstructions.openingTag]
+        ) ?? ""
+        return """
+        \(safetyInstructions)
+
+        \(block)
+        """
     }
 
     /// Appends the user's dictionary as model-visible restoration targets.
@@ -178,6 +241,16 @@ enum DictationCleanupReadiness: Equatable, Sendable {
         case .ready: nil
         }
     }
+}
+
+/// What to do in the destination after the text is pasted.
+///
+/// Separate from `DictationCleanupPolicy` so `TranscriptionCoordinator` never
+/// learns about delivery: it only ever reads the prompt and the provenance.
+struct DictationDeliveryPolicy: Equatable, Sendable {
+    let autoEnter: DictationModeAutoEnter?
+
+    static let none = DictationDeliveryPolicy(autoEnter: nil)
 }
 
 struct DictationCleanupPolicy: Equatable, Sendable {

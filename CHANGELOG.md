@@ -5,6 +5,23 @@ upstream `main`.
 
 ## Unreleased — 12-08-2026
 
+### Dictation modes
+
+#### Features
+
+- Replaced Writing Styles with Modes. A mode carries its own instructions, the apps and websites it applies to, an "override default" switch, and an optional key to press after pasting. Muesli picks one automatically from the app or website you are dictating into.
+- Added a Modes screen (Settings > Dictation > Manage modes) with the global custom instructions on top, a card per mode, a searchable installed-app picker, a website list, and Reset modes.
+- Added auto-enter: a mode can press Return or Cmd+Return after the text is pasted, so a dictated message sends without touching the keyboard. It only fires when the paste actually dispatched into the app you were dictating into and the focused control is a text field.
+- Website modes now work without turning on App Context, behind a new "Match modes by website" setting. Muesli reads only the address of the page you are dictating into, uses it to pick a mode, and never stores, logs or sends it.
+
+#### Changes
+
+- Existing styles, groups, exceptions and custom prompts migrate into modes once, on the first launch. Your previous configuration is copied to `config.pre-modes.json` first; rename it back to `config.json` to roll back. That backup contains the same provider API keys as your configuration, so delete it once the upgrade is working.
+- If you had Adaptive Styles switched **on**, a matched mode now composes as the base cleanup rules plus your global instructions plus the mode's instructions, where a style used to replace the base rules. Turn on "Override default" in that mode to get the old shape back. Users who never enabled Adaptive Styles see no prompt change.
+- Removed the Writing Styles workspace, the global style picker, the Adaptive Styles switch and the JSON ruleset import/export.
+- A bad dictation-style rule can no longer refuse every settings save: mode normalization is total and cannot fail.
+- Downgrading to an older build drops modes, and history rows written by this build show no style badge there until you upgrade again.
+
 ### Mixed-language repair
 
 #### Features

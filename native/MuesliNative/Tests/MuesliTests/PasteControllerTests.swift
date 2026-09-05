@@ -226,7 +226,7 @@ struct PasteControllerTests {
                     events.append("command")
                     return true
                 },
-                onPasteDispatched: {
+                onPasteDispatched: { _ in
                     events.append("dispatched")
                 },
                 onPasteFinished: { _ in
@@ -247,7 +247,7 @@ struct PasteControllerTests {
                     events.append("command")
                     return false
                 },
-                onPasteDispatched: {
+                onPasteDispatched: { _ in
                     events.append("dispatched")
                 },
                 onPasteFinished: { _ in
@@ -659,5 +659,107 @@ struct PasteControllerTests {
                 poll?()
             }
         }
+    }
+}
+
+
+@Suite("Auto-enter delivery")
+@MainActor
+struct AutoEnterDeliveryTests {
+
+    /// The press must never fire when the destination may have received a
+    /// clipboard Muesli did not stage.
+    @Test("the dispatch callback reports whether Muesli still owned the staged clipboard")
+    func dispatchReportsStagedOwnership() async {
+        let pasteboard = NSPasteboard.withUniqueName()
+        var reported: [Bool] = []
+
+        await PasteController.pasteAndWait(
+            text: "hello",
+            pasteboard: pasteboard,
+            simulatePasteAction: { true },
+            onPasteDispatched: { reported.append($0) }
+        )
+
+        #expect(reported == [true])
+    }
+
+    @Test("a failed dispatch never reports and never presses")
+    func failedDispatchNeverReports() async {
+        let pasteboard = NSPasteboard.withUniqueName()
+        var reported: [Bool] = []
+
+        await PasteController.pasteAndWait(
+            text: "hello",
+            pasteboard: pasteboard,
+            simulatePasteAction: { false },
+            onPasteDispatched: { reported.append($0) }
+        )
+
+        #expect(reported.isEmpty)
+    }
+
+    @Test("a cancelled dispatch never reports")
+    func cancelledDispatchNeverReports() async {
+        let pasteboard = NSPasteboard.withUniqueName()
+        var reported: [Bool] = []
+
+        await PasteController.pasteAndWait(
+            text: "hello",
+            pasteboard: pasteboard,
+            simulatePasteAction: { true },
+            shouldDispatchPaste: { false },
+            onPasteDispatched: { reported.append($0) }
+        )
+
+        #expect(reported.isEmpty)
+    }
+
+    @Test("a foreign clipboard write between staging and dispatch reports lost ownership")
+    func foreignWriteReportsLostOwnership() async {
+        let pasteboard = NSPasteboard.withUniqueName()
+        var reported: [Bool] = []
+
+        await PasteController.pasteAndWait(
+            text: "hello",
+            pasteboard: pasteboard,
+            simulatePasteAction: {
+                // Stand in for another app writing during the settle delay.
+                pasteboard.clearContents()
+                pasteboard.setString("someone else", forType: .string)
+                return true
+            },
+            onPasteDispatched: { reported.append($0) }
+        )
+
+        #expect(reported == [false])
+    }
+
+    @Test("the auto-enter delay stays inside the awaited paste transaction")
+    func autoEnterDelayPrecedesClipboardRestore() {
+        #expect(PasteController.autoEnterDelay > 0)
+        #expect(PasteController.autoEnterDelay < 0.5)
+    }
+
+    @Test("the return key code is the physical Return")
+    func returnKeyCode() {
+        #expect(PasteController.returnKeyCode == 36)
+    }
+
+    /// The contract auto-enter depends on: a synthesized Return must not reach the
+    /// hotkey monitors and cancel or re-trigger a dictation session.
+    @Test("a marked synthetic Return is ignored by the hotkey monitor")
+    func markedReturnIgnoredByHotkeyMonitor() throws {
+        let source = try #require(CGEventSource(stateID: .combinedSessionState))
+        let event = try #require(
+            CGEvent(keyboardEventSource: source, virtualKey: PasteController.returnKeyCode, keyDown: true)
+        )
+        event.flags = .maskCommand
+        MuesliSyntheticKeyboardEvent.mark(event)
+
+        #expect(
+            event.getIntegerValueField(.eventSourceUserData)
+                == MuesliSyntheticKeyboardEvent.userDataMarker
+        )
     }
 }

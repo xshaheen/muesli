@@ -1608,6 +1608,11 @@ struct DictationStyleExactException: Codable, Equatable, Identifiable, Sendable 
     }
 }
 
+/// How a dictation's cleanup prompt was chosen, as stored in history rows.
+///
+/// The first seven cases are only ever read back now: rows written before Modes
+/// still carry them, and `DictationRowView` parses the stored string, so removing
+/// one would blank the badge on a user's existing history.
 enum DictationStyleSelectionSource: String, Codable, Equatable, Sendable {
     case exception
     case group
@@ -1616,6 +1621,9 @@ enum DictationStyleSelectionSource: String, Codable, Equatable, Sendable {
     case category
     case global
     case builtInFallback = "built_in_fallback"
+    case modeApp = "mode_app"
+    case modeWebsite = "mode_website"
+    case defaultInstructions = "default"
 }
 
 struct DictationStyleSelectionResult: Equatable {
@@ -1646,13 +1654,84 @@ struct DictationStyleSelectionResult: Equatable {
     }
 }
 
+/// The key pressed once in the destination after a successful paste.
+///
+/// Decoded leniently: an unknown value means "no key", never a decode failure,
+/// so a hand-edited or newer config can never cost the user their mode list.
+enum DictationModeAutoEnter: String, Codable, CaseIterable, Sendable {
+    case `return`
+    case commandReturn = "command_return"
+}
+
+/// One destination-scoped dictation behavior: what to tell the cleanup model and
+/// which apps and websites it applies to.
+///
+/// Every field decodes independently with a default (the `DictationStyleAppRule`
+/// precedent). An element is lost only when it is not a JSON object at all, so a
+/// single bad field can never quarantine the config or drop a user's mode.
+/// `DictationModes.sanitized(_:)` owns identity, naming, and target normalization.
+struct DictationMode: Codable, Identifiable, Equatable, Sendable {
+    var id: String
+    var name: String
+    var isEnabled: Bool
+    var instructions: String
+    var overrideDefaultInstructions: Bool
+    var appBundleIDs: [String]
+    var websiteHostnames: [String]
+    var autoEnter: DictationModeAutoEnter?
+
+    init(
+        id: String,
+        name: String,
+        isEnabled: Bool = false,
+        instructions: String = "",
+        overrideDefaultInstructions: Bool = false,
+        appBundleIDs: [String] = [],
+        websiteHostnames: [String] = [],
+        autoEnter: DictationModeAutoEnter? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.isEnabled = isEnabled
+        self.instructions = instructions
+        self.overrideDefaultInstructions = overrideDefaultInstructions
+        self.appBundleIDs = appBundleIDs
+        self.websiteHostnames = websiteHostnames
+        self.autoEnter = autoEnter
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case isEnabled = "is_enabled"
+        case instructions
+        case overrideDefaultInstructions = "override_default_instructions"
+        case appBundleIDs = "app_bundle_ids"
+        case websiteHostnames = "website_hostnames"
+        case autoEnter = "auto_enter"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? container.decode(String.self, forKey: .id)) ?? ""
+        name = (try? container.decode(String.self, forKey: .name)) ?? ""
+        isEnabled = (try? container.decode(Bool.self, forKey: .isEnabled)) ?? false
+        instructions = (try? container.decode(String.self, forKey: .instructions)) ?? ""
+        overrideDefaultInstructions =
+            (try? container.decode(Bool.self, forKey: .overrideDefaultInstructions)) ?? false
+        appBundleIDs = (try? container.decode([String].self, forKey: .appBundleIDs)) ?? []
+        websiteHostnames = (try? container.decode([String].self, forKey: .websiteHostnames)) ?? []
+        autoEnter = try? container.decode(DictationModeAutoEnter.self, forKey: .autoEnter)
+    }
+}
+
 struct DictationStyleTarget: Equatable {
     let bundleID: String?
     let hostname: String?
 
     init(bundleID: String?, hostname: String?) {
-        self.bundleID = DictationStyleResolver.normalizeBundleID(bundleID)
-        self.hostname = DictationStyleResolver.normalizeHostname(hostname)
+        self.bundleID = DictationModes.normalizedBundleID(bundleID)
+        self.hostname = DictationModes.normalizedHostname(hostname)
     }
 }
 
@@ -2386,6 +2465,24 @@ struct AppConfig: Codable {
     var dictationStyleCategoryAssignments: [String: String] = [:]
     var dictationStyleAppRules: [DictationStyleAppRule] = []
     var dictationStyleDomainRules: [DictationStyleDomainRule] = []
+    /// Destination-scoped dictation behavior, always encoded.
+    ///
+    /// Seeded disabled here on purpose: this memberwise default is what test
+    /// fixtures and in-memory callers get, and an enabled built-in would silently
+    /// change the composed prompt for anything targeting a shipped app. The
+    /// fresh-install seed that turns them on lives in `ConfigStore`.
+    var dictationModes: [DictationMode] = DictationModes.builtInModes(isEnabled: false)
+    /// Decode-only state, deliberately outside `CodingKeys`: it tells `ConfigStore`
+    /// that this decode built the mode list out of the legacy Writing Styles keys, so
+    /// the result has to reach disk once. Persisting it would make every later load
+    /// look like a fresh migration.
+    var dictationModesMigrationApplied: Bool = false
+    /// Lets a mode match the browser page the user is dictating into.
+    ///
+    /// Separate from `enableScreenContext` because the two read different things:
+    /// this reads only the address to pick a mode and keeps it in memory, while
+    /// screen context puts page text into the prompt and the database.
+    var matchModesByWebsite: Bool = true
     var enableScreenContext: Bool = false
     var enableDictationOCRContext: Bool = false
     var useCoreAudioTap: Bool = true
@@ -2531,13 +2628,9 @@ struct AppConfig: Codable {
         case postProcessorOllamaModel = "post_processor_ollama_model"
         case postProcessorLMStudioModel = "post_processor_lmstudio_model"
         case postProcessorCustomLLMModel = "post_processor_custom_llm_model"
-        case activeTranscriptCleanupPromptId = "active_transcript_cleanup_prompt_id"
-        case customTranscriptCleanupPrompts = "custom_transcript_cleanup_prompts"
         case postProcessorSystemPrompt = "post_processor_system_prompt"
-        case adaptiveDictationStylesEnabled = "adaptive_dictation_styles_enabled"
-        case dictationStyleRulesetInitialized = "dictation_style_ruleset_initialized"
-        case dictationStyleGroups = "dictation_style_groups"
-        case dictationStyleExactExceptions = "dictation_style_exact_exceptions"
+        case dictationModes = "dictation_modes"
+        case matchModesByWebsite = "match_modes_by_website"
         case enableScreenContext = "enable_screen_context"
         case enableDictationOCRContext = "enable_dictation_ocr_context"
         case useCoreAudioTap = "use_core_audio_tap"
@@ -2562,7 +2655,15 @@ struct AppConfig: Codable {
         case contributionLinkedInClicked = "contribution_linkedin_clicked"
     }
 
+    /// Decode-only keys. `AppConfig` has no custom `encode(to:)`, so a key that lives
+    /// here and not in `CodingKeys` is read from an existing file and never written back.
     private enum LegacyDictationStyleCodingKeys: String, CodingKey {
+        case activeTranscriptCleanupPromptId = "active_transcript_cleanup_prompt_id"
+        case customTranscriptCleanupPrompts = "custom_transcript_cleanup_prompts"
+        case adaptiveDictationStylesEnabled = "adaptive_dictation_styles_enabled"
+        case dictationStyleRulesetInitialized = "dictation_style_ruleset_initialized"
+        case dictationStyleGroups = "dictation_style_groups"
+        case dictationStyleExactExceptions = "dictation_style_exact_exceptions"
         case dictationStyleCategoryAssignments = "dictation_style_category_assignments"
         case dictationStyleAppRules = "dictation_style_app_rules"
         case dictationStyleDomainRules = "dictation_style_domain_rules"
@@ -2947,19 +3048,26 @@ struct AppConfig: Codable {
         postProcessorOllamaModel = (try? c.decode(String.self, forKey: .postProcessorOllamaModel)) ?? defaults.postProcessorOllamaModel
         postProcessorLMStudioModel = (try? c.decode(String.self, forKey: .postProcessorLMStudioModel)) ?? defaults.postProcessorLMStudioModel
         postProcessorCustomLLMModel = (try? c.decode(String.self, forKey: .postProcessorCustomLLMModel)) ?? defaults.postProcessorCustomLLMModel
-        customTranscriptCleanupPrompts = (try? c.decode([CustomTranscriptCleanupPrompt].self, forKey: .customTranscriptCleanupPrompts)) ?? defaults.customTranscriptCleanupPrompts
-        activeTranscriptCleanupPromptId = (try? c.decode(String.self, forKey: .activeTranscriptCleanupPromptId)) ?? defaults.activeTranscriptCleanupPromptId
+        // Legacy Writing Styles state: read from the decode-only container so an
+        // existing file still migrates, and never written back (R3).
+        customTranscriptCleanupPrompts = (try? legacy.decode([CustomTranscriptCleanupPrompt].self, forKey: .customTranscriptCleanupPrompts)) ?? defaults.customTranscriptCleanupPrompts
+        activeTranscriptCleanupPromptId = (try? legacy.decode(String.self, forKey: .activeTranscriptCleanupPromptId)) ?? defaults.activeTranscriptCleanupPromptId
         postProcessorSystemPrompt = (try? c.decode(String.self, forKey: .postProcessorSystemPrompt)) ?? defaults.postProcessorSystemPrompt
-        adaptiveDictationStylesEnabled = (try? c.decode(Bool.self, forKey: .adaptiveDictationStylesEnabled)) ?? defaults.adaptiveDictationStylesEnabled
-        dictationStyleRulesetInitialized = (try? c.decode(Bool.self, forKey: .dictationStyleRulesetInitialized)) ?? false
-        if c.contains(.dictationStyleGroups) {
-            do { dictationStyleGroups = try c.decode([DictationStyleGroup].self, forKey: .dictationStyleGroups) }
-            catch { dictationStyleGroups = []; dictationStyleRulesetQuarantineReason = "Invalid dictation_style_groups: \(error.localizedDescription)" }
-        }
-        if c.contains(.dictationStyleExactExceptions) {
-            do { dictationStyleExactExceptions = try c.decode([DictationStyleExactException].self, forKey: .dictationStyleExactExceptions) }
-            catch { dictationStyleExactExceptions = []; dictationStyleRulesetQuarantineReason = "Invalid dictation_style_exact_exceptions: \(error.localizedDescription)" }
-        }
+        adaptiveDictationStylesEnabled = (try? legacy.decode(Bool.self, forKey: .adaptiveDictationStylesEnabled)) ?? defaults.adaptiveDictationStylesEnabled
+        dictationStyleRulesetInitialized = (try? legacy.decode(Bool.self, forKey: .dictationStyleRulesetInitialized)) ?? false
+        // A malformed legacy array is simply empty now: the quarantine that used to
+        // block every unrelated save is gone (R2), and the migration reads whatever survives.
+        dictationStyleGroups = (try? legacy.decode([DictationStyleGroup].self, forKey: .dictationStyleGroups)) ?? defaults.dictationStyleGroups
+        dictationStyleExactExceptions = (try? legacy.decode([DictationStyleExactException].self, forKey: .dictationStyleExactExceptions)) ?? defaults.dictationStyleExactExceptions
+        // A config migrated from a build without website matching keeps the read off
+        // when the user had screen context off: they never opted into an address read.
+        matchModesByWebsite = (try? c.decode(Bool.self, forKey: .matchModesByWebsite))
+            ?? (c.contains(.dictationModes) ? defaults.matchModesByWebsite : enableScreenContext)
+        // Modes decode per field; only a non-object element is dropped (R2). Only a
+        // valid array counts as present: `null`, an object, or any other malformed
+        // value migrates instead, so a hand-edited key cannot discard legacy data (R9).
+        let decodedModes = (try? c.decode(DictationModes.DecodedArray.self, forKey: .dictationModes))?.modes
+        dictationModes = decodedModes ?? []
         dictationStyleCategoryAssignments = (try? legacy.decode([String: String].self, forKey: .dictationStyleCategoryAssignments)) ?? defaults.dictationStyleCategoryAssignments
         dictationStyleAppRules = (try? legacy.decode([DictationStyleAppRule].self, forKey: .dictationStyleAppRules)) ?? defaults.dictationStyleAppRules
         dictationStyleDomainRules = (try? legacy.decode([DictationStyleDomainRule].self, forKey: .dictationStyleDomainRules)) ?? defaults.dictationStyleDomainRules
@@ -2988,6 +3096,9 @@ struct AppConfig: Codable {
         contributionBuyMeCoffeeClicked = (try? c.decode(Bool.self, forKey: .contributionBuyMeCoffeeClicked)) ?? defaults.contributionBuyMeCoffeeClicked
         contributionTweetClicked = (try? c.decode(Bool.self, forKey: .contributionTweetClicked)) ?? defaults.contributionTweetClicked
         contributionLinkedInClicked = (try? c.decode(Bool.self, forKey: .contributionLinkedInClicked)) ?? defaults.contributionLinkedInClicked
+        // Modes are normalized at the end of decode as well as on save, so what is
+        // in memory always equals what is on disk (R4).
+        dictationModes = DictationModes.sanitized(modes: dictationModes)
         let sanitizedStyles = DictationStyleResolver.sanitizeConfiguration(self)
         customTranscriptCleanupPrompts = sanitizedStyles.customTranscriptCleanupPrompts
         dictationStyleCategoryAssignments = sanitizedStyles.dictationStyleCategoryAssignments
@@ -3001,9 +3112,16 @@ struct AppConfig: Codable {
             dictationStyleGroups = migration.groups
             dictationStyleExactExceptions = migration.exceptions
         }
+        // R5-R9. Absent modes mean this file predates them, so the legacy keys become
+        // the mode list once. The flag is decode-only and tells `ConfigStore` that this
+        // result has to reach disk on the launch that derived it.
+        if decodedModes == nil {
+            dictationModes = DictationModes.migratedModes(from: self)
+            dictationModesMigrationApplied = true
+        }
         // The repair preset is retired: repair now follows the language selection.
-        // Named explicitly rather than left to the unknown-id branch below, so the
-        // migration is intentional and greppable (R13).
+        // Runs after the mode migration above, so that migration still sees the
+        // user's original selection rather than a value this rewrote (R13).
         if activeTranscriptCleanupPromptId == TranscriptCleanupPrompts.legacyMixedLanguageRepairID {
             activeTranscriptCleanupPromptId = defaults.activeTranscriptCleanupPromptId
             postProcessorSystemPrompt = defaults.postProcessorSystemPrompt
