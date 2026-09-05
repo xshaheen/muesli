@@ -183,6 +183,7 @@ final class MeetingReverseLeakSuppressor {
     private var gateOpenCount = 0
     private var suppressedSamples = 0
     private var referenceUnavailableFrames = 0
+    private var offlineSpeechSecondsInsideSuppressedIntervals: Double?
     private var minimumObservedDelayMs: Int?
     private var maximumObservedDelayMs: Int?
     private var blockProcessingCount = 0
@@ -229,6 +230,12 @@ final class MeetingReverseLeakSuppressor {
     }
 
     /// Session discard: everything goes, intervals included.
+    /// Set by the offline repair pass once it has measured the overlap between offline speech
+    /// and the suppressed spans; stays nil when that pass does not run.
+    func noteOfflineSpeechSecondsInsideSuppressedIntervals(_ seconds: Double) {
+        offlineSpeechSecondsInsideSuppressedIntervals = seconds
+    }
+
     func discard() {
         reset()
         referenceHistory.removeAll()
@@ -788,7 +795,8 @@ final class MeetingReverseLeakSuppressor {
             meanBlockProcessingMicros: blockProcessingCount > 0
                 ? Double(blockProcessingTotalMicros) / Double(blockProcessingCount)
                 : 0,
-            maxBlockProcessingMicros: maxBlockProcessingMicros
+            maxBlockProcessingMicros: maxBlockProcessingMicros,
+            offlineSpeechSecondsInsideSuppressedIntervals: offlineSpeechSecondsInsideSuppressedIntervals
         )
     }
 

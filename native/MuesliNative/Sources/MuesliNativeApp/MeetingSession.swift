@@ -1679,6 +1679,14 @@ final class MeetingSession {
     }
 
     /// Suppressed spans in the raw system file's frame (KTD7).
+    /// Records how much offline speech fell inside suppressed spans, so the field data can
+    /// bound the false-suppression rate before the gate's thresholds are tightened (KTD9).
+    private func noteOfflineSpeechInsideSuppressedIntervals(_ seconds: Double) {
+        chunkRotationQueue.sync {
+            reverseLeakSuppressor.noteOfflineSpeechSecondsInsideSuppressedIntervals(seconds)
+        }
+    }
+
     func suppressedSystemIntervals() -> [MeetingSuppressedInterval] {
         chunkRotationQueue.sync { reverseLeakSuppressor.exportSuppressedIntervals() }
     }
@@ -2411,12 +2419,15 @@ final class MeetingSession {
         endTime: Date
     ) async -> MeetingTranscriptRecoveryResult {
         let totalDuration = durationSeconds(from: meetingStart, to: endTime)
+        // Arrival-frame spans, which is the raw file's own frame (KTD7).
+        let suppressedIntervals = suppressedSystemIntervals()
 
         guard let vadManager = await transcriptionCoordinator.getVadManager() else {
             if existingSystemSegments.isEmpty {
                 return .replace(await fallbackToFullSessionSystemTranscription(
                     systemAudioURL: systemAudioURL,
-                    meetingDuration: totalDuration
+                    meetingDuration: totalDuration,
+                    suppressedIntervals: suppressedIntervals
                 ))
             }
             return .none
@@ -2424,9 +2435,23 @@ final class MeetingSession {
 
         do {
             let samples = try AudioConverter().resampleAudioFile(systemAudioURL)
-            let speechSegments = try await vadManager.segmentSpeech(
+            let rawSpeechSegments = try await vadManager.segmentSpeech(
                 samples,
                 config: VadSegmentationConfig(maxSpeechDuration: 10.0, speechPadding: 0.15)
+            )
+            // Speech the reverse-leak gate already removed from the live chunks is still in the
+            // recorder's raw file. Subtract it before the health check so leaked spans neither
+            // count as uncovered speech nor come back through repair (KTD7, R10).
+            let speechSegments = MeetingReverseLeakMaskPlanner.filterSegments(
+                rawSpeechSegments,
+                excluding: suppressedIntervals,
+                minimumDuration: MeetingTranscriptHealthMonitor.minimumEvaluatedSpeechDuration
+            )
+            noteOfflineSpeechInsideSuppressedIntervals(
+                MeetingReverseLeakMaskPlanner.suppressedSpeechSeconds(
+                    rawSpeechSegments,
+                    intervals: suppressedIntervals
+                )
             )
             let health = MeetingTranscriptHealthMonitor.evaluate(
                 existingSegments: existingSystemSegments,
@@ -2442,7 +2467,8 @@ final class MeetingSession {
                 fputs("[meeting] transcript health triggered full system fallback: \(reason)\n", stderr)
                 return .replace(await fallbackToFullSessionSystemTranscription(
                     systemAudioURL: systemAudioURL,
-                    meetingDuration: totalDuration
+                    meetingDuration: totalDuration,
+                    suppressedIntervals: suppressedIntervals
                 ))
             case .selectiveRepair(let repairSegments):
                 guard !repairSegments.isEmpty else { return .none }
@@ -2480,7 +2506,8 @@ final class MeetingSession {
             if existingSystemSegments.isEmpty {
                 return .replace(await fallbackToFullSessionSystemTranscription(
                     systemAudioURL: systemAudioURL,
-                    meetingDuration: totalDuration
+                    meetingDuration: totalDuration,
+                    suppressedIntervals: suppressedIntervals
                 ))
             }
             return .none
@@ -2489,12 +2516,38 @@ final class MeetingSession {
 
     private func fallbackToFullSessionSystemTranscription(
         systemAudioURL: URL,
-        meetingDuration: Double
+        meetingDuration: Double,
+        suppressedIntervals: [MeetingSuppressedInterval]
     ) async -> [SpeechSegment] {
         fputs("[meeting] no system chunks survived, falling back to full-session system transcription\n", stderr)
+        // The fallback transcribes the whole raw file, so without masking it would re-insert
+        // every span the gate suppressed (KTD7). A load failure falls back to the raw URL
+        // rather than losing the fallback entirely.
+        var transcriptionURL = systemAudioURL
+        var maskedURL: URL?
+        if !suppressedIntervals.isEmpty {
+            do {
+                var samples = try AudioConverter().resampleAudioFile(systemAudioURL)
+                MeetingReverseLeakMaskPlanner.maskSamples(
+                    &samples,
+                    intervals: suppressedIntervals,
+                    sampleRate: VadManager.sampleRate
+                )
+                let url = try MeetingReverseLeakMaskPlanner.writeTemporaryWAV(samples: samples)
+                maskedURL = url
+                transcriptionURL = url
+            } catch {
+                fputs("[meeting] could not mask suppressed spans for the system fallback: \(error)\n", stderr)
+            }
+        }
+        defer {
+            if let maskedURL {
+                try? FileManager.default.removeItem(at: maskedURL)
+            }
+        }
         do {
             let evidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
-                at: systemAudioURL,
+                at: transcriptionURL,
                 backend: currentBackend(),
                 profile: config.languageProfile,
                 appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
