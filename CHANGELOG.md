@@ -5,6 +5,12 @@ upstream `main`.
 
 ## Unreleased — 12-08-2026
 
+### Database repair
+
+#### Fixes
+
+- Fixed "no such table: meeting_participants" when deleting a meeting. Every table is declared in the first schema migration, which only runs on databases below that version, so the participants table added later never reached databases already upgraded past it. A new migration creates the missing tables on those databases. The same gap had also disabled the one-shot local data repairs, which gate on a `local_migrations` table that was never created either.
+
 ### Dictation modes
 
 #### Features

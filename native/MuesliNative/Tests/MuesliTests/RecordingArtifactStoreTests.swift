@@ -38,10 +38,10 @@ struct RecordingArtifactStoreTests {
         return url
     }
 
-    @Test("schema v3 has local-only ownership tables and valid foreign keys")
-    func schemaV3Postconditions() throws {
+    @Test("the current schema has local-only ownership tables and valid foreign keys")
+    func currentSchemaPostconditions() throws {
         let fixture = try makeFixture()
-        #expect(try scalar(fixture.database, "PRAGMA user_version") == 3)
+        #expect(try scalar(fixture.database, "PRAGMA user_version") == Int(DictationStore.currentSchemaVersion))
         #expect(try scalar(
             fixture.database,
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('recording_artifacts','dictation_recording_links','meeting_recording_links','dictation_audio_history','recording_diagnostic_links')"
