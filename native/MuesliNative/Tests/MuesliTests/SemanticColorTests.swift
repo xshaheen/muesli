@@ -33,7 +33,8 @@ private let sweptViewFiles = [
     "ModelsView.swift",
     "OnboardingView.swift",
     "SettingsView.swift",
-    "WritingStylesView.swift",
+    "DictationModesView.swift",
+        "DictationModeEditorView.swift",
 ]
 
 @Suite("Semantic colour tokens")
