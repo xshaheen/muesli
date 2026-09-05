@@ -2234,6 +2234,52 @@ public final class MuesliController: NSObject {
         return persisted
     }
 
+    /// Commits the meeting language authority. A meeting save never touches the
+    /// dictation profile, the legacy pins, or the migration flag (R3).
+    @discardableResult
+    func saveMeetingLanguageProfile(_ profile: SpokenLanguageProfile) throws -> AppConfig {
+        var candidate = config
+        candidate.meetingSpokenLanguage = profile
+        let persisted = try configStore.saveMeetingLanguageProfileConfiguration(candidate)
+        config = persisted
+        appState.config = persisted
+        statusBarController?.refresh()
+        return persisted
+    }
+
+    /// The notes language saves through the throwing canonical seam rather than
+    /// `updateConfig`, whose save is a silent no-op while the dictation-style
+    /// ruleset is quarantined; a failure has to be visible in the card (R6).
+    @discardableResult
+    func saveMeetingArtifactLanguagePolicy(_ policy: MeetingArtifactLanguagePolicy) throws -> AppConfig {
+        var candidate = config
+        candidate.meetingArtifactLanguagePolicy = policy
+        let persisted = try configStore.saveMeetingLanguageProfileConfiguration(candidate)
+        config = persisted
+        appState.config = persisted
+        statusBarController?.refresh()
+        return persisted
+    }
+
+    func meetingLanguageProfileClient() -> LanguageProfileClient {
+        LanguageProfileClient(
+            load: { [weak self] in self?.config.meetingSpokenLanguage ?? .automatic },
+            save: { [weak self] profile in
+                guard let self else { throw LanguageProfileClient.Error.controllerUnavailable }
+                return try self.saveMeetingLanguageProfile(profile).meetingSpokenLanguage
+            },
+            presentation: { profile, backend in
+                // Nemotron is the sole streaming backend and carries `.meetingLive`
+                // but not `.meetingFinal`; every other meeting backend is the
+                // reverse. This mirrors `languageCapabilities` exactly.
+                profile.presentation(
+                    for: backend,
+                    workload: backend.isStreamingDictationBackend ? .meetingLive : .meetingFinal
+                )
+            }
+        )
+    }
+
     func languageProfileClient() -> LanguageProfileClient {
         LanguageProfileClient(
             load: { [weak self] in self?.config.dictationLanguageProfile ?? .automatic },

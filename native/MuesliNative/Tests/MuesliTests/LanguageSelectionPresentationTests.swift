@@ -246,4 +246,36 @@ struct LanguageSelectionPresentationTests {
         #expect(json["transcript"] == nil)
         #expect(json["audio"] == nil)
     }
+    /// U6: the meeting client picks the workload the way `languageCapabilities`
+    /// does — `.meetingLive` for the sole streaming backend, `.meetingFinal` for
+    /// every other meeting backend — so the footer explains the real source.
+    @Test("meeting workloads follow the streaming split")
+    func meetingWorkloadsFollowTheStreamingSplit() throws {
+        let arabic = try SpokenLanguageProfile(selectedLanguages: [TranscriptionLanguage.arabic])
+
+        // Nemotron is streaming: it carries .meetingLive but not .meetingFinal.
+        let live = arabic.presentation(
+            for: .nemotron35Multilingual,
+            workload: .meetingLive,
+            isAvailable: true
+        )
+        #expect(live.state == .pinned)
+        let final = arabic.presentation(
+            for: .nemotron35Multilingual,
+            workload: .meetingFinal,
+            isAvailable: true
+        )
+        #expect(final.state == .incompatible)
+
+        // A non-streaming meeting backend is the reverse.
+        let whisper = arabic.presentation(
+            for: .whisperLargeTurbo,
+            workload: .meetingFinal,
+            isAvailable: true
+        )
+        #expect(whisper.state == .pinned)
+        #expect(BackendOption.nemotron35Multilingual.isStreamingDictationBackend)
+        #expect(!BackendOption.whisperLargeTurbo.isStreamingDictationBackend)
+    }
+
 }
