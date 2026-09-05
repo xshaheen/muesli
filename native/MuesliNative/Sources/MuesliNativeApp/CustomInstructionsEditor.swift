@@ -41,6 +41,8 @@ struct CustomInstructionsEditor: View {
     @State private var draft = ""
     @FocusState private var isFocused: Bool
 
+    private var characterCount: Int { CustomInstructionsEditorRules.count(draft) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
             ZStack(alignment: .topLeading) {
@@ -72,11 +74,11 @@ struct CustomInstructionsEditor: View {
 
             HStack {
                 Spacer()
-                Text("\(CustomInstructionsEditorRules.count(draft)) / \(CustomInstructions.maxLength)")
+                Text("\(characterCount) / \(CustomInstructions.maxLength)")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .monospacedDigit()
-                    .accessibilityLabel("\(CustomInstructionsEditorRules.count(draft)) of \(CustomInstructions.maxLength) characters")
+                    .accessibilityLabel("\(characterCount) of \(CustomInstructions.maxLength) characters")
             }
         }
         .onAppear { draft = committed }

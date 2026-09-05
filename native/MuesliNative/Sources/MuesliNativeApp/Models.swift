@@ -1710,14 +1710,9 @@ enum MeetingTranscriptCleanupPrompt {
     /// Repair core, then the user's preferences when they set any, then the
     /// marker protocol.
     static func systemPrompt(customInstructions: String) -> String {
-        var prompt = MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")
-        if let block = CustomInstructions.promptBlock(
-            customInstructions,
-            preamble: CustomInstructions.meetingCleanupPreamble
-        ) {
-            prompt += "\n\n" + block
-        }
-        return prompt + markerProtocol
+        MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")
+            + CustomInstructions.promptSuffix(customInstructions, preamble: CustomInstructions.meetingCleanupPreamble)
+            + markerProtocol
     }
 }
 struct DictionarySuggestion: Codable, Equatable, Identifiable, Sendable {

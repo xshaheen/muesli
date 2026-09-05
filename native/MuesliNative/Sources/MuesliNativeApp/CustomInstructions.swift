@@ -58,6 +58,14 @@ enum CustomInstructions {
         """
     }
 
+    /// The block ready to append to a prompt: a blank line plus the block, or an
+    /// empty string when there is no block, so callers stay byte-identical when
+    /// the user set nothing.
+    static func promptSuffix(_ text: String, preamble: String, limit: Int = maxLength) -> String {
+        guard let block = promptBlock(text, preamble: preamble, limit: limit) else { return "" }
+        return "\n\n" + block
+    }
+
     /// Repeats until no reserved sequence remains, so one that a removal
     /// reassembles from its neighbours is removed too.
     private static func removingReservedSequences(_ text: String) -> String {

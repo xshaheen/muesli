@@ -173,11 +173,9 @@ enum MeetingSummaryClient {
         case .unspecified:
             languageInstructions = ""
         }
-        let preferences = CustomInstructions.promptBlock(
-            customInstructions,
-            preamble: CustomInstructions.meetingNotesPreamble
-        ).map { "\n\n" + $0 } ?? ""
-        return baseTitleInstructions + preferences + languageInstructions
+        return baseTitleInstructions
+            + CustomInstructions.promptSuffix(customInstructions, preamble: CustomInstructions.meetingNotesPreamble)
+            + languageInstructions
     }
 
     static func summarize(
@@ -424,18 +422,13 @@ enum MeetingSummaryClient {
             languageInstructions = ""
         }
 
-        let preferences = CustomInstructions.promptBlock(
-            customInstructions,
-            preamble: CustomInstructions.meetingNotesPreamble
-        ).map { "\n\n" + $0 } ?? ""
-
         return baseSummaryInstructions
             + notePreservationInstructions
             + manualNoteInstructions
             + followUpInstructions
             + "\n\nFollow this note template exactly:\n\n"
             + template.prompt
-            + preferences
+            + CustomInstructions.promptSuffix(customInstructions, preamble: CustomInstructions.meetingNotesPreamble)
             + languageInstructions
     }
 
