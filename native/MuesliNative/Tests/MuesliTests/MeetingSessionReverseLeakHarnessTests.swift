@@ -253,6 +253,9 @@ struct MeetingSessionReverseLeakHarnessTests {
         let harness = try await Harness(reverseLeakEnabled: true)
         defer { harness.tearDown() }
         harness.drive(system: system, mic: [], micBufferLength: 4_096, micLagSamples: 0, systemBufferLength: 1_500)
+        // Barrier first: without it the queue may simply not have run yet, so an empty
+        // chunk list would prove nothing about rotation.
+        harness.drain()
         #expect(harness.chunks.isEmpty)
         harness.finish()
 
@@ -381,10 +384,19 @@ struct MeetingSessionReverseLeakHarnessTests {
         let fileSeconds = Double(streams.system.count) / Double(Self.sampleRate)
         let lastEnd = try #require(intervals.last?.end)
         #expect(lastEnd <= fileSeconds + 0.05, "intervals must stay inside the raw file")
-        // Gating continued after the gap, so an interval sits in the last third
-        // of the file — which is exactly where a timeline-framed interval would
-        // have run past the file's end.
-        #expect(lastEnd > fileSeconds * 0.6)
+
+        // The discriminating assertion. The last mic utterance runs 26.0-28.6 s, so its leak
+        // sits at 26.7-29.3 s in the raw file; the gate's hangover adds at most 200 ms. The
+        // 0.5 s stall injected at 18 s pushes the recording timeline about 0.4 s ahead of the
+        // file for everything after it, so an interval exported in the timeline frame would
+        // land near 29.8 s. Anything inside this window can only have come from the arrival
+        // frame (AE9, KTD7).
+        let lastLeak = Self.micSchedule[Self.micSchedule.count - 1]
+        let expectedEnd = Double(lastLeak.startMs + lastLeak.durationMs + 700) / 1_000
+        #expect(
+            lastEnd >= expectedEnd - 0.25 && lastEnd <= expectedEnd + 0.3,
+            "last interval ended at \(lastEnd); the raw-file position is \(expectedEnd) and a timeline-framed export would be about 0.4 s later"
+        )
     }
 
     // MARK: - Leak scenario driver

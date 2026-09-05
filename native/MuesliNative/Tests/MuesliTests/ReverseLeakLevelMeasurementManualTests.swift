@@ -42,7 +42,22 @@ struct ReverseLeakLevelMeasurementManualTests {
             var state = await vadManager.makeStreamState()
             var probabilities: [Float] = []
             for start in stride(from: 0, to: samples.count - VadManager.chunkSize, by: VadManager.chunkSize) {
-                let frame = Array(samples[start..<(start + VadManager.chunkSize)]).map { $0 * gain }
+                var frame = Array(samples[start..<(start + VadManager.chunkSize)]).map { $0 * gain }
+                if gain == MeetingReverseLeakMaskPlanner.maskGain {
+                    // The gate emits the floored signal mixed with comfort noise, so measure
+                    // that, not bare attenuation: the noise is what keeps Whisper off a
+                    // digital-zero run, and it is also what the VAD actually sees.
+                    var noiseCarrier = [Float](repeating: 0, count: frame.count)
+                    MeetingReverseLeakMaskPlanner.maskSamples(
+                        &noiseCarrier,
+                        intervals: [MeetingSuppressedInterval(start: 0, end: Double(frame.count) / 16_000)],
+                        sampleRate: 16_000,
+                        pad: 0
+                    )
+                    for index in frame.indices {
+                        frame[index] += noiseCarrier[index]
+                    }
+                }
                 let result = try await vadManager.processStreamingChunk(frame, state: state)
                 state = result.state
                 probabilities.append(result.probability)
