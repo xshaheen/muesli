@@ -3347,9 +3347,10 @@ public final class MuesliController: NSObject {
         await transcriptionCoordinator.configurePostProcessor(
             backend: backend,
             option: option ?? runtimePostProcessorOption(config: runtimeConfig, backend: backend),
-            systemPrompt: DictationCleanupPromptComposer.appendingSpeakerVocabulary(
-                to: runtimeConfig.postProcessorSystemPrompt,
-                customWords: runtimeConfig.customWords
+            systemPrompt: DictationCleanupPromptComposer.systemPrompt(
+                config: runtimeConfig,
+                selection: nil,
+                cleanupBackend: backend
             ),
             config: runtimeConfig
         )
@@ -12025,9 +12026,10 @@ public final class MuesliController: NSObject {
             context: contextResult
         ) ?? DictationCleanupPolicy(
             readiness: cleanupReadiness,
-            systemPromptSnapshot: DictationCleanupPromptComposer.appendingSpeakerVocabulary(
-                to: sessionConfig.postProcessorSystemPrompt,
-                customWords: sessionConfig.customWords
+            systemPromptSnapshot: DictationCleanupPromptComposer.systemPrompt(
+                config: sessionConfig,
+                selection: nil,
+                cleanupBackend: cleanupBackend
             )
         )
         let cleanupRuntimeSnapshot = cleanupRuntime ?? DictationCleanupRuntimeSnapshot(
