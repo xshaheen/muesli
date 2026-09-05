@@ -147,6 +147,8 @@ case "${shard}" in
       MeetingRecordingPanelLifecycleTests
       MeetingResumePolicyTests
       MeetingReverseLeakEstimatorTests
+      MeetingReverseLeakLockPolicyTests
+      MeetingReverseLeakSuppressorTests
       MeetingSessionDiagnosticsTests
       MeetingStreamingPartialSessionTests
       MeetingFollowUpPolicyTests
