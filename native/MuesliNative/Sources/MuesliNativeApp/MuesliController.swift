@@ -636,6 +636,10 @@ public final class MuesliController: NSObject {
     private var activeDictationContextResult: DictationSessionContextResult?
     private var stoppedDictationStyleSession: DictationStyleSessionSnapshot?
     private var stoppedDictationContextResult: DictationSessionContextResult?
+    /// Identity for the active session, and the copy frozen at stop. Kept beside the
+    /// context results so the clear and freeze helpers below cannot forget it.
+    private var activeDictationIdentity: (sessionID: UUID, identity: DictationSessionIdentity)?
+    private var stoppedDictationIdentity: (sessionID: UUID, identity: DictationSessionIdentity)?
     private var workspaceObserver: NSObjectProtocol?
     private var dataDidChangeObserver: NSObjectProtocol?
     private var iCloudAppActiveObserver: NSObjectProtocol?
@@ -11397,8 +11401,37 @@ public final class MuesliController: NSObject {
     private func clearCapturedDictationSessionContext() {
         activeDictationStyleSession = nil
         activeDictationContextResult = nil
+        activeDictationIdentity = nil
         stoppedDictationStyleSession = nil
         stoppedDictationContextResult = nil
+        stoppedDictationIdentity = nil
+        captureDictationIdentityIfNeeded()
+    }
+
+    /// Starts at session start, not when audio goes live, and at user-initiated
+    /// priority: a one-second dictation must still resolve its website mode, and the
+    /// full context capture is too late and too broad to serve that.
+    private func captureDictationIdentityIfNeeded() {
+        guard let session = activeDictationStyleSession,
+              session.mode.allowsDictationModes,
+              !isDictationTestMode,
+              session.config.matchModesByWebsite,
+              let target = session.target,
+              session.config.dictationModes.contains(where: {
+                  $0.isEnabled && !$0.websiteHostnames.isEmpty
+              })
+        else {
+            return
+        }
+        let sessionID = session.id
+        Task.detached(priority: .userInitiated) {
+            guard let identity = DictationContextCapture.captureIdentity(target: target) else { return }
+            await MainActor.run {
+                guard self.activeDictationStyleSession?.id == sessionID else { return }
+                self.activeDictationIdentity = (sessionID, identity)
+                self.markDictationLatency("identity_capture_ready")
+            }
+        }
     }
 
     private func beginDictationStyleSession(mode: DictationStyleSessionMode) {
@@ -11442,8 +11475,10 @@ public final class MuesliController: NSObject {
     private func freezeDictationStyleSessionAtStop() {
         stoppedDictationStyleSession = activeDictationStyleSession
         stoppedDictationContextResult = activeDictationContextResult
+        stoppedDictationIdentity = activeDictationIdentity
         activeDictationStyleSession = nil
         activeDictationContextResult = nil
+        activeDictationIdentity = nil
     }
 
     /// The external app that owned focus, ignoring Muesli itself, for dictation
@@ -12034,7 +12069,13 @@ public final class MuesliController: NSObject {
         )
         // One resolution, two policies (KTD6): the prompt and the delivery key must
         // come from the same mode, and the inputs are already frozen at this point.
-        let modeSelection = styleSession?.resolveMode(context: contextResult)
+        let frozenIdentity = stoppedDictationIdentity.flatMap {
+            $0.sessionID == styleSession?.id ? $0.identity : nil
+        }
+        let modeSelection = styleSession?.resolveMode(
+            context: contextResult,
+            identity: frozenIdentity
+        )
         let deliveryPolicy = modeSelection.flatMap { selection in
             styleSession?.deliveryPolicy(selection: selection)
         } ?? .none

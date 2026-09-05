@@ -2259,6 +2259,12 @@ struct AppConfig: Codable {
     /// the result has to reach disk once. Persisting it would make every later load
     /// look like a fresh migration.
     var dictationModesMigrationApplied: Bool = false
+    /// Lets a mode match the browser page the user is dictating into.
+    ///
+    /// Separate from `enableScreenContext` because the two read different things:
+    /// this reads only the address to pick a mode and keeps it in memory, while
+    /// screen context puts page text into the prompt and the database.
+    var matchModesByWebsite: Bool = true
     var enableScreenContext: Bool = false
     var enableDictationOCRContext: Bool = false
     var useCoreAudioTap: Bool = true
@@ -2404,6 +2410,7 @@ struct AppConfig: Codable {
         case postProcessorCustomLLMModel = "post_processor_custom_llm_model"
         case postProcessorSystemPrompt = "post_processor_system_prompt"
         case dictationModes = "dictation_modes"
+        case matchModesByWebsite = "match_modes_by_website"
         case enableScreenContext = "enable_screen_context"
         case enableDictationOCRContext = "enable_dictation_ocr_context"
         case useCoreAudioTap = "use_core_audio_tap"
@@ -2806,6 +2813,10 @@ struct AppConfig: Codable {
         // block every unrelated save is gone (R2), and the migration reads whatever survives.
         dictationStyleGroups = (try? legacy.decode([DictationStyleGroup].self, forKey: .dictationStyleGroups)) ?? defaults.dictationStyleGroups
         dictationStyleExactExceptions = (try? legacy.decode([DictationStyleExactException].self, forKey: .dictationStyleExactExceptions)) ?? defaults.dictationStyleExactExceptions
+        // A config migrated from a build without website matching keeps the read off
+        // when the user had screen context off: they never opted into an address read.
+        matchModesByWebsite = (try? c.decode(Bool.self, forKey: .matchModesByWebsite))
+            ?? (c.contains(.dictationModes) ? defaults.matchModesByWebsite : enableScreenContext)
         // Modes decode per field; only a non-object element is dropped (R2). Only a
         // valid array counts as present: `null`, an object, or any other malformed
         // value migrates instead, so a hand-edited key cannot discard legacy data (R9).

@@ -87,13 +87,19 @@ struct DictationStyleSessionSnapshot {
     /// Both policies below derive from this one call: resolving twice could hand a
     /// dictation the prompt of one mode and the auto-enter key of another if a late
     /// hostname landed between them.
-    func resolveMode(context result: DictationSessionContextResult?) -> DictationModeSelection {
+    func resolveMode(
+        context result: DictationSessionContextResult?,
+        identity: DictationSessionIdentity? = nil
+    ) -> DictationModeSelection {
         let context = matchingContext(result)
+        // Identity first: it is captured for every standard dictation, while the full
+        // context only exists when the user turned screen context on.
+        let hostname = identity?.hostname ?? context?.hostname
         return DictationModeResolver.resolve(
             config: config,
             target: DictationModeTarget(
                 bundleID: target?.bundleID,
-                hostname: context?.hostname
+                hostname: hostname
             )
         )
     }

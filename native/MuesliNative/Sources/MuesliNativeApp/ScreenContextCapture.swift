@@ -314,6 +314,11 @@ enum DictationContextCapture {
         browserPage(for: app)?.displayURL
     }
 
+    /// Reads only what a mode matches on, after the same PID-bound target check
+    /// the full capture uses. Emits no log line: the hostname is not ours to print.
+}
+
+extension DictationContextCapture {
     static func browserPage(for app: NSRunningApplication?) -> (displayURL: String, hostname: String)? {
         guard let app else { return nil }
         guard isBrowserApplication(app) else { return nil }
@@ -839,5 +844,35 @@ actor MeetingScreenContextCollector {
         }.joined(separator: "\n\n")
 
         return String(result.prefix(5000))
+    }
+}
+
+/// The bundle id and browser hostname of a dictation's destination, and nothing else.
+///
+/// Deliberately not a `DictationContext`: that type carries the page address and
+/// focused text into the prompt, the history row and the debug log. This one only
+/// ever reaches the mode resolver, so a user who never enabled screen context does
+/// not start sending page addresses anywhere.
+struct DictationSessionIdentity: Equatable, Sendable {
+    let processID: pid_t
+    let bundleID: String
+    let hostname: String?
+}
+
+extension DictationContextCapture {
+    /// Reads only what a mode matches on, after the same PID-bound target check the
+    /// full capture uses. Emits no log line: the hostname is not ours to print.
+    static func captureIdentity(target: DictationSessionTarget) -> DictationSessionIdentity? {
+        guard AXIsProcessTrusted() else { return nil }
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              target.matches(processID: app.processIdentifier, bundleID: app.bundleIdentifier ?? "")
+        else {
+            return nil
+        }
+        return DictationSessionIdentity(
+            processID: app.processIdentifier,
+            bundleID: app.bundleIdentifier ?? "",
+            hostname: browserPage(for: app)?.hostname
+        )
     }
 }

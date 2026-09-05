@@ -378,6 +378,73 @@ struct DictationStyleSessionTests {
         #expect(committed.policy.systemPromptSnapshot != laterRequest.policy.systemPromptSnapshot)
     }
 
+    // MARK: - Identity capture (R13)
+
+    /// The point of R13: a website mode matches without the user turning on the
+    /// screen-context capture that puts page text into prompts and history.
+    @Test("a frozen identity resolves a website mode with no screen context")
+    func identityResolvesWebsiteModeWithoutScreenContext() {
+        var config = modeConfig([mode("docs", websites: ["docs.google.com"])])
+        config.enableScreenContext = false
+        let snapshot = DictationStyleSessionSnapshot(
+            target: browserTarget,
+            config: config,
+            mode: .standard
+        )
+        let identity = DictationSessionIdentity(
+            processID: browserTarget.processID,
+            bundleID: "com.google.Chrome",
+            hostname: "docs.google.com"
+        )
+
+        let selection = snapshot.resolveMode(context: nil, identity: identity)
+        #expect(selection.modeID == "docs")
+        #expect(selection.source == .modeWebsite)
+    }
+
+    @Test("identity wins over a full-context hostname when both are present")
+    func identityBeatsFullContext() {
+        let config = modeConfig([
+            mode("docs", websites: ["docs.google.com"]),
+            mode("mail", websites: ["mail.google.com"]),
+        ])
+        let snapshot = DictationStyleSessionSnapshot(
+            target: browserTarget,
+            config: config,
+            mode: .standard
+        )
+        let context = matchingContext(
+            snapshot: snapshot,
+            target: browserTarget,
+            hostname: "mail.google.com"
+        )
+        let identity = DictationSessionIdentity(
+            processID: browserTarget.processID,
+            bundleID: "com.google.Chrome",
+            hostname: "docs.google.com"
+        )
+
+        #expect(snapshot.resolveMode(context: context, identity: identity).modeID == "docs")
+        #expect(snapshot.resolveMode(context: context, identity: nil).modeID == "mail")
+    }
+
+    @Test("no identity and no context falls through to the app list")
+    func noHostnameFallsThroughToApp() {
+        let config = modeConfig([
+            mode("docs", websites: ["docs.google.com"]),
+            mode("browser", apps: ["com.google.chrome"]),
+        ])
+        let snapshot = DictationStyleSessionSnapshot(
+            target: browserTarget,
+            config: config,
+            mode: .standard
+        )
+
+        let selection = snapshot.resolveMode(context: nil, identity: nil)
+        #expect(selection.modeID == "browser")
+        #expect(selection.source == .modeApp)
+    }
+
     private func adaptiveConfig() -> AppConfig {
         var config = AppConfig()
         config.enablePostProcessor = true
