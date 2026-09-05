@@ -93,8 +93,11 @@ struct DictationStyleSessionSnapshot {
     ) -> DictationModeSelection {
         let context = matchingContext(result)
         // Identity first: it is captured for every standard dictation, while the full
-        // context only exists when the user turned screen context on.
-        let hostname = identity?.hostname ?? context?.hostname
+        // context only exists when the user turned screen context on. Both sources
+        // are gated on the same toggle so one resolution path honors one policy: a
+        // user who switched "Match modes by website" off must not have the page
+        // address (via either source) select their mode.
+        let hostname = config.matchModesByWebsite ? (identity?.hostname ?? context?.hostname) : nil
         return DictationModeResolver.resolve(
             config: config,
             target: DictationModeTarget(

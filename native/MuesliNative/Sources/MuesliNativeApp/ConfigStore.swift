@@ -56,9 +56,19 @@ final class ConfigStore {
         _ = write(config)
     }
 
-    /// Copies the pre-migration bytes aside once. An existing backup is left exactly as
-    /// it is: it is the older, more original state, and overwriting it would replace the
-    /// only rollback with a file the migration has already rewritten.
+    /// Provider credential keys that must never persist in the rollback copy. The
+    /// backup exists so a downgrade can recover the legacy Writing Styles keys, not
+    /// so a revoked or rotated API key keeps living in a second plaintext file.
+    private static let legacyBackupCredentialKeys = [
+        "openai_api_key",
+        "openrouter_api_key",
+        "custom_llm_api_key",
+    ]
+
+    /// Copies the pre-migration bytes aside once, with provider credentials blanked.
+    /// An existing backup is left exactly as it is: it is the older, more original
+    /// state, and overwriting it would replace the only rollback with a file the
+    /// migration has already rewritten.
     private func backUpLegacyConfig(_ data: Data) -> Bool {
         let backupURL = legacyBackupURL()
         var isDirectory: ObjCBool = false
@@ -72,8 +82,29 @@ final class ConfigStore {
             )
             return false
         }
+        // Parsed generically (not through AppConfig) so every legacy/unknown key the
+        // typed model doesn't round-trip still survives byte-for-byte in meaning.
+        guard var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            // An unparseable config.json can't be faithfully scrubbed, so there is
+            // nothing safe to back up here; the migration re-runs next launch instead.
+            fputs(
+                "[config-store] cannot back up config.json before the dictation modes migration: the file is not valid JSON; skipping the backup\n",
+                stderr
+            )
+            return false
+        }
+        for key in Self.legacyBackupCredentialKeys where object[key] != nil {
+            object[key] = ""
+        }
+        guard let payload = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else {
+            fputs(
+                "[config-store] cannot back up config.json before the dictation modes migration: failed to re-encode the scrubbed copy; skipping the backup\n",
+                stderr
+            )
+            return false
+        }
         do {
-            try data.write(to: backupURL, options: .withoutOverwriting)
+            try payload.write(to: backupURL, options: .withoutOverwriting)
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o600],
                 ofItemAtPath: backupURL.path

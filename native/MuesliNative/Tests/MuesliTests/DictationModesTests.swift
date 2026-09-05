@@ -411,17 +411,27 @@ struct DictationModesTests {
         #expect(messaging.instructions == (try prompt(TranscriptCleanupPrompts.messageID)))
     }
 
-    @Test("built-in targets come from the curated catalogs and messaging alone auto-enters")
+    @Test("built-in targets come from the curated catalogs")
     func builtInTargetsMatchCuratedCatalogs() throws {
         let builtIns = DictationModes.builtInModes(isEnabled: true)
         let email = try #require(builtIns.first { $0.id == DictationModes.BuiltIn.email.id })
-        let messaging = try #require(builtIns.first { $0.id == DictationModes.BuiltIn.messaging.id })
 
         #expect(email.appBundleIDs == ["com.apple.mail"])
         #expect(email.websiteHostnames == ["mail.google.com", "outlook.office.com"])
-        #expect(messaging.autoEnter == .return)
-        #expect(builtIns.filter { $0.autoEnter != nil }.map(\.id) == [DictationModes.BuiltIn.messaging.id])
         #expect(builtIns.allSatisfy { !$0.overrideDefaultInstructions })
+    }
+
+    /// A fresh install must not arm a key press in a destination the user never
+    /// opened the editor for -- Messaging's Enter key sends the message before the
+    /// user can read what the ASR produced. Seeding disarmed matches what the
+    /// legacy-config migration already does (`autoEnter: nil`) for the same reason.
+    @Test("built-in seeding never arms auto-enter, including Messaging")
+    func builtInSeedingDisarmsAutoEnter() {
+        let enabled = DictationModes.builtInModes(isEnabled: true)
+        let disabled = DictationModes.builtInModes(isEnabled: false)
+
+        #expect(enabled.allSatisfy { $0.autoEnter == nil })
+        #expect(disabled.allSatisfy { $0.autoEnter == nil })
     }
 
     @Test("the shipped built-ins are already sanitized")

@@ -2477,6 +2477,16 @@ struct AppConfig: Codable {
     /// the result has to reach disk once. Persisting it would make every later load
     /// look like a fresh migration.
     var dictationModesMigrationApplied: Bool = false
+    /// The `logMigration` messages the migration above produced, one per dropped
+    /// matcher/group/exception it could not carry over losslessly (e.g. a wildcard
+    /// app-bundle or hostname matcher, which the new exact-match model cannot
+    /// represent). Decode-only like `dictationModesMigrationApplied` above and for
+    /// the same reason: it is derived once from the legacy keys and never encoded,
+    /// so persisting it would make a later load look like a fresh migration. The
+    /// Modes screen shows it once and clears it in memory (`updateConfig { $0
+    /// .dictationModesMigrationNotes = [] }`) when the user dismisses it; because it
+    /// is never written to disk, a later reload always starts from `[]` regardless.
+    var dictationModesMigrationNotes: [String] = []
     /// Lets a mode match the browser page the user is dictating into.
     ///
     /// Separate from `enableScreenContext` because the two read different things:
@@ -3059,10 +3069,14 @@ struct AppConfig: Codable {
         // block every unrelated save is gone (R2), and the migration reads whatever survives.
         dictationStyleGroups = (try? legacy.decode([DictationStyleGroup].self, forKey: .dictationStyleGroups)) ?? defaults.dictationStyleGroups
         dictationStyleExactExceptions = (try? legacy.decode([DictationStyleExactException].self, forKey: .dictationStyleExactExceptions)) ?? defaults.dictationStyleExactExceptions
+        // Decoded ahead of `matchModesByWebsite` below: that migration falls back to
+        // this value, and reading the not-yet-assigned `enableScreenContext` property
+        // there would silently observe its declared default instead of the stored one.
+        let decodedEnableScreenContext = (try? c.decode(Bool.self, forKey: .enableScreenContext)) ?? defaults.enableScreenContext
         // A config migrated from a build without website matching keeps the read off
         // when the user had screen context off: they never opted into an address read.
         matchModesByWebsite = (try? c.decode(Bool.self, forKey: .matchModesByWebsite))
-            ?? (c.contains(.dictationModes) ? defaults.matchModesByWebsite : enableScreenContext)
+            ?? (c.contains(.dictationModes) ? defaults.matchModesByWebsite : decodedEnableScreenContext)
         // Modes decode per field; only a non-object element is dropped (R2). Only a
         // valid array counts as present: `null`, an object, or any other malformed
         // value migrates instead, so a hand-edited key cannot discard legacy data (R9).
@@ -3071,7 +3085,7 @@ struct AppConfig: Codable {
         dictationStyleCategoryAssignments = (try? legacy.decode([String: String].self, forKey: .dictationStyleCategoryAssignments)) ?? defaults.dictationStyleCategoryAssignments
         dictationStyleAppRules = (try? legacy.decode([DictationStyleAppRule].self, forKey: .dictationStyleAppRules)) ?? defaults.dictationStyleAppRules
         dictationStyleDomainRules = (try? legacy.decode([DictationStyleDomainRule].self, forKey: .dictationStyleDomainRules)) ?? defaults.dictationStyleDomainRules
-        enableScreenContext = (try? c.decode(Bool.self, forKey: .enableScreenContext)) ?? defaults.enableScreenContext
+        enableScreenContext = decodedEnableScreenContext
         enableDictationOCRContext = (try? c.decode(Bool.self, forKey: .enableDictationOCRContext)) ?? defaults.enableDictationOCRContext
         useCoreAudioTap = (try? c.decode(Bool.self, forKey: .useCoreAudioTap)) ?? defaults.useCoreAudioTap
         meetingReverseLeakSuppression = (try? c.decode(Bool.self, forKey: .meetingReverseLeakSuppression)) ?? defaults.meetingReverseLeakSuppression
@@ -3116,8 +3130,10 @@ struct AppConfig: Codable {
         // the mode list once. The flag is decode-only and tells `ConfigStore` that this
         // result has to reach disk on the launch that derived it.
         if decodedModes == nil {
-            dictationModes = DictationModes.migratedModes(from: self)
+            let migration = DictationModes.migratedModes(from: self)
+            dictationModes = migration.modes
             dictationModesMigrationApplied = true
+            dictationModesMigrationNotes = migration.notes
         }
         // The repair preset is retired: repair now follows the language selection.
         // Runs after the mode migration above, so that migration still sees the

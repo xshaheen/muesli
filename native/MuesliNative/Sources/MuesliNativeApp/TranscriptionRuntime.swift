@@ -108,17 +108,26 @@ enum DictationCleanupPromptComposer {
         // The two blocks share one budget, filled global-first, because on-device
         // Qwen has a single 1,024-token context for everything. Mode tags are only
         // stripped when a mode block exists, so a no-mode prompt is unchanged.
+        // A long global field cannot spend the whole budget, though: the mode is
+        // destination-specific and modePreamble already tells the model it takes
+        // precedence over the standing preference, so it gets a reserved floor
+        // (half the shared budget, or less if it doesn't need that much) that the
+        // global block's cap leaves untouched.
         let hasMode = CustomInstructions.normalized(modeInstructions ?? "").isEmpty == false
+        let modeFloor = hasMode
+            ? min(customInstructionsLimit / 2, CustomInstructions.normalized(modeInstructions ?? "").count)
+            : 0
+        let globalLimit = max(0, customInstructionsLimit - modeFloor)
         let customBlock = CustomInstructions.promptSuffix(
             customInstructions,
             preamble: CustomInstructions.dictationPreamble,
-            limit: customInstructionsLimit,
+            limit: globalLimit,
             extraReserved: hasMode ? CustomInstructions.modeReservedSequences : []
         )
         var prompt = base + customBlock
         if let modeInstructions, hasMode {
             let spent = CustomInstructions.normalized(customInstructions).count
-            let remaining = max(0, customInstructionsLimit - min(spent, customInstructionsLimit))
+            let remaining = max(0, customInstructionsLimit - min(spent, globalLimit))
             prompt += CustomInstructions.promptSuffix(
                 modeInstructions,
                 preamble: CustomInstructions.modePreamble,
@@ -171,8 +180,15 @@ enum DictationCleanupPromptComposer {
                 mixedLanguageRepair: repair
             )
         } else {
+            // Every legacy adaptive-style group migrated to a mode with
+            // overrideDefaultInstructions == false (DictationModes.swift), so this
+            // arm must keep the same safety envelope those users always had before
+            // compose(styleInstructions:) is not a user preference a preset may
+            // drop; it is Muesli's own untrusted-<APP-CONTEXT> and preserve-meaning
+            // rule, the same reasoning already applied to the mixed-language repair
+            // block above.
             composed = systemPrompt(
-                base: config.postProcessorSystemPrompt,
+                base: compose(styleInstructions: config.postProcessorSystemPrompt),
                 customInstructions: config.customInstructions,
                 customInstructionsLimit: limit,
                 customWords: config.customWords,

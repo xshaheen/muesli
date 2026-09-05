@@ -324,12 +324,29 @@ struct DictationModeEditorView: View {
         panel.allowedContentTypes = [.application]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            let app = try InstalledApplicationCatalog.application(at: url)
-            add(bundleID: app.bundleID, named: app.displayName)
-        } catch {
-            inlineMessage = error.localizedDescription
+
+        presentOpenPanel(panel) { url in
+            do {
+                let app = try InstalledApplicationCatalog.application(at: url)
+                add(bundleID: app.bundleID, named: app.displayName)
+            } catch {
+                inlineMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func presentOpenPanel(_ panel: NSOpenPanel, onPick: @escaping (URL) -> Void) {
+        NSApp.activate()
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            panel.beginSheetModal(for: window) { response in
+                guard response == .OK, let url = panel.url else { return }
+                onPick(url)
+            }
+        } else {
+            panel.begin { response in
+                guard response == .OK, let url = panel.url else { return }
+                onPick(url)
+            }
         }
     }
 

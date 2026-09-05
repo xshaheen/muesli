@@ -3472,6 +3472,11 @@ public final class MuesliController: NSObject {
         guard decision.recordsAttempt else { return }
         updateConfig { $0.bilingualRepairAutoEnableApplied = true }
         guard decision.enablesPostProcessor else { return }
+        // The latch is already recorded above, so a hosted backend simply never
+        // gets auto-enabled rather than being retried on every launch: turning
+        // cleanup on for a hosted provider would start sending dictation text
+        // off-device with no prompt and no visible disclosure.
+        guard selectedPostProcessorBackend.isOnDevice else { return }
         setPostProcessorEnabled(true)
     }
 
@@ -11452,7 +11457,23 @@ public final class MuesliController: NSObject {
         stoppedDictationStyleSession = nil
         stoppedDictationContextResult = nil
         stoppedDictationIdentity = nil
-        captureDictationIdentityIfNeeded()
+    }
+
+    /// Whether a session's website-based mode matching depends on the detached
+    /// identity capture. Read at stop as well as at start: a delivery key resolved
+    /// without the identity this predicate promised is the one that must fail
+    /// closed.
+    private static func websiteIdentityCaptureIsArmed(
+        session: DictationStyleSessionSnapshot,
+        isDictationTestMode: Bool
+    ) -> Bool {
+        session.mode.allowsDictationModes
+            && !isDictationTestMode
+            && session.config.matchModesByWebsite
+            && session.target != nil
+            && session.config.dictationModes.contains(where: {
+                $0.isEnabled && !$0.websiteHostnames.isEmpty
+            })
     }
 
     /// Starts at session start, not when audio goes live, and at user-initiated
@@ -11460,13 +11481,11 @@ public final class MuesliController: NSObject {
     /// full context capture is too late and too broad to serve that.
     private func captureDictationIdentityIfNeeded() {
         guard let session = activeDictationStyleSession,
-              session.mode.allowsDictationModes,
-              !isDictationTestMode,
-              session.config.matchModesByWebsite,
-              let target = session.target,
-              session.config.dictationModes.contains(where: {
-                  $0.isEnabled && !$0.websiteHostnames.isEmpty
-              })
+              Self.websiteIdentityCaptureIsArmed(
+                  session: session,
+                  isDictationTestMode: isDictationTestMode
+              ),
+              let target = session.target
         else {
             return
         }
@@ -11515,8 +11534,10 @@ public final class MuesliController: NSObject {
             cleanupRuntime: cleanupRuntime
         )
         activeDictationContextResult = nil
+        activeDictationIdentity = nil
         stoppedDictationStyleSession = nil
         stoppedDictationContextResult = nil
+        captureDictationIdentityIfNeeded()
     }
 
     private func freezeDictationStyleSessionAtStop() {
@@ -12128,9 +12149,19 @@ public final class MuesliController: NSObject {
             context: contextResult,
             identity: frozenIdentity
         )
-        let deliveryPolicy = modeSelection.flatMap { selection in
-            styleSession?.deliveryPolicy(selection: selection)
-        } ?? .none
+        // Fail closed on a lost identity race: when website matching was armed but
+        // the capture did not land, the resolution falls back to the app-wide mode,
+        // and pressing that mode's Return would submit into a site the user
+        // configured not to send. Pressing no key is the recoverable outcome.
+        let identityResolved = styleSession.map { session in
+            !Self.websiteIdentityCaptureIsArmed(session: session, isDictationTestMode: isTestMode)
+                || frozenIdentity != nil
+        } ?? true
+        let deliveryPolicy = identityResolved
+            ? (modeSelection.flatMap { selection in
+                styleSession?.deliveryPolicy(selection: selection)
+            } ?? .none)
+            : .none
         let cleanupPolicy = modeSelection.flatMap { selection in
             styleSession?.mode.allowsDictationModes == true
                 ? styleSession?.cleanupPolicy(readiness: cleanupReadiness, selection: selection)
@@ -13335,17 +13366,17 @@ public final class MuesliController: NSObject {
     /// is actually focused, so that substitution could submit into Muesli's own
     /// window. Muesli never satisfies this check.
     private func canDeliverAutoEnter(to capturedTarget: DictationSessionTarget?) -> Bool {
-        guard let capturedTarget else { return false }
-        guard let frontmost = NSWorkspace.shared.frontmostApplication,
-              frontmost != NSRunningApplication.current
-        else {
-            return false
-        }
-        return capturedTarget.matches(
-            processID: frontmost.processIdentifier,
-            bundleID: frontmost.bundleIdentifier ?? ""
+        AutoEnterGuard.canDeliver(
+            to: capturedTarget,
+            frontmost: NSWorkspace.shared.frontmostApplication.map(AutoEnterAppIdentity.init(app:)),
+            current: AutoEnterAppIdentity(app: NSRunningApplication.current)
         )
     }
+
+    /// Accessibility calls cross a process boundary and can block their caller
+    /// while the target app is busy, and this one runs on the main thread. Bound
+    /// each request the way the target paste path already does.
+    private static let autoEnterAXMaximumRequestTimeout: Float = 0.1
 
     /// Skips the send key when the focused element is a control Return would
     /// activate rather than a field it would submit.
@@ -13354,14 +13385,24 @@ public final class MuesliController: NSObject {
     /// composers routinely report nothing useful and they are the main reason
     /// auto-enter exists.
     private func focusedElementAcceptsAutoEnter(in application: NSRunningApplication) -> Bool {
-        guard AXIsProcessTrusted() else { return true }
+        let isProcessTrusted = AXIsProcessTrusted()
+        return AutoEnterGuard.focusedRoleAcceptsAutoEnter(
+            isProcessTrusted: isProcessTrusted,
+            focusedRole: isProcessTrusted ? focusedElementRole(in: application) : nil
+        )
+    }
+
+    /// The focused element's AX role, or nil when it cannot be read.
+    private func focusedElementRole(in application: NSRunningApplication) -> String? {
         let app = AXUIElementCreateApplication(application.processIdentifier)
+        _ = AXUIElementSetMessagingTimeout(app, Self.autoEnterAXMaximumRequestTimeout)
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused)
             == .success,
-            let element = focused
+            let element = focused,
+            CFGetTypeID(element) == AXUIElementGetTypeID()
         else {
-            return true
+            return nil
         }
         var role: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
@@ -13369,16 +13410,9 @@ public final class MuesliController: NSObject {
             kAXRoleAttribute as CFString,
             &role
         ) == .success, let roleName = role as? String else {
-            return true
+            return nil
         }
-        let nonTextRoles: Set<String> = [
-            kAXButtonRole as String,
-            kAXMenuItemRole as String,
-            kAXCheckBoxRole as String,
-            kAXRadioButtonRole as String,
-            "AXLink",
-        ]
-        return !nonTextRoles.contains(roleName)
+        return roleName
     }
 
     private func canPasteDictation(to capturedTarget: DictationSessionTarget?) -> Bool {

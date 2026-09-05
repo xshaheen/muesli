@@ -46,6 +46,7 @@ struct DictationModesView: View {
                         }
                     }
 
+                    migrationNotice
                     modesSection
                 }
                 .padding(.bottom, MuesliTheme.spacing16)
@@ -87,7 +88,7 @@ struct DictationModesView: View {
                 pendingDeletion = nil
             }
         } message: {
-            Text("Reset modes brings back the four built-in modes.")
+            Text("This can't be undone. Its apps, websites, and instructions won't move to another mode.")
         }
         .alert("Reset modes?", isPresented: $isResetConfirmationPresented) {
             Button("Cancel", role: .cancel) {}
@@ -124,6 +125,41 @@ struct DictationModesView: View {
                 SettingsControls.compactActionButton("Done") { onClose() }
             }
         }
+    }
+
+    /// One-time disclosure for R5-R9's migration: a wildcard app or website matcher
+    /// has no exact-match equivalent in the new model, so it was dropped rather than
+    /// silently kept. Shown only while notes remain, dismissed by clearing them in
+    /// memory (they are decode-only and never reach disk either way).
+    @ViewBuilder
+    private var migrationNotice: some View {
+        if !appState.config.dictationModesMigrationNotes.isEmpty {
+            SettingsControls.card {
+                HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                        Text("Some activation rules couldn't migrate")
+                            .font(MuesliTheme.headline())
+                        Text(migrationNoticeBody)
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: MuesliTheme.spacing12)
+                    SettingsControls.compactActionButton("Dismiss") {
+                        controller.updateConfig { $0.dictationModesMigrationNotes = [] }
+                    }
+                }
+            }
+        }
+    }
+
+    private var migrationNoticeBody: String {
+        let notes = appState.config.dictationModesMigrationNotes
+        let count = notes.count
+        let header = count == 1
+            ? "1 activation rule from your previous setup couldn't be carried over automatically:"
+            : "\(count) activation rules from your previous setup couldn't be carried over automatically:"
+        return (["\(header)"] + notes.map { "• \($0)" }).joined(separator: "\n")
     }
 
     private var modesSection: some View {

@@ -60,11 +60,6 @@ enum DictationModes {
                 .first { $0.id == category.defaultStyleID }?
                 .prompt ?? ""
         }
-
-        /// Only chat destinations send on Enter; a mail or editor mode must not.
-        var autoEnter: DictationModeAutoEnter? {
-            self == .messaging ? .return : nil
-        }
     }
 
     /// The shipped modes, already sanitized.
@@ -88,7 +83,13 @@ enum DictationModes {
                     .filter { $0.value == builtIn.category }
                     .keys
                     .sorted(),
-                autoEnter: builtIn.autoEnter
+                // Auto-enter sends a message the user has not read yet, so it is never
+                // a seeded default -- Messaging's built-in category would otherwise
+                // post to Messages/Slack/WhatsApp on a fresh install before the user
+                // ever opens the editor. The migration path withholds it on upgrade
+                // for the same reason (see `groupDrafts` below); the editor is where
+                // it gets turned on.
+                autoEnter: nil
             )
         })
     }
@@ -249,23 +250,32 @@ enum DictationModes {
     ///
     /// Output order is pinned: groups in legacy order, then modes an exception had to
     /// create, then unreferenced custom prompts, then the built-ins that are absent.
-    static func migratedModes(from config: AppConfig) -> [DictationMode] {
+    ///
+    /// `notes` carries every `logMigration` message this pass produces (dropped
+    /// matchers, dropped groups, unresolvable exceptions) so the caller can persist
+    /// them and surface a one-time notice; the migration itself stays total either
+    /// way (R4/R9's total-sanitize guarantee does not depend on this list).
+    static func migratedModes(from config: AppConfig) -> (modes: [DictationMode], notes: [String]) {
+        let notes = MigrationNotes()
         let styles = sanitizedLegacyStyles(config.customTranscriptCleanupPrompts)
         let ruleset = legacyRuleset(config, styles: styles)
         var drafts = groupDrafts(
             ruleset.groups,
             styles: styles,
-            isEnabled: config.adaptiveDictationStylesEnabled
+            isEnabled: config.adaptiveDictationStylesEnabled,
+            notes: notes
         )
         applyExceptions(
             ruleset.exceptions,
             to: &drafts,
             styles: styles,
-            isEnabled: config.adaptiveDictationStylesEnabled
+            isEnabled: config.adaptiveDictationStylesEnabled,
+            notes: notes
         )
         appendUnreferencedPrompts(styles, to: &drafts)
         appendAbsentBuiltIns(to: &drafts)
-        return sanitized(modes: uniquelyNamed(drafts.map(\.mode)))
+        let modes = sanitized(modes: uniquelyNamed(drafts.map(\.mode)))
+        return (modes, notes.messages)
     }
 
     /// One mode under construction plus the legacy style it carries, which is how an
@@ -288,23 +298,24 @@ enum DictationModes {
     private static func groupDrafts(
         _ groups: [DictationStyleGroup],
         styles: [CustomTranscriptCleanupPrompt],
-        isEnabled: Bool
+        isEnabled: Bool,
+        notes: MigrationNotes
     ) -> [MigrationDraft] {
         var resolved: [(group: DictationStyleGroup, style: TranscriptCleanupPromptPreset)] = []
         for group in groups {
             guard let style = TranscriptCleanupPrompts.resolveOptional(id: group.styleID, custom: styles) else {
                 // The legacy resolver skipped a group whose style no longer resolves and
                 // fell through to the global prompt, so there is no text to carry over.
-                logMigration("dropping group \"\(group.name)\": its writing style no longer exists")
+                logMigration("dropping group \"\(group.name)\": its writing style no longer exists", notes: notes)
                 continue
             }
             resolved.append((group, style))
         }
 
-        let bundleClaims = resolved.map { claims(in: $0.group, kind: .bundleID) }
-        let websiteClaims = resolved.map { claims(in: $0.group, kind: .hostname) }
-        let bundleOwners = targetOwners(bundleClaims)
-        let websiteOwners = targetOwners(websiteClaims)
+        let bundleClaims = resolved.map { claims(in: $0.group, kind: .bundleID, notes: notes) }
+        let websiteClaims = resolved.map { claims(in: $0.group, kind: .hostname, notes: notes) }
+        let bundleOwners = targetOwners(bundleClaims, notes: notes)
+        let websiteOwners = targetOwners(websiteClaims, notes: notes)
 
         return resolved.indices.map { index in
             MigrationDraft(
@@ -330,30 +341,34 @@ enum DictationModes {
     /// projection that iterated an unordered dictionary.
     private static func claims(
         in group: DictationStyleGroup,
-        kind: DictationStyleMatcherKind
+        kind: DictationStyleMatcherKind,
+        notes: MigrationNotes
     ) -> [TargetClaim] {
         var seen = Set<String>()
         return group.matchers
             .filter { $0.kind == kind }
             .compactMap { matcher in
                 switch kind {
-                case .bundleID: bundleClaim(matcher.pattern, group: group.name)
-                case .hostname: websiteClaim(matcher.pattern, group: group.name)
+                case .bundleID: bundleClaim(matcher.pattern, group: group.name, notes: notes)
+                case .hostname: websiteClaim(matcher.pattern, group: group.name, notes: notes)
                 }
             }
             .filter { seen.insert($0.value).inserted }
             .sorted { $0.value < $1.value }
     }
 
-    private static func bundleClaim(_ pattern: String, group: String) -> TargetClaim? {
+    private static func bundleClaim(_ pattern: String, group: String, notes: MigrationNotes) -> TargetClaim? {
         guard !pattern.contains("*"), let bundleID = normalizedBundleID(pattern) else {
-            logMigration("dropping matcher \"\(pattern)\" from group \"\(group)\": not an exact bundle identifier")
+            logMigration(
+                "dropping matcher \"\(pattern)\" from group \"\(group)\": not an exact bundle identifier",
+                notes: notes
+            )
             return nil
         }
         return TargetClaim(value: bundleID, isExact: true)
     }
 
-    private static func websiteClaim(_ pattern: String, group: String) -> TargetClaim? {
+    private static func websiteClaim(_ pattern: String, group: String, notes: MigrationNotes) -> TargetClaim? {
         let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if trimmed.hasPrefix("*.") {
             let host = String(trimmed.dropFirst(2))
@@ -365,13 +380,13 @@ enum DictationModes {
         } else if !trimmed.contains("*"), let normalized = normalizedHostname(trimmed) {
             return TargetClaim(value: normalized, isExact: true)
         }
-        logMigration("dropping matcher \"\(pattern)\" from group \"\(group)\": no equivalent website entry")
+        logMigration("dropping matcher \"\(pattern)\" from group \"\(group)\": no equivalent website entry", notes: notes)
         return nil
     }
 
     /// The group index that keeps each target, or no entry when the legacy resolver
     /// itself had no winner (equal-rank matchers in two groups resolved to nothing).
-    private static func targetOwners(_ claims: [[TargetClaim]]) -> [String: Int] {
+    private static func targetOwners(_ claims: [[TargetClaim]], notes: MigrationNotes) -> [String: Int] {
         var byValue: [String: [(index: Int, isExact: Bool)]] = [:]
         for (index, groupClaims) in claims.enumerated() {
             for claim in groupClaims {
@@ -389,7 +404,7 @@ enum DictationModes {
                 owners[value] = exact[0].index
                 return
             }
-            logMigration("dropping \"\(value)\": more than one writing-style group claimed it")
+            logMigration("dropping \"\(value)\": more than one writing-style group claimed it", notes: notes)
         }
     }
 
@@ -416,7 +431,8 @@ enum DictationModes {
         _ exceptions: [DictationStyleExactException],
         to drafts: inout [MigrationDraft],
         styles: [CustomTranscriptCleanupPrompt],
-        isEnabled: Bool
+        isEnabled: Bool,
+        notes: MigrationNotes
     ) {
         for exception in exceptions {
             guard let style = TranscriptCleanupPrompts.resolveOptional(id: exception.styleID, custom: styles) else {
@@ -427,7 +443,7 @@ enum DictationModes {
             case .hostname: normalizedHostname(exception.target)
             }
             guard let target = normalized else {
-                logMigration("dropping exception for \"\(exception.target)\": no equivalent mode target")
+                logMigration("dropping exception for \"\(exception.target)\": no equivalent mode target", notes: notes)
                 continue
             }
 
@@ -672,8 +688,23 @@ enum DictationModes {
         }
     }
 
-    private static func logMigration(_ message: String) {
+    /// Accumulates every `logMigration` message from one `migratedModes(from:)` pass.
+    ///
+    /// A reference type rather than an `inout [String]` threaded through the
+    /// migration's helper functions: several of those helpers log from inside a
+    /// `map`/`compactMap`/`reduce(into:)` closure, and an `inout` parameter cannot
+    /// cross that closure boundary the way a captured reference can.
+    private final class MigrationNotes {
+        private(set) var messages: [String] = []
+
+        func record(_ message: String) {
+            messages.append(message)
+        }
+    }
+
+    private static func logMigration(_ message: String, notes: MigrationNotes) {
         fputs("[dictation-modes-migration] \(message)\n", stderr)
+        notes.record(message)
     }
 
     // MARK: - Private

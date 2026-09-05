@@ -98,6 +98,16 @@ struct CustomInstructionsEditor: View {
             if !focused { commitIfNeeded() }
         }
         .onDisappear { commitIfNeeded() }
+        // `.task`, `onDisappear`, and focus-loss all skip whole-process
+        // termination (the Settings window is never torn down before quit).
+        // NotificationCenter observers are the one mechanism this codebase
+        // already treats as reliable under App Nap and shutdown, so flush
+        // any in-flight debounced edit here too. `commitIfNeeded()` is a
+        // no-op once the draft is already committed, so firing alongside
+        // focus loss or disappearance is safe.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            commitIfNeeded()
+        }
     }
 
     private func commitIfNeeded() {

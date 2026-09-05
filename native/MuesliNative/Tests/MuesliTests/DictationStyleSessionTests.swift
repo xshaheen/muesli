@@ -205,8 +205,9 @@ struct DictationStyleSessionTests {
         }
     }
 
-    /// R12: with no mode matched the prompt is the user's own base bytes plus the
-    /// vocabulary, exactly as before Modes existed.
+    /// R12: with no mode matched the prompt is the user's own base bytes (still
+    /// wrapped in Muesli's safety envelope, #17) plus the vocabulary, exactly as
+    /// before Modes existed.
     @Test("no matching mode preserves the base prompt bytes with default provenance")
     func noModeRetainsBasePromptBytes() throws {
         var config = adaptiveConfig()
@@ -217,7 +218,7 @@ struct DictationStyleSessionTests {
         let toggle = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard)
 
         let expectedPrompt = DictationCleanupPromptComposer.appendingSpeakerVocabulary(
-            to: config.postProcessorSystemPrompt,
+            to: DictationCleanupPromptComposer.compose(styleInstructions: config.postProcessorSystemPrompt),
             customWords: config.customWords
         )
         for snapshot in [hold, toggle] {
@@ -244,7 +245,12 @@ struct DictationStyleSessionTests {
         #expect(custom.lowerBound < modeBlock.lowerBound && modeBlock.lowerBound < vocabulary.lowerBound)
     }
 
-    @Test("adaptive styles disabled keeps the raw preset bytes ahead of the instructions")
+    /// The Modes migration removed the `adaptiveDictationStylesEnabled` ternary
+    /// that used to gate the safety envelope (#17): it is Muesli's own
+    /// correctness rule, not a user preference a preset may drop, so a
+    /// disabled-adaptive-styles user still gets the wrapped preset ahead of
+    /// their standing instructions.
+    @Test("adaptive styles disabled still wraps the preset with the safety envelope ahead of the instructions")
     func disabledAdaptiveStylesKeepsRawBytesFirst() throws {
         var config = adaptiveConfig()
         config.adaptiveDictationStylesEnabled = false
@@ -254,9 +260,12 @@ struct DictationStyleSessionTests {
         let snapshot = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard)
 
         let prompt = try #require(snapshot.cleanupPolicy(enabled: true, context: nil)).systemPromptSnapshot
-        #expect(prompt.hasPrefix("Legacy prompt bytes"))
+        let style = try #require(prompt.range(of: "<STYLE-INSTRUCTIONS>"))
+        let preset = try #require(prompt.range(of: "Legacy prompt bytes"))
         let block = try #require(prompt.range(of: CustomInstructions.openingTag))
         let vocabulary = try #require(prompt.range(of: "Speaker vocabulary"))
+        #expect(style.lowerBound < preset.lowerBound)
+        #expect(preset.lowerBound < block.lowerBound)
         #expect(block.lowerBound < vocabulary.lowerBound)
     }
 
