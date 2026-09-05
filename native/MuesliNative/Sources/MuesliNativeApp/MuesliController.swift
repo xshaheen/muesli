@@ -12038,7 +12038,8 @@ public final class MuesliController: NSObject {
             systemPromptSnapshot: DictationCleanupPromptComposer.systemPrompt(
                 config: sessionConfig,
                 selection: nil,
-                cleanupBackend: cleanupBackend
+                cleanupBackend: cleanupBackend,
+                option: ppOption
             )
         )
         let cleanupRuntimeSnapshot = cleanupRuntime ?? DictationCleanupRuntimeSnapshot(

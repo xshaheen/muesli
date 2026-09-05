@@ -83,8 +83,10 @@ struct MeetingSummaryClientTests {
 
         #expect(!summary.contains(CustomInstructions.openingTag))
         #expect(!title.contains(CustomInstructions.openingTag))
-        #expect(summary == MeetingSummaryClient.summaryInstructions(for: customTemplate, transcript: "Hello"))
-        #expect(title == MeetingSummaryClient.titleInstructions(transcript: "Hello", manualNotes: nil))
+        // Nothing may follow the template prompt or the title examples when the
+        // field is empty; these suffixes are the pre-change shape, not the new code.
+        #expect(summary.hasSuffix(customTemplate.prompt))
+        #expect(title.hasSuffix("\"Security Audit Discussion\""))
     }
 
     @Test("title instructions carry the block before the Arabic title instruction")

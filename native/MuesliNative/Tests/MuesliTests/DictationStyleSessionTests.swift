@@ -261,6 +261,19 @@ struct DictationStyleSessionTests {
         #expect(!prompt.contains("Instructions B"))
     }
 
+    @Test("an S1-mini runtime snapshot stores only the trained S1 prompt")
+    func s1MiniSnapshotKeepsTrainedPrompt() throws {
+        var config = adaptiveConfig()
+        config.customInstructions = "Use British English."
+        config.customWords = [CustomWord(word: "muesli", replacement: "Muesli")]
+        let runtime = DictationCleanupRuntimeSnapshot(readiness: .ready, backend: .local, option: .s1Mini, config: config)
+        let snapshot = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard, cleanupRuntime: runtime)
+
+        let prompt = try #require(snapshot.cleanupPolicy(enabled: true, context: nil)).systemPromptSnapshot
+        #expect(prompt == PostProcessorOption.s1MiniSystemPrompt)
+        #expect(!prompt.contains(CustomInstructions.openingTag))
+    }
+
     @Test("the session budget follows the frozen cleanup backend, else the configured one")
     func sessionBudgetFollowsBackend() throws {
         var config = adaptiveConfig()

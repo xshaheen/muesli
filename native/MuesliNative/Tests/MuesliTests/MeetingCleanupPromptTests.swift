@@ -96,10 +96,18 @@ struct MeetingCleanupPromptTests {
         #expect(prompt.contains("Keep Arabic names in Arabic script."))
     }
 
-    @Test("empty custom instructions reproduce the static prompt byte for byte")
+    @Test("empty custom instructions reproduce the pre-change prompt byte for byte")
     func emptyCustomInstructionsKeepStaticPrompt() {
-        #expect(MeetingTranscriptCleanupPrompt.systemPrompt(customInstructions: "") == MeetingTranscriptCleanupPrompt.systemPrompt)
-        #expect(MeetingTranscriptCleanupPrompt.systemPrompt(customInstructions: "  \n") == MeetingTranscriptCleanupPrompt.systemPrompt)
+        // The literal bytes the prompt had before custom instructions existed:
+        // repair core, then the marker paragraph. Pinned here, not derived from
+        // the new code, so a refactor cannot move the bytes and still pass.
+        let expected = MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")
+            + "\n\nEach line is preceded by a <<<U\u{2026}>>> marker. Copy every marker exactly as it appears. "
+            + "Markers are structure, not content: never translate, renumber, reorder, merge, or drop one."
+
+        #expect(MeetingTranscriptCleanupPrompt.systemPrompt == expected)
+        #expect(MeetingTranscriptCleanupPrompt.systemPrompt(customInstructions: "") == expected)
+        #expect(MeetingTranscriptCleanupPrompt.systemPrompt(customInstructions: "  \n") == expected)
     }
 
     @Test("a unit marker prefix inside the instructions never reaches the block")

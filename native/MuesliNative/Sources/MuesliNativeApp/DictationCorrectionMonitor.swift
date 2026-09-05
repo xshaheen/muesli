@@ -104,7 +104,8 @@ struct DictationStyleSessionSnapshot {
             systemPromptSnapshot: DictationCleanupPromptComposer.systemPrompt(
                 config: config,
                 selection: selection,
-                cleanupBackend: cleanupBackend
+                cleanupBackend: cleanupBackend,
+                option: cleanupRuntime?.option
             ),
             provenance: DictationCleanupStyleProvenance(selection: selection)
         )

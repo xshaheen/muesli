@@ -92,23 +92,23 @@ enum DictationCleanupPromptComposer {
         customInstructionsLimit: Int = CustomInstructions.maxLength,
         customWords: [CustomWord] = []
     ) -> String {
-        var prompt = base
-        if let block = CustomInstructions.promptBlock(
+        let prompt = base + CustomInstructions.promptSuffix(
             customInstructions,
             preamble: CustomInstructions.dictationPreamble,
             limit: customInstructionsLimit
-        ) {
-            prompt += "\n\n" + block
-        }
+        )
         return appendingSpeakerVocabulary(to: prompt, customWords: customWords)
     }
 
     /// Resolves the base from the frozen config and an optional style selection,
     /// and the block budget from the cleanup backend, so every call site is one line.
+    /// A fixed-prompt model (S1-mini) replaces the whole composed prompt with its
+    /// trained one, the same substitution the runtime preload already applies.
     static func systemPrompt(
         config: AppConfig,
         selection: DictationStyleSelectionResult?,
-        cleanupBackend: TranscriptCleanupBackendOption
+        cleanupBackend: TranscriptCleanupBackendOption,
+        option: PostProcessorOption? = nil
     ) -> String {
         let base: String
         if let selection, config.adaptiveDictationStylesEnabled {
@@ -116,12 +116,13 @@ enum DictationCleanupPromptComposer {
         } else {
             base = config.postProcessorSystemPrompt
         }
-        return systemPrompt(
+        let composed = systemPrompt(
             base: base,
             customInstructions: config.customInstructions,
             customInstructionsLimit: customInstructionsLimit(for: cleanupBackend),
             customWords: config.customWords
         )
+        return option?.effectiveSystemPrompt(configuredSystemPrompt: composed) ?? composed
     }
 
     /// Appends the user's dictionary as model-visible restoration targets.
@@ -195,18 +196,11 @@ struct DictationCleanupPolicy: Equatable, Sendable {
         )
     }
 
-    init(
-        enabled: Bool,
-        selection: DictationStyleSelectionResult,
-        customInstructions: String = "",
-        customInstructionsLimit: Int = CustomInstructions.maxLength
-    ) {
+    init(enabled: Bool, selection: DictationStyleSelectionResult) {
         self.init(
             readiness: enabled ? .ready : .disabled,
             systemPromptSnapshot: DictationCleanupPromptComposer.systemPrompt(
-                base: DictationCleanupPromptComposer.compose(styleInstructions: selection.prompt),
-                customInstructions: customInstructions,
-                customInstructionsLimit: customInstructionsLimit
+                base: DictationCleanupPromptComposer.compose(styleInstructions: selection.prompt)
             ),
             provenance: DictationCleanupStyleProvenance(selection: selection)
         )
