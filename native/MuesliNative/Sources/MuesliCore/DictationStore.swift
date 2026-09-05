@@ -47,7 +47,7 @@ public final class DictationStore {
     private static let targetApplicationBackfillMigration = "dictation_target_application_from_app_context_v1"
     private static let quillStatisticsBackfillMigration = "quill_statistics_spoken_instruction_v1"
     public static let defaultTombstoneRetentionInterval: TimeInterval = 30 * 24 * 60 * 60
-    static let currentSchemaVersion: Int32 = 3
+    static let currentSchemaVersion: Int32 = 4
 
     private static let iso8601Formatter = ISO8601DateFormatter()
     private static let iso8601FormatterLock = NSLock()
@@ -125,9 +125,14 @@ public final class DictationStore {
                     validate: validateSessionTraceSchema
                 ),
                 SQLiteMigrationRunner.Migration(
-                    version: Self.currentSchemaVersion,
+                    version: 3,
                     apply: addRecordingArtifactSchema,
                     validate: validateRecordingArtifactSchema
+                ),
+                SQLiteMigrationRunner.Migration(
+                    version: Self.currentSchemaVersion,
+                    apply: addDeviceLocalTableSchema,
+                    validate: validateDeviceLocalTableSchema
                 ),
             ],
             checkpoint: migrationCheckpoint
@@ -482,6 +487,76 @@ public final class DictationStore {
         )
         try migrateInsightsCache(db: db)
         try repairLegacyMacOriginSources(db: db)
+    }
+
+    /// Creates the device-local tables that `normalizeLegacySchema` declares but that
+    /// databases created before those declarations can never receive.
+    ///
+    /// Every table in this store is declared inside the version 1 migration, and the
+    /// runner only applies a migration whose version exceeds the database's own. A table
+    /// appended to that block after a database has already recorded a later version is
+    /// therefore never created on it: `meeting_participants` was added on 2026-08-17,
+    /// version 3 shipped on 2026-08-14, and every database upgraded in between lost the
+    /// table permanently. Deleting a meeting, which cascades through it, failed with
+    /// "no such table: meeting_participants" ever after. `local_migrations` has the same
+    /// hole, which silently disables the one-shot device-local repairs that gate on it.
+    ///
+    /// New tables must be added in a new migration from here on, never appended to the
+    /// version 1 block, which no existing database will ever replay.
+    ///
+    /// Written `IF NOT EXISTS` and column-by-column so it is a no-op on a database that
+    /// already has both tables, including one created fresh by version 1.
+    private func addDeviceLocalTableSchema(db: OpaquePointer?) throws {
+        try exec(
+            """
+            CREATE TABLE IF NOT EXISTS meeting_participants (
+                meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+                participant_identifier TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                email_address TEXT,
+                insertion_order INTEGER NOT NULL,
+                source TEXT NOT NULL DEFAULT 'manual',
+                is_suppressed INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (meeting_id, participant_identifier)
+            );
+            CREATE INDEX IF NOT EXISTS idx_meeting_participants_order
+                ON meeting_participants(meeting_id, insertion_order);
+
+            CREATE TABLE IF NOT EXISTS local_migrations (
+                identifier TEXT PRIMARY KEY,
+                completed_at REAL NOT NULL
+            );
+            """,
+            db: db
+        )
+        // A database that received the table from an early build of the participants work
+        // has it without these two columns, and version 1 will not replay to add them.
+        for column in [
+            ("source", "TEXT NOT NULL DEFAULT 'manual'"),
+            ("is_suppressed", "INTEGER NOT NULL DEFAULT 0"),
+        ] {
+            try addColumnIfNeeded(
+                column.0,
+                definition: column.1,
+                to: "meeting_participants",
+                db: db
+            )
+        }
+    }
+
+    private func validateDeviceLocalTableSchema(db: OpaquePointer?) throws {
+        try validateRecordingArtifactSchema(db: db)
+        try validateSchemaObjects(
+            requiredColumns: [
+                "meeting_participants": [
+                    "meeting_id", "participant_identifier", "display_name", "email_address",
+                    "insertion_order", "source", "is_suppressed",
+                ],
+                "local_migrations": ["identifier", "completed_at"],
+            ],
+            requiredIndexes: ["idx_meeting_participants_order"],
+            db: db
+        )
     }
 
     private func addSessionTraceSchema(db: OpaquePointer?) throws {

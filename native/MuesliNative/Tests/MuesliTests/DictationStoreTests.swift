@@ -495,7 +495,11 @@ struct DictationStoreTests {
         let failingStore = DictationStore(
             databaseURL: url,
             migrationCheckpoint: { checkpoint in
-                if checkpoint == .versionRecorded(version: DictationStore.currentSchemaVersion) {
+                // Pinned to the recording-artifact migration rather than the latest
+                // version: its tables are observable, so a rollback is provable. A
+                // later migration whose statements are all `IF NOT EXISTS` leaves
+                // nothing behind to assert against.
+                if checkpoint == .versionRecorded(version: 3) {
                     throw InjectedFailure.stopBeforeCommit
                 }
             }
@@ -4856,6 +4860,72 @@ struct DictationStoreTests {
 
     /// A store plus the file backing it, so tests can issue SQL the store's own
     /// API deliberately does not expose.
+    @Test("a database upgraded past version 1 still receives tables added to it later")
+    func deviceLocalTablesArriveOnDatabasesPastVersionOne() throws {
+        // Reproduces the shipped failure: `meeting_participants` was appended to the
+        // version 1 migration after version 3 existed, so every database upgraded in
+        // between never received it and deleting a meeting failed with
+        // "no such table: meeting_participants".
+        let (store, url) = try makeStoreWithURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let start = Date(timeIntervalSince1970: 1_775_000_000)
+        let meetingID = try store.insertMeeting(
+            title: "Upgraded database",
+            calendarEventID: nil,
+            startTime: start,
+            endTime: start.addingTimeInterval(60),
+            rawTranscript: "Body",
+            formattedNotes: "Notes",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        try rawExec(
+            url,
+            """
+            DROP TABLE IF EXISTS meeting_participants;
+            DROP TABLE IF EXISTS local_migrations;
+            PRAGMA user_version = 3;
+            """
+        )
+        #expect(try tableExists(url, "meeting_participants") == false)
+
+        try store.migrateIfNeeded()
+
+        #expect(try tableExists(url, "meeting_participants"))
+        #expect(try tableExists(url, "local_migrations"))
+        #expect(try firstTextColumns(url, "PRAGMA user_version", count: 1)
+            == [String(DictationStore.currentSchemaVersion)])
+        // The delete is the user-visible symptom, so assert it and not only the schema.
+        _ = try store.deleteMeeting(id: meetingID)
+        #expect(try firstTextColumns(
+            url,
+            "SELECT COUNT(*) FROM meetings WHERE deleted_at IS NULL",
+            count: 1
+        ) == ["0"])
+    }
+
+    @Test("re-running the device-local migration on a current database changes nothing")
+    func deviceLocalTableMigrationIsIdempotent() throws {
+        let (store, url) = try makeStoreWithURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let before = try migrationContentDigest(url)
+        try rawExec(url, "PRAGMA user_version = 3")
+        try store.migrateIfNeeded()
+
+        #expect(try migrationContentDigest(url) == before)
+        #expect(try tableExists(url, "meeting_participants"))
+    }
+
+    private func tableExists(_ url: URL, _ name: String) throws -> Bool {
+        try firstTextColumns(
+            url,
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '\(name)')",
+            count: 1
+        ) == ["1"]
+    }
+
     private func makeStoreWithURL() throws -> (store: DictationStore, url: URL) {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-test-\(UUID().uuidString).db")
