@@ -102,7 +102,8 @@ enum DictationCleanupPromptComposer {
         customInstructions: String = "",
         customInstructionsLimit: Int = CustomInstructions.maxLength,
         customWords: [CustomWord] = [],
-        modeInstructions: String? = nil
+        modeInstructions: String? = nil,
+        mixedLanguageRepair: String? = nil
     ) -> String {
         // The two blocks share one budget, filled global-first, because on-device
         // Qwen has a single 1,024-token context for everything. Mode tags are only
@@ -127,6 +128,13 @@ enum DictationCleanupPromptComposer {
                 extraReserved: [CustomInstructions.closingTag, CustomInstructions.openingTag]
             )
         }
+        // Last before the vocabulary: the repair rules must outrank a global or mode
+        // preference that would conflict with them, and the vocabulary is the
+        // restoration target the repair reads. Not budget-shared, because this text
+        // is Muesli's own and the user cannot grow it.
+        if let mixedLanguageRepair, !mixedLanguageRepair.isEmpty {
+            prompt += "\n\n" + mixedLanguageRepair
+        }
         return appendingSpeakerVocabulary(to: prompt, customWords: customWords)
     }
 
@@ -141,6 +149,14 @@ enum DictationCleanupPromptComposer {
         option: PostProcessorOption? = nil
     ) -> String {
         let limit = customInstructionsLimit(for: cleanupBackend)
+        // Applies to both arms below, including an overriding mode: repair is
+        // Muesli's own correctness rule, not a preference a mode may replace.
+        // On-device cleanup shares a 1,024-token context with the dictated text,
+        // so it gets the compact variant.
+        let repair = MixedLanguageRepairPrompt.block(
+            for: config.dictationLanguageProfile,
+            compact: cleanupBackend.isOnDevice
+        )
         let composed: String
         if let mode, mode.overrideDefaultInstructions,
            CustomInstructions.normalized(mode.instructions).isEmpty == false {
@@ -151,7 +167,8 @@ enum DictationCleanupPromptComposer {
                 base: compose(modeInstructions: mode.instructions, limit: limit),
                 customInstructions: "",
                 customInstructionsLimit: limit,
-                customWords: config.customWords
+                customWords: config.customWords,
+                mixedLanguageRepair: repair
             )
         } else {
             composed = systemPrompt(
@@ -159,7 +176,8 @@ enum DictationCleanupPromptComposer {
                 customInstructions: config.customInstructions,
                 customInstructionsLimit: limit,
                 customWords: config.customWords,
-                modeInstructions: mode?.instructions
+                modeInstructions: mode?.instructions,
+                mixedLanguageRepair: repair
             )
         }
         return option?.effectiveSystemPrompt(configuredSystemPrompt: composed) ?? composed

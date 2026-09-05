@@ -1339,3 +1339,160 @@ struct DictationModePromptCompositionTests {
         #expect(prompt.contains("Keep it casual."))
     }
 }
+
+/// The repair block is composed from the dictation language profile (KTD1, R1/R4/R5/R6).
+@Suite("Dictation mixed-language repair composition")
+struct DictationRepairCompositionTests {
+
+    private func bilingualConfig(
+        _ languages: [TranscriptionLanguage] = [.arabic, .english]
+    ) throws -> AppConfig {
+        var config = AppConfig()
+        config.dictationLanguageProfile = try SpokenLanguageProfile(selectedLanguages: languages)
+        return config
+    }
+
+    @Test("the repair block sits after custom instructions and before the vocabulary")
+    func repairSitsBetweenInstructionsAndVocabulary() throws {
+        var config = try bilingualConfig()
+        config.customInstructions = "Use British English."
+        config.customWords = [CustomWord(word: "muesli", replacement: "Muesli")]
+
+        let prompt = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: nil,
+            cleanupBackend: .hosted(.openAI)
+        )
+
+        let instructions = try #require(prompt.range(of: CustomInstructions.openingTag))
+        let repair = try #require(prompt.range(of: MixedLanguageRepairPrompt.openingTag))
+        let vocabulary = try #require(prompt.range(of: "Speaker vocabulary"))
+        #expect(instructions.lowerBound < repair.lowerBound)
+        #expect(repair.lowerBound < vocabulary.lowerBound)
+    }
+
+    @Test("a monolingual profile leaves the prompt byte-identical")
+    func monolingualIsUnchanged() throws {
+        var config = AppConfig()
+        config.dictationLanguageProfile = try SpokenLanguageProfile(selectedLanguages: [.english])
+        config.customInstructions = "Be concise."
+
+        let prompt = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: nil,
+            cleanupBackend: .hosted(.openAI)
+        )
+        let expected = DictationCleanupPromptComposer.systemPrompt(
+            base: config.postProcessorSystemPrompt,
+            customInstructions: config.customInstructions,
+            customInstructionsLimit: DictationCleanupPromptComposer.customInstructionsLimit(for: .hosted(.openAI)),
+            customWords: config.customWords
+        )
+        #expect(prompt == expected)
+        #expect(!prompt.contains(MixedLanguageRepairPrompt.openingTag))
+    }
+
+    @Test("a bilingual profile with no custom instructions still gets the block")
+    func bilingualWithoutInstructionsGetsBlock() throws {
+        let config = try bilingualConfig()
+        let prompt = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: nil,
+            cleanupBackend: .hosted(.openAI)
+        )
+        #expect(prompt.contains(MixedLanguageRepairPrompt.openingTag))
+        #expect(!prompt.contains(CustomInstructions.openingTag))
+    }
+
+    @Test("the on-device backend gets the compact block and a hosted backend the full one")
+    func onDeviceGetsCompactBlock() throws {
+        let config = try bilingualConfig()
+        let local = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: nil,
+            cleanupBackend: .local
+        )
+        let hosted = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: nil,
+            cleanupBackend: .hosted(.openAI)
+        )
+        #expect(local.contains(MixedLanguageRepairPrompt.openingTag))
+        #expect(!local.contains("البرايمريكية"))
+        #expect(hosted.contains("البرايمريكية"))
+        #expect(local.count < hosted.count)
+    }
+
+    @Test("a non-Arabic bilingual pair gets the script-neutral block")
+    func frenchEnglishGetsNeutralBlock() throws {
+        let config = try bilingualConfig([.french, .english])
+        let prompt = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: nil,
+            cleanupBackend: .hosted(.openAI)
+        )
+        #expect(prompt.contains(MixedLanguageRepairPrompt.openingTag))
+        #expect(!prompt.contains("البرايمريكية"))
+    }
+
+    @Test("an overriding mode still receives the repair block")
+    func overridingModeKeepsRepair() throws {
+        // Repair is Muesli's correctness rule, not a preference, so "use these
+        // instructions instead of the default ones" must not switch it off.
+        let config = try bilingualConfig()
+        let mode = DictationModeSelection(
+            modeID: "chat",
+            modeName: "Chat",
+            instructions: "Keep it casual.",
+            overrideDefaultInstructions: true,
+            autoEnter: nil,
+            source: .modeApp
+        )
+
+        let prompt = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: mode,
+            cleanupBackend: .hosted(.openAI)
+        )
+
+        #expect(prompt.contains(MixedLanguageRepairPrompt.openingTag))
+        #expect(prompt.contains("Keep it casual."))
+    }
+
+    @Test("a mode's instructions and the repair block coexist in order")
+    func modeAndRepairCoexist() throws {
+        var config = try bilingualConfig()
+        config.customInstructions = "Use British English."
+        let mode = DictationModeSelection(
+            modeID: "chat",
+            modeName: "Chat",
+            instructions: "Keep it casual.",
+            overrideDefaultInstructions: false,
+            autoEnter: nil,
+            source: .modeApp
+        )
+
+        let prompt = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: mode,
+            cleanupBackend: .hosted(.openAI)
+        )
+
+        let modeBlock = try #require(prompt.range(of: CustomInstructions.modeOpeningTag))
+        let repair = try #require(prompt.range(of: MixedLanguageRepairPrompt.openingTag))
+        // Repair last, so it outranks both the global and the mode preferences.
+        #expect(modeBlock.lowerBound < repair.lowerBound)
+    }
+
+    @Test("a fixed-prompt model still replaces the whole composed prompt")
+    func fixedPromptModelWins() throws {
+        let config = try bilingualConfig()
+        let prompt = DictationCleanupPromptComposer.systemPrompt(
+            config: config,
+            mode: nil,
+            cleanupBackend: .local,
+            option: PostProcessorOption.s1Mini
+        )
+        #expect(!prompt.contains(MixedLanguageRepairPrompt.openingTag))
+    }
+}

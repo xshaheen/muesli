@@ -1741,7 +1741,11 @@ enum TranscriptCleanupPrompts {
     static let emailID = "email"
     static let writingID = "writing"
     static let codeID = "code"
-    static let mixedLanguageRepairID = "mixed-language-repair"
+    /// The retired hand-picked repair preset.
+    ///
+    /// Repair is now derived from the spoken-language selection, so the preset is
+    /// gone; the id survives only to migrate a config that still names it (R13).
+    static let legacyMixedLanguageRepairID = "mixed-language-repair"
 
     static let builtIns: [TranscriptCleanupPromptPreset] = [
         TranscriptCleanupPromptPreset(
@@ -1780,15 +1784,6 @@ enum TranscriptCleanupPrompts {
             prompt: """
             Clean up the dictated technical prose while preserving its meaning, facts, names, wording, deletion intent, identifiers, and code terms. Format prose compactly. Never convert spoken syntax into executable code unless the user explicitly dictated code.
             """,
-            isCustom: false
-        ),
-        // Selectable because the default forbids the word changes this needs. Someone
-        // dictating Arabic with English technical terms gets the same phonetic
-        // mangling a meeting does, and the same repair fixes it.
-        TranscriptCleanupPromptPreset(
-            id: mixedLanguageRepairID,
-            name: "Mixed-Language Repair (Arabic + English)",
-            prompt: MixedLanguageRepairPrompt.dictation,
             isCustom: false
         ),
     ]
@@ -1839,6 +1834,37 @@ enum TranscriptCleanupPrompts {
 /// البرايمريكية *is* changing the words.
 enum MixedLanguageRepairPrompt {
 
+    /// Delimiters for the dictation block. The dictation prompt already carries a
+    /// custom-instructions block, so this one is bounded the same way rather than
+    /// running loose into whatever follows it.
+    static let openingTag = "<MIXED-LANGUAGE-REPAIR>"
+    static let closingTag = "</MIXED-LANGUAGE-REPAIR>"
+
+    /// Names the exception the surrounding prompt would otherwise forbid.
+    ///
+    /// The dictation base prompt says never to paraphrase or change words, and the
+    /// model sees both blocks in one system prompt. Without this sentence the two
+    /// read as a contradiction, and the safest reading -- change nothing -- is the
+    /// one that makes the repair a no-op.
+    private static let restorationAllowance = """
+    Restoring a term the recognizer wrote in the wrong script is not paraphrasing; \
+    it is the correction this block asks for. Every word the recognizer heard \
+    correctly stays exactly as the speaker said it.
+    """
+
+    private static let rules = """
+    You MUST:
+    - Change words when the recognizer misheard them. This is the entire task.
+    - Keep every other word as the speaker said it, in the language they said it.
+    - Return every line you were given, in the same order.
+    - Return the full text of every line, however long.
+
+    You MUST NOT:
+    - Summarize, shorten, or omit anything.
+    - Translate the text into another language.
+    - Add commentary, headings, or content nobody said.
+    """
+
     /// The repair instructions themselves, shared by dictation and meetings.
     ///
     /// Carries no `<APP-CONTEXT>` block: it is about the words, not about what was
@@ -1857,19 +1883,84 @@ enum MixedLanguageRepairPrompt {
         technical discussion is "one-to-many", not the Arabic question it looks like. \
         Use the surrounding context to decide which reading is meant.
 
+        \(restorationAllowance)
+
         Add sentence punctuation where it is missing.
 
-        You MUST:
-        - Change words when the recognizer misheard them. This is the entire task.
-        - Keep every other word as the speaker said it, in the language they said it.
-        - Return every line you were given, in the same order.
-        - Return the full text of every line, however long.
-
-        You MUST NOT:
-        - Summarize, shorten, or omit anything.
-        - Translate the text into another language.
-        - Add commentary, headings, or content nobody said.
+        \(rules)
         """
+    }
+
+    /// The same repair for a bilingual pair we carry no worked examples for.
+    ///
+    /// Examples in a script the user never selected would teach the wrong lesson,
+    /// so this variant states the rule and lets the model apply it to the pair in
+    /// front of it.
+    static func neutral(subject: String) -> String {
+        """
+        You repair \(subject) that mix two languages.
+
+        The speech recognizer was monolingual, so terms from the other language were \
+        transcribed phonetically into the text's own script and are now nonsense. \
+        Restore technical terms, product names, and borrowed words to their correct \
+        original spelling, using the surrounding context to decide which reading is \
+        meant.
+
+        \(restorationAllowance)
+
+        Add sentence punctuation where it is missing.
+
+        \(rules)
+        """
+    }
+
+    /// The on-device variant.
+    ///
+    /// `Qwen3PostProcessor.maxContextTokens` is 1024 for the prompt, the dictated
+    /// text, and the output together, so the full block would crowd out the words
+    /// it is meant to repair. This keeps the instruction and the prohibitions and
+    /// drops the worked examples.
+    static func compact(subject: String) -> String {
+        """
+        You repair \(subject) that mix two languages. The recognizer was monolingual, \
+        so foreign terms were written phonetically in the wrong script. Restore them \
+        to their correct original spelling.
+
+        \(restorationAllowance)
+
+        Do not translate, summarize, omit, reorder, or add anything.
+        """
+    }
+
+    /// The dictation block for a profile, or nil when the profile is not bilingual.
+    ///
+    /// The profile is the only input: repair follows the languages the user selected
+    /// rather than a stored preference (KTD1).
+    static func block(for profile: SpokenLanguageProfile, compact useCompact: Bool) -> String? {
+        guard profile.isBilingual else { return nil }
+        let subject = "dictated text"
+        let body: String
+        if useCompact {
+            body = compact(subject: subject)
+        } else {
+            body = usesArabicExamples(profile) ? core(subject: subject) : neutral(subject: subject)
+        }
+        return "\(openingTag)\n\(body)\n\(closingTag)"
+    }
+
+    /// Whether the worked Arabic examples apply to this selection.
+    static func hasArabicEnglishPair(_ profile: SpokenLanguageProfile) -> Bool {
+        let selected = Set(profile.selectedLanguages)
+        return selected.contains(.arabic) && selected.contains(.english)
+    }
+
+    /// Whether a prompt built for this profile should carry the Arabic examples.
+    ///
+    /// The neutral variant exists to avoid teaching examples from a script the user
+    /// did not choose, so it applies only when the profile names a different
+    /// bilingual pair. A profile that says nothing keeps the historical text.
+    static func usesArabicExamples(_ profile: SpokenLanguageProfile) -> Bool {
+        !profile.isBilingual || hasArabicEnglishPair(profile)
     }
 
     /// The dictation preset: one snippet in, one snippet out, no wire protocol.
@@ -1901,10 +1992,18 @@ enum MeetingTranscriptCleanupPrompt {
     /// custom instructions. Byte-identical to `systemPrompt(customInstructions: "")`.
     static let systemPrompt = systemPrompt(customInstructions: "")
 
-    /// Repair core, then the user's preferences when they set any, then the
+    /// Repair instructions, then the user's preferences when they set any, then the
     /// marker protocol.
-    static func systemPrompt(customInstructions: String) -> String {
-        MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")
+    ///
+    /// The marker protocol stays last so it outranks anything the preferences say:
+    /// a response whose markers drifted is rejected, and a rejection discards the
+    /// whole transcript (KTD7).
+    static func systemPrompt(customInstructions: String, usesArabicExamples: Bool = true) -> String {
+        let subject = "transcripts of meetings"
+        let repair = usesArabicExamples
+            ? MixedLanguageRepairPrompt.core(subject: subject)
+            : MixedLanguageRepairPrompt.neutral(subject: subject)
+        return repair
             + CustomInstructions.promptSuffix(customInstructions, preamble: CustomInstructions.meetingCleanupPreamble)
             + markerProtocol
     }
@@ -2321,6 +2420,11 @@ struct AppConfig: Codable {
     var hiddenCalendarEventSourceHints: [String: String] = [:]
     var disabledCalendarIDs: [String] = []
     var enablePostProcessor: Bool = false
+    /// Whether the one-time bilingual auto-enable already ran (KTD6).
+    ///
+    /// A latch, not a standing rule: repair turns cleanup on once for a bilingual
+    /// profile, and a user who then turns it off keeps it off.
+    var bilingualRepairAutoEnableApplied: Bool = false
     /// The user's standing preferences for every LLM rewrite of their words:
     /// dictation cleanup, meeting transcript cleanup, and meeting notes.
     /// Stored trimmed; `CustomInstructions` owns the cap and the prompt block.
@@ -2330,10 +2434,9 @@ struct AppConfig: Codable {
     /// Off by default: it costs a model pass per meeting, and depending on the
     /// configured endpoint it may send the full transcript of a private
     /// conversation to a third party.
-    var enableMeetingTranscriptCleanup: Bool = false
-    /// SHA-256 identity of the backend and resolved destination the user approved.
-    /// Nil means there is no consent, including configs saved before this field.
-    var meetingTranscriptCleanupConsentFingerprint: String?
+// Retired: meeting cleanup now follows the meeting language selection (R10).
+    // `enable_meeting_transcript_cleanup` and the consent fingerprint decode as
+    // legacy keys and are no longer written.
     var quilBackend: String = TranscriptCleanupBackendOption.local.backend
     var quilModel: String = PostProcessorOption.defaultQuilOption.id
     var postProcessorBackend: String = TranscriptCleanupBackendOption.local.backend
@@ -2511,9 +2614,8 @@ struct AppConfig: Codable {
         case hiddenCalendarEventSourceHints = "hidden_calendar_event_source_hints"
         case disabledCalendarIDs = "disabled_calendar_ids"
         case enablePostProcessor = "enable_post_processor"
+        case bilingualRepairAutoEnableApplied = "bilingual_repair_auto_enable_applied"
         case customInstructions = "custom_instructions"
-        case enableMeetingTranscriptCleanup = "enable_meeting_transcript_cleanup"
-        case meetingTranscriptCleanupConsentFingerprint = "meeting_transcript_cleanup_consent_fingerprint"
         case quilBackend = "quil_backend"
         case quilModel = "quil_model"
         case postProcessorBackend = "post_processor_backend"
@@ -2913,13 +3015,9 @@ struct AppConfig: Codable {
         )) ?? defaults.hiddenCalendarEventSourceHints
         disabledCalendarIDs = (try? c.decode([String].self, forKey: .disabledCalendarIDs)) ?? defaults.disabledCalendarIDs
         enablePostProcessor = (try? c.decode(Bool.self, forKey: .enablePostProcessor)) ?? defaults.enablePostProcessor
+        bilingualRepairAutoEnableApplied = (try? c.decode(Bool.self, forKey: .bilingualRepairAutoEnableApplied))
+            ?? defaults.bilingualRepairAutoEnableApplied
         customInstructions = (try? c.decode(String.self, forKey: .customInstructions)) ?? defaults.customInstructions
-        enableMeetingTranscriptCleanup = (try? c.decode(Bool.self, forKey: .enableMeetingTranscriptCleanup))
-            ?? defaults.enableMeetingTranscriptCleanup
-        meetingTranscriptCleanupConsentFingerprint = try? c.decode(
-            String.self,
-            forKey: .meetingTranscriptCleanupConsentFingerprint
-        )
         quilBackend = TranscriptCleanupBackendOption
             .resolved(try? c.decode(String.self, forKey: .quilBackend))
             .backend
@@ -3021,6 +3119,13 @@ struct AppConfig: Codable {
             dictationModes = DictationModes.migratedModes(from: self)
             dictationModesMigrationApplied = true
         }
+        // The repair preset is retired: repair now follows the language selection.
+        // Runs after the mode migration above, so that migration still sees the
+        // user's original selection rather than a value this rewrote (R13).
+        if activeTranscriptCleanupPromptId == TranscriptCleanupPrompts.legacyMixedLanguageRepairID {
+            activeTranscriptCleanupPromptId = defaults.activeTranscriptCleanupPromptId
+            postProcessorSystemPrompt = defaults.postProcessorSystemPrompt
+        }
         if TranscriptCleanupPrompts.resolveOptional(
             id: activeTranscriptCleanupPromptId,
             custom: customTranscriptCleanupPrompts
@@ -3028,7 +3133,6 @@ struct AppConfig: Codable {
             activeTranscriptCleanupPromptId = defaults.activeTranscriptCleanupPromptId
             postProcessorSystemPrompt = defaults.postProcessorSystemPrompt
         }
-        MeetingTranscriptCleanupPolicy.reconcileConsent(in: &self)
     }
 
     /// Read-only hybrid projection onto the combined `LanguageProfile` for

@@ -22,6 +22,19 @@ upstream `main`.
 - A bad dictation-style rule can no longer refuse every settings save: mode normalization is total and cannot fail.
 - Downgrading to an older build drops modes, and history rows written by this build show no style badge there until you upgrade again.
 
+### Mixed-language repair
+
+#### Features
+
+- Mixed-language repair now follows the spoken-language selection instead of a preset and a toggle: selecting two or more dictation languages composes the repair instructions into every cleanup prompt, and selecting two or more meeting languages runs transcript cleanup automatically.
+- Meeting transcript cleanup now runs on the meeting summary backend, the endpoint that already receives the full transcript to write the notes, so repair adds no destination the user has not already configured.
+- Dictation cleanup turns itself on once for a bilingual profile; turning it back off is permanent.
+- A bilingual pair other than Arabic and English receives script-neutral repair instructions, and the on-device cleanup model receives a shortened block sized for its 1,024-token context.
+
+#### Removals
+
+- Removed the "Mixed-Language Repair (Arabic + English)" dictation preset. A config still naming it loads onto the default cleanup prompt with everything else untouched.
+- Removed the "Repair mixed-language transcripts" meeting toggle and its per-endpoint consent fingerprint, replaced by a read-only status line in Settings › Meetings. The retired `enable_meeting_transcript_cleanup` and `meeting_transcript_cleanup_consent_fingerprint` keys still decode and are no longer written.
 
 ### Custom instructions
 
