@@ -122,6 +122,34 @@ struct DictationModeMigrationTests {
         #expect(config.dictationModes.first?.id == "web")
     }
 
+    /// A dropped wildcard matcher's only trace used to be an `fputs` to stderr that a
+    /// notarized, LSUIElement app never surfaces. It must also land in the decode-only
+    /// notes field the Modes screen reads to disclose the drop once.
+    @Test("a dropped wildcard matcher is named in the migration notes")
+    func droppedWildcardMatcherIsNamedInMigrationNotes() throws {
+        let config = try decode("""
+        {
+          "adaptive_dictation_styles_enabled": true,
+          "dictation_style_ruleset_initialized": true,
+          "dictation_style_groups": [
+            {
+              "id": "web",
+              "name": "Web",
+              "style_id": "writing",
+              "matchers": [
+                {"id": "m1", "kind": "hostname", "pattern": "mail-*.example.com"},
+                {"id": "m2", "kind": "bundle_id", "pattern": "com.example.*"}
+              ]
+            }
+          ]
+        }
+        """)
+
+        #expect(!config.dictationModesMigrationNotes.isEmpty)
+        #expect(config.dictationModesMigrationNotes.contains { $0.contains("mail-*.example.com") })
+        #expect(config.dictationModesMigrationNotes.contains { $0.contains("com.example.*") })
+    }
+
     /// The group's own name and text survive even when every matcher is unusable.
     @Test("a group whose matchers are all dropped is still created")
     func groupWithOnlyUnusableMatchersIsStillCreated() throws {
@@ -662,6 +690,26 @@ struct DictationModeMigrationTests {
         #expect(config.dictationModes == DictationModes.builtInModes(isEnabled: false))
     }
 
+    // MARK: - Website matching migration
+
+    /// A legacy config predates `dictation_modes` and `match_modes_by_website` alike, so
+    /// the fallback must read the user's stored `enable_screen_context`, not the
+    /// property's declared default (regression: the fallback used to read the
+    /// not-yet-decoded property and always observed `false`).
+    @Test(
+        "match_modes_by_website falls back to the stored enable_screen_context on upgrade",
+        arguments: [true, false]
+    )
+    func matchModesByWebsiteFallsBackToStoredScreenContext(_ enableScreenContext: Bool) throws {
+        let config = try decode("""
+        {
+          "enable_screen_context": \(enableScreenContext)
+        }
+        """)
+
+        #expect(config.matchModesByWebsite == enableScreenContext)
+    }
+
     // MARK: - Backup and save-on-load (R9, KTD13)
 
     private func makeStore(_ json: String) throws -> (ConfigStore, URL, URL) {
@@ -695,12 +743,19 @@ struct DictationModeMigrationTests {
     func migratingLoadWritesBackupAndConfig() throws {
         let (store, configURL, backupURL) = try makeStore(Self.legacyFixture)
         defer { try? FileManager.default.removeItem(at: store.supportDirectory()) }
-        let original = try Data(contentsOf: configURL)
+        let original = try #require(
+            JSONSerialization.jsonObject(with: try Data(contentsOf: configURL)) as? NSDictionary
+        )
 
         let loaded = store.load()
 
         #expect(loaded.dictationModes.first?.id == "team-chat")
-        #expect(try Data(contentsOf: backupURL) == original)
+        // The backup is re-serialized (credentials get scrubbed on the way through), so
+        // it is compared for semantic equality rather than byte-for-byte identity.
+        let backedUp = try #require(
+            JSONSerialization.jsonObject(with: try Data(contentsOf: backupURL)) as? NSDictionary
+        )
+        #expect(backedUp == original)
 
         let attributes = try FileManager.default.attributesOfItem(atPath: backupURL.path)
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)

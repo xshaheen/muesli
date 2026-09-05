@@ -360,4 +360,50 @@ struct ConfigStoreTests {
         #expect(reloaded.meetingSpokenLanguage.selectedLanguages == [.arabic])
         #expect(reloaded.dictationLanguageProfile == AppConfig().dictationLanguageProfile)
     }
+
+    /// The pre-modes backup exists so a downgrade can recover the legacy Writing
+    /// Styles keys, not so a rotated or cleared provider key keeps living in a
+    /// second plaintext file. The credentials must come out; everything else the
+    /// typed `AppConfig` doesn't model must round-trip untouched.
+    @Test("the pre-modes backup blanks provider credentials but keeps legacy style keys")
+    func preModesBackupScrubsCredentials() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = ConfigStore(supportDirectory: directory)
+        let legacyJSON = """
+        {
+          "openai_api_key": "sk-secret-openai",
+          "openrouter_api_key": "sk-secret-openrouter",
+          "custom_llm_api_key": "sk-secret-custom",
+          "adaptive_dictation_styles_enabled": true,
+          "dictation_style_ruleset_initialized": true,
+          "dictation_style_groups": [
+            {
+              "id": "team-chat",
+              "name": "Team chat",
+              "style_id": "message",
+              "matchers": [
+                {"id": "m1", "kind": "bundle_id", "pattern": "com.tinyspeck.slackmacgap"}
+              ]
+            }
+          ]
+        }
+        """
+        try Data(legacyJSON.utf8).write(to: store.configPath())
+
+        _ = store.load()
+
+        let backupObject = try #require(
+            JSONSerialization.jsonObject(with: try Data(contentsOf: store.legacyBackupURL())) as? [String: Any]
+        )
+        #expect(backupObject["openai_api_key"] as? String == "")
+        #expect(backupObject["openrouter_api_key"] as? String == "")
+        #expect(backupObject["custom_llm_api_key"] as? String == "")
+        let groups = try #require(backupObject["dictation_style_groups"] as? [[String: Any]])
+        #expect(groups.first?["id"] as? String == "team-chat")
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: store.legacyBackupURL().path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+    }
 }
