@@ -30,8 +30,8 @@ struct DictationSessionTarget: Sendable, Equatable {
 
     func matches(processID: pid_t?, bundleID: String) -> Bool {
         guard processID == self.processID,
-              let expectedBundleID = DictationStyleResolver.normalizeBundleID(self.bundleID),
-              let actualBundleID = DictationStyleResolver.normalizeBundleID(bundleID)
+              let expectedBundleID = DictationModes.normalizedBundleID(self.bundleID),
+              let actualBundleID = DictationModes.normalizedBundleID(bundleID)
         else {
             return false
         }

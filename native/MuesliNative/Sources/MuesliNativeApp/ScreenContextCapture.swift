@@ -35,7 +35,7 @@ struct DictationContext: Sendable, Equatable {
         self.documentContext = documentContext
         self.selectedText = selectedText
         self.url = url
-        self.hostname = DictationStyleResolver.normalizeHostname(hostname)
+        self.hostname = DictationModes.normalizedHostname(hostname)
         self.documentIdentifier = documentIdentifier
         self.ocrText = ocrText
     }
@@ -342,7 +342,7 @@ extension DictationContextCapture {
     /// hostname that style matchers key on. A URL without a usable host yields neither.
     static func browserPage(from url: String) -> (displayURL: String, hostname: String)? {
         guard let parsed = URL(string: url),
-              let hostname = DictationStyleResolver.normalizeHostname(parsed.host)
+              let hostname = DictationModes.normalizedHostname(parsed.host)
         else {
             return nil
         }

@@ -80,11 +80,11 @@ enum DictationModes {
                 isEnabled: isEnabled,
                 instructions: builtIn.instructions,
                 overrideDefaultInstructions: false,
-                appBundleIDs: DictationStyleResolver.curatedBundleCategories
+                appBundleIDs: curatedBundleCategories
                     .filter { $0.value == builtIn.category }
                     .keys
                     .sorted(),
-                websiteHostnames: DictationStyleResolver.curatedHostnameCategories
+                websiteHostnames: curatedHostnameCategories
                     .filter { $0.value == builtIn.category }
                     .keys
                     .sorted(),
@@ -116,6 +116,28 @@ enum DictationModes {
             modes = try [Element](from: decoder).compactMap(\.mode)
         }
     }
+
+    // MARK: - Curated legacy catalogs
+
+    /// The app and website defaults the retired Writing Styles resolver shipped.
+    /// They live here because the built-in mode seeds and the legacy migration are
+    /// now their only readers.
+    static let curatedBundleCategories: [String: DictationStyleCategory] = [
+        "com.apple.mail": .email,
+        "com.apple.mobilesms": .messages,
+        "com.apple.notes": .writing,
+        "com.apple.textedit": .writing,
+        "com.microsoft.vscode": .code,
+        "com.tinyspeck.slackmacgap": .messages,
+        "net.whatsapp.whatsapp": .messages,
+    ]
+
+    static let curatedHostnameCategories: [String: DictationStyleCategory] = [
+        "docs.google.com": .writing,
+        "mail.google.com": .email,
+        "outlook.office.com": .email,
+        "web.whatsapp.com": .messages,
+    ]
 
     // MARK: - Normalization
 
@@ -552,7 +574,7 @@ enum DictationModes {
             var matchers: [DictationStyleMatcher] = []
             // Sorted, unlike the retired resolver, which iterated the curated
             // dictionaries directly and produced a different order per process.
-            for target in DictationStyleResolver.curatedHostnameCategories
+            for target in curatedHostnameCategories
                 .filter({ $0.value == category })
                 .keys
                 .sorted() where !exactTargets.contains("hostname:\(target)") {
@@ -562,7 +584,7 @@ enum DictationModes {
                     pattern: target
                 ))
             }
-            for target in DictationStyleResolver.curatedBundleCategories
+            for target in curatedBundleCategories
                 .filter({ $0.value == category })
                 .keys
                 .sorted() where !exactTargets.contains("bundle_id:\(target)") {

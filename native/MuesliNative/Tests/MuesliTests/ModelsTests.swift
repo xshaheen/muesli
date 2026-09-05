@@ -1289,7 +1289,7 @@ struct AppConfigTests {
         config.dictationStyleDomainRules = [
             DictationStyleDomainRule(hostname: "docs.google.com", categoryID: "writing", styleID: "writing"),
         ]
-        config = DictationStyleResolver.enablingAdaptiveStyles(in: config)
+        config.adaptiveDictationStylesEnabled = true
 
         let data = try JSONEncoder().encode(config)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])

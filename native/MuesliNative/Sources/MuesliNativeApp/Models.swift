@@ -1615,8 +1615,8 @@ struct DictationStyleTarget: Equatable {
     let hostname: String?
 
     init(bundleID: String?, hostname: String?) {
-        self.bundleID = DictationStyleResolver.normalizeBundleID(bundleID)
-        self.hostname = DictationStyleResolver.normalizeHostname(hostname)
+        self.bundleID = DictationModes.normalizedBundleID(bundleID)
+        self.hostname = DictationModes.normalizedHostname(hostname)
     }
 }
 

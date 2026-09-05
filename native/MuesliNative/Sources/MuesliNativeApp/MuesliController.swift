@@ -2179,19 +2179,6 @@ public final class MuesliController: NSObject {
         }
     }
 
-    /// Persists all style definitions and assignments as one candidate before
-    /// publishing them to the live runtime. A thrown error leaves both unchanged.
-    func updateDictationStyleConfiguration(_ mutate: (inout AppConfig) -> Void) throws {
-        let persisted = try DictationStyleSettingsModel.committing(
-            current: config,
-            mutate: mutate,
-            persist: configStore.saveDictationStyleConfiguration
-        )
-        config = persisted
-        appState.config = persisted
-        statusBarController?.refresh()
-    }
-
     /// Commits the language authority as one persisted transaction. Existing
     /// recordings keep their frozen profile snapshots; only future sessions see
     /// the newly published value.
@@ -2239,27 +2226,6 @@ public final class MuesliController: NSObject {
                 return try self.saveLanguageProfile(profile).dictationLanguageProfile
             }
         )
-    }
-
-    /// Applies a previously reviewed portable replacement in the same
-    /// validate-write-publish transaction used by local Writing Styles edits.
-    /// Cancellation never calls this method and therefore has no side effects.
-    func replaceDictationStyleRuleset(_ preview: DictationStyleRulesetPreview) throws {
-        let candidate = try DictationStyleSettingsModel.replacementCandidate(
-            for: preview,
-            replacing: config
-        )
-        let expected = try DictationStyleRulesetCodec.ruleset(from: candidate)
-        guard expected == preview.ruleset else {
-            throw DictationStyleRulesetCodec.Error.fidelityMismatch
-        }
-        let persisted = try configStore.saveDictationStyleRulesetConfiguration(
-            candidate,
-            expectedRuleset: expected
-        )
-        config = persisted
-        appState.config = persisted
-        statusBarController?.refresh()
     }
 
     /// Applies the configured theme to app-level chrome. The fullscreen
@@ -3553,49 +3519,6 @@ public final class MuesliController: NSObject {
             }
         }
         guard config.enablePostProcessor else { return }
-        preloadExperimentalTranscriptionFeatures()
-    }
-
-    func selectTranscriptCleanupPrompt(id: String) throws {
-        let preset = TranscriptCleanupPrompts.resolve(id: id, custom: config.customTranscriptCleanupPrompts)
-        try updateDictationStyleConfiguration {
-            $0.activeTranscriptCleanupPromptId = preset.id
-            $0.postProcessorSystemPrompt = preset.prompt
-        }
-        preloadExperimentalTranscriptionFeatures()
-    }
-
-    func createTranscriptCleanupPrompt(name: String, prompt: String) throws {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty, !trimmedPrompt.isEmpty else { return }
-        let preset = CustomTranscriptCleanupPrompt(name: trimmedName, prompt: trimmedPrompt)
-        try updateDictationStyleConfiguration {
-            $0.customTranscriptCleanupPrompts.append(preset)
-            $0.activeTranscriptCleanupPromptId = preset.id
-            $0.postProcessorSystemPrompt = preset.prompt
-        }
-        preloadExperimentalTranscriptionFeatures()
-    }
-
-    func updateTranscriptCleanupPrompt(id: String, name: String, prompt: String) throws {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty, !trimmedPrompt.isEmpty else { return }
-        try updateDictationStyleConfiguration {
-            guard let index = $0.customTranscriptCleanupPrompts.firstIndex(where: { $0.id == id }) else { return }
-            $0.customTranscriptCleanupPrompts[index].name = trimmedName
-            $0.customTranscriptCleanupPrompts[index].prompt = trimmedPrompt
-            if $0.activeTranscriptCleanupPromptId == id {
-                $0.postProcessorSystemPrompt = trimmedPrompt
-            }
-        }
-        preloadExperimentalTranscriptionFeatures()
-    }
-
-    func deleteTranscriptCleanupPrompt(id: String) throws {
-        let repaired = DictationStyleSettingsModel.deletingStyle(id: id, from: config)
-        try updateDictationStyleConfiguration { $0 = repaired }
         preloadExperimentalTranscriptionFeatures()
     }
 
