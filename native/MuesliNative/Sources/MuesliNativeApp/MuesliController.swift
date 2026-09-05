@@ -13074,10 +13074,10 @@ public final class MuesliController: NSObject {
             if let trace = job.latencyTrace {
                 markDictationLatency("pipeline_completed chars:\(text.count)", trace: trace)
             }
-            var telemetryParameters = DictationStyleObservability.parameters(
-                for: DictationStyleObservabilityInput(
+            var telemetryParameters = DictationModeObservability.parameters(
+                for: DictationModeObservabilityInput(
                     selectionSource: result.cleanupStyle?.source,
-                    isCustomStyle: result.cleanupStyle?.isCustom,
+                    usedMode: result.cleanupStyle?.usedMode,
                     cleanupOutcome: result.cleanupOutcome,
                     cleanupBackend: cleanupRuntime.backend
                 )

@@ -1493,6 +1493,11 @@ struct DictationStyleExactException: Codable, Equatable, Identifiable, Sendable 
     }
 }
 
+/// How a dictation's cleanup prompt was chosen, as stored in history rows.
+///
+/// The first seven cases are only ever read back now: rows written before Modes
+/// still carry them, and `DictationRowView` parses the stored string, so removing
+/// one would blank the badge on a user's existing history.
 enum DictationStyleSelectionSource: String, Codable, Equatable, Sendable {
     case exception
     case group
@@ -1501,6 +1506,9 @@ enum DictationStyleSelectionSource: String, Codable, Equatable, Sendable {
     case category
     case global
     case builtInFallback = "built_in_fallback"
+    case modeApp = "mode_app"
+    case modeWebsite = "mode_website"
+    case defaultInstructions = "default"
 }
 
 struct DictationStyleSelectionResult: Equatable {

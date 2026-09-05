@@ -36,21 +36,32 @@ enum DictationCleanupOutcome: String, Codable, CaseIterable, Sendable {
     case skippedStreaming = "skipped_streaming"
 }
 
+/// What chose this dictation's cleanup prompt, as persisted on the history row.
+///
+/// `usedMode` is what telemetry reports: the mode's id and name stay on the
+/// device, so nothing user-authored can reach an event.
 struct DictationCleanupStyleProvenance: Equatable, Sendable {
     let styleID: String
     let styleName: String
-    let isCustom: Bool
+    let modeID: String?
     let source: DictationStyleSelectionSource
-    let categoryID: String?
-    let groupID: String?
+
+    var usedMode: Bool {
+        source != .defaultInstructions
+    }
+
+    init(selection: DictationModeSelection) {
+        styleID = selection.modeID
+        styleName = selection.modeName
+        modeID = selection.source == .defaultInstructions ? nil : selection.modeID
+        source = selection.source
+    }
 
     init(selection: DictationStyleSelectionResult) {
         styleID = selection.styleID
         styleName = selection.styleName
-        isCustom = selection.isCustom
+        modeID = selection.groupID
         source = selection.source
-        categoryID = selection.categoryID
-        groupID = selection.groupID
     }
 }
 

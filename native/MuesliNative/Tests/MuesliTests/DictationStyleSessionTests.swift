@@ -370,9 +370,9 @@ struct DictationStyleSessionTests {
         let laterRequest = try #require(snapshot.cleanupRequest(context: lateContext))
 
         #expect(committed.policy.provenance?.source == .group)
-        #expect(committed.policy.provenance?.groupID == "browser")
+        #expect(committed.policy.provenance?.modeID == "browser")
         #expect(laterRequest.policy.provenance?.source == .group)
-        #expect(laterRequest.policy.provenance?.groupID == "docs")
+        #expect(laterRequest.policy.provenance?.modeID == "docs")
         #expect(committed.policy.systemPromptSnapshot != laterRequest.policy.systemPromptSnapshot)
     }
 

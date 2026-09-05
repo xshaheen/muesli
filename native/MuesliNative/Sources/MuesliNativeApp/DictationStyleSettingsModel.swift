@@ -301,6 +301,9 @@ enum DictationStyleSettingsModel {
                 : result.categoryID.flatMap(DictationStyleCategory.init(rawValue:))?.displayName ?? "Category"
         case .global: sourceLabel = "Global style"
         case .builtInFallback: sourceLabel = "Default fallback"
+        // The mode sources cannot come out of the Writing Styles resolver; this
+        // file is retired with it.
+        case .modeApp, .modeWebsite, .defaultInstructions: sourceLabel = "Default fallback"
         }
         return DictationStyleEffectiveState(
             styleName: result.styleName,

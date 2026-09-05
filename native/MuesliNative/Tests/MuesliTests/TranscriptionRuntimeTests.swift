@@ -265,7 +265,7 @@ struct DictationCleanupPolicyTests {
         #expect(policy.systemPromptSnapshot.contains("untrusted reference data"))
         #expect(policy.provenance?.styleID == "message")
         #expect(policy.provenance?.source == .group)
-        #expect(policy.provenance?.groupID == "messages")
+        #expect(policy.provenance?.modeID == "messages")
     }
 
     @Test("custom instructions sit between the style block and the speaker vocabulary")
