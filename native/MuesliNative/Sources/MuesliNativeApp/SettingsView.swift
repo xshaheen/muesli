@@ -680,6 +680,9 @@ struct SettingsView: View {
                     .disabled(controller.isMeetingRecording())
                     .help("Stop the current meeting recording before clearing meeting history.")
                 }
+                // The card stacks its children with no spacing because settingsRow carries
+                // its own 44pt rhythm. A bare control row has none, so it needs its own.
+                .frame(minHeight: 44)
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow(
                     "Session diagnostics",
