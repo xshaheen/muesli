@@ -166,6 +166,86 @@ struct MeetingAecDelaySkip: Codable {
     let systemPeak: Double?
 }
 
+/// Reverse-leak suppressor state at the end of a meeting. Built on the chunk
+/// rotation queue and handed to `writeFinalReport` as a sibling of the forward
+/// AEC snapshot; every field is direction-neutral because the reverse estimator
+/// treats the cleaned mic as the reference and the system track as the target.
+struct MeetingReverseLeakDiagnosticsSnapshot: Codable, Sendable {
+    /// Resolved enabled flag (config key and environment override applied).
+    let enabled: Bool
+    /// Locked reverse offset in ms; nil while unlocked.
+    let lockedDelayMs: Int?
+    let delayHistory: [MeetingAecDelayObservation]
+    let delaySkipHistory: [MeetingReverseLeakDelaySkip]
+    let lockCount: Int
+    let relockCount: Int
+    let resetCount: Int
+    let gapResetCount: Int
+    let gateOpenCount: Int
+    let suppressedSeconds: Double
+    let referenceUnavailableFrames: Int
+    let intervalCount: Int
+    /// Spread between the smallest and largest observed offsets, in ms.
+    let offsetSpreadMs: Int
+    let meanBlockProcessingMicros: Double
+    let maxBlockProcessingMicros: Int
+    /// Set by the offline repair pass when it runs; nil otherwise.
+    var offlineSpeechSecondsInsideSuppressedIntervals: Double?
+
+    init(
+        enabled: Bool,
+        lockedDelayMs: Int?,
+        delayHistory: [MeetingAecDelayObservation],
+        delaySkipHistory: [MeetingReverseLeakDelaySkip],
+        lockCount: Int,
+        relockCount: Int,
+        resetCount: Int,
+        gapResetCount: Int,
+        gateOpenCount: Int,
+        suppressedSeconds: Double,
+        referenceUnavailableFrames: Int,
+        intervalCount: Int,
+        offsetSpreadMs: Int,
+        meanBlockProcessingMicros: Double,
+        maxBlockProcessingMicros: Int,
+        offlineSpeechSecondsInsideSuppressedIntervals: Double? = nil
+    ) {
+        self.enabled = enabled
+        self.lockedDelayMs = lockedDelayMs
+        self.delayHistory = delayHistory
+        self.delaySkipHistory = delaySkipHistory
+        self.lockCount = lockCount
+        self.relockCount = relockCount
+        self.resetCount = resetCount
+        self.gapResetCount = gapResetCount
+        self.gateOpenCount = gateOpenCount
+        self.suppressedSeconds = suppressedSeconds
+        self.referenceUnavailableFrames = referenceUnavailableFrames
+        self.intervalCount = intervalCount
+        self.offsetSpreadMs = offsetSpreadMs
+        self.meanBlockProcessingMicros = meanBlockProcessingMicros
+        self.maxBlockProcessingMicros = maxBlockProcessingMicros
+        self.offlineSpeechSecondsInsideSuppressedIntervals = offlineSpeechSecondsInsideSuppressedIntervals
+    }
+}
+
+/// Direction-neutral counterpart of `MeetingAecDelaySkip`: "reference" is the
+/// signal being searched for (cleaned mic) and "target" the signal it leaks
+/// into (system audio).
+struct MeetingReverseLeakDelaySkip: Codable, Sendable {
+    let reason: String
+    let referenceSamplesReceived: Int
+    let targetSamplesReceived: Int
+    let referenceHistoryStartSample: Int
+    let targetHistoryStartSample: Int
+    let comparableEndSample: Int?
+    let validCandidateCount: Int
+    let missingCandidateCount: Int
+    let lowActiveCandidateCount: Int
+    let targetWindowSamples: Int
+    let targetPeak: Double?
+}
+
 final class MeetingSessionDiagnostics {
     static let retentionDuration: TimeInterval = 7 * 24 * 60 * 60
     static let maximumStoredRunCount = 10
@@ -264,6 +344,44 @@ final class MeetingSessionDiagnostics {
         }
     }
 
+    struct ReverseLeakSummary: Codable, Equatable {
+        let enabled: Bool
+        let lockedDelayMs: Int?
+        let delayObservationCount: Int
+        let delaySkipCount: Int
+        let lockCount: Int
+        let relockCount: Int
+        let resetCount: Int
+        let gapResetCount: Int
+        let gateOpenCount: Int
+        let suppressedSeconds: Double
+        let referenceUnavailableFrames: Int
+        let intervalCount: Int
+        let offsetSpreadMs: Int
+        let meanBlockProcessingMicros: Double
+        let maxBlockProcessingMicros: Int
+        let offlineSpeechSecondsInsideSuppressedIntervals: Double?
+
+        init(_ snapshot: MeetingReverseLeakDiagnosticsSnapshot) {
+            enabled = snapshot.enabled
+            lockedDelayMs = snapshot.lockedDelayMs
+            delayObservationCount = snapshot.delayHistory.count
+            delaySkipCount = snapshot.delaySkipHistory.count
+            lockCount = snapshot.lockCount
+            relockCount = snapshot.relockCount
+            resetCount = snapshot.resetCount
+            gapResetCount = snapshot.gapResetCount
+            gateOpenCount = snapshot.gateOpenCount
+            suppressedSeconds = snapshot.suppressedSeconds
+            referenceUnavailableFrames = snapshot.referenceUnavailableFrames
+            intervalCount = snapshot.intervalCount
+            offsetSpreadMs = snapshot.offsetSpreadMs
+            meanBlockProcessingMicros = snapshot.meanBlockProcessingMicros
+            maxBlockProcessingMicros = snapshot.maxBlockProcessingMicros
+            offlineSpeechSecondsInsideSuppressedIntervals = snapshot.offlineSpeechSecondsInsideSuppressedIntervals
+        }
+    }
+
     struct Summary: Codable {
         let schemaVersion: Int
         let startedAt: String
@@ -273,6 +391,8 @@ final class MeetingSessionDiagnostics {
         let micRecorder: MicRecorderSummary?
         let micHealth: MicHealthSummary?
         let aec: AecSummary
+        /// Absent in payloads written before reverse-leak suppression shipped.
+        let reverseLeak: ReverseLeakSummary?
         let micChunks: ChunkStats
         let systemChunks: ChunkStats
         let diarizationSegments: Int
@@ -379,6 +499,7 @@ final class MeetingSessionDiagnostics {
         systemChunks: MeetingTranscriptChunkHealthSnapshot,
         diarizationSegments: [TimedSpeakerSegment]?,
         protectedSystemSegmentCount: Int,
+        reverseLeak: MeetingReverseLeakDiagnosticsSnapshot? = nil,
         retentionReferenceDate: Date = Date()
     ) {
         guard enabled, let outputDirectory else { return }
@@ -394,6 +515,7 @@ final class MeetingSessionDiagnostics {
             micRecorder: micRecorder.map(MicRecorderSummary.init),
             micHealth: micHealth.map(MicHealthSummary.init),
             aec: AecSummary(aec),
+            reverseLeak: reverseLeak.map(ReverseLeakSummary.init),
             micChunks: ChunkStats(
                 successful: micChunks.successfulChunkCount,
                 empty: micChunks.emptyChunkCount,

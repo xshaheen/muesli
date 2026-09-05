@@ -213,6 +213,212 @@ struct MeetingSessionDiagnosticsTests {
         #expect(FileManager.default.fileExists(atPath: recordingURL.path))
     }
 
+    @Test("summary payload without reverseLeak decodes with nil")
+    func summaryWithoutReverseLeakDecodesNil() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let diagnostics = MeetingSessionDiagnostics(startedAt: now, rootURL: root, enabledOverride: true)
+        diagnostics.writeFinalReport(
+            startedAt: now,
+            endedAt: now.addingTimeInterval(30),
+            systemCapture: nil,
+            micRecorder: nil,
+            micHealth: nil,
+            aec: emptyAecSnapshot,
+            micChunks: emptyChunkSnapshot,
+            systemChunks: emptyChunkSnapshot,
+            diarizationSegments: nil,
+            protectedSystemSegmentCount: 0,
+            retentionReferenceDate: now
+        )
+
+        let run = try #require(MeetingSessionDiagnostics.loadStoredSummaries(rootURL: root, now: now).first)
+        let reportURL = root
+            .appendingPathComponent("MeetingDiagnostics", isDirectory: true)
+            .appendingPathComponent(run.id, isDirectory: true)
+            .appendingPathComponent("diagnostics.json")
+        let data = try Data(contentsOf: reportURL)
+        let keys = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any]).keys
+
+        #expect(!keys.contains("reverseLeak"))
+        #expect(run.summary.reverseLeak == nil)
+        #expect(run.summary.schemaVersion == 1)
+        #expect(run.summary.aec.processedFrames == 0)
+
+        let decoded = try JSONDecoder().decode(MeetingSessionDiagnostics.Summary.self, from: data)
+        #expect(decoded.reverseLeak == nil)
+    }
+
+    @Test("reverse-leak summary round-trips every field")
+    func reverseLeakSummaryRoundTrips() throws {
+        let snapshot = sampleReverseLeakSnapshot
+        let summary = MeetingSessionDiagnostics.ReverseLeakSummary(snapshot)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+
+        let decodedSummary = try JSONDecoder().decode(
+            MeetingSessionDiagnostics.ReverseLeakSummary.self,
+            from: encoder.encode(summary)
+        )
+        #expect(decodedSummary == summary)
+        #expect(decodedSummary.enabled == true)
+        #expect(decodedSummary.lockedDelayMs == 140)
+        #expect(decodedSummary.delayObservationCount == 2)
+        #expect(decodedSummary.delaySkipCount == 1)
+        #expect(decodedSummary.lockCount == 1)
+        #expect(decodedSummary.relockCount == 2)
+        #expect(decodedSummary.resetCount == 3)
+        #expect(decodedSummary.gapResetCount == 4)
+        #expect(decodedSummary.gateOpenCount == 5)
+        #expect(decodedSummary.suppressedSeconds == 6.5)
+        #expect(decodedSummary.referenceUnavailableFrames == 7)
+        #expect(decodedSummary.intervalCount == 8)
+        #expect(decodedSummary.offsetSpreadMs == 9)
+        #expect(decodedSummary.meanBlockProcessingMicros == 10.25)
+        #expect(decodedSummary.maxBlockProcessingMicros == 11)
+        #expect(decodedSummary.offlineSpeechSecondsInsideSuppressedIntervals == 12.75)
+
+        let decodedSnapshot = try JSONDecoder().decode(
+            MeetingReverseLeakDiagnosticsSnapshot.self,
+            from: encoder.encode(snapshot)
+        )
+        #expect(decodedSnapshot.enabled == snapshot.enabled)
+        #expect(decodedSnapshot.lockedDelayMs == snapshot.lockedDelayMs)
+        #expect(decodedSnapshot.delayHistory.map(\.delayMs) == [120, 140])
+        #expect(decodedSnapshot.delayHistory.last?.candidateScores.map(\.delayMs) == [140, 160])
+        #expect(decodedSnapshot.delaySkipHistory.count == 1)
+        #expect(decodedSnapshot.delaySkipHistory.first?.reason == "reference-inactive")
+        #expect(decodedSnapshot.delaySkipHistory.first?.referenceSamplesReceived == 32_000)
+        #expect(decodedSnapshot.delaySkipHistory.first?.targetSamplesReceived == 48_000)
+        #expect(decodedSnapshot.delaySkipHistory.first?.referenceHistoryStartSample == 1_000)
+        #expect(decodedSnapshot.delaySkipHistory.first?.targetHistoryStartSample == 2_000)
+        #expect(decodedSnapshot.delaySkipHistory.first?.comparableEndSample == 31_000)
+        #expect(decodedSnapshot.delaySkipHistory.first?.validCandidateCount == 3)
+        #expect(decodedSnapshot.delaySkipHistory.first?.missingCandidateCount == 4)
+        #expect(decodedSnapshot.delaySkipHistory.first?.lowActiveCandidateCount == 5)
+        #expect(decodedSnapshot.delaySkipHistory.first?.targetWindowSamples == 6_000)
+        #expect(decodedSnapshot.delaySkipHistory.first?.targetPeak == 0.5)
+        #expect(decodedSnapshot.gateOpenCount == 5)
+        #expect(decodedSnapshot.offlineSpeechSecondsInsideSuppressedIntervals == 12.75)
+        #expect(MeetingSessionDiagnostics.ReverseLeakSummary(decodedSnapshot) == summary)
+    }
+
+    @Test("final report flattens a reverse-leak snapshot when present and omits it when absent")
+    func finalReportFlattensReverseLeakWhenPresent() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let withReverse = MeetingSessionDiagnostics(startedAt: now, rootURL: root, enabledOverride: true)
+        withReverse.writeFinalReport(
+            startedAt: now,
+            endedAt: now.addingTimeInterval(30),
+            systemCapture: nil,
+            micRecorder: nil,
+            micHealth: nil,
+            aec: emptyAecSnapshot,
+            micChunks: emptyChunkSnapshot,
+            systemChunks: emptyChunkSnapshot,
+            diarizationSegments: nil,
+            protectedSystemSegmentCount: 0,
+            reverseLeak: sampleReverseLeakSnapshot,
+            retentionReferenceDate: now
+        )
+        let withoutReverse = MeetingSessionDiagnostics(
+            startedAt: now.addingTimeInterval(1),
+            rootURL: root,
+            enabledOverride: true
+        )
+        withoutReverse.writeFinalReport(
+            startedAt: now,
+            endedAt: now.addingTimeInterval(30),
+            systemCapture: nil,
+            micRecorder: nil,
+            micHealth: nil,
+            aec: emptyAecSnapshot,
+            micChunks: emptyChunkSnapshot,
+            systemChunks: emptyChunkSnapshot,
+            diarizationSegments: nil,
+            protectedSystemSegmentCount: 0,
+            retentionReferenceDate: now
+        )
+
+        let runs = MeetingSessionDiagnostics.loadStoredSummaries(rootURL: root, now: now)
+        #expect(runs.count == 2)
+        let flattened = try #require(runs.compactMap(\.summary.reverseLeak).first)
+        #expect(flattened == MeetingSessionDiagnostics.ReverseLeakSummary(sampleReverseLeakSnapshot))
+        #expect(runs.filter { $0.summary.reverseLeak == nil }.count == 1)
+        #expect(runs.allSatisfy { $0.summary.schemaVersion == 1 })
+
+        let reportURL = root
+            .appendingPathComponent("MeetingDiagnostics", isDirectory: true)
+            .appendingPathComponent(try #require(runs.first { $0.summary.reverseLeak != nil }).id, isDirectory: true)
+            .appendingPathComponent("diagnostics.json")
+        let report = try String(contentsOf: reportURL, encoding: .utf8)
+        #expect(report.contains("\"reverseLeak\""))
+        #expect(report.contains("\"lockedDelayMs\" : 140"))
+        #expect(!report.contains("delayHistory"), "the summary flattens histories into counts")
+        #expect(!report.contains("delaySkipHistory"))
+    }
+
+    private var sampleReverseLeakSnapshot: MeetingReverseLeakDiagnosticsSnapshot {
+        MeetingReverseLeakDiagnosticsSnapshot(
+            enabled: true,
+            lockedDelayMs: 140,
+            delayHistory: [
+                MeetingAecDelayObservation(
+                    delayMs: 120,
+                    appliedDelayMs: 0,
+                    score: 0.61,
+                    confidence: 0.4,
+                    comparedFrames: 90,
+                    decision: "candidate",
+                    candidateScores: []
+                ),
+                MeetingAecDelayObservation(
+                    delayMs: 140,
+                    appliedDelayMs: 140,
+                    score: 0.82,
+                    confidence: 0.7,
+                    comparedFrames: 100,
+                    decision: "lock",
+                    candidateScores: [
+                        MeetingAecDelayCandidateScore(delayMs: 140, score: 0.82, comparedFrames: 100),
+                        MeetingAecDelayCandidateScore(delayMs: 160, score: 0.31, comparedFrames: 100),
+                    ]
+                ),
+            ],
+            delaySkipHistory: [
+                MeetingReverseLeakDelaySkip(
+                    reason: "reference-inactive",
+                    referenceSamplesReceived: 32_000,
+                    targetSamplesReceived: 48_000,
+                    referenceHistoryStartSample: 1_000,
+                    targetHistoryStartSample: 2_000,
+                    comparableEndSample: 31_000,
+                    validCandidateCount: 3,
+                    missingCandidateCount: 4,
+                    lowActiveCandidateCount: 5,
+                    targetWindowSamples: 6_000,
+                    targetPeak: 0.5
+                ),
+            ],
+            lockCount: 1,
+            relockCount: 2,
+            resetCount: 3,
+            gapResetCount: 4,
+            gateOpenCount: 5,
+            suppressedSeconds: 6.5,
+            referenceUnavailableFrames: 7,
+            intervalCount: 8,
+            offsetSpreadMs: 9,
+            meanBlockProcessingMicros: 10.25,
+            maxBlockProcessingMicros: 11,
+            offlineSpeechSecondsInsideSuppressedIntervals: 12.75
+        )
+    }
+
     private var emptyAecSnapshot: MeetingAecDiagnosticsSnapshot {
         MeetingAecDiagnosticsSnapshot(
             ready: false,

@@ -146,8 +146,15 @@ case "${shard}" in
       MeetingRecordingPanelGeometryTests
       MeetingRecordingPanelLifecycleTests
       MeetingResumePolicyTests
+      MeetingReverseLeakEstimatorTests
+      MeetingReverseLeakLockPolicyTests
+      MeetingReverseLeakMaskPlannerTests
+      MeetingReverseLeakSettingTests
+      ReverseLeakLevelMeasurementManualTests
+      MeetingReverseLeakSuppressorTests
       MeetingSessionDiagnosticsTests
       MeetingSessionLanguageAuthorityTests
+      MeetingSessionReverseLeakHarnessTests
       MeetingStreamingPartialSessionTests
       MeetingFollowUpPolicyTests
       MeetingFollowUpThreadTests
@@ -169,6 +176,7 @@ case "${shard}" in
       MeetingTemplatesDefaultFallbackTests
       RouteAwareMeetingMicRecorderTests
       StreamingMicRecorderConfigChangeTests
+      StreamingVadFrameAccumulatorTests
       SystemAudioRecorderTests
       MeetingMicFailoverAttemptTrackerTests
       MeetingMicFailoverPolicyTests

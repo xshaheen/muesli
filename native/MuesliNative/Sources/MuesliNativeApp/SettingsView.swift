@@ -2128,6 +2128,13 @@ struct SettingsView: View {
                     meetingHookTimeoutControl
                 }
                 settingsDescription("Runs a user-supplied executable after each completed meeting. The executable receives JSON on stdin and must already be runnable on its own.")
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Suppress echoed local speech", controlWidth: meetingControlWidth) {
+                    settingsSwitch(isOn: appState.config.meetingReverseLeakSuppression) { newValue in
+                        controller.updateConfig { $0.meetingReverseLeakSuppression = newValue }
+                    }
+                }
+                settingsDescription("Removes your own voice from the Others track when the far end echoes it back, so a sentence is not transcribed twice. Turning it off applies to the meeting in progress. Saved recordings and re-transcription always keep the original audio, and session diagnostics record what was removed.")
             }
             .padding(.top, MuesliTheme.spacing8)
         }
