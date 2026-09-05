@@ -1662,7 +1662,11 @@ enum TranscriptCleanupPrompts {
     static let emailID = "email"
     static let writingID = "writing"
     static let codeID = "code"
-    static let mixedLanguageRepairID = "mixed-language-repair"
+    /// The retired hand-picked repair preset.
+    ///
+    /// Repair is now derived from the spoken-language selection, so the preset is
+    /// gone; the id survives only to migrate a config that still names it (R13).
+    static let legacyMixedLanguageRepairID = "mixed-language-repair"
 
     static let builtIns: [TranscriptCleanupPromptPreset] = [
         TranscriptCleanupPromptPreset(
@@ -1701,15 +1705,6 @@ enum TranscriptCleanupPrompts {
             prompt: """
             Clean up the dictated technical prose while preserving its meaning, facts, names, wording, deletion intent, identifiers, and code terms. Format prose compactly. Never convert spoken syntax into executable code unless the user explicitly dictated code.
             """,
-            isCustom: false
-        ),
-        // Selectable because the default forbids the word changes this needs. Someone
-        // dictating Arabic with English technical terms gets the same phonetic
-        // mangling a meeting does, and the same repair fixes it.
-        TranscriptCleanupPromptPreset(
-            id: mixedLanguageRepairID,
-            name: "Mixed-Language Repair (Arabic + English)",
-            prompt: MixedLanguageRepairPrompt.dictation,
             isCustom: false
         ),
     ]
@@ -3000,6 +2995,13 @@ struct AppConfig: Codable {
             dictationStyleRulesetInitialized = migration.initialized
             dictationStyleGroups = migration.groups
             dictationStyleExactExceptions = migration.exceptions
+        }
+        // The repair preset is retired: repair now follows the language selection.
+        // Named explicitly rather than left to the unknown-id branch below, so the
+        // migration is intentional and greppable (R13).
+        if activeTranscriptCleanupPromptId == TranscriptCleanupPrompts.legacyMixedLanguageRepairID {
+            activeTranscriptCleanupPromptId = defaults.activeTranscriptCleanupPromptId
+            postProcessorSystemPrompt = defaults.postProcessorSystemPrompt
         }
         if TranscriptCleanupPrompts.resolveOptional(
             id: activeTranscriptCleanupPromptId,

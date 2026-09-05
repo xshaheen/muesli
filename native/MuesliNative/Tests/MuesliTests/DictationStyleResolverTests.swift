@@ -23,7 +23,7 @@ struct DictationStyleResolverTests {
     @Test("first enable seeds canonical starter groups without changing global selection")
     func firstEnableSeedsCanonicalGroups() {
         var config = AppConfig()
-        config.activeTranscriptCleanupPromptId = TranscriptCleanupPrompts.mixedLanguageRepairID
+        config.activeTranscriptCleanupPromptId = TranscriptCleanupPrompts.emailID
         config.postProcessorSystemPrompt = "Unchanged global prompt"
         let enabled = DictationStyleResolver.enablingAdaptiveStyles(in: config)
         let enabledAgain = DictationStyleResolver.enablingAdaptiveStyles(in: enabled)

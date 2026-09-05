@@ -51,16 +51,37 @@ struct MeetingCleanupPromptTests {
         #expect(presets.contains { $0.prompt == MeetingTranscriptCleanupPrompt.systemPrompt } == false)
     }
 
-    @Test("dictation can select the same mixed-language repair")
-    func dictationOffersTheRepairPreset() {
-        // Dictating Arabic with English technical terms mangles them exactly as a
-        // meeting does, and the default preset forbids the fix.
+    @Test("the hand-picked repair preset is retired")
+    func repairPresetIsRetired() {
+        // Repair now follows the language selection, so there is nothing to pick.
         let presets = TranscriptCleanupPrompts.presets(custom: [])
 
-        let repair = presets.first { $0.id == TranscriptCleanupPrompts.mixedLanguageRepairID }
-        #expect(repair != nil)
-        #expect(repair?.prompt.contains("Change words when the recognizer misheard them") == true)
-        #expect(repair?.isCustom == false)
+        #expect(!presets.contains { $0.id == TranscriptCleanupPrompts.legacyMixedLanguageRepairID })
+        #expect(!TranscriptCleanupPrompts.reservedIDs.contains(
+            TranscriptCleanupPrompts.legacyMixedLanguageRepairID
+        ))
+    }
+
+    @Test("a config still naming the retired preset loads onto the default prompt")
+    func retiredPresetMigratesToDefault() throws {
+        // R13: the id maps across without disturbing anything else in the config.
+        let json = Data(#"{"active_transcript_cleanup_prompt_id":"mixed-language-repair","custom_transcript_cleanup_prompts":[{"id":"mine","name":"Mine","prompt":"Keep it short."}],"openai_api_key":"sk-keep"}"#.utf8)
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: json)
+
+        #expect(config.activeTranscriptCleanupPromptId == AppConfig().activeTranscriptCleanupPromptId)
+        #expect(config.postProcessorSystemPrompt == AppConfig().postProcessorSystemPrompt)
+        #expect(config.customTranscriptCleanupPrompts.count == 1)
+        #expect(config.customTranscriptCleanupPrompts.first?.id == "mine")
+    }
+
+    @Test("a config naming an unrelated custom preset is left alone")
+    func unrelatedPresetSurvives() throws {
+        let json = Data(#"{"active_transcript_cleanup_prompt_id":"mine","custom_transcript_cleanup_prompts":[{"id":"mine","name":"Mine","prompt":"Keep it short."}]}"#.utf8)
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: json)
+
+        #expect(config.activeTranscriptCleanupPromptId == "mine")
     }
 
     @Test("the dictation preset carries no chunking protocol")
