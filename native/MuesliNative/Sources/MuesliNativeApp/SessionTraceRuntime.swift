@@ -263,7 +263,7 @@ enum SessionTraceSnapshot {
         backend: BackendOption,
         profile: LanguageProfile
     ) -> String {
-        let dictationProfile = (try? DictationLanguageProfile(
+        let dictationProfile = (try? SpokenLanguageProfile(
             selectedLanguages: profile.selectedLanguages,
             dominantLanguage: profile.dominantLanguage
         )) ?? .automatic

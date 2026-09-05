@@ -159,11 +159,14 @@ struct ConfigStoreTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = ConfigStore(supportDirectory: directory)
         var candidate = AppConfig()
-        candidate.dictationLanguageProfile = try DictationLanguageProfile(
+        candidate.dictationLanguageProfile = try SpokenLanguageProfile(
             selectedLanguages: [.english, .arabic],
             dominantLanguage: .arabic
         )
-        candidate.meetingSpokenLanguage = .explicit(.arabic)
+        candidate.meetingSpokenLanguage = try SpokenLanguageProfile(
+            selectedLanguages: [.arabic, .hindi],
+            dominantLanguage: .hindi
+        )
         candidate.meetingArtifactLanguagePolicy = .arabic
         candidate.languageProfileNeedsConfirmation = true
 
@@ -172,7 +175,8 @@ struct ConfigStoreTests {
 
         #expect(persisted.dictationLanguageProfile == candidate.dictationLanguageProfile)
         #expect(reloaded.dictationLanguageProfile == candidate.dictationLanguageProfile)
-        #expect(reloaded.meetingSpokenLanguage == .explicit(.arabic))
+        // The meeting authority round-trips in the profile shape, independent of dictation.
+        #expect(reloaded.meetingSpokenLanguage == candidate.meetingSpokenLanguage)
         #expect(reloaded.meetingArtifactLanguagePolicy == .arabic)
         #expect(!reloaded.languageProfileNeedsConfirmation)
         #expect(reloaded.cohereLanguage == CohereTranscribeLanguage.arabic.rawValue)

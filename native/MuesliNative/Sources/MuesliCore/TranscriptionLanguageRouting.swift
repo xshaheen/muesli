@@ -41,7 +41,14 @@ public enum TranscriptionLanguage: String, CaseIterable, Codable, Hashable, Iden
     }
 }
 
-public struct DictationLanguageProfile: Codable, Equatable, Sendable {
+/// The validated, persisted spoken-language authority shared by dictation and
+/// meetings: a normalized set of selected languages (empty means automatic) plus
+/// an optional dominant language that must be in the set.
+///
+/// Profile is the Codable config value with a validating decoder; the
+/// field-identical `TranscriptionLanguageSelection` is the router input with a
+/// synthesized decoder. Keep them separate so config validation stays in one place.
+public struct SpokenLanguageProfile: Codable, Equatable, Sendable {
     public enum ValidationError: Error, LocalizedError {
         case dominantLanguageNotSelected
 
@@ -53,7 +60,7 @@ public struct DictationLanguageProfile: Codable, Equatable, Sendable {
     public let selectedLanguages: [TranscriptionLanguage]
     public let dominantLanguage: TranscriptionLanguage?
 
-    public static let automatic = DictationLanguageProfile(
+    public static let automatic = SpokenLanguageProfile(
         normalizedLanguages: [],
         dominantLanguage: nil
     )
@@ -97,40 +104,12 @@ public struct DictationLanguageProfile: Codable, Equatable, Sendable {
             dominantLanguage: dominantLanguage
         )) ?? .automatic
     }
-}
 
-public enum MeetingSpokenLanguageSelection: Codable, Equatable, Sendable {
-    case automatic
-    case explicit(TranscriptionLanguage)
+    /// Two or more selected languages. Automatic and single-language profiles are not bilingual.
+    public var isBilingual: Bool { selectedLanguages.count >= 2 }
 
-    private enum CodingKeys: String, CodingKey { case mode, language }
-    private enum Mode: String, Codable { case automatic, explicit }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        switch try container.decode(Mode.self, forKey: .mode) {
-        case .automatic:
-            self = .automatic
-        case .explicit:
-            self = .explicit(try container.decode(TranscriptionLanguage.self, forKey: .language))
-        }
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        switch self {
-        case .automatic:
-            try container.encode(Mode.automatic, forKey: .mode)
-        case .explicit(let language):
-            try container.encode(Mode.explicit, forKey: .mode)
-            try container.encode(language, forKey: .language)
-        }
-    }
-
-    public var language: TranscriptionLanguage? {
-        guard case .explicit(let language) = self else { return nil }
-        return language
-    }
+    /// The language a pinning backend would honor; the selection owns the rule.
+    public var authoritativeLanguage: TranscriptionLanguage? { selection.authoritativeLanguage }
 }
 
 public struct TranscriptionBackendID: RawRepresentable, Codable, Hashable, Sendable {
@@ -191,6 +170,13 @@ public struct TranscriptionLanguageSelection: Codable, Equatable, Sendable {
     }
 
     public var isAutomatic: Bool { selectedLanguages.isEmpty }
+
+    /// The dominant language, else the sole selected language, else nil. This is
+    /// the single owner of the "dominant pins, else sole pins" rule that the
+    /// router, presentation and profiles all read.
+    public var authoritativeLanguage: TranscriptionLanguage? {
+        dominantLanguage ?? (selectedLanguages.count == 1 ? selectedLanguages[0] : nil)
+    }
 }
 
 public struct TranscriptionBackendCapabilities: Codable, Equatable, Sendable {

@@ -14,7 +14,7 @@ struct BackendOptionTests {
         var config = AppConfig()
         config.sttBackend = BackendOption.parakeetMultilingual.backend
         config.sttModel = BackendOption.parakeetMultilingual.model
-        config.dictationLanguageProfile = try DictationLanguageProfile(
+        config.dictationLanguageProfile = try SpokenLanguageProfile(
             selectedLanguages: [.english, .arabic],
             dominantLanguage: nil
         )
@@ -571,7 +571,8 @@ struct LanguageProfileTests {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: legacy)
         #expect(decoded.dictationLanguageProfile.selectedLanguages == [.arabic, .english, .hindi])
         #expect(decoded.dictationLanguageProfile.dominantLanguage == nil)
-        #expect(decoded.meetingSpokenLanguage == .automatic)
+        // An absent meeting key copies the migrated dictation profile (KTD2).
+        #expect(decoded.meetingSpokenLanguage == decoded.dictationLanguageProfile)
         #expect(decoded.meetingArtifactLanguagePolicy == .automatic)
         #expect(decoded.languageProfileNeedsConfirmation)
 
@@ -581,6 +582,24 @@ struct LanguageProfileTests {
         #expect(roundTrip.meetingSpokenLanguage == decoded.meetingSpokenLanguage)
         #expect(roundTrip.meetingArtifactLanguagePolicy == decoded.meetingArtifactLanguagePolicy)
         #expect(roundTrip.languageProfileNeedsConfirmation)
+    }
+
+    @Test("provider pins cohere=de indic=hi seed both authorities and the review flag")
+    func appConfigMigratesPollutedProviderPins() throws {
+        let legacy = Data("""
+        {
+          "cohere_language": "de",
+          "indic_asr_language": "hi"
+        }
+        """.utf8)
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: legacy)
+        #expect(decoded.dictationLanguageProfile.selectedLanguages == [.german, .hindi])
+        #expect(decoded.dictationLanguageProfile.dominantLanguage == nil)
+        #expect(decoded.languageProfileNeedsConfirmation)
+        #expect(decoded.meetingSpokenLanguage.selectedLanguages == [.german, .hindi])
+        #expect(decoded.meetingSpokenLanguage.dominantLanguage == nil)
+        #expect(decoded.meetingArtifactLanguagePolicy == .automatic)
     }
 
     @Test("legacy combined profile migrates meeting and output authorities deterministically")
@@ -598,9 +617,225 @@ struct LanguageProfileTests {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: legacy)
         #expect(decoded.dictationLanguageProfile.selectedLanguages == [.arabic, .english])
         #expect(decoded.dictationLanguageProfile.dominantLanguage == .arabic)
-        #expect(decoded.meetingSpokenLanguage == .explicit(.arabic))
+        #expect(decoded.meetingSpokenLanguage == decoded.dictationLanguageProfile)
         #expect(decoded.meetingArtifactLanguagePolicy == .arabic)
-        #expect(decoded.languageProfile.meetingOutputPolicy == .dominantLanguage)
+        // The projection reports the explicit artifact policy directly (KTD7);
+        // the legacy dominant-language case is no longer produced by any projection.
+        #expect(decoded.languageProfile.meetingOutputPolicy == .arabic)
+        #expect(decoded.meetingLanguageProfile.meetingOutputPolicy == .arabic)
+    }
+
+    /// Wraps a raw `meeting_spoken_language` JSON fragment in a config whose
+    /// dictation profile is already `[ar, en]/en`, so every precedence row can
+    /// tell "copied dictation" apart from "automatic".
+    private func decodeMeetingSpokenLanguage(
+        _ fragment: String?,
+        dictation: String = #"{"selectedLanguages":["ar","en"],"dominantLanguage":"en"}"#
+    ) throws -> AppConfig {
+        var body = #""dictation_language_profile":"# + dictation
+        if let fragment {
+            body += #","meeting_spoken_language":"# + fragment
+        }
+        return try JSONDecoder().decode(AppConfig.self, from: Data("{\(body)}".utf8))
+    }
+
+    @Test("meeting_spoken_language decode precedence: copy-dictation rows", arguments: [
+        nil,
+        #"{"mode":"automatic"}"#,
+        #"{"mode":"explicit","language":"ar"}"#,
+        #"{"mode":"explicit"}"#,
+        #"{"mode":"explicit","language":"ar","selectedLanguages":["hi"]}"#,
+        #"{"selectedLanguages":["ar"],"dominantLanguage":"en"}"#,
+        #"{"selectedLanguages":["xx"]}"#,
+        #"{"selectedLanguages":["ar"],"dominantLanguage":"auto"}"#,
+        "7",
+        #""ar""#,
+        "null",
+        "[]",
+    ] as [String?])
+    func meetingSpokenLanguageCopiesDictation(fragment: String?) throws {
+        let decoded = try decodeMeetingSpokenLanguage(fragment)
+        let expected = try SpokenLanguageProfile(
+            selectedLanguages: [.arabic, .english],
+            dominantLanguage: .english
+        )
+        #expect(decoded.dictationLanguageProfile == expected)
+        #expect(decoded.meetingSpokenLanguage == expected, "fragment: \(fragment ?? "absent")")
+    }
+
+    @Test("meeting_spoken_language decode precedence: profile rows")
+    func meetingSpokenLanguageDecodesProfileShape() throws {
+        let explicit = try decodeMeetingSpokenLanguage(
+            #"{"selectedLanguages":["ar","en"],"dominantLanguage":"ar"}"#
+        )
+        #expect(explicit.meetingSpokenLanguage == (try SpokenLanguageProfile(
+            selectedLanguages: [.arabic, .english],
+            dominantLanguage: .arabic
+        )))
+        #expect(explicit.dictationLanguageProfile.dominantLanguage == .english)
+
+        // The profile decoder's empty case: no user intent, but a valid profile.
+        #expect(try decodeMeetingSpokenLanguage("{}").meetingSpokenLanguage == .automatic)
+        #expect(try decodeMeetingSpokenLanguage(#"{"unrelated":1}"#).meetingSpokenLanguage == .automatic)
+
+        let duplicated = try decodeMeetingSpokenLanguage(#"{"selectedLanguages":["ar","ar","en"]}"#)
+        #expect(duplicated.meetingSpokenLanguage.selectedLanguages == [.arabic, .english])
+        #expect(duplicated.meetingSpokenLanguage.dominantLanguage == nil)
+    }
+
+    @Test("legacy automatic mode copies a dominant dictation profile, not an automatic one")
+    func legacyAutomaticModeCopiesDictationDominant() throws {
+        let decoded = try decodeMeetingSpokenLanguage(
+            #"{"mode":"automatic"}"#,
+            dictation: #"{"selectedLanguages":["ar"],"dominantLanguage":"ar"}"#
+        )
+        #expect(decoded.meetingSpokenLanguage.selectedLanguages == [.arabic])
+        #expect(decoded.meetingSpokenLanguage.dominantLanguage == .arabic)
+    }
+
+    @Test("meeting_spoken_language encodes only the profile shape")
+    func meetingSpokenLanguageEncodesProfileShape() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+
+        var config = AppConfig()
+        config.meetingSpokenLanguage = .automatic
+        let automatic = String(decoding: try encoder.encode(config), as: UTF8.self)
+        #expect(automatic.contains(#""meeting_spoken_language":{"selectedLanguages":[]}"#))
+        #expect(!automatic.contains(#""mode""#))
+
+        config.meetingSpokenLanguage = try SpokenLanguageProfile(
+            selectedLanguages: [.english, .arabic],
+            dominantLanguage: .arabic
+        )
+        let explicit = String(decoding: try encoder.encode(config), as: UTF8.self)
+        #expect(explicit.contains(
+            #""meeting_spoken_language":{"dominantLanguage":"ar","selectedLanguages":["ar","en"]}"#
+        ))
+
+        let roundTrip = try JSONDecoder().decode(AppConfig.self, from: Data(explicit.utf8))
+        #expect(roundTrip.meetingSpokenLanguage == config.meetingSpokenLanguage)
+    }
+
+    @Test("the retained legacy adapter rejects the new profile shape (tier-B rollback)")
+    func legacyAdapterRejectsProfileShape() throws {
+        let newShape = Data(#"{"selectedLanguages":["ar","en"],"dominantLanguage":"ar"}"#.utf8)
+        #expect(throws: (any Error).self) {
+            try JSONDecoder().decode(AppConfig.LegacyMeetingSpokenLanguageSelection.self, from: newShape)
+        }
+        let legacyShape = Data(#"{"mode":"explicit","language":"ar"}"#.utf8)
+        let decoded = try JSONDecoder().decode(AppConfig.LegacyMeetingSpokenLanguageSelection.self, from: legacyShape)
+        #expect(decoded == .explicit(.arabic))
+    }
+
+    @Test("spoken-language profile exposes isBilingual and authoritativeLanguage")
+    func spokenLanguageProfilePredicates() throws {
+        #expect(!SpokenLanguageProfile.automatic.isBilingual)
+        #expect(SpokenLanguageProfile.automatic.authoritativeLanguage == nil)
+        #expect(TranscriptionLanguageSelection.automatic.authoritativeLanguage == nil)
+
+        let sole = try SpokenLanguageProfile(selectedLanguages: [.arabic])
+        #expect(!sole.isBilingual)
+        #expect(sole.authoritativeLanguage == .arabic)
+        #expect(sole.selection.authoritativeLanguage == .arabic)
+
+        let pair = try SpokenLanguageProfile(selectedLanguages: [.arabic, .english])
+        #expect(pair.isBilingual)
+        #expect(pair.authoritativeLanguage == nil)
+
+        let dominant = try SpokenLanguageProfile(
+            selectedLanguages: [.arabic, .english],
+            dominantLanguage: .english
+        )
+        #expect(dominant.isBilingual)
+        #expect(dominant.authoritativeLanguage == .english)
+        #expect((try TranscriptionLanguageSelection(
+            selectedLanguages: [.arabic, .english, .hindi],
+            dominantLanguage: .hindi
+        )).authoritativeLanguage == .hindi)
+    }
+
+    @Test("applyLegacyLanguageProfile writes the same profile to both authorities")
+    func applyLegacyLanguageProfileWritesBothAuthorities() throws {
+        var config = AppConfig()
+        config.applyLegacyLanguageProfile(try LanguageProfile(
+            selectedLanguages: [.arabic, .english],
+            dominantLanguage: .arabic,
+            meetingOutputPolicy: .dominantLanguage
+        ))
+        let expected = try SpokenLanguageProfile(
+            selectedLanguages: [.arabic, .english],
+            dominantLanguage: .arabic
+        )
+        #expect(config.dictationLanguageProfile == expected)
+        #expect(config.meetingSpokenLanguage == expected)
+        #expect(config.meetingArtifactLanguagePolicy == .arabic)
+
+        config.applyLegacyLanguageProfile(try LanguageProfile(
+            selectedLanguages: [.french],
+            dominantLanguage: .french,
+            meetingOutputPolicy: .automatic
+        ))
+        #expect(config.dictationLanguageProfile.selectedLanguages == [.french])
+        #expect(config.meetingSpokenLanguage.selectedLanguages == [.french])
+        #expect(config.meetingSpokenLanguage.dominantLanguage == .french)
+        #expect(config.meetingArtifactLanguagePolicy == .automatic)
+    }
+
+    @Test("policy conversion helpers are total and inverse for the explicit cases")
+    func policyConversionHelpers() {
+        #expect(MeetingArtifactLanguagePolicy.automatic.outputPolicy == .automatic)
+        #expect(MeetingArtifactLanguagePolicy.english.outputPolicy == .english)
+        #expect(MeetingArtifactLanguagePolicy.arabic.outputPolicy == .arabic)
+        for policy in MeetingArtifactLanguagePolicy.allCases {
+            #expect(policy.outputPolicy.artifactPolicy(dominantLanguage: nil) == policy)
+        }
+        #expect(MeetingOutputLanguagePolicy.dominantLanguage.artifactPolicy(dominantLanguage: .english) == .english)
+        #expect(MeetingOutputLanguagePolicy.dominantLanguage.artifactPolicy(dominantLanguage: .arabic) == .arabic)
+        #expect(MeetingOutputLanguagePolicy.dominantLanguage.artifactPolicy(dominantLanguage: .french) == .automatic)
+        #expect(MeetingOutputLanguagePolicy.dominantLanguage.artifactPolicy(dominantLanguage: nil) == .automatic)
+    }
+
+    @Test("both projections agree on the artifact policy and carry their own selection")
+    func projectionsAgreeOnMeetingOutputPolicy() throws {
+        var config = AppConfig()
+        config.dictationLanguageProfile = try SpokenLanguageProfile(
+            selectedLanguages: [.english, .french],
+            dominantLanguage: .english
+        )
+        config.meetingSpokenLanguage = try SpokenLanguageProfile(
+            selectedLanguages: [.arabic, .hindi],
+            dominantLanguage: .hindi
+        )
+
+        for policy in MeetingArtifactLanguagePolicy.allCases {
+            config.meetingArtifactLanguagePolicy = policy
+            let dictation = config.languageProfile
+            let meeting = config.meetingLanguageProfile
+            #expect(dictation.meetingOutputPolicy == policy.outputPolicy, "\(policy)")
+            #expect(meeting.meetingOutputPolicy == dictation.meetingOutputPolicy, "\(policy)")
+            #expect(dictation.selectedLanguages == [.english, .french])
+            #expect(dictation.dominantLanguage == .english)
+            #expect(meeting.selectedLanguages == [.arabic, .hindi])
+            #expect(meeting.dominantLanguage == .hindi)
+        }
+    }
+
+    @Test("an explicit Arabic policy survives the projection without a dictation dominant")
+    func explicitArabicPolicyIsNotLossy() throws {
+        var config = AppConfig()
+        config.dictationLanguageProfile = try SpokenLanguageProfile(selectedLanguages: [.english, .arabic])
+        config.meetingSpokenLanguage = .automatic
+        config.meetingArtifactLanguagePolicy = .arabic
+        #expect(config.dictationLanguageProfile.dominantLanguage == nil)
+        #expect(config.languageProfile.meetingOutputPolicy == .arabic)
+        #expect(config.meetingLanguageProfile.meetingOutputPolicy == .arabic)
+
+        config.dictationLanguageProfile = try SpokenLanguageProfile(
+            selectedLanguages: [.english, .arabic],
+            dominantLanguage: .english
+        )
+        #expect(config.languageProfile.meetingOutputPolicy == .arabic)
     }
 }
 

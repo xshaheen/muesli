@@ -12,26 +12,26 @@ import Testing
 struct LanguageSelectionPresentationTests {
     @Test("selection states preserve model and language identifiers")
     func presentationStatesPreserveIdentity() throws {
-        let automatic = DictationLanguageProfile.automatic.presentation(
+        let automatic = SpokenLanguageProfile.automatic.presentation(
             for: .whisperSmall,
             isAvailable: true
         )
         #expect(automatic.state == .automatic)
         #expect(automatic.backendID == BackendOption.whisperSmall.transcriptionBackendID)
 
-        let pinned = try DictationLanguageProfile(
+        let pinned = try SpokenLanguageProfile(
             selectedLanguages: [.arabic]
         ).presentation(for: .whisperLargeTurbo, isAvailable: true)
         #expect(pinned.state == .pinned)
         #expect(pinned.selectedLanguageIDs == ["ar"])
 
-        let constrainedDisabled = try DictationLanguageProfile(
+        let constrainedDisabled = try SpokenLanguageProfile(
             selectedLanguages: [.english, .arabic]
         ).presentation(for: .whisperLargeTurbo, isAvailable: true)
         #expect(constrainedDisabled.state == .incompatible)
         #expect(constrainedDisabled.selectedLanguageIDs == ["ar", "en"])
 
-        let unavailable = try DictationLanguageProfile(
+        let unavailable = try SpokenLanguageProfile(
             selectedLanguages: [.arabic]
         ).presentation(for: .whisperLargeTurbo, isAvailable: false)
         #expect(unavailable.state == .unavailable)

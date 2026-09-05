@@ -1133,8 +1133,14 @@ struct Nemotron35LanguageTests {
         let data = try JSONEncoder().encode(cfg)
         let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(json["nemotron35_language"] as? String == "hi")
+        // Onboarding keeps the meeting authority equal to dictation, in the profile shape.
+        let meeting = try #require(json["meeting_spoken_language"] as? [String: Any])
+        #expect(meeting["selectedLanguages"] as? [String] == ["hi"])
+        #expect(meeting["dominantLanguage"] as? String == "hi")
+        #expect(meeting["mode"] == nil)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(decoded.resolvedNemotron35Language == .hindi)
+        #expect(decoded.meetingSpokenLanguage == cfg.meetingSpokenLanguage)
     }
 
     @Test("stream state freezes its language prompt")
@@ -1204,8 +1210,12 @@ struct WhisperKitLanguageTests {
         let data = try JSONEncoder().encode(cfg)
         let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(json["whisper_language"] as? String == "de")
+        let meeting = try #require(json["meeting_spoken_language"] as? [String: Any])
+        #expect(meeting["selectedLanguages"] as? [String] == ["de"])
+        #expect(meeting["dominantLanguage"] as? String == "de")
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(decoded.resolvedWhisperLanguage == .german)
+        #expect(decoded.meetingSpokenLanguage.selectedLanguages == [.german])
     }
 
     @Test("missing language config falls back to auto-detect")

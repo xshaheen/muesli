@@ -7,7 +7,7 @@ import Testing
 struct LanguageProfileSettingsModelTests {
     @Test("loading crosses one adapter and preserves an existing draft")
     func loadUsesOneAdapterWithoutOverwritingDraft() throws {
-        let loaded = try DictationLanguageProfile(
+        let loaded = try SpokenLanguageProfile(
             selectedLanguages: [.arabic],
             dominantLanguage: .arabic
         )
@@ -32,7 +32,7 @@ struct LanguageProfileSettingsModelTests {
 
     @Test("edits remain draft state until the atomic save succeeds")
     func failedSaveRetainsDraft() throws {
-        let original = try DictationLanguageProfile(
+        let original = try SpokenLanguageProfile(
             selectedLanguages: [.english],
             dominantLanguage: .english
         )
@@ -75,7 +75,7 @@ struct LanguageProfileSettingsModelTests {
 
     @Test("removing a dominant language clears dominance")
     func removingDominantLanguageRepairsDraft() throws {
-        let profile = try DictationLanguageProfile(
+        let profile = try SpokenLanguageProfile(
             selectedLanguages: [.english, .arabic],
             dominantLanguage: .arabic
         )

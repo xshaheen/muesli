@@ -14,14 +14,14 @@ struct LanguageProfileClient {
         }
     }
 
-    let load: () -> DictationLanguageProfile
-    let save: (DictationLanguageProfile) throws -> DictationLanguageProfile
-    let presentation: (DictationLanguageProfile, BackendOption) -> LanguageSelectionPresentation
+    let load: () -> SpokenLanguageProfile
+    let save: (SpokenLanguageProfile) throws -> SpokenLanguageProfile
+    let presentation: (SpokenLanguageProfile, BackendOption) -> LanguageSelectionPresentation
 
     init(
-        load: @escaping () -> DictationLanguageProfile = { .automatic },
-        save: @escaping (DictationLanguageProfile) throws -> DictationLanguageProfile,
-        presentation: @escaping (DictationLanguageProfile, BackendOption) -> LanguageSelectionPresentation = {
+        load: @escaping () -> SpokenLanguageProfile = { .automatic },
+        save: @escaping (SpokenLanguageProfile) throws -> SpokenLanguageProfile,
+        presentation: @escaping (SpokenLanguageProfile, BackendOption) -> LanguageSelectionPresentation = {
             profile, backend in profile.presentation(for: backend)
         }
     ) {
@@ -36,11 +36,11 @@ struct LanguageProfileClient {
 final class LanguageProfileSettingsModel {
     private(set) var selectedLanguages: [TranscriptionLanguage]
     private(set) var dominantLanguage: TranscriptionLanguage?
-    private(set) var committedProfile: DictationLanguageProfile
+    private(set) var committedProfile: SpokenLanguageProfile
     private(set) var errorMessage: String?
     private(set) var didSave = false
 
-    init(profile: DictationLanguageProfile = .automatic) {
+    init(profile: SpokenLanguageProfile = .automatic) {
         selectedLanguages = profile.selectedLanguages
         dominantLanguage = profile.dominantLanguage
         committedProfile = profile
@@ -50,9 +50,9 @@ final class LanguageProfileSettingsModel {
         draftProfile != committedProfile
     }
 
-    var draftProfile: DictationLanguageProfile {
+    var draftProfile: SpokenLanguageProfile {
         // The mutation methods maintain the dominant-language invariant.
-        (try? DictationLanguageProfile(
+        (try? SpokenLanguageProfile(
             selectedLanguages: selectedLanguages,
             dominantLanguage: dominantLanguage
         )) ?? .automatic
@@ -62,7 +62,7 @@ final class LanguageProfileSettingsModel {
         synchronize(with: client.load())
     }
 
-    func synchronize(with profile: DictationLanguageProfile) {
+    func synchronize(with profile: SpokenLanguageProfile) {
         guard !hasUnsavedChanges else { return }
         applyCommitted(profile)
     }
@@ -108,7 +108,7 @@ final class LanguageProfileSettingsModel {
         }
     }
 
-    private func applyCommitted(_ profile: DictationLanguageProfile) {
+    private func applyCommitted(_ profile: SpokenLanguageProfile) {
         selectedLanguages = profile.selectedLanguages
         dominantLanguage = profile.dominantLanguage
         committedProfile = profile

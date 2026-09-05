@@ -2190,7 +2190,7 @@ public final class MuesliController: NSObject {
     /// recordings keep their frozen profile snapshots; only future sessions see
     /// the newly published value.
     @discardableResult
-    func saveLanguageProfile(_ profile: DictationLanguageProfile) throws -> AppConfig {
+    func saveLanguageProfile(_ profile: SpokenLanguageProfile) throws -> AppConfig {
         var candidate = config
         candidate.dictationLanguageProfile = profile
         let persisted = try configStore.saveLanguageProfileConfiguration(candidate)
