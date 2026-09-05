@@ -97,14 +97,15 @@ struct DictationStyleSessionSnapshot {
     ) -> DictationCleanupPolicy? {
         guard mode.allowsAdaptiveStyles else { return nil }
         let selection = resolveStyle(context: result)
-        let basePrompt = config.adaptiveDictationStylesEnabled
-            ? DictationCleanupPromptComposer.compose(styleInstructions: selection.prompt)
-            : config.postProcessorSystemPrompt
+        let cleanupBackend = cleanupRuntime?.backend
+            ?? TranscriptCleanupBackendOption.resolved(config.postProcessorBackend)
         return DictationCleanupPolicy(
             readiness: readiness,
-            systemPromptSnapshot: DictationCleanupPromptComposer.appendingSpeakerVocabulary(
-                to: basePrompt,
-                customWords: config.customWords
+            systemPromptSnapshot: DictationCleanupPromptComposer.systemPrompt(
+                config: config,
+                selection: selection,
+                cleanupBackend: cleanupBackend,
+                option: cleanupRuntime?.option
             ),
             provenance: DictationCleanupStyleProvenance(selection: selection)
         )

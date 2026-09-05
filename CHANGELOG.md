@@ -5,6 +5,13 @@ upstream `main`.
 
 ## Unreleased — 12-08-2026
 
+### Custom instructions
+
+#### Features
+
+- Added a global Custom Instructions setting (Settings › Dictation) whose standing preferences are injected into dictation cleanup, meeting transcript cleanup, and meeting notes and titles; empty instructions leave every prompt byte-identical to before.
+- Bounded the block to 2,000 characters, with a 500-character budget on the on-device Qwen cleanup model, and stripped reserved delimiter sequences so the text can never close its own block or forge a transcript marker.
+
 ### Meeting languages and language conditioning
 
 #### Features
@@ -20,6 +27,7 @@ upstream `main`.
 - Extended WhisperKit pinning to all 22 listed languages; ten of them previously failed to pin.
 - Saving one language card no longer disturbs the other: a meeting save leaves `dictation_language_profile`, the legacy provider pins and the migration banner untouched.
 - Session traces now record the real workload for meeting, retranscription and import runs instead of labelling them dictation.
+
 
 ### Meeting intelligence, audio reliability, and floating UI
 

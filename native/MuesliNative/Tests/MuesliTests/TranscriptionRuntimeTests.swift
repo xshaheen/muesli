@@ -268,6 +268,64 @@ struct DictationCleanupPolicyTests {
         #expect(policy.provenance?.groupID == "messages")
     }
 
+    @Test("custom instructions sit between the style block and the speaker vocabulary")
+    func customInstructionsSitBetweenStyleAndVocabulary() throws {
+        let base = DictationCleanupPromptComposer.compose(styleInstructions: "Keep it casual.")
+        let prompt = DictationCleanupPromptComposer.systemPrompt(
+            base: base,
+            customInstructions: "Use British English.",
+            customWords: [CustomWord(word: "muesli", replacement: "Muesli")]
+        )
+
+        let style = try #require(prompt.range(of: "<STYLE-INSTRUCTIONS>"))
+        let block = try #require(prompt.range(of: CustomInstructions.openingTag))
+        let vocabulary = try #require(prompt.range(of: "Speaker vocabulary"))
+        #expect(style.lowerBound < block.lowerBound)
+        #expect(block.lowerBound < vocabulary.lowerBound)
+        #expect(prompt.contains("Use British English."))
+    }
+
+    @Test("empty custom instructions leave the prompt byte-identical")
+    func emptyCustomInstructionsKeepBytes() {
+        let words = [CustomWord(word: "muesli", replacement: "Muesli")]
+        let raw = "Legacy prompt bytes"
+        let expected = DictationCleanupPromptComposer.appendingSpeakerVocabulary(to: raw, customWords: words)
+
+        #expect(DictationCleanupPromptComposer.systemPrompt(base: raw, customInstructions: "", customWords: words) == expected)
+        #expect(DictationCleanupPromptComposer.systemPrompt(base: raw, customInstructions: " \n ", customWords: words) == expected)
+        let styled = DictationCleanupPromptComposer.compose(styleInstructions: "Style")
+        #expect(DictationCleanupPromptComposer.systemPrompt(base: styled, customWords: words)
+            == DictationCleanupPromptComposer.appendingSpeakerVocabulary(to: styled, customWords: words))
+    }
+
+    @Test("the on-device backend budgets the block and other backends keep it")
+    func backendBudgetBoundsBlock() {
+        var config = AppConfig()
+        config.customInstructions = String(repeating: "x", count: 1_500)
+
+        let local = DictationCleanupPromptComposer.systemPrompt(config: config, selection: nil, cleanupBackend: .local)
+        let gemma = DictationCleanupPromptComposer.systemPrompt(config: config, selection: nil, cleanupBackend: .gemma4LiteRT)
+
+        #expect(DictationCleanupPromptComposer.customInstructionsLimit(for: .local) == 500)
+        #expect(local.contains(String(repeating: "x", count: 500)))
+        #expect(!local.contains(String(repeating: "x", count: 501)))
+        #expect(gemma.contains(String(repeating: "x", count: 1_500)))
+    }
+
+    @Test("the runtime preload prompt matches the session prompt for the same config")
+    func preloadMatchesSessionWithoutAdaptiveStyles() throws {
+        var config = AppConfig()
+        config.enablePostProcessor = true
+        config.adaptiveDictationStylesEnabled = false
+        config.customInstructions = "Be concise."
+        config.customWords = [CustomWord(word: "muesli", replacement: "Muesli")]
+        let snapshot = DictationStyleSessionSnapshot(target: nil, config: config, mode: .standard)
+
+        let policy = try #require(snapshot.cleanupPolicy(enabled: true, context: nil))
+        let preload = DictationCleanupPromptComposer.systemPrompt(config: config, selection: nil, cleanupBackend: .local)
+        #expect(policy.systemPromptSnapshot == preload)
+    }
+
     @Test("all non-applied outcomes retain deterministic cleanup and custom words")
     func fallbackOutcomesAndFinalOrdering() {
         let attempts: [(DictationCleanupAttempt, DictationCleanupOutcome)] = [

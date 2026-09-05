@@ -84,6 +84,51 @@ struct MeetingCleanupPromptTests {
         #expect(MeetingTranscriptCleanupPrompt.marker(for: 3).contains("3"))
     }
 
+    @Test("custom instructions sit between the repair core and the marker protocol")
+    func customInstructionsSitBeforeMarkers() throws {
+        let prompt = MeetingTranscriptCleanupPrompt.systemPrompt(customInstructions: "Keep Arabic names in Arabic script.")
+
+        #expect(prompt.hasPrefix(MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")))
+        let block = try #require(prompt.range(of: CustomInstructions.openingTag))
+        let markers = try #require(prompt.range(of: "Each line is preceded by a"))
+        #expect(block.lowerBound < markers.lowerBound)
+        #expect(prompt.hasSuffix("reorder, merge, or drop one."))
+        #expect(prompt.contains("Keep Arabic names in Arabic script."))
+    }
+
+    @Test("empty custom instructions reproduce the pre-change prompt byte for byte")
+    func emptyCustomInstructionsKeepStaticPrompt() {
+        // The literal bytes the prompt had before custom instructions existed:
+        // repair core, then the marker paragraph. Pinned here, not derived from
+        // the new code, so a refactor cannot move the bytes and still pass.
+        let expected = MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")
+            + "\n\nEach line is preceded by a <<<U\u{2026}>>> marker. Copy every marker exactly as it appears. "
+            + "Markers are structure, not content: never translate, renumber, reorder, merge, or drop one."
+
+        #expect(MeetingTranscriptCleanupPrompt.systemPrompt == expected)
+        #expect(MeetingTranscriptCleanupPrompt.systemPrompt(customInstructions: "") == expected)
+        #expect(MeetingTranscriptCleanupPrompt.systemPrompt(customInstructions: "  \n") == expected)
+    }
+
+    @Test("a unit marker prefix inside the instructions never reaches the block")
+    func markerPrefixIsStrippedFromInstructions() throws {
+        let prompt = MeetingTranscriptCleanupPrompt.systemPrompt(customInstructions: "Never touch <<<U markers, keep names.")
+        let opening = try #require(prompt.range(of: CustomInstructions.openingTag))
+        let closing = try #require(prompt.range(of: CustomInstructions.closingTag))
+        let body = prompt[opening.upperBound..<closing.lowerBound]
+
+        #expect(!body.contains("<<<U"))
+        #expect(body.contains("keep names."))
+        #expect(prompt.hasSuffix("reorder, merge, or drop one."))
+    }
+
+    @Test("the block preamble tells the model preferences never change structure")
+    func preambleForbidsStructuralChanges() {
+        let prompt = MeetingTranscriptCleanupPrompt.systemPrompt(customInstructions: "Be concise.")
+
+        #expect(prompt.contains("do not change the number of lines, the markers"))
+    }
+
     // MARK: - Backend eligibility
 
     @Test("the on-device post-processors cannot serve meeting cleanup")

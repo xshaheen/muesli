@@ -1472,6 +1472,43 @@ struct SettingsView: View {
         }
     }
 
+    private var customInstructionsSettingsSection: some View {
+        settingsSection("Custom Instructions") {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                Text("Standing preferences for how Muesli rewrites your words. Applies to AI transcript cleanup, meeting transcript cleanup, and meeting notes.")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                CustomInstructionsEditor(committed: appState.config.customInstructions) { text in
+                    controller.setCustomInstructions(text)
+                }
+
+                if let note = customInstructionsScopeNote {
+                    Text(note)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// Names the one dictation-side caveat that applies to the current cleanup
+    /// setup, so the user knows where the instructions are inert or shortened.
+    private var customInstructionsScopeNote: String? {
+        if !appState.config.enablePostProcessor {
+            return "Dictation cleanup is off; instructions still apply to meetings."
+        }
+        if cleanupModelUsesFixedPrompt {
+            return "S1-mini uses Superwhisper’s built-in normalization instructions, so custom instructions do not affect dictation with that model."
+        }
+        if appState.selectedPostProcessorBackend == .local {
+            return "The on-device model reads the first \(DictationCleanupPromptComposer.onDeviceCustomInstructionsLimit) characters."
+        }
+        return nil
+    }
+
     private var cleanupPromptSettings: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             settingsRow(
@@ -1788,6 +1825,8 @@ struct SettingsView: View {
             }
 
             dictationCleanupSettingsSection
+
+            customInstructionsSettingsSection
 
             quilSettingsSection
 

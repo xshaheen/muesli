@@ -3427,9 +3427,10 @@ public final class MuesliController: NSObject {
         await transcriptionCoordinator.configurePostProcessor(
             backend: backend,
             option: option ?? runtimePostProcessorOption(config: runtimeConfig, backend: backend),
-            systemPrompt: DictationCleanupPromptComposer.appendingSpeakerVocabulary(
-                to: runtimeConfig.postProcessorSystemPrompt,
-                customWords: runtimeConfig.customWords
+            systemPrompt: DictationCleanupPromptComposer.systemPrompt(
+                config: runtimeConfig,
+                selection: nil,
+                cleanupBackend: backend
             ),
             config: runtimeConfig
         )
@@ -4511,6 +4512,15 @@ public final class MuesliController: NSObject {
 
     func removeCustomWord(id: UUID) {
         updateConfig { $0.customWords.removeAll { $0.id == id } }
+        refreshPostProcessorPromptAfterDictionaryChange()
+    }
+
+    /// Persists the user's standing preferences and re-arms the preloaded cleanup
+    /// runtime the way a dictionary edit does, so the next dictation sees them.
+    func setCustomInstructions(_ text: String) {
+        let normalized = CustomInstructions.normalized(text)
+        guard normalized != config.customInstructions else { return }
+        updateConfig { $0.customInstructions = normalized }
         refreshPostProcessorPromptAfterDictionaryChange()
     }
 
@@ -12129,9 +12139,11 @@ public final class MuesliController: NSObject {
             context: contextResult
         ) ?? DictationCleanupPolicy(
             readiness: cleanupReadiness,
-            systemPromptSnapshot: DictationCleanupPromptComposer.appendingSpeakerVocabulary(
-                to: sessionConfig.postProcessorSystemPrompt,
-                customWords: sessionConfig.customWords
+            systemPromptSnapshot: DictationCleanupPromptComposer.systemPrompt(
+                config: sessionConfig,
+                selection: nil,
+                cleanupBackend: cleanupBackend,
+                option: ppOption
             )
         )
         let cleanupRuntimeSnapshot = cleanupRuntime ?? DictationCleanupRuntimeSnapshot(
