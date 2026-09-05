@@ -1237,6 +1237,9 @@ struct AppConfigTests {
         #expect(config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU)
     }
 
+    /// R7: the prompt stays the base prompt and also becomes a disabled override mode.
+    /// The two copies are not redundant when a user edited the base prompt after
+    /// selecting the style, which is the case where the style's bytes would be lost.
     @Test("legacy custom global prompt survives with adaptive styles off")
     func legacyCustomGlobalPromptSurvives() throws {
         let json = """
@@ -1258,6 +1261,14 @@ struct AppConfigTests {
         #expect(config.dictationStyleCategoryAssignments.isEmpty)
         #expect(config.dictationStyleAppRules.isEmpty)
         #expect(config.dictationStyleDomainRules.isEmpty)
+
+        let migrated = try #require(config.dictationModes.first)
+        #expect(migrated.id == "legacy-prompt-legacy-custom")
+        #expect(migrated.name == "Legacy")
+        #expect(migrated.instructions == "Keep my exact legacy prompt.")
+        #expect(migrated.overrideDefaultInstructions)
+        #expect(migrated.isEnabled == false)
+        #expect(config.dictationModes.dropFirst().map(\.id) == DictationModes.BuiltIn.allCases.map(\.id))
     }
 
     /// R3. Every legacy Writing Styles key is decode-only now: a config that carries

@@ -2246,6 +2246,11 @@ struct AppConfig: Codable {
     /// change the composed prompt for anything targeting a shipped app. The
     /// fresh-install seed that turns them on lives in `ConfigStore`.
     var dictationModes: [DictationMode] = DictationModes.builtInModes(isEnabled: false)
+    /// Decode-only state, deliberately outside `CodingKeys`: it tells `ConfigStore`
+    /// that this decode built the mode list out of the legacy Writing Styles keys, so
+    /// the result has to reach disk once. Persisting it would make every later load
+    /// look like a fresh migration.
+    var dictationModesMigrationApplied: Bool = false
     var enableScreenContext: Bool = false
     var enableDictationOCRContext: Bool = false
     var useCoreAudioTap: Bool = true
@@ -2793,9 +2798,11 @@ struct AppConfig: Codable {
         // block every unrelated save is gone (R2), and the migration reads whatever survives.
         dictationStyleGroups = (try? legacy.decode([DictationStyleGroup].self, forKey: .dictationStyleGroups)) ?? defaults.dictationStyleGroups
         dictationStyleExactExceptions = (try? legacy.decode([DictationStyleExactException].self, forKey: .dictationStyleExactExceptions)) ?? defaults.dictationStyleExactExceptions
-        // Modes decode per field; only a non-object element is dropped (R2).
-        dictationModes = ((try? c.decode(DictationModes.DecodedArray.self, forKey: .dictationModes))?.modes)
-            ?? (c.contains(.dictationModes) ? [] : defaults.dictationModes)
+        // Modes decode per field; only a non-object element is dropped (R2). Only a
+        // valid array counts as present: `null`, an object, or any other malformed
+        // value migrates instead, so a hand-edited key cannot discard legacy data (R9).
+        let decodedModes = (try? c.decode(DictationModes.DecodedArray.self, forKey: .dictationModes))?.modes
+        dictationModes = decodedModes ?? []
         dictationStyleCategoryAssignments = (try? legacy.decode([String: String].self, forKey: .dictationStyleCategoryAssignments)) ?? defaults.dictationStyleCategoryAssignments
         dictationStyleAppRules = (try? legacy.decode([DictationStyleAppRule].self, forKey: .dictationStyleAppRules)) ?? defaults.dictationStyleAppRules
         dictationStyleDomainRules = (try? legacy.decode([DictationStyleDomainRule].self, forKey: .dictationStyleDomainRules)) ?? defaults.dictationStyleDomainRules
@@ -2838,6 +2845,13 @@ struct AppConfig: Codable {
             dictationStyleRulesetInitialized = migration.initialized
             dictationStyleGroups = migration.groups
             dictationStyleExactExceptions = migration.exceptions
+        }
+        // R5-R9. Absent modes mean this file predates them, so the legacy keys become
+        // the mode list once. The flag is decode-only and tells `ConfigStore` that this
+        // result has to reach disk on the launch that derived it.
+        if decodedModes == nil {
+            dictationModes = DictationModes.migratedModes(from: self)
+            dictationModesMigrationApplied = true
         }
         if TranscriptCleanupPrompts.resolveOptional(
             id: activeTranscriptCleanupPromptId,

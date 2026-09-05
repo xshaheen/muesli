@@ -6,18 +6,28 @@ import MuesliCore
 @Suite("ConfigStore", .serialized)
 struct ConfigStoreTests {
 
+    /// Every case that writes uses its own directory. The default one is the real
+    /// support directory, and loading it now runs the modes migration, which would
+    /// rewrite a developer's own config and drop the keys their installed build reads.
+    private func makeStore() throws -> ConfigStore {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return ConfigStore(supportDirectory: directory)
+    }
+
     @Test("load returns a valid config")
-    func loadReturnsConfig() {
-        let store = ConfigStore()
+    func loadReturnsConfig() throws {
+        let store = try makeStore()
+        defer { try? FileManager.default.removeItem(at: store.supportDirectory()) }
         let config = store.load()
-        // Hotkey may have been customized by user — just verify it loaded
         #expect(HotkeyConfig.label(for: config.dictationHotkey.keyCode) != nil)
         #expect(!config.sttBackend.isEmpty)
     }
 
     @Test("save and load round-trip")
-    func saveLoadRoundTrip() {
-        let store = ConfigStore()
+    func saveLoadRoundTrip() throws {
+        let store = try makeStore()
+        defer { try? FileManager.default.removeItem(at: store.supportDirectory()) }
         let original = store.load()
 
         var config = original
@@ -40,9 +50,6 @@ struct ConfigStoreTests {
         #expect(loaded.whisperLanguage == WhisperKitLanguage.german.rawValue)
         #expect(loaded.appleSpeechLanguage == "en-US")
         #expect(loaded.meetingSummaryBackend == "openrouter")
-
-        // Restore original
-        store.save(original)
     }
 
     @Test("config path is in Application Support")
@@ -55,10 +62,10 @@ struct ConfigStoreTests {
 
     @Test("saved config uses owner-only file permissions")
     func configPermissions() throws {
-        let store = ConfigStore()
-        let original = store.load()
+        let store = try makeStore()
+        defer { try? FileManager.default.removeItem(at: store.supportDirectory()) }
 
-        store.save(original)
+        store.save(store.load())
 
         let attributes = try FileManager.default.attributesOfItem(atPath: store.configPath().path)
         let permissions = attributes[.posixPermissions] as? NSNumber
@@ -109,6 +116,50 @@ struct ConfigStoreTests {
 
         let reloaded = ConfigStore(supportDirectory: directory).load()
         #expect(reloaded.openAIModel == "must-overwrite")
+    }
+
+    /// R8: a missing file is the only fresh install, and it is the only place the
+    /// built-ins arrive enabled.
+    @Test("a missing config file seeds the four built-in modes enabled")
+    func missingConfigFileSeedsEnabledBuiltIns() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConfigStore(supportDirectory: directory)
+
+        let fresh = store.load()
+
+        #expect(fresh.dictationModes == DictationModes.builtInModes(isEnabled: true))
+        #expect(fresh.dictationModesMigrationApplied == false)
+        #expect(!FileManager.default.fileExists(atPath: store.configPath().path))
+        #expect(!FileManager.default.fileExists(atPath: store.legacyBackupURL().path))
+
+        store.save(fresh)
+
+        let data = try Data(contentsOf: store.configPath())
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let modes = try #require(object["dictation_modes"] as? [[String: Any]])
+        #expect(modes.map { $0["id"] as? String } == DictationModes.BuiltIn.allCases.map(\.id))
+        #expect(modes.allSatisfy { $0["is_enabled"] as? Bool == true })
+    }
+
+    /// R8: an unreadable file is not a fresh install. It keeps its bytes, and nothing
+    /// about the modes migration may write over a file this build could not parse.
+    @Test("an unreadable config file writes nothing and stays byte-identical")
+    func unreadableConfigFileIsLeftAlone() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = ConfigStore(supportDirectory: directory)
+        let original = Data("{ this is not json".utf8)
+        try original.write(to: store.configPath())
+
+        let loaded = store.load()
+
+        #expect(loaded.dictationModes == AppConfig().dictationModes)
+        #expect(loaded.dictationModes.allSatisfy { !$0.isEnabled })
+        #expect(loaded.dictationModesMigrationApplied == false)
+        #expect(try Data(contentsOf: store.configPath()) == original)
+        #expect(!FileManager.default.fileExists(atPath: store.legacyBackupURL().path))
     }
 
     /// R3: the nine legacy keys leave disk, `post_processor_system_prompt` stays.

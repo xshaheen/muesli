@@ -2,6 +2,11 @@ import Foundation
 import MuesliCore
 
 final class ConfigStore {
+    /// The pre-migration copy of `config.json`, kept beside it. It is the manual
+    /// rollback for a downgrade or a migration bug, because the migrating save is the
+    /// moment the legacy Writing Styles keys leave disk (KTD13).
+    static let legacyBackupFileName = "config.pre-modes.json"
+
     private let configURL: URL
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -28,19 +33,72 @@ final class ConfigStore {
         }
         // A migrated selection reaches disk on the launch that migrated it, so the
         // rewrite survives a crash and cannot be re-derived from stale keys.
-        if decoded.retiredASRBackendMigrationApplied {
-            save(decoded)
+        guard decoded.retiredASRBackendMigrationApplied || decoded.dictationModesMigrationApplied else {
+            return decoded
+        }
+        // R9: the backup goes down before the only save that removes the legacy keys.
+        // A backup that cannot be written aborts the save, so the migration re-runs next
+        // launch against a file that still has everything it needs. Derived ids make the
+        // second run produce the same modes (KTD13).
+        if decoded.dictationModesMigrationApplied, !backUpLegacyConfig(data) {
+            return decoded
+        }
+        if !write(decoded) {
+            fputs(
+                "[config-store] the dictation modes migration could not be persisted; it will run again on the next launch\n",
+                stderr
+            )
         }
         return decoded
     }
 
     func save(_ config: AppConfig) {
+        _ = write(config)
+    }
+
+    /// Copies the pre-migration bytes aside once. An existing backup is left exactly as
+    /// it is: it is the older, more original state, and overwriting it would replace the
+    /// only rollback with a file the migration has already rewritten.
+    private func backUpLegacyConfig(_ data: Data) -> Bool {
+        let backupURL = legacyBackupURL()
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: backupURL.path, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue else { return true }
+            // Something that is not the backup occupies the path, so no rollback exists
+            // and none can be written here.
+            fputs(
+                "[config-store] cannot back up config.json before the dictation modes migration: \(backupURL.lastPathComponent) is a directory; leaving the existing config untouched\n",
+                stderr
+            )
+            return false
+        }
+        do {
+            try data.write(to: backupURL, options: .withoutOverwriting)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: backupURL.path
+            )
+            return true
+        } catch {
+            fputs(
+                "[config-store] failed to back up config.json before the dictation modes migration: \(error); leaving the existing config untouched\n",
+                stderr
+            )
+            return false
+        }
+    }
+
+    func legacyBackupURL() -> URL {
+        configURL.deletingLastPathComponent().appendingPathComponent(Self.legacyBackupFileName)
+    }
+
+    private func write(_ config: AppConfig) -> Bool {
         ensureDirectory()
         // Normalization is total: nothing about mode content can refuse a save, so an
         // unrelated setting is never held hostage by a bad mode array (R4).
         guard let data = try? encoder.encode(DictationModes.sanitized(config)) else {
             fputs("[config-store] failed to encode config\n", stderr)
-            return
+            return false
         }
         do {
             try data.write(to: configURL, options: .atomic)
@@ -48,8 +106,10 @@ final class ConfigStore {
                 [.posixPermissions: 0o600],
                 ofItemAtPath: configURL.path
             )
+            return true
         } catch {
             fputs("[config-store] failed to save config: \(error)\n", stderr)
+            return false
         }
     }
 

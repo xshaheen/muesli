@@ -217,6 +217,443 @@ enum DictationModes {
         }
     }
 
+    // MARK: - Legacy migration (R5-R9)
+
+    /// The mode list a legacy Writing Styles config becomes, exactly once.
+    ///
+    /// Pure and total: every id it produces is derived from the config's own bytes
+    /// (KTD13), so a launch whose migrating save is interrupted re-derives the same
+    /// list next time and history rows keep pointing at the same modes.
+    ///
+    /// Output order is pinned: groups in legacy order, then modes an exception had to
+    /// create, then unreferenced custom prompts, then the built-ins that are absent.
+    static func migratedModes(from config: AppConfig) -> [DictationMode] {
+        let styles = sanitizedLegacyStyles(config.customTranscriptCleanupPrompts)
+        let ruleset = legacyRuleset(config, styles: styles)
+        var drafts = groupDrafts(
+            ruleset.groups,
+            styles: styles,
+            isEnabled: config.adaptiveDictationStylesEnabled
+        )
+        applyExceptions(
+            ruleset.exceptions,
+            to: &drafts,
+            styles: styles,
+            isEnabled: config.adaptiveDictationStylesEnabled
+        )
+        appendUnreferencedPrompts(styles, to: &drafts)
+        appendAbsentBuiltIns(to: &drafts)
+        return sanitized(modes: uniquelyNamed(drafts.map(\.mode)))
+    }
+
+    /// One mode under construction plus the legacy style it carries, which is how an
+    /// exception finds the mode that already speaks in its voice (R6).
+    private struct MigrationDraft {
+        var mode: DictationMode
+        var styleID: String?
+    }
+
+    /// A target a group claims, and whether the group named it exactly.
+    ///
+    /// The distinction only matters when `*.host` collapses onto a bare `host` another
+    /// group named exactly: the legacy resolver ranked the exact matcher higher, so the
+    /// exact claim keeps the target.
+    private struct TargetClaim {
+        let value: String
+        let isExact: Bool
+    }
+
+    private static func groupDrafts(
+        _ groups: [DictationStyleGroup],
+        styles: [CustomTranscriptCleanupPrompt],
+        isEnabled: Bool
+    ) -> [MigrationDraft] {
+        var resolved: [(group: DictationStyleGroup, style: TranscriptCleanupPromptPreset)] = []
+        for group in groups {
+            guard let style = TranscriptCleanupPrompts.resolveOptional(id: group.styleID, custom: styles) else {
+                // The legacy resolver skipped a group whose style no longer resolves and
+                // fell through to the global prompt, so there is no text to carry over.
+                logMigration("dropping group \"\(group.name)\": its writing style no longer exists")
+                continue
+            }
+            resolved.append((group, style))
+        }
+
+        let bundleClaims = resolved.map { claims(in: $0.group, kind: .bundleID) }
+        let websiteClaims = resolved.map { claims(in: $0.group, kind: .hostname) }
+        let bundleOwners = targetOwners(bundleClaims)
+        let websiteOwners = targetOwners(websiteClaims)
+
+        return resolved.indices.map { index in
+            MigrationDraft(
+                mode: DictationMode(
+                    id: migratedGroupID(resolved[index].group),
+                    name: resolved[index].group.name,
+                    isEnabled: isEnabled,
+                    // R7: the style's exact bytes, never the typed-instructions cap.
+                    instructions: resolved[index].style.prompt,
+                    overrideDefaultInstructions: false,
+                    appBundleIDs: bundleClaims[index].map(\.value).filter { bundleOwners[$0] == index },
+                    websiteHostnames: websiteClaims[index].map(\.value).filter { websiteOwners[$0] == index },
+                    // Legacy had no auto-enter. Adopting one on upgrade would press a key
+                    // in a destination the user never asked it to.
+                    autoEnter: nil
+                ),
+                styleID: resolved[index].style.id
+            )
+        }
+    }
+
+    /// Sorted so the migration is reproducible even when the legacy groups came from a
+    /// projection that iterated an unordered dictionary.
+    private static func claims(
+        in group: DictationStyleGroup,
+        kind: DictationStyleMatcherKind
+    ) -> [TargetClaim] {
+        var seen = Set<String>()
+        return group.matchers
+            .filter { $0.kind == kind }
+            .compactMap { matcher in
+                switch kind {
+                case .bundleID: bundleClaim(matcher.pattern, group: group.name)
+                case .hostname: websiteClaim(matcher.pattern, group: group.name)
+                }
+            }
+            .filter { seen.insert($0.value).inserted }
+            .sorted { $0.value < $1.value }
+    }
+
+    private static func bundleClaim(_ pattern: String, group: String) -> TargetClaim? {
+        guard !pattern.contains("*"), let bundleID = normalizedBundleID(pattern) else {
+            logMigration("dropping matcher \"\(pattern)\" from group \"\(group)\": not an exact bundle identifier")
+            return nil
+        }
+        return TargetClaim(value: bundleID, isExact: true)
+    }
+
+    private static func websiteClaim(_ pattern: String, group: String) -> TargetClaim? {
+        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.hasPrefix("*.") {
+            let host = String(trimmed.dropFirst(2))
+            // `*.host` is the one wildcard the new model maps losslessly: a website entry
+            // matches the host itself and every subdomain of it.
+            if !host.contains("*"), let normalized = normalizedHostname(host) {
+                return TargetClaim(value: normalized, isExact: false)
+            }
+        } else if !trimmed.contains("*"), let normalized = normalizedHostname(trimmed) {
+            return TargetClaim(value: normalized, isExact: true)
+        }
+        logMigration("dropping matcher \"\(pattern)\" from group \"\(group)\": no equivalent website entry")
+        return nil
+    }
+
+    /// The group index that keeps each target, or no entry when the legacy resolver
+    /// itself had no winner (equal-rank matchers in two groups resolved to nothing).
+    private static func targetOwners(_ claims: [[TargetClaim]]) -> [String: Int] {
+        var byValue: [String: [(index: Int, isExact: Bool)]] = [:]
+        for (index, groupClaims) in claims.enumerated() {
+            for claim in groupClaims {
+                byValue[claim.value, default: []].append((index, claim.isExact))
+            }
+        }
+        return byValue.reduce(into: [:]) { owners, entry in
+            let (value, candidates) = entry
+            if candidates.count == 1 {
+                owners[value] = candidates[0].index
+                return
+            }
+            let exact = candidates.filter(\.isExact)
+            if exact.count == 1 {
+                owners[value] = exact[0].index
+                return
+            }
+            logMigration("dropping \"\(value)\": more than one writing-style group claimed it")
+        }
+    }
+
+    /// R8: a category group still carrying its category's default style is the same
+    /// thing the built-in mode is, so it keeps the built-in id and "Reset modes"
+    /// restores it. Both the starter and the projected id families map.
+    private static func migratedGroupID(_ group: DictationStyleGroup) -> String {
+        for prefix in ["starter-group-", "legacy-group-"] where group.id.hasPrefix(prefix) {
+            guard let category = DictationStyleCategory(rawValue: String(group.id.dropFirst(prefix.count))),
+                  group.styleID == category.defaultStyleID,
+                  let builtIn = BuiltIn.allCases.first(where: { $0.category == category })
+            else {
+                continue
+            }
+            return builtIn.id
+        }
+        return group.id
+    }
+
+    /// R6: an exception outranked every group, so its target moves to the mode that
+    /// carries its style and leaves every other mode. Processing in order reproduces
+    /// the legacy last-exception-wins rule.
+    private static func applyExceptions(
+        _ exceptions: [DictationStyleExactException],
+        to drafts: inout [MigrationDraft],
+        styles: [CustomTranscriptCleanupPrompt],
+        isEnabled: Bool
+    ) {
+        for exception in exceptions {
+            guard let style = TranscriptCleanupPrompts.resolveOptional(id: exception.styleID, custom: styles) else {
+                continue
+            }
+            let normalized = switch exception.kind {
+            case .bundleID: normalizedBundleID(exception.target)
+            case .hostname: normalizedHostname(exception.target)
+            }
+            guard let target = normalized else {
+                logMigration("dropping exception for \"\(exception.target)\": no equivalent mode target")
+                continue
+            }
+
+            let index: Int
+            if let existing = drafts.firstIndex(where: { $0.styleID == style.id }) {
+                index = existing
+            } else {
+                drafts.append(MigrationDraft(
+                    mode: DictationMode(
+                        id: "legacy-style-\(style.id)",
+                        name: style.name,
+                        isEnabled: isEnabled,
+                        instructions: style.prompt,
+                        overrideDefaultInstructions: false
+                    ),
+                    styleID: style.id
+                ))
+                index = drafts.count - 1
+            }
+
+            for other in drafts.indices {
+                switch exception.kind {
+                case .bundleID: drafts[other].mode.appBundleIDs.removeAll { $0 == target }
+                case .hostname: drafts[other].mode.websiteHostnames.removeAll { $0 == target }
+                }
+            }
+            switch exception.kind {
+            case .bundleID: drafts[index].mode.appBundleIDs.append(target)
+            case .hostname: drafts[index].mode.websiteHostnames.append(target)
+            }
+        }
+    }
+
+    /// R7: a custom prompt no group or exception speaks for would otherwise be deleted
+    /// by the upgrade, so it survives as a disabled, targetless override mode.
+    private static func appendUnreferencedPrompts(
+        _ styles: [CustomTranscriptCleanupPrompt],
+        to drafts: inout [MigrationDraft]
+    ) {
+        let referenced = Set(drafts.compactMap(\.styleID))
+        for style in styles where !referenced.contains(style.id) {
+            guard !style.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            drafts.append(MigrationDraft(
+                mode: DictationMode(
+                    id: "legacy-prompt-\(style.id)",
+                    name: style.name,
+                    isEnabled: false,
+                    instructions: style.prompt,
+                    overrideDefaultInstructions: true
+                ),
+                styleID: style.id
+            ))
+        }
+    }
+
+    /// R8: every shipped mode is reachable after the upgrade, so "Reset modes" is not
+    /// the only way back to one the legacy config had no equivalent for.
+    private static func appendAbsentBuiltIns(to drafts: inout [MigrationDraft]) {
+        let present = Set(drafts.map(\.mode.id))
+        for shipped in builtInModes(isEnabled: false) where !present.contains(shipped.id) {
+            drafts.append(MigrationDraft(mode: shipped, styleID: nil))
+        }
+    }
+
+    /// The editor requires case-insensitively unique names, so a migrated list that
+    /// collides would contain modes the user cannot save without renaming them first.
+    private static func uniquelyNamed(_ modes: [DictationMode]) -> [DictationMode] {
+        var claimed = Set<String>()
+        return modes.map { mode in
+            var candidate = mode
+            let trimmed = mode.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = trimmed.isEmpty ? fallbackName : trimmed
+            var name = base
+            var suffix = 1
+            while !claimed.insert(comparableName(name)).inserted {
+                suffix += 1
+                name = "\(base) (\(suffix))"
+            }
+            candidate.name = name
+            return candidate
+        }
+    }
+
+    private static func comparableName(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .lowercased()
+    }
+
+    // MARK: - Legacy projection
+
+    /// The groups and exceptions to migrate: the canonical ruleset when the user has
+    /// one, otherwise the projection of the pre-canonical category, app, and domain
+    /// rules. The projection is copied here rather than called so that retiring the
+    /// Writing Styles resolver cannot change what an upgrading config becomes.
+    private static func legacyRuleset(
+        _ config: AppConfig,
+        styles: [CustomTranscriptCleanupPrompt]
+    ) -> (groups: [DictationStyleGroup], exceptions: [DictationStyleExactException]) {
+        guard config.dictationStyleGroups.isEmpty, config.dictationStyleExactExceptions.isEmpty else {
+            return (config.dictationStyleGroups, config.dictationStyleExactExceptions)
+        }
+        return projectedLegacyRuleset(config, styles: styles)
+    }
+
+    private static func projectedLegacyRuleset(
+        _ config: AppConfig,
+        styles: [CustomTranscriptCleanupPrompt]
+    ) -> (groups: [DictationStyleGroup], exceptions: [DictationStyleExactException]) {
+        let resolvedStyleID: (String?) -> String? = {
+            TranscriptCleanupPrompts.resolveOptional(id: $0, custom: styles)?.id
+        }
+        let domainRules = lastRulePerTarget(config.dictationStyleDomainRules) { normalizedHostname($0.hostname) }
+        let appRules = lastRulePerTarget(config.dictationStyleAppRules) { normalizedBundleID($0.bundleID) }
+
+        var exactTargets = Set<String>()
+        var exceptions: [DictationStyleExactException] = []
+        for rule in domainRules {
+            guard let styleID = resolvedStyleID(rule.rule.styleID) else { continue }
+            exactTargets.insert("hostname:\(rule.target)")
+            exceptions.append(DictationStyleExactException(
+                id: "legacy-exception-hostname-\(rule.target)",
+                kind: .hostname,
+                target: rule.target,
+                styleID: styleID
+            ))
+        }
+        for rule in appRules {
+            guard let styleID = resolvedStyleID(rule.rule.styleID) else { continue }
+            exactTargets.insert("bundle_id:\(rule.target)")
+            exceptions.append(DictationStyleExactException(
+                id: "legacy-exception-bundle-id-\(rule.target)",
+                kind: .bundleID,
+                target: rule.target,
+                styleID: styleID
+            ))
+        }
+
+        var groups: [DictationStyleGroup] = []
+        for category in DictationStyleCategory.allCases {
+            guard let styleID = resolvedStyleID(config.dictationStyleCategoryAssignments[category.rawValue]) else {
+                continue
+            }
+            var matchers: [DictationStyleMatcher] = []
+            // Sorted, unlike the retired resolver, which iterated the curated
+            // dictionaries directly and produced a different order per process.
+            for target in DictationStyleResolver.curatedHostnameCategories
+                .filter({ $0.value == category })
+                .keys
+                .sorted() where !exactTargets.contains("hostname:\(target)") {
+                matchers.append(DictationStyleMatcher(
+                    id: "legacy-group-\(category.rawValue)-hostname-\(target)",
+                    kind: .hostname,
+                    pattern: target
+                ))
+            }
+            for target in DictationStyleResolver.curatedBundleCategories
+                .filter({ $0.value == category })
+                .keys
+                .sorted() where !exactTargets.contains("bundle_id:\(target)") {
+                matchers.append(DictationStyleMatcher(
+                    id: "legacy-group-\(category.rawValue)-bundle-id-\(target)",
+                    kind: .bundleID,
+                    pattern: target
+                ))
+            }
+            for rule in domainRules where legacyCategory(rule.rule.categoryID) == category {
+                matchers.append(DictationStyleMatcher(
+                    id: "legacy-group-\(category.rawValue)-hostname-\(rule.target)",
+                    kind: .hostname,
+                    pattern: rule.target
+                ))
+            }
+            for rule in appRules where legacyCategory(rule.rule.categoryID) == category {
+                matchers.append(DictationStyleMatcher(
+                    id: "legacy-group-\(category.rawValue)-bundle-id-\(rule.target)",
+                    kind: .bundleID,
+                    pattern: rule.target
+                ))
+            }
+            var seen = Set<String>()
+            matchers = matchers.filter { seen.insert("\($0.kind.rawValue):\($0.pattern)").inserted }
+            groups.append(DictationStyleGroup(
+                id: "legacy-group-\(category.rawValue)",
+                name: category.displayName,
+                styleID: styleID,
+                matchers: matchers
+            ))
+        }
+        return (groups, exceptions)
+    }
+
+    /// The legacy resolver read the *last* rule for a target, so a duplicated target
+    /// keeps its last rule in the position that rule held.
+    private static func lastRulePerTarget<Rule>(
+        _ rules: [Rule],
+        target: (Rule) -> String?
+    ) -> [(target: String, rule: Rule)] {
+        var seen = Set<String>()
+        let retained = rules.reversed().compactMap { rule -> (target: String, rule: Rule)? in
+            guard let value = target(rule), seen.insert(value).inserted else { return nil }
+            return (value, rule)
+        }
+        return retained.reversed()
+    }
+
+    private static func legacyCategory(_ id: String?) -> DictationStyleCategory? {
+        guard let id else { return nil }
+        return DictationStyleCategory(rawValue: id.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Copied from the retired resolver so the ids groups and exceptions reference stay
+    /// resolvable once it is gone.
+    private static func sanitizedLegacyStyles(
+        _ styles: [CustomTranscriptCleanupPrompt]
+    ) -> [CustomTranscriptCleanupPrompt] {
+        var preservedIDs: Set<String> = []
+        for style in styles {
+            let candidateID = style.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !candidateID.isEmpty, !TranscriptCleanupPrompts.reservedIDs.contains(candidateID) {
+                preservedIDs.insert(candidateID)
+            }
+        }
+
+        var claimedPreservedIDs: Set<String> = []
+        var usedIDs = TranscriptCleanupPrompts.reservedIDs.union(preservedIDs)
+        var nextGeneratedID = 1
+        return styles.map { style in
+            var sanitized = style
+            let candidateID = style.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            if preservedIDs.contains(candidateID), !claimedPreservedIDs.contains(candidateID) {
+                sanitized.id = candidateID
+                claimedPreservedIDs.insert(candidateID)
+            } else {
+                repeat {
+                    sanitized.id = "custom-style-\(nextGeneratedID)"
+                    nextGeneratedID += 1
+                } while usedIDs.contains(sanitized.id)
+                usedIDs.insert(sanitized.id)
+            }
+            return sanitized
+        }
+    }
+
+    private static func logMigration(_ message: String) {
+        fputs("[dictation-modes-migration] \(message)\n", stderr)
+    }
+
     // MARK: - Private
 
     private static func uniqueID(
