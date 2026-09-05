@@ -67,9 +67,6 @@ struct DictionaryView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
             HStack {
-                Text("Dictionary")
-                    .font(MuesliTheme.title1())
-                    .foregroundStyle(MuesliTheme.textPrimary)
                 Spacer()
                 Toggle(
                     "Dictionary suggestions",

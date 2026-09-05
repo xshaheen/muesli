@@ -17,6 +17,23 @@ struct DashboardRootView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var isSidebarCollapsed = false
 
+    /// The window's titlebar is opaque chrome that spans the whole width, so a page that
+    /// draws its own large heading below it leaves that band empty. The page title lives
+    /// in the band instead, which is what fills it.
+    private var pageTitle: String {
+        switch appState.selectedTab {
+        case .timeline: "Timeline"
+        case .dictations: "Dictations"
+        case .insights: "Insights"
+        case .meetings: "Meetings"
+        case .dictionary: "Dictionary"
+        case .models: "Models"
+        case .shortcuts: "Shortcuts"
+        case .settings: "Settings"
+        case .about: "About"
+        }
+    }
+
     private var sidebar: some View {
         SidebarView(
             appState: appState,
@@ -76,6 +93,13 @@ struct DashboardRootView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(pageTitle)
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+            }
+        }
         .frame(minWidth: 640, minHeight: 480)
         .preferredColorScheme(appState.config.darkMode ? .dark : .light)
         .onPreferenceChange(FeatureTourTargetPreferenceKey.self) { frames in

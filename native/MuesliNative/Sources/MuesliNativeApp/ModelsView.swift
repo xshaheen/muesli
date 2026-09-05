@@ -70,9 +70,6 @@ struct ModelsView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
-                    Text("Models")
-                        .font(MuesliTheme.title1())
-                        .foregroundStyle(MuesliTheme.textPrimary)
 
                     Text("Choose the transcription and cleanup models that fit how you speak and work.")
                         .font(MuesliTheme.body())
