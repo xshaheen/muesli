@@ -171,6 +171,9 @@ struct ActiveMeetingAudioWarningState {
 @Observable
 final class AppState {
     let languageProfileSettings = LanguageProfileSettingsModel()
+    /// The meeting authority's own draft. Separate from the dictation editor so
+    /// saving one card never republishes the other (KD1).
+    let meetingLanguageProfileSettings = LanguageProfileSettingsModel()
 
     // Dashboard data
     var timelineRows: [TimelineEntry] = []

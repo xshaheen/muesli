@@ -427,11 +427,14 @@ struct MuesliAudioTranscriptionPipeline {
             capabilities: request.model.languageCapabilities(),
             workload: .cli
         )
+        let compatibilityFix = "Choose a compatible --model/--language combination; the selected model was not changed."
         if case .incompatible(let incompatibility) = languageDecision {
-            throw CLIError.invalidInput(
-                incompatibility.localizedDescription,
-                fix: "Choose a compatible --model/--language combination; the selected model was not changed."
-            )
+            throw CLIError.invalidInput(incompatibility.localizedDescription, fix: compatibilityFix)
+        }
+        // The app degrades and explains; the agent-facing CLI keeps failing fast
+        // so a request is either honored exactly or rejected.
+        if let degradation = languageDecision.degradation(for: request.languageSelection) {
+            throw CLIError.invalidInput(degradation.localizedDescription, fix: compatibilityFix)
         }
         let customWords: [CustomWord]?
         if let dictionaryURL = request.dictionaryURL {
