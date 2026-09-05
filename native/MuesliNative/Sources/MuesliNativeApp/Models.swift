@@ -1693,15 +1693,32 @@ enum MeetingTranscriptCleanupPrompt {
 
     static func marker(for index: Int) -> String { "\(unitMarker)\(index)>>>" }
 
-    /// The shared repair instructions plus the chunking protocol only meetings use.
-    static let systemPrompt = MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")
-        + """
+    /// The chunking protocol only meetings use. Always last, so it stays
+    /// authoritative over anything the user's preferences say.
+    private static let markerProtocol = """
 
 
         Each line is preceded by a <<<U…>>> marker. Copy every marker exactly as it \
         appears. Markers are structure, not content: never translate, renumber, \
         reorder, merge, or drop one.
         """
+
+    /// The shared repair instructions plus the chunking protocol, with no
+    /// custom instructions. Byte-identical to `systemPrompt(customInstructions: "")`.
+    static let systemPrompt = systemPrompt(customInstructions: "")
+
+    /// Repair core, then the user's preferences when they set any, then the
+    /// marker protocol.
+    static func systemPrompt(customInstructions: String) -> String {
+        var prompt = MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")
+        if let block = CustomInstructions.promptBlock(
+            customInstructions,
+            preamble: CustomInstructions.meetingCleanupPreamble
+        ) {
+            prompt += "\n\n" + block
+        }
+        return prompt + markerProtocol
+    }
 }
 struct DictionarySuggestion: Codable, Equatable, Identifiable, Sendable {
     let id: UUID

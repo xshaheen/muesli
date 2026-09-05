@@ -109,7 +109,7 @@ enum MeetingTranscriptCleanup {
         { payload in
             try await TranscriptCleanupClient.clean(
                 text: payload,
-                systemPrompt: MeetingTranscriptCleanupPrompt.systemPrompt,
+                systemPrompt: MeetingInstructionsComposer.cleanupSystemPrompt(for: config),
                 // No app context: focused app, URL, and OCR text are dictation
                 // concepts with no meaning during a meeting.
                 appContext: nil,
