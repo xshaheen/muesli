@@ -218,6 +218,77 @@ struct DictationStyleSessionTests {
         }
     }
 
+    @Test("custom instructions follow the style block and precede the vocabulary")
+    func customInstructionsOrderWithAdaptiveStyles() throws {
+        var config = adaptiveConfig()
+        config.customInstructions = "Use British English."
+        config.customWords = [CustomWord(word: "muesli", replacement: "Muesli")]
+        let snapshot = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard)
+
+        let prompt = try #require(snapshot.cleanupPolicy(enabled: true, context: nil)).systemPromptSnapshot
+        let style = try #require(prompt.range(of: "<STYLE-INSTRUCTIONS>"))
+        let block = try #require(prompt.range(of: CustomInstructions.openingTag))
+        let vocabulary = try #require(prompt.range(of: "Speaker vocabulary"))
+        #expect(style.lowerBound < block.lowerBound && block.lowerBound < vocabulary.lowerBound)
+    }
+
+    @Test("adaptive styles disabled keeps the raw preset bytes ahead of the instructions")
+    func disabledAdaptiveStylesKeepsRawBytesFirst() throws {
+        var config = adaptiveConfig()
+        config.adaptiveDictationStylesEnabled = false
+        config.postProcessorSystemPrompt = "Legacy prompt bytes"
+        config.customInstructions = "Use British English."
+        config.customWords = [CustomWord(word: "muesli", replacement: "Muesli")]
+        let snapshot = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard)
+
+        let prompt = try #require(snapshot.cleanupPolicy(enabled: true, context: nil)).systemPromptSnapshot
+        #expect(prompt.hasPrefix("Legacy prompt bytes"))
+        let block = try #require(prompt.range(of: CustomInstructions.openingTag))
+        let vocabulary = try #require(prompt.range(of: "Speaker vocabulary"))
+        #expect(block.lowerBound < vocabulary.lowerBound)
+    }
+
+    @Test("custom instructions freeze at recording start")
+    func customInstructionsFreezeAtStart() throws {
+        var config = adaptiveConfig()
+        config.customInstructions = "Instructions A"
+        let snapshot = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard)
+
+        config.customInstructions = "Instructions B"
+
+        let prompt = try #require(snapshot.cleanupPolicy(enabled: true, context: nil)).systemPromptSnapshot
+        #expect(prompt.contains("Instructions A"))
+        #expect(!prompt.contains("Instructions B"))
+    }
+
+    @Test("an S1-mini runtime snapshot stores only the trained S1 prompt")
+    func s1MiniSnapshotKeepsTrainedPrompt() throws {
+        var config = adaptiveConfig()
+        config.customInstructions = "Use British English."
+        config.customWords = [CustomWord(word: "muesli", replacement: "Muesli")]
+        let runtime = DictationCleanupRuntimeSnapshot(readiness: .ready, backend: .local, option: .s1Mini, config: config)
+        let snapshot = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard, cleanupRuntime: runtime)
+
+        let prompt = try #require(snapshot.cleanupPolicy(enabled: true, context: nil)).systemPromptSnapshot
+        #expect(prompt == PostProcessorOption.s1MiniSystemPrompt)
+        #expect(!prompt.contains(CustomInstructions.openingTag))
+    }
+
+    @Test("the session budget follows the frozen cleanup backend, else the configured one")
+    func sessionBudgetFollowsBackend() throws {
+        var config = adaptiveConfig()
+        config.customInstructions = String(repeating: "x", count: 1_500)
+        let runtime = DictationCleanupRuntimeSnapshot(readiness: .ready, backend: .gemma4LiteRT, option: nil, config: config)
+        let hosted = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard, cleanupRuntime: runtime)
+        let configured = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard)
+
+        let hostedPrompt = try #require(hosted.cleanupPolicy(enabled: true, context: nil)).systemPromptSnapshot
+        let localPrompt = try #require(configured.cleanupPolicy(enabled: true, context: nil)).systemPromptSnapshot
+        #expect(hostedPrompt.contains(String(repeating: "x", count: 1_500)))
+        #expect(localPrompt.contains(String(repeating: "x", count: 500)))
+        #expect(!localPrompt.contains(String(repeating: "x", count: 501)))
+    }
+
     @Test("adaptive prompt freezes speaker vocabulary at recording start")
     func adaptivePromptFreezesSpeakerVocabulary() throws {
         var config = adaptiveConfig()

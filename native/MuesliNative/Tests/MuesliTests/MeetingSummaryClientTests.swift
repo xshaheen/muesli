@@ -60,6 +60,63 @@ struct MeetingSummaryClientTests {
         #expect(instructions.contains("Do not invent facts"))
     }
 
+    @Test("custom instructions follow the template and precede the language instruction")
+    func customInstructionsFollowTemplate() throws {
+        let instructions = MeetingSummaryClient.summaryInstructions(
+            for: customTemplate,
+            transcript: "ناقشنا خطة إطلاق المنتج ومهام الفريق القادمة مع API الجديد",
+            customInstructions: "Use bullet points everywhere."
+        )
+
+        let template = try #require(instructions.range(of: "## Risks"))
+        let block = try #require(instructions.range(of: CustomInstructions.openingTag))
+        let language = try #require(instructions.range(of: "predominantly Arabic"))
+        #expect(template.lowerBound < block.lowerBound)
+        #expect(block.lowerBound < language.lowerBound)
+        #expect(instructions.contains("Use bullet points everywhere."))
+    }
+
+    @Test("empty custom instructions add no block to summary or title instructions")
+    func emptyCustomInstructionsAddNothing() {
+        let summary = MeetingSummaryClient.summaryInstructions(for: customTemplate, transcript: "Hello", customInstructions: "  ")
+        let title = MeetingSummaryClient.titleInstructions(transcript: "Hello", manualNotes: nil, customInstructions: "")
+
+        #expect(!summary.contains(CustomInstructions.openingTag))
+        #expect(!title.contains(CustomInstructions.openingTag))
+        // Nothing may follow the template prompt or the title examples when the
+        // field is empty; these suffixes are the pre-change shape, not the new code.
+        #expect(summary.hasSuffix(customTemplate.prompt))
+        #expect(title.hasSuffix("\"Security Audit Discussion\""))
+    }
+
+    @Test("title instructions carry the block before the Arabic title instruction")
+    func titleInstructionsCarryBlock() throws {
+        let instructions = MeetingSummaryClient.titleInstructions(
+            transcript: "راجعنا نتائج الربع وخطة تحسين تجربة المستخدم",
+            manualNotes: nil,
+            customInstructions: "Short titles only."
+        )
+
+        let block = try #require(instructions.range(of: CustomInstructions.openingTag))
+        let language = try #require(instructions.range(of: "predominantly Arabic"))
+        #expect(block.lowerBound < language.lowerBound)
+        #expect(instructions.contains("Short titles only."))
+    }
+
+    @Test("the block appears once even with existing and manual notes")
+    func blockAppearsOnce() {
+        let instructions = MeetingSummaryClient.summaryInstructions(
+            for: MeetingTemplates.auto.snapshot,
+            transcript: "Hello world",
+            existingNotes: "Existing notes",
+            manualNotes: "Manual notes",
+            previousMeetingNotes: "Previous notes",
+            customInstructions: "Be concise."
+        )
+
+        #expect(instructions.components(separatedBy: CustomInstructions.openingTag).count == 2)
+    }
+
     @Test("predominantly Arabic transcripts require Arabic meeting notes")
     func arabicTranscriptRequiresArabicSummary() {
         let instructions = MeetingSummaryClient.summaryInstructions(
