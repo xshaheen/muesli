@@ -149,6 +149,8 @@ case "${shard}" in
       MeetingReverseLeakEstimatorTests
       MeetingReverseLeakLockPolicyTests
       MeetingReverseLeakMaskPlannerTests
+      MeetingReverseLeakSettingTests
+      ReverseLeakLevelMeasurementManualTests
       MeetingReverseLeakSuppressorTests
       MeetingSessionDiagnosticsTests
       MeetingSessionReverseLeakHarnessTests
