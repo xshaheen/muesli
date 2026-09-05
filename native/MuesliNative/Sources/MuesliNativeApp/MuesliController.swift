@@ -3349,7 +3349,7 @@ public final class MuesliController: NSObject {
             option: option ?? runtimePostProcessorOption(config: runtimeConfig, backend: backend),
             systemPrompt: DictationCleanupPromptComposer.systemPrompt(
                 config: runtimeConfig,
-                selection: nil,
+                mode: nil,
                 cleanupBackend: backend
             ),
             config: runtimeConfig
@@ -12017,7 +12017,7 @@ public final class MuesliController: NSObject {
         let frozenLanguageProfile = transcriptionSelection.languageProfile
         let capturedContext = styleSession?.matchingContext(contextResult)
         let correctionTargetApp = styleSession?.target
-        let cleanupRuntime = styleSession?.mode.allowsAdaptiveStyles == true
+        let cleanupRuntime = styleSession?.mode.allowsDictationModes == true
             ? styleSession?.cleanupRuntime
             : nil
         let cleanupBackend = cleanupRuntime?.backend
@@ -12030,14 +12030,21 @@ public final class MuesliController: NSObject {
             transcriptionBackend: transcriptionBackend,
             cleanupBackend: cleanupBackend
         )
-        let cleanupPolicy = styleSession?.cleanupPolicy(
-            readiness: cleanupReadiness,
-            context: contextResult
-        ) ?? DictationCleanupPolicy(
+        // One resolution, two policies (KTD6): the prompt and the delivery key must
+        // come from the same mode, and the inputs are already frozen at this point.
+        let modeSelection = styleSession?.resolveMode(context: contextResult)
+        let deliveryPolicy = modeSelection.flatMap { selection in
+            styleSession?.deliveryPolicy(selection: selection)
+        } ?? .none
+        let cleanupPolicy = modeSelection.flatMap { selection in
+            styleSession?.mode.allowsDictationModes == true
+                ? styleSession?.cleanupPolicy(readiness: cleanupReadiness, selection: selection)
+                : nil
+        } ?? DictationCleanupPolicy(
             readiness: cleanupReadiness,
             systemPromptSnapshot: DictationCleanupPromptComposer.systemPrompt(
                 config: sessionConfig,
-                selection: nil,
+                mode: nil,
                 cleanupBackend: cleanupBackend,
                 option: ppOption
             )

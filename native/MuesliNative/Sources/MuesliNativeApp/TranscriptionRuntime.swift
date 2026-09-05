@@ -101,13 +101,32 @@ enum DictationCleanupPromptComposer {
         base: String,
         customInstructions: String = "",
         customInstructionsLimit: Int = CustomInstructions.maxLength,
-        customWords: [CustomWord] = []
+        customWords: [CustomWord] = [],
+        modeInstructions: String? = nil
     ) -> String {
-        let prompt = base + CustomInstructions.promptSuffix(
+        // The two blocks share one budget, filled global-first, because on-device
+        // Qwen has a single 1,024-token context for everything. Mode tags are only
+        // stripped when a mode block exists, so a no-mode prompt is unchanged.
+        let hasMode = CustomInstructions.normalized(modeInstructions ?? "").isEmpty == false
+        let customBlock = CustomInstructions.promptSuffix(
             customInstructions,
             preamble: CustomInstructions.dictationPreamble,
-            limit: customInstructionsLimit
+            limit: customInstructionsLimit,
+            extraReserved: hasMode ? CustomInstructions.modeReservedSequences : []
         )
+        var prompt = base + customBlock
+        if let modeInstructions, hasMode {
+            let spent = CustomInstructions.normalized(customInstructions).count
+            let remaining = max(0, customInstructionsLimit - min(spent, customInstructionsLimit))
+            prompt += CustomInstructions.promptSuffix(
+                modeInstructions,
+                preamble: CustomInstructions.modePreamble,
+                limit: remaining,
+                openingTag: CustomInstructions.modeOpeningTag,
+                closingTag: CustomInstructions.modeClosingTag,
+                extraReserved: [CustomInstructions.closingTag, CustomInstructions.openingTag]
+            )
+        }
         return appendingSpeakerVocabulary(to: prompt, customWords: customWords)
     }
 
@@ -117,23 +136,51 @@ enum DictationCleanupPromptComposer {
     /// trained one, the same substitution the runtime preload already applies.
     static func systemPrompt(
         config: AppConfig,
-        selection: DictationStyleSelectionResult?,
+        mode: DictationModeSelection?,
         cleanupBackend: TranscriptCleanupBackendOption,
         option: PostProcessorOption? = nil
     ) -> String {
-        let base: String
-        if let selection, config.adaptiveDictationStylesEnabled {
-            base = compose(styleInstructions: selection.prompt)
+        let limit = customInstructionsLimit(for: cleanupBackend)
+        let composed: String
+        if let mode, mode.overrideDefaultInstructions,
+           CustomInstructions.normalized(mode.instructions).isEmpty == false {
+            // "Instead of the default ones, even if there are none": the mode text
+            // replaces the base prompt AND the standing preferences, so the model
+            // is told one thing rather than two that disagree.
+            composed = systemPrompt(
+                base: compose(modeInstructions: mode.instructions, limit: limit),
+                customInstructions: "",
+                customInstructionsLimit: limit,
+                customWords: config.customWords
+            )
         } else {
-            base = config.postProcessorSystemPrompt
+            composed = systemPrompt(
+                base: config.postProcessorSystemPrompt,
+                customInstructions: config.customInstructions,
+                customInstructionsLimit: limit,
+                customWords: config.customWords,
+                modeInstructions: mode?.instructions
+            )
         }
-        let composed = systemPrompt(
-            base: base,
-            customInstructions: config.customInstructions,
-            customInstructionsLimit: customInstructionsLimit(for: cleanupBackend),
-            customWords: config.customWords
-        )
         return option?.effectiveSystemPrompt(configuredSystemPrompt: composed) ?? composed
+    }
+
+    /// The override arm's base: the fixed safety envelope plus the mode's own
+    /// block, so an override still cannot talk the model out of preserving meaning.
+    static func compose(modeInstructions: String, limit: Int = CustomInstructions.maxLength) -> String {
+        let block = CustomInstructions.promptBlock(
+            modeInstructions,
+            preamble: CustomInstructions.modePreamble,
+            limit: limit,
+            openingTag: CustomInstructions.modeOpeningTag,
+            closingTag: CustomInstructions.modeClosingTag,
+            extraReserved: [CustomInstructions.closingTag, CustomInstructions.openingTag]
+        ) ?? ""
+        return """
+        \(safetyInstructions)
+
+        \(block)
+        """
     }
 
     /// Appends the user's dictionary as model-visible restoration targets.
@@ -176,6 +223,16 @@ enum DictationCleanupReadiness: Equatable, Sendable {
         case .ready: nil
         }
     }
+}
+
+/// What to do in the destination after the text is pasted.
+///
+/// Separate from `DictationCleanupPolicy` so `TranscriptionCoordinator` never
+/// learns about delivery: it only ever reads the prompt and the provenance.
+struct DictationDeliveryPolicy: Equatable, Sendable {
+    let autoEnter: DictationModeAutoEnter?
+
+    static let none = DictationDeliveryPolicy(autoEnter: nil)
 }
 
 struct DictationCleanupPolicy: Equatable, Sendable {

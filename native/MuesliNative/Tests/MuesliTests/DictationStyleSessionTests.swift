@@ -16,37 +16,53 @@ struct DictationStyleSessionTests {
         bundleID: "com.google.Chrome"
     )
 
+    /// A mode set standing in for the old app/domain rules.
+    private func modeConfig(_ modes: [DictationMode]) -> AppConfig {
+        var config = adaptiveConfig()
+        config.dictationModes = modes
+        return config
+    }
+
+    private func mode(
+        _ id: String,
+        apps: [String] = [],
+        websites: [String] = []
+    ) -> DictationMode {
+        DictationMode(
+            id: id,
+            name: id.capitalized,
+            isEnabled: true,
+            instructions: "\(id) instructions",
+            appBundleIDs: apps,
+            websiteHostnames: websites
+        )
+    }
+
     @Test("start target and configuration remain authoritative")
     func startSnapshotRemainsAuthoritative() {
-        var config = adaptiveConfig()
-        config.dictationStyleAppRules = [
-            DictationStyleAppRule(bundleID: "com.apple.mail", styleID: TranscriptCleanupPrompts.emailID),
-        ]
+        var config = modeConfig([mode("email", apps: ["com.apple.mail"])])
         let snapshot = DictationStyleSessionSnapshot(
             target: mailTarget,
             config: config,
             mode: .standard
         )
 
-        config.dictationStyleAppRules = [
-            DictationStyleAppRule(bundleID: "com.apple.mail", styleID: TranscriptCleanupPrompts.codeID),
-            DictationStyleAppRule(bundleID: "com.apple.notes", styleID: TranscriptCleanupPrompts.writingID),
+        config.dictationModes = [
+            mode("code", apps: ["com.apple.mail"]),
+            mode("writing", apps: ["com.apple.notes"]),
         ]
 
-        let result = snapshot.resolveStyle(context: nil)
-        #expect(result.styleID == TranscriptCleanupPrompts.emailID)
-        #expect(result.source == .app)
+        let result = snapshot.resolveMode(context: nil)
+        #expect(result.modeID == "email")
+        #expect(result.source == .modeApp)
     }
 
     @Test("matching browser hostname beats the browser app")
     func matchingHostnameWins() {
-        var config = adaptiveConfig()
-        config.dictationStyleDomainRules = [
-            DictationStyleDomainRule(hostname: "docs.google.com", styleID: TranscriptCleanupPrompts.writingID),
-        ]
-        config.dictationStyleAppRules = [
-            DictationStyleAppRule(bundleID: "com.google.chrome", styleID: TranscriptCleanupPrompts.codeID),
-        ]
+        let config = modeConfig([
+            mode("writing", websites: ["docs.google.com"]),
+            mode("code", apps: ["com.google.chrome"]),
+        ])
         let snapshot = DictationStyleSessionSnapshot(
             target: browserTarget,
             config: config,
@@ -58,20 +74,17 @@ struct DictationStyleSessionTests {
             hostname: "Docs.Google.Com."
         )
 
-        let result = snapshot.resolveStyle(context: context)
-        #expect(result.styleID == TranscriptCleanupPrompts.writingID)
-        #expect(result.source == .domain)
+        let result = snapshot.resolveMode(context: context)
+        #expect(result.modeID == "writing")
+        #expect(result.source == .modeWebsite)
     }
 
-    @Test("mismatched and late context cannot select a domain")
+    @Test("mismatched and late context cannot select a website mode")
     func rejectsMismatchedAndLateContext() {
-        var config = adaptiveConfig()
-        config.dictationStyleDomainRules = [
-            DictationStyleDomainRule(hostname: "docs.google.com", styleID: TranscriptCleanupPrompts.writingID),
-        ]
-        config.dictationStyleAppRules = [
-            DictationStyleAppRule(bundleID: "com.google.chrome", styleID: TranscriptCleanupPrompts.codeID),
-        ]
+        let config = modeConfig([
+            mode("writing", websites: ["docs.google.com"]),
+            mode("code", apps: ["com.google.chrome"]),
+        ])
         let snapshot = DictationStyleSessionSnapshot(
             target: browserTarget,
             config: config,
@@ -109,16 +122,15 @@ struct DictationStyleSessionTests {
         )
 
         for rejected in [wrongSession, wrongProcess, wrongBundle] {
-            let result = snapshot.resolveStyle(context: rejected)
-            #expect(result.styleID == TranscriptCleanupPrompts.codeID)
-            #expect(result.source == .app)
+            let result = snapshot.resolveMode(context: rejected)
+            #expect(result.modeID == "code")
+            #expect(result.source == .modeApp)
         }
     }
 
     @Test("missing context and target identity fall through without blocking")
     func missingContextFallsThrough() {
-        var config = adaptiveConfig()
-        config.activeTranscriptCleanupPromptId = TranscriptCleanupPrompts.emailID
+        let config = modeConfig([])
         let targetSnapshot = DictationStyleSessionSnapshot(
             target: DictationSessionTarget(processID: 90, appName: "Unknown", bundleID: ""),
             config: config,
@@ -130,16 +142,13 @@ struct DictationStyleSessionTests {
             mode: .standard
         )
 
-        #expect(targetSnapshot.resolveStyle(context: nil).styleID == TranscriptCleanupPrompts.emailID)
-        #expect(missingTargetSnapshot.resolveStyle(context: nil).styleID == TranscriptCleanupPrompts.emailID)
+        #expect(targetSnapshot.resolveMode(context: nil) == .default)
+        #expect(missingTargetSnapshot.resolveMode(context: nil) == .default)
     }
 
     @Test("base browser context resolves without OCR completion")
     func hostnameDoesNotDependOnOCR() {
-        var config = adaptiveConfig()
-        config.dictationStyleDomainRules = [
-            DictationStyleDomainRule(hostname: "docs.google.com", styleID: TranscriptCleanupPrompts.writingID),
-        ]
+        let config = modeConfig([mode("writing", websites: ["docs.google.com"])])
         let snapshot = DictationStyleSessionSnapshot(
             target: browserTarget,
             config: config,
@@ -151,8 +160,8 @@ struct DictationStyleSessionTests {
             context: context(target: browserTarget, hostname: "docs.google.com", ocrText: "visual text")
         )
 
-        #expect(snapshot.resolveStyle(context: base).styleID == TranscriptCleanupPrompts.writingID)
-        #expect(snapshot.resolveStyle(context: enriched).styleID == TranscriptCleanupPrompts.writingID)
+        #expect(snapshot.resolveMode(context: base).modeID == "writing")
+        #expect(snapshot.resolveMode(context: enriched).modeID == "writing")
     }
 
     @Test("context hostname is exact and never accepts path or query identity")
@@ -196,11 +205,12 @@ struct DictationStyleSessionTests {
         }
     }
 
-    @Test("adaptive styles disabled preserves legacy prompt bytes with global provenance")
-    func disabledAdaptiveStylesRetainsGlobalProvenance() throws {
+    /// R12: with no mode matched the prompt is the user's own base bytes plus the
+    /// vocabulary, exactly as before Modes existed.
+    @Test("no matching mode preserves the base prompt bytes with default provenance")
+    func noModeRetainsBasePromptBytes() throws {
         var config = adaptiveConfig()
-        config.adaptiveDictationStylesEnabled = false
-        config.activeTranscriptCleanupPromptId = TranscriptCleanupPrompts.emailID
+        config.dictationModes = []
         config.postProcessorSystemPrompt = "Legacy prompt bytes"
         config.customWords = [CustomWord(word: "muesli", replacement: "Muesli")]
         let hold = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard)
@@ -213,23 +223,25 @@ struct DictationStyleSessionTests {
         for snapshot in [hold, toggle] {
             let policy = try #require(snapshot.cleanupPolicy(enabled: true, context: nil))
             #expect(policy.systemPromptSnapshot == expectedPrompt)
-            #expect(policy.provenance?.styleID == TranscriptCleanupPrompts.emailID)
-            #expect(policy.provenance?.source == .global)
+            #expect(policy.provenance?.styleID == "default")
+            #expect(policy.provenance?.source == .defaultInstructions)
         }
     }
 
-    @Test("custom instructions follow the style block and precede the vocabulary")
-    func customInstructionsOrderWithAdaptiveStyles() throws {
-        var config = adaptiveConfig()
+    /// R11 ordering: the standing preferences come first and the destination's own
+    /// instructions after them, so the mode wins where the two disagree.
+    @Test("the mode block follows the custom block and precedes the vocabulary")
+    func modeBlockFollowsCustomInstructions() throws {
+        var config = modeConfig([mode("email", apps: ["com.apple.mail"])])
         config.customInstructions = "Use British English."
         config.customWords = [CustomWord(word: "muesli", replacement: "Muesli")]
         let snapshot = DictationStyleSessionSnapshot(target: mailTarget, config: config, mode: .standard)
 
         let prompt = try #require(snapshot.cleanupPolicy(enabled: true, context: nil)).systemPromptSnapshot
-        let style = try #require(prompt.range(of: "<STYLE-INSTRUCTIONS>"))
-        let block = try #require(prompt.range(of: CustomInstructions.openingTag))
+        let custom = try #require(prompt.range(of: CustomInstructions.openingTag))
+        let modeBlock = try #require(prompt.range(of: CustomInstructions.modeOpeningTag))
         let vocabulary = try #require(prompt.range(of: "Speaker vocabulary"))
-        #expect(style.lowerBound < block.lowerBound && block.lowerBound < vocabulary.lowerBound)
+        #expect(custom.lowerBound < modeBlock.lowerBound && modeBlock.lowerBound < vocabulary.lowerBound)
     }
 
     @Test("adaptive styles disabled keeps the raw preset bytes ahead of the instructions")
@@ -338,19 +350,9 @@ struct DictationStyleSessionTests {
     func cleanupRequestDoesNotChangeAfterCommit() throws {
         var config = adaptiveConfig()
         config.dictationStyleRulesetInitialized = true
-        config.dictationStyleGroups = [
-            DictationStyleGroup(
-                id: "docs",
-                name: "Docs",
-                styleID: TranscriptCleanupPrompts.writingID,
-                matchers: [DictationStyleMatcher(id: "docs-host", kind: .hostname, pattern: "docs.google.com")]
-            ),
-            DictationStyleGroup(
-                id: "browser",
-                name: "Browser",
-                styleID: TranscriptCleanupPrompts.codeID,
-                matchers: [DictationStyleMatcher(id: "chrome-app", kind: .bundleID, pattern: "com.google.chrome")]
-            ),
+        config.dictationModes = [
+            mode("docs", websites: ["docs.google.com"]),
+            mode("browser", apps: ["com.google.chrome"]),
         ]
         let runtime = DictationCleanupRuntimeSnapshot(
             readiness: .ready,
@@ -369,9 +371,9 @@ struct DictationStyleSessionTests {
         let lateContext = matchingContext(snapshot: snapshot, target: browserTarget, hostname: "docs.google.com")
         let laterRequest = try #require(snapshot.cleanupRequest(context: lateContext))
 
-        #expect(committed.policy.provenance?.source == .group)
+        #expect(committed.policy.provenance?.source == .modeApp)
         #expect(committed.policy.provenance?.modeID == "browser")
-        #expect(laterRequest.policy.provenance?.source == .group)
+        #expect(laterRequest.policy.provenance?.source == .modeWebsite)
         #expect(laterRequest.policy.provenance?.modeID == "docs")
         #expect(committed.policy.systemPromptSnapshot != laterRequest.policy.systemPromptSnapshot)
     }

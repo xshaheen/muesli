@@ -47,7 +47,7 @@ enum DictationStyleSessionMode: Sendable, Equatable {
     case streaming
     case dictationTest
 
-    var allowsAdaptiveStyles: Bool { self == .standard }
+    var allowsDictationModes: Bool { self == .standard }
 }
 
 struct DictationStyleSessionSnapshot {
@@ -82,33 +82,54 @@ struct DictationStyleSessionSnapshot {
         return result.context
     }
 
-    func resolveStyle(context result: DictationSessionContextResult?) -> DictationStyleSelectionResult {
+    /// Resolves the destination's mode once, over inputs already frozen at stop.
+    ///
+    /// Both policies below derive from this one call: resolving twice could hand a
+    /// dictation the prompt of one mode and the auto-enter key of another if a late
+    /// hostname landed between them.
+    func resolveMode(context result: DictationSessionContextResult?) -> DictationModeSelection {
         let context = matchingContext(result)
-        return DictationStyleResolver.resolve(
+        return DictationModeResolver.resolve(
             config: config,
-            bundleID: target?.bundleID,
-            hostname: context?.hostname
+            target: DictationModeTarget(
+                bundleID: target?.bundleID,
+                hostname: context?.hostname
+            )
         )
     }
 
     func cleanupPolicy(
         readiness: DictationCleanupReadiness,
-        context result: DictationSessionContextResult?
-    ) -> DictationCleanupPolicy? {
-        guard mode.allowsAdaptiveStyles else { return nil }
-        let selection = resolveStyle(context: result)
+        selection: DictationModeSelection
+    ) -> DictationCleanupPolicy {
         let cleanupBackend = cleanupRuntime?.backend
             ?? TranscriptCleanupBackendOption.resolved(config.postProcessorBackend)
         return DictationCleanupPolicy(
             readiness: readiness,
             systemPromptSnapshot: DictationCleanupPromptComposer.systemPrompt(
                 config: config,
-                selection: selection,
+                mode: selection,
                 cleanupBackend: cleanupBackend,
                 option: cleanupRuntime?.option
             ),
             provenance: DictationCleanupStyleProvenance(selection: selection)
         )
+    }
+
+    /// The delivery half of the same selection. Deliberately independent of
+    /// cleanup readiness: a Messaging mode should still press Enter when the user
+    /// has AI cleanup switched off.
+    func deliveryPolicy(selection: DictationModeSelection) -> DictationDeliveryPolicy {
+        guard mode.allowsDictationModes else { return .none }
+        return DictationDeliveryPolicy(autoEnter: selection.autoEnter)
+    }
+
+    func cleanupPolicy(
+        readiness: DictationCleanupReadiness,
+        context result: DictationSessionContextResult?
+    ) -> DictationCleanupPolicy? {
+        guard mode.allowsDictationModes else { return nil }
+        return cleanupPolicy(readiness: readiness, selection: resolveMode(context: result))
     }
 
     func cleanupPolicy(
