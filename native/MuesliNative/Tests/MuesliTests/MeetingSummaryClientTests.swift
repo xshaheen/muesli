@@ -1284,4 +1284,145 @@ struct MeetingSummaryClientTests {
         #expect(input?.count == 2)
         #expect(input?.first?["role"] == "system")
     }
+
+    // MARK: - Notes language policy (U5)
+
+    /// AE6: an explicit Arabic notes policy is honored even when the meeting
+    /// selection is automatic and the dictation dominant is English, which the
+    /// old dominant-comparison rule silently collapsed to script detection.
+    @Test("an explicit Arabic notes policy outranks an English transcript and an English dictation dominant")
+    func explicitArabicPolicyIsHonored() throws {
+        var config = AppConfig()
+        config.dictationLanguageProfile = try SpokenLanguageProfile(
+            selectedLanguages: [.english],
+            dominantLanguage: .english
+        )
+        config.meetingSpokenLanguage = .automatic
+        config.meetingArtifactLanguagePolicy = .arabic
+        let profile = config.meetingLanguageProfile
+        let transcript = "We reviewed the migration plan and agreed on the rollout order."
+
+        let summary = MeetingSummaryClient.summaryInstructions(
+            for: MeetingTemplates.auto.snapshot,
+            transcript: transcript,
+            languageProfile: profile
+        )
+        #expect(summary.contains("Write the entire output in Arabic"))
+
+        let title = MeetingSummaryClient.titleInstructions(
+            transcript: transcript,
+            manualNotes: nil,
+            languageProfile: profile
+        )
+        #expect(title.contains("Return the title in Arabic"))
+
+        let failure = MeetingSummaryClient.summaryFailureNotes(
+            transcript: transcript,
+            meetingTitle: "Migration sync",
+            error: NSError(domain: "test", code: 1),
+            languageProfile: profile
+        )
+        #expect(failure.contains("## تعذر إنشاء الملخص"))
+    }
+
+    /// A persisted English policy reads as automatic until a positive English
+    /// instruction lands; this characterizes that deferred behavior.
+    @Test("a persisted English notes policy emits no Arabic instruction on an Arabic transcript")
+    func explicitEnglishPolicyEmitsNoArabicInstruction() throws {
+        var config = AppConfig()
+        config.meetingArtifactLanguagePolicy = .english
+        let arabicTranscript = "ناقشنا خطة الترحيل واتفقنا على ترتيب الإطلاق."
+
+        let summary = MeetingSummaryClient.summaryInstructions(
+            for: MeetingTemplates.auto.snapshot,
+            transcript: arabicTranscript,
+            languageProfile: config.meetingLanguageProfile
+        )
+        #expect(!summary.contains("Write the entire output in Arabic"))
+    }
+
+    /// The automatic policy still lets the transcript decide.
+    @Test("an automatic notes policy still detects Arabic from the transcript")
+    func automaticPolicyDetectsFromTranscript() {
+        var config = AppConfig()
+        config.meetingArtifactLanguagePolicy = .automatic
+        let arabicTranscript = "ناقشنا خطة الترحيل واتفقنا على ترتيب الإطلاق."
+
+        let summary = MeetingSummaryClient.summaryInstructions(
+            for: MeetingTemplates.auto.snapshot,
+            transcript: arabicTranscript,
+            languageProfile: config.meetingLanguageProfile
+        )
+        #expect(summary.contains("Write the entire output in Arabic"))
+    }
+
+    /// R22: resuming a meeting regenerates with the languages it recorded under,
+    /// on a copy. The live dictation authority, the legacy pins and the
+    /// confirmation flag must all survive untouched.
+    @Test("resuming applies the frozen profile to a copy and leaves dictation alone")
+    func resumeSummaryConfigIsMeetingScoped() throws {
+        var live = AppConfig()
+        live.dictationLanguageProfile = try SpokenLanguageProfile(
+            selectedLanguages: [.english],
+            dominantLanguage: .english
+        )
+        live.meetingSpokenLanguage = try SpokenLanguageProfile(selectedLanguages: [.english])
+        live.meetingArtifactLanguagePolicy = .automatic
+        live.languageProfileNeedsConfirmation = true
+        live.cohereLanguage = "de"
+
+        let frozen = try LanguageProfile(
+            selectedLanguages: [TranscriptionLanguage.arabic, TranscriptionLanguage.english],
+            dominantLanguage: .arabic,
+            meetingOutputPolicy: .arabic
+        )
+        var result = MeetingSessionResult(
+            title: "Migration sync",
+            originalTitle: "Migration sync",
+            calendarEventID: nil,
+            startTime: Date(timeIntervalSince1970: 1_000_000),
+            endTime: Date(timeIntervalSince1970: 1_000_600),
+            durationSeconds: 600,
+            rawTranscript: "transcript",
+            formattedNotes: "notes",
+            retainedRecordingURL: nil,
+            retainedRecordingError: nil,
+            systemRecordingURL: nil,
+            templateSnapshot: MeetingTemplates.auto.snapshot
+        )
+        result.languageProfile = frozen
+
+        let summaryConfig = MuesliController.resumeSummaryConfig(base: live, result: result)
+
+        #expect(summaryConfig.meetingSpokenLanguage.selectedLanguages == [.arabic, .english])
+        #expect(summaryConfig.meetingSpokenLanguage.dominantLanguage == .arabic)
+        #expect(summaryConfig.meetingArtifactLanguagePolicy == .arabic)
+        // The dictation authority and its migration state are untouched.
+        #expect(summaryConfig.dictationLanguageProfile == live.dictationLanguageProfile)
+        #expect(summaryConfig.languageProfileNeedsConfirmation)
+        #expect(summaryConfig.cohereLanguage == "de")
+        // And the caller's own config never changed.
+        #expect(live.meetingSpokenLanguage.selectedLanguages == [.english])
+        #expect(live.meetingArtifactLanguagePolicy == .automatic)
+    }
+
+    /// The two conversion helpers are the single owner of the policy mapping.
+    @Test("the frozen apply maps every legacy output policy to an artifact policy")
+    func frozenApplyMapsEveryPolicy() throws {
+        var config = AppConfig()
+        config.applyFrozenMeetingLanguageProfile(try LanguageProfile(
+            selectedLanguages: [.english],
+            dominantLanguage: .english,
+            meetingOutputPolicy: .dominantLanguage
+        ))
+        #expect(config.meetingArtifactLanguagePolicy == .english)
+
+        config.applyFrozenMeetingLanguageProfile(try LanguageProfile(
+            selectedLanguages: [.french],
+            dominantLanguage: .french,
+            meetingOutputPolicy: .automatic
+        ))
+        #expect(config.meetingArtifactLanguagePolicy == .automatic)
+        #expect(config.meetingSpokenLanguage.selectedLanguages == [.french])
+    }
 }

@@ -41,7 +41,14 @@ public enum TranscriptionLanguage: String, CaseIterable, Codable, Hashable, Iden
     }
 }
 
-public struct DictationLanguageProfile: Codable, Equatable, Sendable {
+/// The validated, persisted spoken-language authority shared by dictation and
+/// meetings: a normalized set of selected languages (empty means automatic) plus
+/// an optional dominant language that must be in the set.
+///
+/// Profile is the Codable config value with a validating decoder; the
+/// field-identical `TranscriptionLanguageSelection` is the router input with a
+/// synthesized decoder. Keep them separate so config validation stays in one place.
+public struct SpokenLanguageProfile: Codable, Equatable, Sendable {
     public enum ValidationError: Error, LocalizedError {
         case dominantLanguageNotSelected
 
@@ -53,7 +60,7 @@ public struct DictationLanguageProfile: Codable, Equatable, Sendable {
     public let selectedLanguages: [TranscriptionLanguage]
     public let dominantLanguage: TranscriptionLanguage?
 
-    public static let automatic = DictationLanguageProfile(
+    public static let automatic = SpokenLanguageProfile(
         normalizedLanguages: [],
         dominantLanguage: nil
     )
@@ -97,40 +104,12 @@ public struct DictationLanguageProfile: Codable, Equatable, Sendable {
             dominantLanguage: dominantLanguage
         )) ?? .automatic
     }
-}
 
-public enum MeetingSpokenLanguageSelection: Codable, Equatable, Sendable {
-    case automatic
-    case explicit(TranscriptionLanguage)
+    /// Two or more selected languages. Automatic and single-language profiles are not bilingual.
+    public var isBilingual: Bool { selectedLanguages.count >= 2 }
 
-    private enum CodingKeys: String, CodingKey { case mode, language }
-    private enum Mode: String, Codable { case automatic, explicit }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        switch try container.decode(Mode.self, forKey: .mode) {
-        case .automatic:
-            self = .automatic
-        case .explicit:
-            self = .explicit(try container.decode(TranscriptionLanguage.self, forKey: .language))
-        }
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        switch self {
-        case .automatic:
-            try container.encode(Mode.automatic, forKey: .mode)
-        case .explicit(let language):
-            try container.encode(Mode.explicit, forKey: .mode)
-            try container.encode(language, forKey: .language)
-        }
-    }
-
-    public var language: TranscriptionLanguage? {
-        guard case .explicit(let language) = self else { return nil }
-        return language
-    }
+    /// The language a pinning backend would honor; the selection owns the rule.
+    public var authoritativeLanguage: TranscriptionLanguage? { selection.authoritativeLanguage }
 }
 
 public struct TranscriptionBackendID: RawRepresentable, Codable, Hashable, Sendable {
@@ -191,6 +170,13 @@ public struct TranscriptionLanguageSelection: Codable, Equatable, Sendable {
     }
 
     public var isAutomatic: Bool { selectedLanguages.isEmpty }
+
+    /// The dominant language, else the sole selected language, else nil. This is
+    /// the single owner of the "dominant pins, else sole pins" rule that the
+    /// router, presentation and profiles all read.
+    public var authoritativeLanguage: TranscriptionLanguage? {
+        dominantLanguage ?? (selectedLanguages.count == 1 ? selectedLanguages[0] : nil)
+    }
 }
 
 public struct TranscriptionBackendCapabilities: Codable, Equatable, Sendable {
@@ -202,6 +188,10 @@ public struct TranscriptionBackendCapabilities: Codable, Equatable, Sendable {
     public let constrainedCandidateCapacity: Int
     public let hasComparableCandidateConfidence: Bool
     public let fixedLanguage: TranscriptionLanguage?
+    /// The language a backend that cannot detect automatically decodes in when
+    /// the selection gives it nothing it can pin (Cohere English, Indic Hindi).
+    /// Nil means such a selection is incompatible, which only the CLI relies on.
+    public let fallbackLanguage: TranscriptionLanguage?
     public let supportsCodeSwitching: Bool
     public let maximumSafeDuration: TimeInterval?
     public let supportsStreaming: Bool
@@ -217,6 +207,7 @@ public struct TranscriptionBackendCapabilities: Codable, Equatable, Sendable {
         constrainedCandidateCapacity: Int = 0,
         hasComparableCandidateConfidence: Bool = false,
         fixedLanguage: TranscriptionLanguage? = nil,
+        fallbackLanguage: TranscriptionLanguage? = nil,
         supportsCodeSwitching: Bool = false,
         maximumSafeDuration: TimeInterval? = nil,
         supportsStreaming: Bool = false,
@@ -231,6 +222,7 @@ public struct TranscriptionBackendCapabilities: Codable, Equatable, Sendable {
         self.constrainedCandidateCapacity = max(constrainedCandidateCapacity, 0)
         self.hasComparableCandidateConfidence = hasComparableCandidateConfidence
         self.fixedLanguage = fixedLanguage
+        self.fallbackLanguage = fallbackLanguage
         self.supportsCodeSwitching = supportsCodeSwitching
         self.maximumSafeDuration = maximumSafeDuration
         self.supportsStreaming = supportsStreaming
@@ -265,6 +257,29 @@ public enum LanguageRoutingIncompatibility: Codable, Equatable, Sendable, Locali
     }
 }
 
+/// How a resolved decision falls short of what the selection asked for. A
+/// degradation never aborts transcription; it is explained (Settings footer,
+/// diagnostics) or, in the CLI, turned into a fail-fast error.
+public enum LanguageRoutingDegradation: Codable, Equatable, Hashable, Sendable, LocalizedError {
+    /// The backend cannot pin the authoritative language and detects instead.
+    case notPinned(TranscriptionLanguage)
+    /// The backend decodes in its provider default instead of the selection.
+    case providerFallback(to: TranscriptionLanguage)
+    /// A fixed-language backend ignores a selected language other than its own.
+    case fixedLanguageIgnoresSelection(TranscriptionLanguage)
+
+    public var errorDescription: String? {
+        switch self {
+        case .notPinned(let language):
+            "The selected transcription model cannot pin \(language.label) (\(language.rawValue)) and would detect the language automatically instead."
+        case .providerFallback(let language):
+            "The selected transcription model would transcribe in \(language.label) (\(language.rawValue)) instead of honoring the language selection."
+        case .fixedLanguageIgnoresSelection(let language):
+            "The selected transcription model always transcribes in its fixed language and would ignore \(language.label) (\(language.rawValue))."
+        }
+    }
+}
+
 public enum LanguageRoutingDecision: Codable, Equatable, Sendable {
     case automatic
     case pinned(TranscriptionLanguage)
@@ -284,9 +299,37 @@ public enum LanguageRoutingDecision: Codable, Equatable, Sendable {
         case .incompatible: "incompatible"
         }
     }
+
+    /// Nil when the decision honors the selection: automatic detection for an
+    /// automatic or no-dominant selection, a pin to the sole or dominant
+    /// language, candidates, a matching fixed language, or any incompatibility
+    /// (which is a hard stop, not a degradation).
+    public func degradation(
+        for selection: TranscriptionLanguageSelection
+    ) -> LanguageRoutingDegradation? {
+        switch self {
+        case .automatic:
+            return selection.authoritativeLanguage.map { .notPinned($0) }
+        case .pinned(let language):
+            return language == selection.authoritativeLanguage
+                ? nil
+                : .providerFallback(to: language)
+        case .fixed(let fixedLanguage):
+            guard !selection.isAutomatic,
+                  let ignored = selection.selectedLanguages.first(where: { $0 != fixedLanguage })
+            else { return nil }
+            return .fixedLanguageIgnoresSelection(ignored)
+        case .constrainedCandidates, .incompatible:
+            return nil
+        }
+    }
 }
 
 public enum TranscriptionLanguageRouter {
+    /// Resolves a selection against a backend. Only an unavailable backend or
+    /// an unsupported workload is incompatible; every selection shape degrades
+    /// to a decision the backend can run (KD2), and `degradation(for:)` names
+    /// the cases where that decision is not what the selection asked for.
     public static func resolve(
         selection: TranscriptionLanguageSelection,
         capabilities: TranscriptionBackendCapabilities,
@@ -299,54 +342,65 @@ public enum TranscriptionLanguageRouter {
             return .incompatible(.unsupportedWorkload(workload))
         }
 
+        // A fixed-language backend ignores the selection; the mismatch is an
+        // explanation, not an abort, because the runtime never reads it.
         if let fixedLanguage = capabilities.fixedLanguage {
-            guard selection.isAutomatic
-                || selection.selectedLanguages.allSatisfy({ $0 == fixedLanguage })
-            else {
-                return .incompatible(.languageUnsupported(
-                    selection.selectedLanguages.first { $0 != fixedLanguage } ?? fixedLanguage
-                ))
-            }
             return .fixed(fixedLanguage)
         }
 
+        func detectOrFallback(
+            otherwise incompatibility: LanguageRoutingIncompatibility
+        ) -> LanguageRoutingDecision {
+            if capabilities.supportsAutomaticDetection { return .automatic }
+            if let fallback = capabilities.fallbackLanguage { return .pinned(fallback) }
+            return .incompatible(incompatibility)
+        }
+
+        func canPin(_ language: TranscriptionLanguage) -> Bool {
+            capabilities.supportsSingleLanguage
+                && capabilities.supportedLanguages.contains(language)
+        }
+
         guard !selection.isAutomatic else {
-            return capabilities.supportsAutomaticDetection
-                ? .automatic
-                : .incompatible(.automaticDetectionUnsupported)
+            return detectOrFallback(otherwise: .automaticDetectionUnsupported)
         }
 
         if selection.selectedLanguages.count == 1,
            let language = selection.selectedLanguages.first {
-            guard capabilities.supportedLanguages.contains(language) else {
-                return .incompatible(.languageUnsupported(language))
-            }
-            return capabilities.supportsSingleLanguage
+            return canPin(language)
                 ? .pinned(language)
-                : .incompatible(.languageUnsupported(language))
+                : detectOrFallback(otherwise: .languageUnsupported(language))
         }
 
-        if let unsupported = selection.selectedLanguages.first(where: {
-            !capabilities.supportedLanguages.contains($0)
-        }) {
-            return .incompatible(.languageUnsupported(unsupported))
+        // Two or more: the dominant pins; otherwise the exact advertised
+        // candidate set may compete; otherwise the others are accepted by
+        // detection.
+        if let dominant = selection.dominantLanguage, canPin(dominant) {
+            return .pinned(dominant)
         }
-        guard selection.selectedLanguages.count <= capabilities.constrainedCandidateCapacity else {
-            return .incompatible(.tooManyLanguages(
-                requested: selection.selectedLanguages.count,
-                maximum: capabilities.constrainedCandidateCapacity
-            ))
+        if selection.dominantLanguage == nil,
+           capabilities.hasComparableCandidateConfidence,
+           selection.selectedLanguages.count <= capabilities.constrainedCandidateCapacity,
+           Set(selection.selectedLanguages) == capabilities.constrainedCandidateLanguages {
+            return .constrainedCandidates(
+                languages: selection.selectedLanguages,
+                dominantLanguage: nil
+            )
         }
-        let requested = Set(selection.selectedLanguages)
-        guard capabilities.hasComparableCandidateConfidence,
-              requested == capabilities.constrainedCandidateLanguages
-        else {
-            return .incompatible(.constrainedCandidatesUnsupported)
-        }
-        return .constrainedCandidates(
-            languages: selection.selectedLanguages,
-            dominantLanguage: selection.dominantLanguage
-        )
+        return detectOrFallback(otherwise: .automaticDetectionUnsupported)
+    }
+
+    /// The decision a runtime may hand to its backend, or nil for any
+    /// incompatibility so nil-decision callers keep their legacy behavior
+    /// instead of receiving a value that throws.
+    public static func runtimeDecision(
+        selection: TranscriptionLanguageSelection,
+        capabilities: TranscriptionBackendCapabilities,
+        workload: TranscriptionWorkload
+    ) -> LanguageRoutingDecision? {
+        let decision = resolve(selection: selection, capabilities: capabilities, workload: workload)
+        if case .incompatible = decision { return nil }
+        return decision
     }
 }
 

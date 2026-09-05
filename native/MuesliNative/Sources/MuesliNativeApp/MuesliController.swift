@@ -1464,6 +1464,40 @@ public final class MuesliController: NSObject {
         ))
     }
 
+    /// The one place a dictation profile becomes a routing decision. All three
+    /// dictation paths — the standard stop, Nemotron double-tap streaming, and
+    /// computer-use — resolve through here so they agree on what a selection
+    /// means for a backend. The router degrades rather than throwing, so an
+    /// unpinnable selection detects instead of failing the dictation (KD2).
+    /// The local summary config a resumed meeting is regenerated with. It is a
+    /// copy: the frozen profile reaches the MEETING authority only, so resuming
+    /// never rewrites the live dictation languages, the legacy pins, or the
+    /// confirmation flag. Pure and internal so the isolation is testable without
+    /// a session or a summarizer (R22).
+    nonisolated static func resumeSummaryConfig(
+        base: AppConfig,
+        result: MeetingSessionResult
+    ) -> AppConfig {
+        var summaryConfig = base
+        summaryConfig.applyFrozenMeetingLanguageProfile(result.languageProfile)
+        return summaryConfig
+    }
+
+    nonisolated static func dictationLanguageDecision(
+        profile: LanguageProfile,
+        backend: BackendOption
+    ) -> LanguageRoutingDecision {
+        let selection = (try? TranscriptionLanguageSelection(
+            selectedLanguages: profile.selectedLanguages,
+            dominantLanguage: profile.dominantLanguage
+        )) ?? .automatic
+        return TranscriptionLanguageRouter.resolve(
+            selection: selection,
+            capabilities: backend.languageCapabilities(isAvailable: true),
+            workload: .dictation
+        )
+    }
+
     nonisolated static func migrateLegacyMeetingRecordings(
         historyStore: DictationStore,
         artifactStore: RecordingArtifactStore
@@ -2202,7 +2236,7 @@ public final class MuesliController: NSObject {
     /// recordings keep their frozen profile snapshots; only future sessions see
     /// the newly published value.
     @discardableResult
-    func saveLanguageProfile(_ profile: DictationLanguageProfile) throws -> AppConfig {
+    func saveLanguageProfile(_ profile: SpokenLanguageProfile) throws -> AppConfig {
         var candidate = config
         candidate.dictationLanguageProfile = profile
         let persisted = try configStore.saveLanguageProfileConfiguration(candidate)
@@ -2210,6 +2244,52 @@ public final class MuesliController: NSObject {
         appState.config = persisted
         statusBarController?.refresh()
         return persisted
+    }
+
+    /// Commits the meeting language authority. A meeting save never touches the
+    /// dictation profile, the legacy pins, or the migration flag (R3).
+    @discardableResult
+    func saveMeetingLanguageProfile(_ profile: SpokenLanguageProfile) throws -> AppConfig {
+        var candidate = config
+        candidate.meetingSpokenLanguage = profile
+        let persisted = try configStore.saveMeetingLanguageProfileConfiguration(candidate)
+        config = persisted
+        appState.config = persisted
+        statusBarController?.refresh()
+        return persisted
+    }
+
+    /// The notes language saves through the throwing canonical seam rather than
+    /// `updateConfig`, whose save is a silent no-op while the dictation-style
+    /// ruleset is quarantined; a failure has to be visible in the card (R6).
+    @discardableResult
+    func saveMeetingArtifactLanguagePolicy(_ policy: MeetingArtifactLanguagePolicy) throws -> AppConfig {
+        var candidate = config
+        candidate.meetingArtifactLanguagePolicy = policy
+        let persisted = try configStore.saveMeetingLanguageProfileConfiguration(candidate)
+        config = persisted
+        appState.config = persisted
+        statusBarController?.refresh()
+        return persisted
+    }
+
+    func meetingLanguageProfileClient() -> LanguageProfileClient {
+        LanguageProfileClient(
+            load: { [weak self] in self?.config.meetingSpokenLanguage ?? .automatic },
+            save: { [weak self] profile in
+                guard let self else { throw LanguageProfileClient.Error.controllerUnavailable }
+                return try self.saveMeetingLanguageProfile(profile).meetingSpokenLanguage
+            },
+            presentation: { profile, backend in
+                // Nemotron is the sole streaming backend and carries `.meetingLive`
+                // but not `.meetingFinal`; every other meeting backend is the
+                // reverse. This mirrors `languageCapabilities` exactly.
+                profile.presentation(
+                    for: backend,
+                    workload: backend.isStreamingDictationBackend ? .meetingLive : .meetingFinal
+                )
+            }
+        )
     }
 
     func languageProfileClient() -> LanguageProfileClient {
@@ -5477,10 +5557,15 @@ public final class MuesliController: NSObject {
                 }
                 let retranscriptionConfig = self.config
                 let retranscriptionStartedAt = Date()
+                // Retranscription is an action taken now, so it follows the
+                // meeting selection current at the time of the action.
+                let retranscriptionSelection = retranscriptionConfig.meetingSpokenLanguage.selection
                 let trace = self.makeMeetingSessionTrace(
                     backend: backend,
                     startedAt: retranscriptionStartedAt,
-                    languageProfile: retranscriptionConfig.languageProfile
+                    selection: retranscriptionSelection,
+                    workload: .retranscription,
+                    meetingOutputPolicy: retranscriptionConfig.meetingArtifactLanguagePolicy.outputPolicy
                 )
                 sessionTrace = trace
                 await trace.associate(meetingID: meeting.id)
@@ -5501,7 +5586,12 @@ public final class MuesliController: NSObject {
                 let transcription = try await self.transcriptionCoordinator.transcribeMeetingWithEvidence(
                     at: recordingURL,
                     backend: backend,
-                    profile: retranscriptionConfig.languageProfile,
+                    languageDecision: MeetingSession.meetingLanguageDecision(
+                        selection: retranscriptionSelection,
+                        backend: backend,
+                        workload: .retranscription
+                    ),
+                    profile: retranscriptionConfig.meetingLanguageProfile,
                     appleSpeechLanguage: self.config.resolvedAppleSpeechLanguage,
                     customWords: retranscriptionConfig.customWords
                 )
@@ -5531,7 +5621,7 @@ public final class MuesliController: NSObject {
                         meetingTitle: meeting.title,
                         error: error,
                         manualNotes: meeting.manualNotes,
-                        languageProfile: retranscriptionConfig.languageProfile
+                        languageProfile: retranscriptionConfig.meetingLanguageProfile
                     )
                 }
 
@@ -6690,7 +6780,9 @@ public final class MuesliController: NSObject {
         let sessionTrace = makeMeetingSessionTrace(
             backend: meetingBackend,
             startedAt: meetingStartedAt,
-            languageProfile: meetingConfig.languageProfile
+            selection: meetingConfig.meetingSpokenLanguage.selection,
+            workload: .meetingFinal,
+            meetingOutputPolicy: meetingConfig.meetingArtifactLanguagePolicy.outputPolicy
         )
         let templateSnapshot = defaultMeetingTemplate()
         let resolvedCalendarEventID = calendarOccurrence?.eventID ?? calendarEventID
@@ -6880,7 +6972,9 @@ public final class MuesliController: NSObject {
         let sessionTrace = makeMeetingSessionTrace(
             backend: meetingBackend,
             startedAt: Date(),
-            languageProfile: meetingConfig.languageProfile
+            selection: meetingConfig.meetingSpokenLanguage.selection,
+            workload: .meetingFinal,
+            meetingOutputPolicy: meetingConfig.meetingArtifactLanguagePolicy.outputPolicy
         )
         meetingSessionTraces[meetingID] = sessionTrace
         Task {
@@ -7045,7 +7139,9 @@ public final class MuesliController: NSObject {
             id: sessionID,
             backend: importContext.backend,
             startedAt: Date(),
-            languageProfile: importContext.config.languageProfile
+            selection: importContext.config.meetingSpokenLanguage.selection,
+            workload: .fileImport,
+            meetingOutputPolicy: importContext.config.meetingArtifactLanguagePolicy.outputPolicy
         )
         importSessionTrace = sessionTrace
         await sessionTrace.storeArtifact("", kind: .contextSources)
@@ -8906,8 +9002,7 @@ public final class MuesliController: NSObject {
         }
 
         let regeneratedNotes: String
-        var summaryConfig = config
-        summaryConfig.applyLegacyLanguageProfile(result.languageProfile)
+        let summaryConfig = Self.resumeSummaryConfig(base: config, result: result)
         do {
             regeneratedNotes = try await MeetingSummaryClient.summarize(
                 transcript: combined,
@@ -10402,6 +10497,10 @@ public final class MuesliController: NSObject {
                 let result = try await self.transcriptionCoordinator.transcribeDictation(
                     at: wavURL,
                     backend: backend,
+                    languageDecision: Self.dictationLanguageDecision(
+                        profile: languageProfile,
+                        backend: backend
+                    ),
                     cohereLanguage: languageProfile.resolvedCohereLanguage,
                     indicASRLanguage: languageProfile.resolvedIndicASRLanguage,
                     nemotron35Language: languageProfile.resolvedNemotron35Language,
@@ -11521,7 +11620,12 @@ public final class MuesliController: NSObject {
             }
             fputs("[muesli-native] got Nemotron 3.5 transcriber\n", stderr)
             let chunkSamples = transcriber.chunkSamples
-            let promptId = languageProfile.resolvedNemotron35Language.promptId
+            let promptId = Nemotron35Language.promptId(
+                for: Self.dictationLanguageDecision(
+                    profile: languageProfile,
+                    backend: .nemotron35Multilingual
+                )
+            )
             let makeController: @MainActor (AudioObjectID?) -> StreamingDictationController = { preferredID in
                 StreamingDictationController(
                     transcriber: transcriber,
@@ -12192,11 +12296,15 @@ public final class MuesliController: NSObject {
         )
     }
 
+    /// Meeting-family traces record the meeting selection resolved with the
+    /// workload of the call they describe, not dictation routing.
     private func makeMeetingSessionTrace(
         id: UUID = UUID(),
         backend: BackendOption,
         startedAt: Date,
-        languageProfile: LanguageProfile
+        selection: TranscriptionLanguageSelection,
+        workload: TranscriptionWorkload,
+        meetingOutputPolicy: MeetingOutputLanguagePolicy
     ) -> SessionRunTrace {
         let trace = SessionRunTrace(
             id: id,
@@ -12212,7 +12320,9 @@ public final class MuesliController: NSObject {
                 SessionTraceInitialArtifact(
                     content: SessionTraceSnapshot.languageProfile(
                         backend: backend,
-                        profile: languageProfile
+                        selection: selection,
+                        workload: workload,
+                        meetingOutputPolicy: meetingOutputPolicy
                     ),
                     kind: .languageProfile
                 ),
@@ -12883,14 +12993,9 @@ public final class MuesliController: NSObject {
                 await Self.recordDictationTraceEvent(event, trace: job.sessionTrace)
             }
             await job.sessionTrace.recordStageStarted("speech_recognition")
-            let frozenLanguageSelection = (try? TranscriptionLanguageSelection(
-                selectedLanguages: job.languageProfile.selectedLanguages,
-                dominantLanguage: job.languageProfile.dominantLanguage
-            )) ?? .automatic
-            let frozenLanguageDecision = TranscriptionLanguageRouter.resolve(
-                selection: frozenLanguageSelection,
-                capabilities: job.backend.languageCapabilities(isAvailable: true),
-                workload: .dictation
+            let frozenLanguageDecision = Self.dictationLanguageDecision(
+                profile: job.languageProfile,
+                backend: job.backend
             )
             let result = try await transcriptionCoordinator.transcribeDictationWithCleanupOutcome(
                 at: job.wavURL,

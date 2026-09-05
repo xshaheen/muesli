@@ -289,6 +289,7 @@ struct BackendOption: Equatable {
         let supportsAuto: Bool
         let supportsSingle: Bool
         let fixedLanguage: TranscriptionLanguage?
+        var fallbackLanguage: TranscriptionLanguage?
 
         if self == .parakeetEnglish
             || (backend == "whisper" && WhisperKitLanguage.isEnglishOnlyModel(model)) {
@@ -315,12 +316,14 @@ struct BackendOption: Equatable {
                 })
                 supportsAuto = false
                 supportsSingle = true
+                fallbackLanguage = .english  // CohereTranscribeLanguage.defaultLanguage
             case "indicasr":
                 supported = Set(TranscriptionLanguage.allCases.filter {
                     IndicASRLanguage(rawValue: $0.rawValue) != nil
                 })
                 supportsAuto = false
                 supportsSingle = true
+                fallbackLanguage = .hindi  // IndicASRLanguage.defaultLanguage
             default:
                 supported = Set(TranscriptionLanguage.allCases)
                 supportsAuto = true
@@ -341,11 +344,14 @@ struct BackendOption: Equatable {
             supportedLanguages: supported,
             supportsAutomaticDetection: supportsAuto,
             supportsSingleLanguage: supportsSingle,
-            // U2/U3 must prove KTD3 before either backend enables this pair.
+            // Whisper candidate decoding stays disabled until the score contract
+            // in docs/plans/2026-08-19-002-feat-language-aware-transcription-fluidaudio-upgrade-plan.md
+            // is proven; the dominant-pin and automatic arms cover mixed selections.
             constrainedCandidateLanguages: [],
             constrainedCandidateCapacity: 0,
             hasComparableCandidateConfidence: false,
             fixedLanguage: fixedLanguage,
+            fallbackLanguage: fallbackLanguage,
             supportsCodeSwitching: supportsAuto,
             maximumSafeDuration: nil,
             supportsStreaming: isStreamingDictationBackend,
@@ -412,6 +418,8 @@ struct LanguageSelectionPresentation: Equatable, Sendable {
         case pinned
         case constrained
         case fixed
+        /// The backend runs, but not as the selection asked; `degradation` says how.
+        case degraded
         case incompatible
         case unavailable
     }
@@ -420,40 +428,71 @@ struct LanguageSelectionPresentation: Equatable, Sendable {
     let backendID: TranscriptionBackendID
     let selectedLanguageIDs: [String]
     let routingIdentifier: String
+    let degradation: LanguageRoutingDegradation?
     let explanation: String
 }
 
-extension DictationLanguageProfile {
+extension SpokenLanguageProfile {
     func presentation(
         for backend: BackendOption,
         workload: TranscriptionWorkload = .dictation,
         isAvailable: Bool? = nil
     ) -> LanguageSelectionPresentation {
         let capabilities = backend.languageCapabilities(isAvailable: isAvailable)
+        let selection = selection
         let decision = TranscriptionLanguageRouter.resolve(
             selection: selection,
             capabilities: capabilities,
             workload: workload
         )
+        let degradation = decision.degradation(for: selection)
         let state: LanguageSelectionPresentation.State
         let explanation: String
-        switch decision {
-        case .automatic:
+        switch (decision, degradation) {
+        case (_, .notPinned(let language)?):
+            state = .degraded
+            explanation = "\(backend.label) cannot pin \(language.label), so it will detect the spoken language automatically."
+        case (_, .providerFallback(let fallback)?):
+            state = .degraded
+            if let requested = selection.authoritativeLanguage {
+                explanation = "\(backend.label) does not support \(requested.label) and will transcribe in \(fallback.label). Choose a supported language to change this."
+            } else {
+                explanation = "\(backend.label) cannot detect languages automatically and will transcribe in \(fallback.label). Choose a dominant language to change this."
+            }
+        case (.fixed(let fixedLanguage), .fixedLanguageIgnoresSelection(let ignored)?):
+            state = .degraded
+            explanation = "\(backend.label) always transcribes in \(fixedLanguage.label) and ignores \(ignored.label) in this selection."
+        case (_, .fixedLanguageIgnoresSelection(let ignored)?):
+            state = .degraded
+            explanation = "\(backend.label) always transcribes in its fixed language and ignores \(ignored.label) in this selection."
+        case (.automatic, nil):
             state = .automatic
-            explanation = "The selected model will detect the spoken language automatically."
-        case .pinned(let language):
+            explanation = selectedLanguages.count >= 2
+                ? "The selected model will detect the spoken language among \(Self.joinedLabels(selectedLanguages))."
+                : "The selected model will detect the spoken language automatically."
+        case (.pinned(let language), nil):
             state = .pinned
-            explanation = "The selected model will transcribe in \(language.label)."
-        case .constrainedCandidates(let languages, _):
+            let accepted = selectedLanguages.filter { $0 != language }
+            explanation = accepted.isEmpty
+                ? "The selected model will transcribe in \(language.label)."
+                : "The selected model will transcribe in \(language.label); \(Self.joinedLabels(accepted)) also accepted."
+        case (.constrainedCandidates(let languages, _), nil):
             state = .constrained
-            explanation = "The selected model will consider only \(languages.map(\.label).joined(separator: " and "))."
-        case .fixed(let language):
+            explanation = "The selected model will consider only \(Self.joinedLabels(languages))."
+        case (.fixed(let language), nil):
             state = .fixed
             explanation = "This model always transcribes in \(language.label)."
-        case .incompatible(.backendUnavailable):
+        case (.incompatible(.backendUnavailable), nil):
             state = .unavailable
             explanation = "\(backend.label) remains selected but is unavailable. Download it before transcribing."
-        case .incompatible:
+        case (.incompatible(.unsupportedWorkload(let unsupported)), nil):
+            state = .incompatible
+            explanation = unsupported == .meetingLive
+                ? "\(backend.label) does not provide live meeting captions."
+                : "\(backend.label) does not transcribe meetings."
+        case (.incompatible, nil):
+            // Reachable only with capabilities that advertise neither automatic
+            // detection nor a fallback language; no app backend does.
             state = .incompatible
             explanation = "\(backend.label) cannot honor this language selection. Choose a compatible model or language setting."
         }
@@ -462,8 +501,15 @@ extension DictationLanguageProfile {
             backendID: capabilities.backendID,
             selectedLanguageIDs: selectedLanguages.map(\.rawValue),
             routingIdentifier: decision.identifier,
+            degradation: degradation,
             explanation: explanation
         )
+    }
+
+    private static func joinedLabels(_ languages: [TranscriptionLanguage]) -> String {
+        let labels = languages.map(\.label)
+        guard labels.count > 2 else { return labels.joined(separator: " and ") }
+        return labels.dropLast().joined(separator: ", ") + " and " + labels[labels.count - 1]
     }
 }
 
@@ -535,6 +581,18 @@ enum Nemotron35Language: String, CaseIterable, Codable, Sendable {
     static func resolvedCode(_ rawValue: String?) -> String {
         resolved(rawValue).rawValue
     }
+
+    /// The single owner of decision-to-`prompt_id`: a pinned or fixed Nemotron
+    /// language maps to its id; everything else (automatic detection, a language
+    /// Nemotron lacks, candidates, incompatibilities) is auto-detect.
+    static func promptId(for decision: LanguageRoutingDecision) -> Int32 {
+        switch decision {
+        case .pinned(let language), .fixed(let language):
+            return (Self(rawValue: language.rawValue) ?? defaultLanguage).promptId
+        case .automatic, .constrainedCandidates, .incompatible:
+            return defaultLanguage.promptId
+        }
+    }
 }
 
 /// Language selection for multilingual WhisperKit models.
@@ -553,6 +611,18 @@ enum WhisperKitLanguage: String, CaseIterable, Codable, Sendable {
     case korean = "ko"
     case russian = "ru"
     case arabic = "ar"
+    // WhisperKit takes the raw ISO code, so every language the app lists
+    // (`TranscriptionLanguage`) is pinnable on multilingual checkpoints.
+    case bengali = "bn"
+    case dutch = "nl"
+    case greek = "el"
+    case kannada = "kn"
+    case malayalam = "ml"
+    case marathi = "mr"
+    case polish = "pl"
+    case tamil = "ta"
+    case telugu = "te"
+    case vietnamese = "vi"
 
     static let defaultLanguage: Self = .auto
 
@@ -571,6 +641,16 @@ enum WhisperKitLanguage: String, CaseIterable, Codable, Sendable {
         case .korean: return "Korean"
         case .russian: return "Russian"
         case .arabic: return "Arabic"
+        case .bengali: return "Bengali"
+        case .dutch: return "Dutch"
+        case .greek: return "Greek"
+        case .kannada: return "Kannada"
+        case .malayalam: return "Malayalam"
+        case .marathi: return "Marathi"
+        case .polish: return "Polish"
+        case .tamil: return "Tamil"
+        case .telugu: return "Telugu"
+        case .vietnamese: return "Vietnamese"
         }
     }
 
@@ -627,16 +707,51 @@ enum MeetingArtifactLanguagePolicy: String, CaseIterable, Codable, Sendable {
         case .arabic: .arabic
         }
     }
+
+    /// Single owner of the artifact-policy to output-policy mapping used by the
+    /// `languageProfile` and `meetingLanguageProfile` projections.
+    var outputPolicy: MeetingOutputLanguagePolicy {
+        switch self {
+        case .automatic: .automatic
+        case .english: .english
+        case .arabic: .arabic
+        }
+    }
 }
 
-enum MeetingOutputLanguagePolicy: String, CaseIterable, Codable, Sendable {
+/// The output-language field of the deprecated combined `LanguageProfile`.
+/// It is the artifact policy plus the legacy `dominantLanguage` case, which is
+/// only ever produced by decoding the legacy `language_profile` key.
+enum MeetingOutputLanguagePolicy: String, Codable, Sendable {
     case automatic
+    case english
+    case arabic
+    @available(*, deprecated, message: "Legacy language_profile only; artifact policies name their language explicitly.")
     case dominantLanguage = "dominant_language"
 
     var label: String {
         switch self {
         case .automatic: "Automatic from the meeting"
+        case .english: "English"
+        case .arabic: "Arabic"
         case .dominantLanguage: "Use dominant Arabic or English"
+        }
+    }
+
+    /// Single owner of the output-policy to artifact-policy mapping. The legacy
+    /// dominant case resolves through the dominant language and collapses to
+    /// automatic when that language has no meeting-output support.
+    func artifactPolicy(dominantLanguage: TranscriptionLanguage?) -> MeetingArtifactLanguagePolicy {
+        switch self {
+        case .automatic: .automatic
+        case .english: .english
+        case .arabic: .arabic
+        case .dominantLanguage:
+            switch dominantLanguage {
+            case .arabic: .arabic
+            case .english: .english
+            default: .automatic
+            }
         }
     }
 }
@@ -2022,8 +2137,8 @@ struct AppConfig: Codable {
     var indicASRLanguage: String = IndicASRLanguage.defaultLanguage.rawValue
     var nemotron35Language: String = Nemotron35Language.defaultLanguage.rawValue
     var whisperLanguage: String = WhisperKitLanguage.defaultLanguage.rawValue
-    var dictationLanguageProfile: DictationLanguageProfile = .automatic
-    var meetingSpokenLanguage: MeetingSpokenLanguageSelection = .automatic
+    var dictationLanguageProfile: SpokenLanguageProfile = .automatic
+    var meetingSpokenLanguage: SpokenLanguageProfile = .automatic
     var meetingArtifactLanguagePolicy: MeetingArtifactLanguagePolicy = .automatic
     var languageProfileNeedsConfirmation: Bool = false
     /// Set when a persisted selection named a removed backend, and cleared once the
@@ -2356,6 +2471,52 @@ struct AppConfig: Codable {
         case languageProfile = "language_profile"
     }
 
+    /// Decode precedence for `meeting_spoken_language`. The legacy probe runs
+    /// first because the profile decoder's keys are optional, so `{}` and
+    /// `{"mode":"automatic"}` would both read as a valid automatic profile.
+    /// A legacy `{mode, language}` object was never user-authored and copies
+    /// the already-migrated dictation profile; a valid profile shape wins;
+    /// anything else (absent, non-object, unknown code, dominant outside the
+    /// set) also copies dictation. `{}` is the profile decoder's empty case.
+    private static func decodeMeetingSpokenLanguage(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        dictation: SpokenLanguageProfile
+    ) -> SpokenLanguageProfile {
+        if let legacy = try? container.nestedContainer(
+            keyedBy: LegacyMeetingSpokenLanguageSelection.CodingKeys.self,
+            forKey: .meetingSpokenLanguage
+        ), legacy.contains(.mode) {
+            fputs("[muesli-native] meeting_spoken_language uses the legacy mode shape; copying the dictation languages\n", stderr)
+            return dictation
+        }
+        return (try? container.decode(
+            SpokenLanguageProfile.self,
+            forKey: .meetingSpokenLanguage
+        )) ?? dictation
+    }
+
+    /// Decode-only adapter naming the legacy `{mode, language}` shape that
+    /// `meeting_spoken_language` carried before it became a `SpokenLanguageProfile`.
+    /// Legacy-ness is decided by the presence of the `mode` key, never by whether
+    /// this adapter decodes; it exists so the keys have one named owner.
+    enum LegacyMeetingSpokenLanguageSelection: Decodable, Equatable {
+        case automatic
+        case explicit(TranscriptionLanguage)
+
+        enum CodingKeys: String, CodingKey { case mode, language }
+        private enum Mode: String, Decodable { case automatic, explicit }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            switch try container.decode(Mode.self, forKey: .mode) {
+            case .automatic:
+                self = .automatic
+            case .explicit:
+                self = .explicit(try container.decode(TranscriptionLanguage.self, forKey: .language))
+            }
+        }
+    }
+
     struct RetiredASRBackendMigrationOutcome {
         let dictation: BackendOption?
         let meetingTranscription: BackendOption?
@@ -2461,39 +2622,22 @@ struct AppConfig: Codable {
         }
         let legacyProfile = legacyMigration.profile
         dictationLanguageProfile = (try? c.decode(
-            DictationLanguageProfile.self,
+            SpokenLanguageProfile.self,
             forKey: .dictationLanguageProfile
-        )) ?? (try? DictationLanguageProfile(
+        )) ?? (try? SpokenLanguageProfile(
             selectedLanguages: legacyProfile.selectedLanguages,
             dominantLanguage: legacyProfile.dominantLanguage
         )) ?? .automatic
-        if let decodedMeetingLanguage = try? c.decode(
-            MeetingSpokenLanguageSelection.self,
-            forKey: .meetingSpokenLanguage
-        ) {
-            meetingSpokenLanguage = decodedMeetingLanguage
-        } else if legacyProfile.selectedLanguages.count == 1,
-                  let language = legacyProfile.selectedLanguages.first {
-            meetingSpokenLanguage = .explicit(language)
-        } else if let dominantLanguage = legacyProfile.dominantLanguage {
-            meetingSpokenLanguage = .explicit(dominantLanguage)
-        } else {
-            meetingSpokenLanguage = .automatic
-        }
-        if let decodedArtifactPolicy = try? c.decode(
+        meetingSpokenLanguage = Self.decodeMeetingSpokenLanguage(
+            from: c,
+            dictation: dictationLanguageProfile
+        )
+        meetingArtifactLanguagePolicy = (try? c.decode(
             MeetingArtifactLanguagePolicy.self,
             forKey: .meetingArtifactLanguagePolicy
-        ) {
-            meetingArtifactLanguagePolicy = decodedArtifactPolicy
-        } else if legacyProfile.meetingOutputPolicy == .dominantLanguage {
-            switch legacyProfile.dominantLanguage {
-            case .arabic: meetingArtifactLanguagePolicy = .arabic
-            case .english: meetingArtifactLanguagePolicy = .english
-            default: meetingArtifactLanguagePolicy = .automatic
-            }
-        } else {
-            meetingArtifactLanguagePolicy = .automatic
-        }
+        )) ?? legacyProfile.meetingOutputPolicy.artifactPolicy(
+            dominantLanguage: legacyProfile.dominantLanguage
+        )
         languageProfileNeedsConfirmation =
             (try? c.decode(Bool.self, forKey: .languageProfileNeedsConfirmation))
             ?? legacyMigration.needsConfirmation
@@ -2769,46 +2913,68 @@ struct AppConfig: Codable {
         MeetingTranscriptCleanupPolicy.reconcileConsent(in: &self)
     }
 
-    /// Transitional projection for consumers that U3 and U4 have not switched
-    /// to the split authorities yet. It is intentionally read-only.
+    /// Read-only hybrid projection onto the combined `LanguageProfile` for
+    /// consumers that still take one. Selected and dominant languages come from
+    /// the dictation authority; `meetingOutputPolicy` is derived one-to-one from
+    /// `meetingArtifactLanguagePolicy` and is shared with `meetingLanguageProfile`.
+    /// It never produces the legacy `dominantLanguage` case.
     @available(*, deprecated, message: "Use the split language authorities.")
     var languageProfile: LanguageProfile {
-        let projectedOutput: MeetingOutputLanguagePolicy
-        if let artifactLanguage = meetingArtifactLanguagePolicy.explicitLanguage,
-           artifactLanguage == dictationLanguageProfile.dominantLanguage {
-            projectedOutput = .dominantLanguage
-        } else {
-            projectedOutput = .automatic
-        }
-        return (try? LanguageProfile(
-            selectedLanguages: dictationLanguageProfile.selectedLanguages,
-            dominantLanguage: dictationLanguageProfile.dominantLanguage,
-            meetingOutputPolicy: projectedOutput
+        Self.projectedLanguageProfile(
+            spoken: dictationLanguageProfile,
+            artifactPolicy: meetingArtifactLanguagePolicy
+        )
+    }
+
+    /// Read-only projection for meeting consumers: the meeting selection plus the
+    /// same artifact-derived `meetingOutputPolicy` as `languageProfile`.
+    @available(*, deprecated, message: "Meeting selection plus the artifact policy; use for meeting transcription and result freezing.")
+    var meetingLanguageProfile: LanguageProfile {
+        Self.projectedLanguageProfile(
+            spoken: meetingSpokenLanguage,
+            artifactPolicy: meetingArtifactLanguagePolicy
+        )
+    }
+
+    /// The `try?` fallback is unreachable from validated inputs: the spoken
+    /// profile already guarantees the dominant language is selected, and the
+    /// explicit policies carry no validation. It stays so an explicit policy can
+    /// never be silently collapsed by a future validation arm without a test failing.
+    @available(*, deprecated, message: "Projection onto the combined LanguageProfile.")
+    private static func projectedLanguageProfile(
+        spoken: SpokenLanguageProfile,
+        artifactPolicy: MeetingArtifactLanguagePolicy
+    ) -> LanguageProfile {
+        (try? LanguageProfile(
+            selectedLanguages: spoken.selectedLanguages,
+            dominantLanguage: spoken.dominantLanguage,
+            meetingOutputPolicy: artifactPolicy.outputPolicy
         )) ?? .automatic
     }
 
-    mutating func applyLegacyLanguageProfile(_ profile: LanguageProfile) {
-        dictationLanguageProfile = (try? DictationLanguageProfile(
+    /// Apply a finished meeting's frozen profile to the MEETING authority only.
+    /// The resume merge summarizes with the languages the meeting recorded
+    /// under, so it must not touch `dictationLanguageProfile`, the legacy pins,
+    /// or the confirmation flag the dictation card owns (R22).
+    mutating func applyFrozenMeetingLanguageProfile(_ profile: LanguageProfile) {
+        meetingSpokenLanguage = (try? SpokenLanguageProfile(
             selectedLanguages: profile.selectedLanguages,
             dominantLanguage: profile.dominantLanguage
         )) ?? .automatic
-        if profile.selectedLanguages.count == 1,
-           let language = profile.selectedLanguages.first {
-            meetingSpokenLanguage = .explicit(language)
-        } else if let dominantLanguage = profile.dominantLanguage {
-            meetingSpokenLanguage = .explicit(dominantLanguage)
-        } else {
-            meetingSpokenLanguage = .automatic
-        }
-        if profile.meetingOutputPolicy == .dominantLanguage {
-            switch profile.dominantLanguage {
-            case .arabic: meetingArtifactLanguagePolicy = .arabic
-            case .english: meetingArtifactLanguagePolicy = .english
-            default: meetingArtifactLanguagePolicy = .automatic
-            }
-        } else {
-            meetingArtifactLanguagePolicy = .automatic
-        }
+        meetingArtifactLanguagePolicy = profile.meetingOutputPolicy.artifactPolicy(
+            dominantLanguage: profile.dominantLanguage
+        )
+    }
+
+    mutating func applyLegacyLanguageProfile(_ profile: LanguageProfile) {
+        dictationLanguageProfile = (try? SpokenLanguageProfile(
+            selectedLanguages: profile.selectedLanguages,
+            dominantLanguage: profile.dominantLanguage
+        )) ?? .automatic
+        meetingSpokenLanguage = dictationLanguageProfile
+        meetingArtifactLanguagePolicy = profile.meetingOutputPolicy.artifactPolicy(
+            dominantLanguage: profile.dominantLanguage
+        )
     }
 
     var resolvedCohereLanguage: CohereTranscribeLanguage {
