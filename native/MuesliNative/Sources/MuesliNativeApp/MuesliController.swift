@@ -4435,6 +4435,15 @@ public final class MuesliController: NSObject {
         refreshPostProcessorPromptAfterDictionaryChange()
     }
 
+    /// Persists the user's standing preferences and re-arms the preloaded cleanup
+    /// runtime the way a dictionary edit does, so the next dictation sees them.
+    func setCustomInstructions(_ text: String) {
+        let normalized = CustomInstructions.normalized(text)
+        guard normalized != config.customInstructions else { return }
+        updateConfig { $0.customInstructions = normalized }
+        refreshPostProcessorPromptAfterDictionaryChange()
+    }
+
     /// The dictionary rides inside the cleanup prompt as restoration vocabulary, so
     /// editing it must reconfigure the post-processor the same way a preset change does.
     private func refreshPostProcessorPromptAfterDictionaryChange() {
