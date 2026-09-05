@@ -2025,6 +2025,7 @@ actor TranscriptionCoordinator {
     func transcribeMeeting(
         at url: URL,
         backend: BackendOption,
+        languageDecision: LanguageRoutingDecision? = nil,
         profile: LanguageProfile = .automatic,
         appleSpeechLanguage: String = AppleSpeechLanguageOption.systemIdentifier,
         customWords: [CustomWord] = []
@@ -2032,15 +2033,21 @@ actor TranscriptionCoordinator {
         try await transcribeMeetingWithEvidence(
             at: url,
             backend: backend,
+            languageDecision: languageDecision,
             profile: profile,
             appleSpeechLanguage: appleSpeechLanguage,
             customWords: customWords
         ).cleaned
     }
 
+    /// `languageDecision` is the meeting language authority's decision for the
+    /// backend this call routes to; `profile` keeps supplying the legacy
+    /// language arguments, which `routeToBackend` reads only when the decision
+    /// is nil.
     func transcribeMeetingWithEvidence(
         at url: URL,
         backend: BackendOption,
+        languageDecision: LanguageRoutingDecision? = nil,
         profile: LanguageProfile = .automatic,
         appleSpeechLanguage: String = AppleSpeechLanguageOption.systemIdentifier,
         customWords: [CustomWord] = []
@@ -2050,6 +2057,7 @@ actor TranscriptionCoordinator {
         let raw = try await route(
             url: url,
             backend: backend,
+            languageDecision: languageDecision,
             cohereLanguage: profile.resolvedCohereLanguage,
             indicASRLanguage: profile.resolvedIndicASRLanguage,
             nemotron35Language: profile.resolvedNemotron35Language,
@@ -2063,6 +2071,7 @@ actor TranscriptionCoordinator {
     func transcribeMeetingChunk(
         at url: URL,
         backend: BackendOption,
+        languageDecision: LanguageRoutingDecision? = nil,
         profile: LanguageProfile = .automatic,
         appleSpeechLanguage: String = AppleSpeechLanguageOption.systemIdentifier,
         customWords: [CustomWord] = []
@@ -2070,15 +2079,19 @@ actor TranscriptionCoordinator {
         try await transcribeMeetingChunkWithEvidence(
             at: url,
             backend: backend,
+            languageDecision: languageDecision,
             profile: profile,
             appleSpeechLanguage: appleSpeechLanguage,
             customWords: customWords
         ).cleaned
     }
 
+    /// See `transcribeMeetingWithEvidence` for how `languageDecision` and the
+    /// legacy `profile` arguments divide the work.
     func transcribeMeetingChunkWithEvidence(
         at url: URL,
         backend: BackendOption,
+        languageDecision: LanguageRoutingDecision? = nil,
         profile: LanguageProfile = .automatic,
         appleSpeechLanguage: String = AppleSpeechLanguageOption.systemIdentifier,
         customWords: [CustomWord] = []
@@ -2102,6 +2115,7 @@ actor TranscriptionCoordinator {
         let raw = try await route(
             url: url,
             backend: backend,
+            languageDecision: languageDecision,
             cohereLanguage: profile.resolvedCohereLanguage,
             indicASRLanguage: profile.resolvedIndicASRLanguage,
             nemotron35Language: profile.resolvedNemotron35Language,

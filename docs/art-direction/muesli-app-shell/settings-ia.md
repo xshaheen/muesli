@@ -73,6 +73,7 @@ Settings · About
 | Meetings › Notifications | 4 | Meetings › Notifications | unchanged |
 | Meetings › Calendars, Google Calendar | 2 | Meetings › Calendars | unchanged |
 | Meetings › Meeting model, Final transcript | 2 | Models & Languages | all three model choices in pipeline order |
+| Meetings › Meeting languages (spoken, dominant, notes language) | 3 | Models & Languages | beside the meeting model and final-transcript rows |
 | Meetings › Transcript cleanup, Summary backend + Account/Key/Model ×7 | ~16 | **AI Providers** | |
 | Meetings › Post-meeting hook, Script, Timeout | 3 | Advanced › Automation | |
 | Appearance › Dark mode, Accent colour | 2 | Appearance | see decision D2 |

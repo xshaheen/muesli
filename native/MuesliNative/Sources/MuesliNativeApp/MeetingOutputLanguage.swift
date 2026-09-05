@@ -51,10 +51,22 @@ enum MeetingOutputLanguage: Equatable {
         transcript: String,
         manualNotes: String? = nil
     ) -> Self {
-        if profile.meetingOutputPolicy == .dominantLanguage {
+        switch profile.meetingOutputPolicy {
+        case .arabic:
+            // An explicit Arabic policy is honored whatever the transcript says,
+            // and whatever the dictation authority holds (KD3).
+            return .arabic
+        case .english:
+            // `.unspecified` is "no Arabic instruction". A positive English
+            // instruction needs a new case here and matching arms in
+            // MeetingSummaryClient, which a sibling change owns; until then an
+            // explicit English policy reads as automatic.
+            return .unspecified
+        case .dominantLanguage:
             return profile.dominantLanguage == .arabic ? .arabic : .unspecified
+        case .automatic:
+            return detect(transcript: transcript, manualNotes: manualNotes)
         }
-        return detect(transcript: transcript, manualNotes: manualNotes)
     }
 
     private static func transcriptContent(from transcript: String) -> String {

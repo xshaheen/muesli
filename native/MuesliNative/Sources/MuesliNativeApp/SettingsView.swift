@@ -122,6 +122,7 @@ struct SettingsView: View {
     @State private var audioInputDevices: [AudioInputDeviceInfo] = []
     @State private var permissionPollTimer: Timer?
     @State private var isModesPresented = false
+    @State private var notesLanguageErrorMessage: String?
     @State private var isSessionDiagnosticsPresented = false
     @State private var dictationStyleSettingsError: String?
     @State private var micGranted = false
@@ -152,6 +153,16 @@ struct SettingsView: View {
 
     private var languageProfileEditor: LanguageProfileSettingsModel {
         appState.languageProfileSettings
+    }
+    private var meetingLanguageProfileEditor: LanguageProfileSettingsModel {
+        appState.meetingLanguageProfileSettings
+    }
+    /// The meeting card repeats the dictation migration banner only while the two
+    /// authorities still hold the same pin-derived copy, so an upgrader who
+    /// resolves it on one card is not left with a stale meeting profile (R5).
+    private var meetingProfileNeedsReview: Bool {
+        appState.config.languageProfileNeedsConfirmation
+            && appState.config.meetingSpokenLanguage == appState.config.dictationLanguageProfile
     }
     private let meetingDetectionAppOptions: [MeetingDetectionAppOption] = [
         MeetingDetectionAppOption(bundleID: "com.google.Chrome", name: "Chrome", icon: "globe"),
@@ -372,6 +383,7 @@ struct SettingsView: View {
             .background(MuesliTheme.backgroundBase)
             .onAppear {
                 languageProfileEditor.load(using: controller.languageProfileClient())
+                meetingLanguageProfileEditor.load(using: controller.meetingLanguageProfileClient())
                 refreshDownloadedModelOptions()
                 refreshAudioInputDevices()
                 startPermissionPolling()
@@ -382,6 +394,9 @@ struct SettingsView: View {
             }
             .onChange(of: appState.config.dictationLanguageProfile) { _, profile in
                 languageProfileEditor.synchronize(with: profile)
+            }
+            .onChange(of: appState.config.meetingSpokenLanguage) { _, profile in
+                meetingLanguageProfileEditor.synchronize(with: profile)
             }
             .onDisappear {
                 SoundController.stopMaraudersMapClip()
@@ -840,8 +855,35 @@ struct SettingsView: View {
     }
 
     private var languageProfileSettingsSection: some View {
-        settingsSection("Dictation languages") {
-            if appState.config.languageProfileNeedsConfirmation {
+        languageProfileSection(
+            title: "Dictation languages",
+            editor: languageProfileEditor,
+            client: controller.languageProfileClient(),
+            spokenLanguagesDescription: "Choose any languages you use. Leave empty for automatic detection.",
+            dominantLanguageDescription: "Pins compatible recognizers. Leave unset to preserve code-switching.",
+            saveTitle: "Save language profile",
+            showsMigrationConfirmation: appState.config.languageProfileNeedsConfirmation,
+            crossReference: "Meetings use their own languages in Meetings › Meeting languages."
+        )
+    }
+
+    /// Both language cards render through here so the meeting card cannot drift
+    /// from the dictation one. Only the copy, the editor, the save seam and the
+    /// banner condition vary; the workload lives in the client's presentation.
+    @ViewBuilder
+    private func languageProfileSection(
+        title: String,
+        editor: LanguageProfileSettingsModel,
+        client: @autoclosure @escaping () -> LanguageProfileClient,
+        spokenLanguagesDescription: String,
+        dominantLanguageDescription: String,
+        saveTitle: String,
+        showsMigrationConfirmation: Bool,
+        crossReference: String,
+        trailingContent: (() -> AnyView)? = nil
+    ) -> some View {
+        settingsSection(title) {
+            if showsMigrationConfirmation {
                 Label(
                     "Previous model language choices disagreed. Review this profile, then save it.",
                     systemImage: "exclamationmark.triangle.fill"
@@ -852,16 +894,16 @@ struct SettingsView: View {
 
             settingsRow(
                 "Spoken languages",
-                description: "Choose any languages you use. Leave empty for automatic detection.",
+                description: spokenLanguagesDescription,
                 controlWidth: meetingControlWidth
             ) {
                 Menu {
                     Button {
-                        languageProfileEditor.useAutomaticDetection()
+                        editor.useAutomaticDetection()
                     } label: {
                         HStack {
                             Text("Automatic detection")
-                            if languageProfileEditor.selectedLanguages.isEmpty {
+                            if editor.selectedLanguages.isEmpty {
                                 Image(systemName: "checkmark")
                             }
                         }
@@ -869,18 +911,18 @@ struct SettingsView: View {
                     Divider()
                     ForEach(TranscriptionLanguage.allCases) { language in
                         Button {
-                            languageProfileEditor.toggle(language)
+                            editor.toggle(language)
                         } label: {
                             HStack {
                                 Text(language.label)
-                                if languageProfileEditor.selectedLanguages.contains(language) {
+                                if editor.selectedLanguages.contains(language) {
                                     Image(systemName: "checkmark")
                                 }
                             }
                         }
                     }
                 } label: {
-                    Text(languageSelectionSummary)
+                    Text(languageSelectionSummary(for: editor))
                         .lineLimit(1)
                         .frame(width: meetingControlWidth, alignment: .trailing)
                 }
@@ -890,49 +932,120 @@ struct SettingsView: View {
             Divider().background(MuesliTheme.surfaceBorder)
             settingsRow(
                 "Dominant language",
-                description: "Pins compatible recognizers. Leave unset to preserve code-switching.",
+                description: dominantLanguageDescription,
                 controlWidth: meetingControlWidth
             ) {
                 let options: [TranscriptionLanguage?] = [nil]
-                    + languageProfileEditor.selectedLanguages.map(Optional.some)
+                    + editor.selectedLanguages.map(Optional.some)
                 FixedWidthPopUp(
-                    selection: languageProfileEditor.dominantLanguage?.label ?? "No dominant language",
+                    selection: editor.dominantLanguage?.label ?? "No dominant language",
                     options: options.map { $0?.label ?? "No dominant language" },
                     onSelectIndex: { index in
                         guard options.indices.contains(index) else { return }
-                        languageProfileEditor.setDominant(options[index])
+                        editor.setDominant(options[index])
                     }
                 )
                 .frame(height: 24)
             }
 
+            if let trailingContent {
+                Divider().background(MuesliTheme.surfaceBorder)
+                trailingContent()
+            }
+
             Divider().background(MuesliTheme.surfaceBorder)
             HStack(spacing: MuesliTheme.spacing12) {
-                Button("Save language profile") {
-                    languageProfileEditor.save(using: controller.languageProfileClient())
+                Button(saveTitle) {
+                    editor.save(using: client())
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(!languageProfileEditor.hasUnsavedChanges
-                    && !appState.config.languageProfileNeedsConfirmation)
+                .disabled(!editor.hasUnsavedChanges && !showsMigrationConfirmation)
 
-                if let errorMessage = languageProfileEditor.errorMessage {
+                if let errorMessage = editor.errorMessage {
                     Text(errorMessage)
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.danger)
-                } else if languageProfileEditor.didSave {
+                } else if editor.didSave {
                     Label("Saved", systemImage: "checkmark.circle.fill")
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.success)
                 }
             }
+            settingsDescription(crossReference)
         }
     }
 
-    private var languageSelectionSummary: String {
-        let selected = languageProfileEditor.selectedLanguages
+    private func languageSelectionSummary(for editor: LanguageProfileSettingsModel) -> String {
+        let selected = editor.selectedLanguages
         if selected.isEmpty { return "Automatic detection" }
         if selected.count <= 2 { return selected.map(\.label).joined(separator: ", ") }
         return "\(selected.count) languages"
+    }
+
+    private var languageSelectionSummary: String {
+        languageSelectionSummary(for: languageProfileEditor)
+    }
+
+    /// Meetings get their own card, directly after Transcription so its footer
+    /// explains the backend chosen just above it (KD1, R5).
+    private var meetingLanguageProfileSettingsSection: some View {
+        languageProfileSection(
+            title: "Meeting languages",
+            editor: meetingLanguageProfileEditor,
+            client: controller.meetingLanguageProfileClient(),
+            spokenLanguagesDescription: meetingSpokenLanguagesDescription,
+            dominantLanguageDescription: "Pins compatible recognizers. Leave unset to preserve code-switching.",
+            saveTitle: "Save meeting languages",
+            showsMigrationConfirmation: meetingProfileNeedsReview,
+            crossReference: "Dictation uses its own languages in Dictation › Dictation languages.",
+            trailingContent: { AnyView(meetingNotesLanguageRow) }
+        )
+    }
+
+    private var meetingSpokenLanguagesDescription: String {
+        appState.isMeetingRecording
+            ? "Choose any languages you use. Applies to the next meeting; the current recording keeps its languages."
+            : "Choose any languages you use. Leave empty for automatic detection."
+    }
+
+    @ViewBuilder
+    private var meetingNotesLanguageRow: some View {
+        let policies = MeetingArtifactLanguagePolicy.allCases.filter { $0 != .english }
+        let current = appState.config.meetingArtifactLanguagePolicy
+        // A persisted English policy stays persisted but reads as Automatic until
+        // a positive English instruction lands (KD3, Scope Boundaries).
+        let displayed = current == .english ? .automatic : current
+        settingsRow(
+            "Notes language",
+            description: meetingNotesLanguageDescription,
+            controlWidth: meetingControlWidth
+        ) {
+            FixedWidthPopUp(
+                selection: displayed.label,
+                options: policies.map(\.label),
+                onSelectIndex: { index in
+                    guard policies.indices.contains(index) else { return }
+                    do {
+                        try controller.saveMeetingArtifactLanguagePolicy(policies[index])
+                        notesLanguageErrorMessage = nil
+                    } catch {
+                        notesLanguageErrorMessage = error.localizedDescription
+                    }
+                }
+            )
+            .frame(height: 24)
+        }
+        if let notesLanguageErrorMessage {
+            Text(notesLanguageErrorMessage)
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.danger)
+        }
+    }
+
+    private var meetingNotesLanguageDescription: String {
+        appState.isMeetingRecording
+            ? "Applies to the next meeting and to notes regenerated after saving."
+            : "Automatic follows the meeting; Arabic always writes notes in Arabic."
     }
 
     private var meetingTranscriptionSettingsSection: some View {
@@ -1023,12 +1136,35 @@ struct SettingsView: View {
             }
             Divider().background(MuesliTheme.surfaceBorder)
             settingsDescription(
-                controller.languageProfileClient().presentation(
-                    appState.config.dictationLanguageProfile,
-                    appState.selectedMeetingTranscriptionBackend
-                ).explanation
+                meetingLanguageExplanation
             )
+            if let liveCaptionLanguageNotice {
+                settingsDescription(liveCaptionLanguageNotice)
+            }
         }
+    }
+
+    /// The meeting selection explained against whichever backend actually
+    /// produces the final transcript: Nemotron under `.meetingLive` when it is
+    /// the unified source, the selected meeting backend under `.meetingFinal`
+    /// otherwise (R7).
+    private var meetingLanguageExplanation: String {
+        let backend = usesUnifiedMeetingTranscript
+            ? BackendOption.nemotron35Multilingual
+            : appState.selectedMeetingTranscriptionBackend
+        return controller.meetingLanguageProfileClient().presentation(
+            appState.config.meetingSpokenLanguage,
+            backend
+        ).explanation
+    }
+
+    /// Parakeet Live Captions is not a routable backend, so it cannot follow the
+    /// meeting languages; say so rather than letting the preview look broken (R10).
+    private var liveCaptionLanguageNotice: String? {
+        guard appState.config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU else { return nil }
+        let selected = appState.config.meetingSpokenLanguage.selectedLanguages
+        guard !(selected.isEmpty || selected == [.english]) else { return nil }
+        return "Live preview does not follow meeting languages."
     }
 
     private var dictationCleanupSettingsSection: some View {
@@ -1704,6 +1840,8 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
             meetingTranscriptionSettingsSection
 
+            meetingLanguageProfileSettingsSection
+
             settingsSection("Meeting Context") {
                 screenContextRow("Meeting context", includesScreenOCR: true)
             }
@@ -1914,6 +2052,13 @@ struct SettingsView: View {
                     meetingHookTimeoutControl
                 }
                 settingsDescription("Runs a user-supplied executable after each completed meeting. The executable receives JSON on stdin and must already be runnable on its own.")
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Suppress echoed local speech", controlWidth: meetingControlWidth) {
+                    settingsSwitch(isOn: appState.config.meetingReverseLeakSuppression) { newValue in
+                        controller.updateConfig { $0.meetingReverseLeakSuppression = newValue }
+                    }
+                }
+                settingsDescription("Removes your own voice from the Others track when the far end echoes it back, so a sentence is not transcribed twice. Turning it off applies to the meeting in progress. Saved recordings and re-transcription always keep the original audio, and session diagnostics record what was removed.")
             }
             .padding(.top, MuesliTheme.spacing8)
         }

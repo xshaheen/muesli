@@ -23,9 +23,62 @@ struct SessionTraceRuntimeTests {
         #expect(json["selectedLanguages"] as? [String] == ["ar", "en"])
         #expect(json["dominantLanguage"] as? String == "ar")
         #expect(json["meetingOutputPolicy"] as? String == "dominant_language")
-        #expect(json["effectiveLanguage"] == nil)
-        #expect(json["effectiveBehavior"] as? String == "incompatible")
-        #expect(json["routingResult"] as? String == "incompatible")
+        // Reversed under KD2: a fixed-language model now routes to its fixed
+        // arm and ignores the foreign selection instead of being incompatible.
+        #expect(json["effectiveLanguage"] as? String == "en")
+        #expect(json["effectiveBehavior"] as? String == "fixed")
+        #expect(json["routingResult"] as? String == "fixed")
+        #expect(json["candidateCount"] as? Int == 1)
+    }
+
+    @Test("the workload overload records the meeting selection with its own routing")
+    func languageTraceRecordsMeetingWorkloads() throws {
+        let selection = try TranscriptionLanguageSelection(selectedLanguages: [.arabic])
+
+        func routingResult(for workload: TranscriptionWorkload) throws -> String {
+            let data = Data(SessionTraceSnapshot.languageProfile(
+                backend: .nemotron35Multilingual,
+                selection: selection,
+                workload: workload,
+                meetingOutputPolicy: .arabic
+            ).utf8)
+            let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect(json["selectedLanguages"] as? [String] == ["ar"])
+            #expect(json["meetingOutputPolicy"] as? String == "arabic")
+            return try #require(json["routingResult"] as? String)
+        }
+
+        // Nemotron transcribes live captions and dictation but no final meeting
+        // audio, so the recorded routing differs by workload.
+        #expect(try routingResult(for: .dictation) == "pinned")
+        #expect(try routingResult(for: .meetingLive) == "pinned")
+        #expect(try routingResult(for: .meetingFinal) == "incompatible")
+        #expect(try routingResult(for: .retranscription) == "incompatible")
+        #expect(try routingResult(for: .fileImport) == "incompatible")
+    }
+
+    @Test("the dictation overload output is unchanged by the workload overload")
+    func languageTraceDictationOverloadIsUnchanged() throws {
+        let profile = try LanguageProfile(
+            selectedLanguages: [.english, .arabic],
+            dominantLanguage: .arabic,
+            meetingOutputPolicy: .arabic
+        )
+        let legacy = SessionTraceSnapshot.languageProfile(
+            backend: .whisperLargeTurbo,
+            profile: profile
+        )
+        let delegated = SessionTraceSnapshot.languageProfile(
+            backend: .whisperLargeTurbo,
+            selection: try TranscriptionLanguageSelection(
+                selectedLanguages: [.english, .arabic],
+                dominantLanguage: .arabic
+            ),
+            workload: .dictation,
+            meetingOutputPolicy: profile.meetingOutputPolicy
+        )
+
+        #expect(legacy == delegated)
     }
 
     @Test("initial profile evidence is ordered before an immediate terminal failure")

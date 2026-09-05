@@ -441,6 +441,77 @@ struct MeetingMicSessionRouteState {
     }
 }
 
+/// Translates AEC arrival positions to recording-timeline positions.
+///
+/// Cleaned mic audio leaves the AEC in frame-sized batches that lag the raw
+/// callbacks (and can be held waiting for reference), so the reverse-leak
+/// reference cannot be registered at the delivering callback's own timeline
+/// offset. One range is appended per raw mic callback and consumed as cleaned
+/// output is released. Accessed only from MeetingSession's chunkRotationQueue.
+struct MeetingMicArrivalTimelineMap {
+    struct Span: Equatable {
+        /// Offset of this span inside the released batch.
+        let offset: Int
+        let count: Int
+        let timelineStart: Int
+    }
+
+    private struct Entry {
+        let arrivalStart: Int
+        let timelineStart: Int
+        let count: Int
+    }
+
+    private var entries: [Entry] = []
+    private var arrivalCount = 0
+    private var releasedCount = 0
+
+    var pendingEntryCount: Int { entries.count }
+
+    mutating func noteMicCallback(sampleCount: Int, timelineStart: Int) {
+        guard sampleCount > 0 else { return }
+        entries.append(Entry(
+            arrivalStart: arrivalCount,
+            timelineStart: timelineStart,
+            count: sampleCount
+        ))
+        arrivalCount += sampleCount
+    }
+
+    /// Splits `count` released cleaned samples into timeline-contiguous spans.
+    /// Samples past the last registered callback are dropped rather than
+    /// misregistered; the AEC flush trims its own zero padding, so that only
+    /// happens if a reset raced a release.
+    mutating func consume(_ count: Int) -> [Span] {
+        guard count > 0 else { return [] }
+        var spans: [Span] = []
+        var offset = 0
+        var remaining = count
+        while remaining > 0 {
+            while let first = entries.first, first.arrivalStart + first.count <= releasedCount {
+                entries.removeFirst()
+            }
+            guard let first = entries.first, releasedCount >= first.arrivalStart else { break }
+            let take = min(remaining, first.arrivalStart + first.count - releasedCount)
+            spans.append(Span(
+                offset: offset,
+                count: take,
+                timelineStart: first.timelineStart + (releasedCount - first.arrivalStart)
+            ))
+            releasedCount += take
+            offset += take
+            remaining -= take
+        }
+        return spans
+    }
+
+    mutating func reset() {
+        entries.removeAll(keepingCapacity: true)
+        arrivalCount = 0
+        releasedCount = 0
+    }
+}
+
 final class MeetingSession {
     private static let logger = Logger(subsystem: "com.muesli.native", category: "MeetingSession")
 
@@ -459,10 +530,44 @@ final class MeetingSession {
     )
     private let runtime: RuntimePaths
     private let config: AppConfig
+    /// The meeting spoken-language selection frozen when this meeting started.
+    /// A settings save during the recording applies to the next meeting; only
+    /// the decision derived from it follows a mid-meeting backend swap.
+    let frozenLanguageSelection: TranscriptionLanguageSelection
+    /// The meeting-derived legacy profile handed to every transcribe call. The
+    /// runtime reads it only on the nil-decision branch, where a dictation-derived
+    /// profile would pin Cohere and Indic to the wrong language.
+    let frozenMeetingProfile: LanguageProfile
     private let templateSnapshot: MeetingTemplateSnapshot
     private let transcriptionCoordinator: TranscriptionCoordinator
     private let systemAudioRecorder: SystemAudioCapturing
-    private let neuralAec = MeetingNeuralAec()
+    private let neuralAec: MeetingNeuralAec
+
+    /// The gate decides per completed VAD frame: a shorter block would shrink
+    /// the cleaned-mic lookahead the reference feed already has (A1).
+    private static let systemGateBlockLength = StreamingVadFrameAccumulator.frameLength
+    /// KTD6: intra-block timeline gaps up to the gate tolerance are ignored; a
+    /// larger one closes the pending block early.
+    private static let systemBlockGapToleranceSamples =
+        MeetingReverseLeakSuppressor.toleranceFrames * MeetingReverseLeakSuppressor.frameLength
+
+    /// Reverse-leak gate and its estimator. Accessed only from MeetingSession's
+    /// chunkRotationQueue.
+    private let reverseLeakSuppressor: MeetingReverseLeakSuppressor
+    /// Re-blocks the gated system stream into whole VAD frames; the pending
+    /// remainder belongs to the next chunk and never reaches the controller (R16).
+    private var systemVadFrameAccumulator = StreamingVadFrameAccumulator()
+    /// Raw system samples waiting to complete a gate block, with the timeline
+    /// and arrival positions of their first sample.
+    private var pendingSystemBlock: [Int16] = []
+    private var pendingSystemBlockTimelineStart = 0
+    private var pendingSystemBlockArrivalStart = 0
+    /// Running count of every raw system sample the recorder delivered,
+    /// advanced before the recording/paused guard so it stays equal to the raw
+    /// system file's length across pauses (KTD7).
+    private var systemArrivalSampleCount = 0
+    /// Ordered arrival-to-timeline ranges, one per raw mic callback (KTD6).
+    private var micArrivalTimeline = MeetingMicArrivalTimelineMap()
 
     /// Route-aware mic recorder with real-time 16 kHz mono PCM access.
     private var meetingMicRecorder: MeetingMicRecording
@@ -527,6 +632,13 @@ final class MeetingSession {
     /// follow-up; injected into the summary prompt for action-item carry-forward.
     var previousMeetingNotes: String?
     var onChunkTranscribed: (([SpeechSegment], String) -> Void)?
+    /// Fires synchronously on `chunkRotationQueue` with a rotated system chunk
+    /// and its timing, after the rotate and before the transcription task that
+    /// deletes the file, and again in `stop` for the final chunk. Test seam.
+    var onSystemChunkRotated: ((URL, MeetingChunkTimingSnapshot) -> Void)?
+    /// The exact stream `appendProcessedSystemSamplesOnQueue` releases — what a
+    /// system partial session consumes when caption models are downloaded. Test seam.
+    var onProcessedSystemSamples: (([Float]) -> Void)?
     /// Display-only streaming partial for a source ("You"/"Others", tail text).
     /// Empty text clears the source's tail. Called on a background thread.
     var onPartialTranscript: ((String, String) -> Void)?
@@ -570,6 +682,8 @@ final class MeetingSession {
         templateSnapshot: MeetingTemplateSnapshot,
         transcriptionCoordinator: TranscriptionCoordinator,
         meetingMicRecorder: MeetingMicRecording = RouteAwareMeetingMicRecorder(),
+        systemAudioRecorder injectedSystemAudioRecorder: SystemAudioCapturing? = nil,
+        neuralAec injectedNeuralAec: MeetingNeuralAec? = nil,
         sessionTrace: SessionRunTrace? = nil
     ) {
         self.title = title
@@ -580,14 +694,24 @@ final class MeetingSession {
         }
         self.runtime = runtime
         self.config = config
+        self.frozenLanguageSelection = config.meetingSpokenLanguage.selection
+        self.frozenMeetingProfile = config.meetingLanguageProfile
         self.templateSnapshot = templateSnapshot
         self.transcriptionCoordinator = transcriptionCoordinator
         self.meetingMicRecorder = meetingMicRecorder
+        self.neuralAec = injectedNeuralAec ?? MeetingNeuralAec()
+        // KTD8: config and environment are resolved once, at meeting start.
+        self.reverseLeakSuppressor = MeetingReverseLeakSuppressor(
+            enabled: config.meetingReverseLeakSuppression
+                && !MeetingReverseLeakSuppressor.isDisabledByEnvironment()
+        )
         self.sessionTrace = sessionTrace
         self.micSessionRouteState = MeetingMicSessionRouteState(
             configuredDeviceID: meetingMicRecorder.preferredInputDeviceID
         )
-        if config.useCoreAudioTap {
+        if let injectedSystemAudioRecorder {
+            self.systemAudioRecorder = injectedSystemAudioRecorder
+        } else if config.useCoreAudioTap {
             self.systemAudioRecorder = CoreAudioSystemRecorder()
         } else {
             self.systemAudioRecorder = SystemAudioRecorder()
@@ -762,6 +886,51 @@ final class MeetingSession {
         transcriptionAuthorityLock.withLock { $0.backend }
     }
 
+    /// The decision a meeting transcription call hands the runtime: the frozen
+    /// meeting selection resolved against the backend that call just read.
+    /// Nil for every incompatibility, so the call keeps its legacy language
+    /// arguments instead of receiving a value the runtime throws on. Callers
+    /// pass `isAvailable: true` because an unavailable model still fails at
+    /// load, exactly as it does today. Retranscription and file import resolve
+    /// through here too, with their own workloads.
+    nonisolated static func meetingLanguageDecision(
+        selection: TranscriptionLanguageSelection,
+        backend: BackendOption,
+        workload: TranscriptionWorkload
+    ) -> LanguageRoutingDecision? {
+        TranscriptionLanguageRouter.runtimeDecision(
+            selection: selection,
+            capabilities: backend.languageCapabilities(isAvailable: true),
+            workload: workload
+        )
+    }
+
+    /// The live-caption `prompt_id`: the same selection resolved against
+    /// Nemotron's own capabilities with `.meetingLive`, then mapped by the one
+    /// decision-to-prompt-id owner, so the Settings footer and the engine agree
+    /// by construction. `MeetingLiveCaptionBackend` is not a `BackendOption`,
+    /// which is why the capabilities are named here.
+    nonisolated static func liveCaptionNemotronPromptId(
+        selection: TranscriptionLanguageSelection
+    ) -> Int32 {
+        let decision = meetingLanguageDecision(
+            selection: selection,
+            backend: .nemotron35Multilingual,
+            workload: .meetingLive
+        )
+        return Nemotron35Language.promptId(for: decision ?? .automatic)
+    }
+
+    private func meetingFinalLanguageDecision(
+        backend: BackendOption
+    ) -> LanguageRoutingDecision? {
+        Self.meetingLanguageDecision(
+            selection: frozenLanguageSelection,
+            backend: backend,
+            workload: .meetingFinal
+        )
+    }
+
     func usesLiveNemotronTranscriptAsFinal() -> Bool {
         transcriptionAuthorityLock.withLock { $0.usesUnifiedNemotronTranscript }
     }
@@ -784,6 +953,10 @@ final class MeetingSession {
             chunkTimingTracker.discard()
             systemChunkTimingTracker.discard()
             systemChunkNeedsTimelineRealignment = false
+            resetSystemGateBufferingOnQueue()
+            systemArrivalSampleCount = 0
+            // A new meeting is the only other place suppressed intervals go (KTD7).
+            reverseLeakSuppressor.discard()
             isRecording = true
             setPausedStateOnQueue(false)
         }
@@ -872,13 +1045,17 @@ final class MeetingSession {
                     let shared = try? await self.transcriptionCoordinator.getLoadedNemotron35Transcriber()
                     engines = try await MeetingLiveCaptionModelStore.makeEngines(
                         backend: backend,
-                        nemotronPromptId: self.config.resolvedNemotron35Language.promptId,
+                        nemotronPromptId: Self.liveCaptionNemotronPromptId(
+                            selection: self.frozenLanguageSelection
+                        ),
                         sharedNemotron35: shared
                     )
                 } else {
                     engines = try await MeetingLiveCaptionModelStore.makeEngines(
                         backend: backend,
-                        nemotronPromptId: self.config.resolvedNemotron35Language.promptId
+                        nemotronPromptId: Self.liveCaptionNemotronPromptId(
+                            selection: self.frozenLanguageSelection
+                        )
                     )
                 }
                 guard self.chunkRotationQueue.sync(execute: { self.isRecording }),
@@ -999,11 +1176,15 @@ final class MeetingSession {
         let shouldPause = chunkRotationQueue.sync { () -> Bool in
             guard isRecording, !isPaused else { return false }
             appendFlushedStreamingMicOnQueue()
+            flushPendingSystemBlockOnQueue()
             rotateChunkOnQueue()
             rotateSystemChunkOnQueue()
             retainedRecordingTimeline.pause(at: pauseUptime)
             retainedRecordingWriter?.markPauseBoundary()
             neuralAec.resetForStreaming()
+            // AEC arrival positions restart at zero with the reset above.
+            micArrivalTimeline.reset()
+            reverseLeakSuppressor.reset()
             setPausedStateOnQueue(true)
             suspendPartialSessions()
             return true
@@ -1042,6 +1223,11 @@ final class MeetingSession {
             chunkTimingTracker.discard()
             systemChunkTimingTracker.discard()
             systemChunkNeedsTimelineRealignment = false
+            resetSystemGateBufferingOnQueue()
+            systemArrivalSampleCount = 0
+            micArrivalTimeline.reset()
+            // Only `discard` and a new `start` drop the suppressed intervals (KTD7).
+            reverseLeakSuppressor.discard()
             micSessionRouteState.endSession()
             retainedRecordingTimeline.reset()
             startTime = nil
@@ -1111,24 +1297,12 @@ final class MeetingSession {
         systemAudioRecorder.onSystemAudioInterruption = nil
         systemAudioRecorder.onSystemAudioFailure = nil
         systemAudioRecorder.onSystemAudioRecovery = nil
-        let (meetingStart, lastChunkTiming, lastRawMicURL, lastSystemChunkTiming, lastSystemChunkURL) = chunkRotationQueue.sync { () -> (Date, MeetingChunkTimingSnapshot?, URL?, MeetingChunkTimingSnapshot?, URL?) in
-            isRecording = false
-            setPausedStateOnQueue(false)
-
-            // Flush partial AEC frame before stopping chunk recorder
-            appendFlushedStreamingMicOnQueue()
-
-            let meetingStart = self.startTime ?? self.captureRequestedStartTime ?? Date()
-            micSessionRouteState.endSession()
-            let lastRawMicURL = rawMicChunkRecorder?.stop()
-            let lastSystemChunkURL = systemChunkRecorder?.stop()
-            rawMicChunkRecorder = nil
-            systemChunkRecorder = nil
-            let lastChunkTiming = chunkTimingTracker.finish()
-            let lastSystemChunkTiming = systemChunkTimingTracker.finish()
-            systemChunkNeedsTimelineRealignment = false
-            return (meetingStart, lastChunkTiming, lastRawMicURL, lastSystemChunkTiming, lastSystemChunkURL)
-        }
+        let teardown = finishRealtimeCapture()
+        let meetingStart = teardown.meetingStart
+        let lastChunkTiming = teardown.micChunkTiming
+        let lastRawMicURL = teardown.micChunkURL
+        let lastSystemChunkTiming = teardown.systemChunkTiming
+        let lastSystemChunkURL = teardown.systemChunkURL
         // The chunkRotationQueue barrier above guarantees every sample callback
         // enqueued before teardown has been processed and that later callbacks
         // bail on isRecording == false. Only now is the coordinator's episode
@@ -1199,10 +1373,12 @@ final class MeetingSession {
             if !usesUnifiedNemotronTranscript || systemSegments.isEmpty {
                 fputs("[meeting] transcribing final system chunk (offset=\(String(format: "%.0f", chunkOffset))s)\n", stderr)
                 do {
+                    let backend = currentBackend()
                     let evidence = try await transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                         at: lastSystemChunkURL,
-                        backend: currentBackend(),
-                        profile: config.languageProfile,
+                        backend: backend,
+                        languageDecision: meetingFinalLanguageDecision(backend: backend),
+                        profile: frozenMeetingProfile,
                         appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
                         customWords: config.customWords
                     )
@@ -1411,7 +1587,7 @@ final class MeetingSession {
                 meetingTitle: generatedTitle,
                 error: error,
                 manualNotes: manualNotes,
-                languageProfile: config.languageProfile
+                languageProfile: frozenMeetingProfile
             )
         }
         let summaryElapsedMilliseconds = max(
@@ -1445,7 +1621,8 @@ final class MeetingSession {
             micChunks: micChunkHealthTracker.snapshot(),
             systemChunks: systemChunkHealthTracker.snapshot(),
             diarizationSegments: protectedTranscriptInputs.diarizationSegments,
-            protectedSystemSegmentCount: protectedTranscriptInputs.systemSegments.count
+            protectedSystemSegmentCount: protectedTranscriptInputs.systemSegments.count,
+            reverseLeak: reverseLeakDiagnosticsSnapshot()
         )
 
         return MeetingSessionResult(
@@ -1461,7 +1638,7 @@ final class MeetingSession {
             retainedRecordingError: retainedRecordingWriterError,
             systemRecordingURL: systemAudioURL,
             templateSnapshot: templateSnapshot,
-            languageProfile: config.languageProfile,
+            languageProfile: frozenMeetingProfile,
             recordingSavePolicy: config.meetingRecordingSavePolicy,
             recordingFileFormat: config.resolvedMeetingRecordingFileFormat,
             visualContext: visualContext,
@@ -1491,6 +1668,107 @@ final class MeetingSession {
         guard !trimmedCandidate.isEmpty else { return nil }
         guard trimmedCandidate != trimmedOriginal else { return nil }
         return trimmedCandidate
+    }
+
+    struct RealtimeCaptureTeardown {
+        let meetingStart: Date
+        let micChunkTiming: MeetingChunkTimingSnapshot?
+        let micChunkURL: URL?
+        let systemChunkTiming: MeetingChunkTimingSnapshot?
+        let systemChunkURL: URL?
+    }
+
+    /// Ends realtime capture: flushes both partial buffers, finalises the chunk
+    /// files and freezes the timing trackers. `stop()` calls it before its
+    /// transcription and summarisation tail; harnesses call it to reach the
+    /// same final-chunk state without that tail.
+    @discardableResult
+    func finishRealtimeCapture() -> RealtimeCaptureTeardown {
+        chunkRotationQueue.sync { finishRealtimeCaptureOnQueue() }
+    }
+
+    private func finishRealtimeCaptureOnQueue() -> RealtimeCaptureTeardown {
+        isRecording = false
+        setPausedStateOnQueue(false)
+
+        // Flush partial AEC frame before stopping chunk recorder
+        appendFlushedStreamingMicOnQueue()
+        // The gate's pending block belongs to the final chunk, and the funnel
+        // deliberately does not guard on the flag cleared just above.
+        flushPendingSystemBlockOnQueue()
+
+        let meetingStart = self.startTime ?? self.captureRequestedStartTime ?? Date()
+        micSessionRouteState.endSession()
+        let lastRawMicURL = rawMicChunkRecorder?.stop()
+        let lastSystemChunkURL = systemChunkRecorder?.stop()
+        rawMicChunkRecorder = nil
+        systemChunkRecorder = nil
+        let lastChunkTiming = chunkTimingTracker.finish()
+        let lastSystemChunkTiming = systemChunkTimingTracker.finish()
+        systemChunkNeedsTimelineRealignment = false
+        if let lastSystemChunkURL, let lastSystemChunkTiming {
+            onSystemChunkRotated?(lastSystemChunkURL, lastSystemChunkTiming)
+        }
+        return RealtimeCaptureTeardown(
+            meetingStart: meetingStart,
+            micChunkTiming: lastChunkTiming,
+            micChunkURL: lastRawMicURL,
+            systemChunkTiming: lastSystemChunkTiming,
+            systemChunkURL: lastSystemChunkURL
+        )
+    }
+
+    /// Live disable (R14): the gate opens for the running meeting while the
+    /// estimator keeps running for diagnostics. Idempotent, and safe on a
+    /// session that has not started capture yet.
+    func forceOpenReverseLeakGate() {
+        chunkRotationQueue.async { [weak self] in
+            self?.reverseLeakSuppressor.forceOpen()
+        }
+    }
+
+    /// Live enable (R14): gating resumes from the estimator's current lock
+    /// state. Idempotent.
+    func releaseReverseLeakGate() {
+        chunkRotationQueue.async { [weak self] in
+            self?.reverseLeakSuppressor.release()
+        }
+    }
+
+    func reverseLeakDiagnosticsSnapshot() -> MeetingReverseLeakDiagnosticsSnapshot {
+        chunkRotationQueue.sync { reverseLeakSuppressor.diagnosticsSnapshot }
+    }
+
+    /// Suppressed spans in the raw system file's frame (KTD7).
+    /// Records how much offline speech fell inside suppressed spans, so the field data can
+    /// bound the false-suppression rate before the gate's thresholds are tightened (KTD9).
+    private func noteOfflineSpeechInsideSuppressedIntervals(_ seconds: Double) {
+        chunkRotationQueue.sync {
+            reverseLeakSuppressor.noteOfflineSpeechSecondsInsideSuppressedIntervals(seconds)
+        }
+    }
+
+    func suppressedSystemIntervals() -> [MeetingSuppressedInterval] {
+        chunkRotationQueue.sync { reverseLeakSuppressor.exportSuppressedIntervals() }
+    }
+
+    /// Test seam: the running count of raw system samples, which must stay
+    /// equal to the raw system file's length across pauses (KTD7, A8).
+    var systemArrivalSampleCountForTesting: Int {
+        chunkRotationQueue.sync { systemArrivalSampleCount }
+    }
+
+    /// Test seam: the live failover path only reaches the handoff handler after
+    /// seconds of confirmed silent mic, so harnesses prime the pending attempt
+    /// and let the real handler resolve it.
+    func applyMicHandoffResultForTesting(
+        record: MeetingMicFailoverRecord,
+        result: MeetingMicHandoffResult
+    ) {
+        chunkRotationQueue.sync {
+            micFailoverAttemptTracker.begin(record)
+            handleMicHandoffResultOnQueue(result)
+        }
     }
 
     private func appendFlushedStreamingMicOnQueue() {
@@ -1561,7 +1839,9 @@ final class MeetingSession {
         }
     }
 
-    private func rotateSystemChunk() {
+    /// The system VAD boundary closure's dispatch, reachable without a
+    /// `VadManager` so harnesses can drive chunk rotation.
+    func rotateSystemChunk() {
         chunkRotationQueue.async { [weak self] in
             self?.rotateSystemChunkOnQueue()
         }
@@ -1573,6 +1853,8 @@ final class MeetingSession {
               let chunkTiming = systemChunkTimingTracker.rotate() else {
             return
         }
+
+        onSystemChunkRotated?(chunkURL, chunkTiming)
 
         let chunkOffset = chunkTiming.startTimeSeconds
         let chunkDuration = chunkTiming.durationSeconds
@@ -1590,7 +1872,8 @@ final class MeetingSession {
                 let evidence = try await self.transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                     at: chunkURL,
                     backend: backend,
-                    profile: config.languageProfile,
+                    languageDecision: self.meetingFinalLanguageDecision(backend: backend),
+                    profile: self.frozenMeetingProfile,
                     appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
                     customWords: config.customWords
                 )
@@ -1718,6 +2001,8 @@ final class MeetingSession {
             systemVadController = nil
         }
         neuralAec.resetForStreaming()
+        // AEC arrival positions restart at zero with the reset above.
+        micArrivalTimeline.reset()
         meetingMicRecorder.onRawPCMSamples = { [weak self] samples in
             self?.enqueueRealtimeMicSamples(samples)
         }
@@ -1746,6 +2031,8 @@ final class MeetingSession {
     private func handleSystemAudioCaptureInterruption() {
         chunkRotationQueue.async { [weak self] in
             guard let self, self.isRecording else { return }
+            self.flushPendingSystemBlockOnQueue()
+            self.reverseLeakSuppressor.reset()
             self.rotateSystemChunkOnQueue()
             self.systemChunkNeedsTimelineRealignment = true
         }
@@ -1813,6 +2100,8 @@ final class MeetingSession {
         guard let record = micFailoverAttemptTracker.resolve(result) else { return }
         let snapshot = micHealthTracker.recordFailover(record)
         if record.didSwitchInput {
+            // A different input invalidates the registration offset (R7).
+            reverseLeakSuppressor.reset()
             fputs("[meeting] microphone handoff completed after replacement produced audio\n", stderr)
             Self.logger.info("Meeting mic failover completed")
         } else {
@@ -1853,6 +2142,15 @@ final class MeetingSession {
 
             let floatSamples = rawSamples.map { Float($0) / 32767.0 }
 
+            // The forward-residual exclusion compares raw against cleaned mic
+            // energy at the same timeline position (KTD4); the cleaned side is
+            // registered as the AEC releases it.
+            self.reverseLeakSuppressor.feedRawMicSamples(floatSamples, timelineStartSample: recordingOffset)
+            self.micArrivalTimeline.noteMicCallback(
+                sampleCount: rawSamples.count,
+                timelineStart: recordingOffset
+            )
+
             // AEC: clean mic using position-aligned system reference
             let cleanedFloat = self.neuralAec.processStreamingMic(floatSamples)
             self.appendCleanedMicSamplesOnQueue(cleanedFloat)
@@ -1872,7 +2170,13 @@ final class MeetingSession {
         let callbackDate = Date()
 
         chunkRotationQueue.async { [weak self] in
-            guard let self, self.isRecording, !self.isPaused else { return }
+            guard let self else { return }
+            // KTD7: the recorder wrote these samples to the raw file before
+            // invoking the session, so the arrival counter advances even for
+            // callbacks the guard below drops.
+            let arrivalStart = self.systemArrivalSampleCount
+            self.systemArrivalSampleCount += samples.count
+            guard self.isRecording, !self.isPaused else { return }
 
             let now = callbackDate
             let healthSnapshot = self.micHealthTracker.noteSystemSamples(samples, now: now)
@@ -1890,12 +2194,11 @@ final class MeetingSession {
                 self.systemChunkNeedsTimelineRealignment = false
             }
             self.retainedRecordingWriter?.appendSystem(samples, atSampleOffset: recordingOffset)
-            self.systemChunkRecorder?.append(samples)
-            self.systemChunkTimingTracker.append(sampleCount: samples.count)
 
             let floatSamples = samples.map { Float($0) / 32767.0 }
-            self.feedSystemPartialSession(floatSamples)
             self.neuralAec.feedSystemSamples(floatSamples)
+            // Release whatever the fresh reference unblocks before gating, so
+            // the block below sees the newest reference frames it can (A1).
             let cleanedFloat = self.neuralAec.processStreamingMic([])
             self.appendCleanedMicSamplesOnQueue(cleanedFloat)
 
@@ -1903,9 +2206,13 @@ final class MeetingSession {
                 vadController.processAudio(cleanedFloat)
             }
 
-            if let systemVadController = self.systemVadController {
-                systemVadController.processAudio(floatSamples)
-            }
+            // The chunk file, the chunk timing, the partial session and the
+            // system VAD consume the gated stream instead (KTD5).
+            self.appendRawSystemSamplesOnQueue(
+                samples,
+                timelineStart: recordingOffset,
+                arrivalStart: arrivalStart
+            )
         }
     }
 
@@ -1942,12 +2249,139 @@ final class MeetingSession {
         // Single funnel for all AEC'd mic audio — the streaming partial tail
         // must consume exactly the stream the mic chunks record.
         feedMicPartialSession(cleanedFloat)
+        // Reached from both callbacks, so it is the only place the reverse
+        // reference can be registered at its true timeline position (KTD6).
+        for span in micArrivalTimeline.consume(cleanedFloat.count) {
+            reverseLeakSuppressor.feedCleanedMicSamples(
+                Array(cleanedFloat[span.offset..<(span.offset + span.count)]),
+                timelineStartSample: span.timelineStart
+            )
+        }
         let cleanedInt16 = cleanedFloat.map { sample -> Int16 in
             Int16(max(-1.0, min(1.0, sample)) * 32767)
         }
         rawMicChunkRecorder?.append(cleanedInt16)
         chunkTimingTracker.append(sampleCount: cleanedInt16.count)
         diagnostics?.appendCleanedMicSamples(cleanedInt16)
+    }
+
+    /// Accumulates raw system callbacks into whole gate blocks (KTD5). A
+    /// timeline gap larger than the gate tolerance closes the pending block
+    /// early and it passes ungated, so a block never straddles a realign or a
+    /// capture stall (KTD6).
+    private func appendRawSystemSamplesOnQueue(
+        _ samples: [Int16],
+        timelineStart: Int,
+        arrivalStart: Int
+    ) {
+        guard !samples.isEmpty else { return }
+        if !pendingSystemBlock.isEmpty {
+            let expectedTimelineStart = pendingSystemBlockTimelineStart + pendingSystemBlock.count
+            if abs(timelineStart - expectedTimelineStart) > Self.systemBlockGapToleranceSamples {
+                emitPendingSystemBlockOnQueue(gated: false)
+            }
+        }
+        if pendingSystemBlock.isEmpty {
+            pendingSystemBlockTimelineStart = timelineStart
+            pendingSystemBlockArrivalStart = arrivalStart
+        }
+        pendingSystemBlock.append(contentsOf: samples)
+
+        while pendingSystemBlock.count >= Self.systemGateBlockLength {
+            let block = Array(pendingSystemBlock.prefix(Self.systemGateBlockLength))
+            pendingSystemBlock.removeFirst(Self.systemGateBlockLength)
+            let blockTimelineStart = pendingSystemBlockTimelineStart
+            let blockArrivalStart = pendingSystemBlockArrivalStart
+            pendingSystemBlockTimelineStart += Self.systemGateBlockLength
+            pendingSystemBlockArrivalStart += Self.systemGateBlockLength
+            gateSystemBlockOnQueue(
+                block,
+                timelineStart: blockTimelineStart,
+                arrivalStart: blockArrivalStart,
+                gated: true
+            )
+        }
+    }
+
+    /// Idempotent. Called on pause, stop and system-capture interruption only —
+    /// VAD-driven rotation leaves the remainder for the next chunk (KTD5).
+    private func flushPendingSystemBlockOnQueue() {
+        emitPendingSystemBlockOnQueue(gated: true)
+        // R16: a flushed remainder must never reach a VAD controller.
+        _ = systemVadFrameAccumulator.flush()
+    }
+
+    private func emitPendingSystemBlockOnQueue(gated: Bool) {
+        guard !pendingSystemBlock.isEmpty else { return }
+        let block = pendingSystemBlock
+        let blockTimelineStart = pendingSystemBlockTimelineStart
+        let blockArrivalStart = pendingSystemBlockArrivalStart
+        pendingSystemBlock.removeAll(keepingCapacity: true)
+        pendingSystemBlockTimelineStart += block.count
+        pendingSystemBlockArrivalStart += block.count
+        gateSystemBlockOnQueue(
+            block,
+            timelineStart: blockTimelineStart,
+            arrivalStart: blockArrivalStart,
+            gated: gated
+        )
+    }
+
+    private func resetSystemGateBufferingOnQueue() {
+        pendingSystemBlock.removeAll(keepingCapacity: true)
+        pendingSystemBlockTimelineStart = 0
+        pendingSystemBlockArrivalStart = 0
+        systemVadFrameAccumulator.reset()
+    }
+
+    private func gateSystemBlockOnQueue(
+        _ block: [Int16],
+        timelineStart: Int,
+        arrivalStart: Int,
+        gated: Bool
+    ) {
+        let floatSamples = block.map { Float($0) / 32767.0 }
+        guard gated else {
+            appendProcessedSystemSamplesOnQueue(floatSamples, original: block)
+            return
+        }
+        let processed = reverseLeakSuppressor.processSystemBlock(
+            floatSamples,
+            timelineStartSample: timelineStart,
+            arrivalStartSample: arrivalStart
+        )
+        appendProcessedSystemSamplesOnQueue(processed, original: block)
+    }
+
+    /// Single funnel for the system audio the transcript is built from: the
+    /// chunk file, the chunk timing, the streaming partial tail and the system
+    /// VAD must all consume exactly the gated stream (KTD5). Deliberately does
+    /// not guard on `isRecording`/`isPaused`, mirroring
+    /// `appendCleanedMicSamplesOnQueue`, because `stop` clears `isRecording`
+    /// before it flushes the pending block.
+    private func appendProcessedSystemSamplesOnQueue(_ processed: [Float], original: [Int16]) {
+        guard !processed.isEmpty else { return }
+        onProcessedSystemSamples?(processed)
+        feedSystemPartialSession(processed)
+        systemChunkRecorder?.append(Self.systemChunkSamples(processed: processed, original: original))
+        systemChunkTimingTracker.append(sampleCount: processed.count)
+        for frame in systemVadFrameAccumulator.push(processed) {
+            systemVadController?.processAudio(frame)
+        }
+    }
+
+    /// Ungated samples keep their original Int16 bytes: a float round trip
+    /// clamps a full-scale negative (-32768 to -32767) and would cost byte
+    /// parity with the raw capture whenever the gate never fires.
+    private static func systemChunkSamples(processed: [Float], original: [Int16]) -> [Int16] {
+        guard processed.count == original.count else {
+            return processed.map { Int16(max(-1.0, min(1.0, $0)) * 32767) }
+        }
+        var samples = original
+        for index in processed.indices where processed[index] != Float(original[index]) / 32767.0 {
+            samples[index] = Int16(max(-1.0, min(1.0, processed[index])) * 32767)
+        }
+        return samples
     }
 
     private func transcribeMicChunk(
@@ -1981,10 +2415,12 @@ final class MeetingSession {
     ) async -> [SpeechSegment]? {
         fputs("\(logPrefix) (offset=\(String(format: "%.0f", chunkOffset))s, source=raw)\n", stderr)
         do {
+            let backend = currentBackend()
             let evidence = try await transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                 at: url,
-                backend: currentBackend(),
-                profile: config.languageProfile,
+                backend: backend,
+                languageDecision: meetingFinalLanguageDecision(backend: backend),
+                profile: frozenMeetingProfile,
                 appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
                 customWords: config.customWords
             )
@@ -2047,12 +2483,15 @@ final class MeetingSession {
         endTime: Date
     ) async -> MeetingTranscriptRecoveryResult {
         let totalDuration = durationSeconds(from: meetingStart, to: endTime)
+        // Arrival-frame spans, which is the raw file's own frame (KTD7).
+        let suppressedIntervals = suppressedSystemIntervals()
 
         guard let vadManager = await transcriptionCoordinator.getVadManager() else {
             if existingSystemSegments.isEmpty {
                 return .replace(await fallbackToFullSessionSystemTranscription(
                     systemAudioURL: systemAudioURL,
-                    meetingDuration: totalDuration
+                    meetingDuration: totalDuration,
+                    suppressedIntervals: suppressedIntervals
                 ))
             }
             return .none
@@ -2060,9 +2499,23 @@ final class MeetingSession {
 
         do {
             let samples = try AudioConverter().resampleAudioFile(systemAudioURL)
-            let speechSegments = try await vadManager.segmentSpeech(
+            let rawSpeechSegments = try await vadManager.segmentSpeech(
                 samples,
                 config: VadSegmentationConfig(maxSpeechDuration: 10.0, speechPadding: 0.15)
+            )
+            // Speech the reverse-leak gate already removed from the live chunks is still in the
+            // recorder's raw file. Subtract it before the health check so leaked spans neither
+            // count as uncovered speech nor come back through repair (KTD7, R10).
+            let speechSegments = MeetingReverseLeakMaskPlanner.filterSegments(
+                rawSpeechSegments,
+                excluding: suppressedIntervals,
+                minimumDuration: MeetingTranscriptHealthMonitor.minimumEvaluatedSpeechDuration
+            )
+            noteOfflineSpeechInsideSuppressedIntervals(
+                MeetingReverseLeakMaskPlanner.suppressedSpeechSeconds(
+                    rawSpeechSegments,
+                    intervals: suppressedIntervals
+                )
             )
             let health = MeetingTranscriptHealthMonitor.evaluate(
                 existingSegments: existingSystemSegments,
@@ -2078,7 +2531,8 @@ final class MeetingSession {
                 fputs("[meeting] transcript health triggered full system fallback: \(reason)\n", stderr)
                 return .replace(await fallbackToFullSessionSystemTranscription(
                     systemAudioURL: systemAudioURL,
-                    meetingDuration: totalDuration
+                    meetingDuration: totalDuration,
+                    suppressedIntervals: suppressedIntervals
                 ))
             case .selectiveRepair(let repairSegments):
                 guard !repairSegments.isEmpty else { return .none }
@@ -2096,12 +2550,14 @@ final class MeetingSession {
                     )
                     defer { try? FileManager.default.removeItem(at: segmentURL) }
 
+                    let repairBackend = currentBackend()
                     let evidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
                         at: segmentURL,
-                        backend: currentBackend(),
-                profile: config.languageProfile,
-                appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
-                customWords: config.customWords
+                        backend: repairBackend,
+                        languageDecision: meetingFinalLanguageDecision(backend: repairBackend),
+                        profile: frozenMeetingProfile,
+                        appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
+                        customWords: config.customWords
                     )
                     repairedSegments.append(contentsOf: normalizeSystemTranscription(
                         result: evidence.cleaned,
@@ -2116,7 +2572,8 @@ final class MeetingSession {
             if existingSystemSegments.isEmpty {
                 return .replace(await fallbackToFullSessionSystemTranscription(
                     systemAudioURL: systemAudioURL,
-                    meetingDuration: totalDuration
+                    meetingDuration: totalDuration,
+                    suppressedIntervals: suppressedIntervals
                 ))
             }
             return .none
@@ -2125,14 +2582,42 @@ final class MeetingSession {
 
     private func fallbackToFullSessionSystemTranscription(
         systemAudioURL: URL,
-        meetingDuration: Double
+        meetingDuration: Double,
+        suppressedIntervals: [MeetingSuppressedInterval]
     ) async -> [SpeechSegment] {
         fputs("[meeting] no system chunks survived, falling back to full-session system transcription\n", stderr)
+        // The fallback transcribes the whole raw file, so without masking it would re-insert
+        // every span the gate suppressed (KTD7). A load failure falls back to the raw URL
+        // rather than losing the fallback entirely.
+        var transcriptionURL = systemAudioURL
+        var maskedURL: URL?
+        if !suppressedIntervals.isEmpty {
+            do {
+                var samples = try AudioConverter().resampleAudioFile(systemAudioURL)
+                MeetingReverseLeakMaskPlanner.maskSamples(
+                    &samples,
+                    intervals: suppressedIntervals,
+                    sampleRate: VadManager.sampleRate
+                )
+                let url = try MeetingReverseLeakMaskPlanner.writeTemporaryWAV(samples: samples)
+                maskedURL = url
+                transcriptionURL = url
+            } catch {
+                fputs("[meeting] could not mask suppressed spans for the system fallback: \(error)\n", stderr)
+            }
+        }
+        defer {
+            if let maskedURL {
+                try? FileManager.default.removeItem(at: maskedURL)
+            }
+        }
         do {
+            let backend = currentBackend()
             let evidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
-                at: systemAudioURL,
-                backend: currentBackend(),
-                profile: config.languageProfile,
+                at: transcriptionURL,
+                backend: backend,
+                languageDecision: meetingFinalLanguageDecision(backend: backend),
+                profile: frozenMeetingProfile,
                 appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
                 customWords: config.customWords
             )

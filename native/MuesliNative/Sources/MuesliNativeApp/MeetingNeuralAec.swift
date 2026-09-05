@@ -1,3 +1,4 @@
+import Accelerate
 import DTLNAecCoreML
 import Foundation
 import os
@@ -550,6 +551,10 @@ struct MeetingAecDelayEstimator {
         let confidence: Double
         let comparedFrames: Int
         let candidateScores: [MeetingAecDelayCandidateScore]
+        // Envelope-mode outputs (reverse direction). Defaulted trailing `var`s keep the
+        // memberwise initializer the forward path and its tests already use.
+        var activeReferenceFrames: Int = 0
+        var peakRatio: Double = 0
     }
 
     struct Failure {
@@ -572,9 +577,14 @@ struct MeetingAecDelayEstimator {
     let windowSamples = 8 * 16_000
     let estimateIntervalSamples = 2 * 16_000
     let candidateDelaysMs: [Int]
+    let envelopeCandidateLagFrames: [Int]
 
-    init(candidateDelaysMs: [Int] = Self.defaultCandidateDelaysMs) {
+    init(
+        candidateDelaysMs: [Int] = Self.defaultCandidateDelaysMs,
+        envelopeCandidateLagFrames: [Int] = Self.defaultEnvelopeCandidateLagFrames
+    ) {
         self.candidateDelaysMs = candidateDelaysMs
+        self.envelopeCandidateLagFrames = envelopeCandidateLagFrames
     }
 
     var maxCandidateDelaySamples: Int {
@@ -792,5 +802,317 @@ struct MeetingAecDelayEstimator {
             }
         }
         return weighted.last?.delaySamples ?? 0
+    }
+}
+
+// MARK: - Envelope-domain scoring (reverse direction)
+
+extension MeetingAecDelayEstimator {
+    /// Envelope frame length in samples (20 ms at 16 kHz); equals the forward `envelopeFrameSize`.
+    static let envelopeFrameLength = 320
+    static let envelopeFrameDurationMs = 20
+    /// 8 s window expressed in envelope frames.
+    static let envelopeWindowFrames = 400
+    /// 80 ms ... 2000 ms at 20 ms steps: 97 lags.
+    static let defaultEnvelopeCandidateLagFrames: [Int] = Array(4...100)
+    /// 1.5 s of active reference audio inside the window.
+    static let envelopeMinimumActiveReferenceFrames = 75
+    static let envelopeMinimumPeakScore = 0.6
+    static let envelopeMinimumPeakRatio = 1.3
+    /// The runner-up is searched outside this many grid steps around the peak.
+    static let envelopeRunnerUpExclusionSteps = 2
+    static let envelopeQuietPeak: Float = 0.0005
+    /// Floor for the runner-up score so a strong peak with a non-positive runner-up
+    /// yields a large finite ratio instead of infinity.
+    static let envelopeRunnerUpFloor = 0.01
+
+    /// Scores precomputed 20 ms envelopes with zero-mean Pearson correlation over the
+    /// candidate lag grid. Positive lag means the near end trails the reference
+    /// (system[t] echoes cleanedMic[t - lag]).
+    ///
+    /// The Pearson pairs are `(reference[i], nearEnd[i + lag])` for every `i` where
+    /// `referenceMask[i]` is true (`nil` means every frame is eligible); silence frames stay in
+    /// so the on/off structure of speech contributes to the correlation. The mask is the
+    /// exclusion hook for forward-residual frames. Active reference frames are the eligible
+    /// frames whose envelope is at or above `activeThreshold`.
+    ///
+    /// Failure reasons are reverse-only strings; the forward reasons are untouched. The
+    /// `Failure` slots map as: `validCandidateCount` scored lags, `missingCandidateCount`
+    /// lags without any pair, `lowActiveCandidateCount` lags with too few pairs,
+    /// `systemWindowSamples` near-end frames times the frame length, `systemPeak` near-end peak.
+    func scoreEnvelopes(
+        reference: [Float],
+        nearEnd: [Float],
+        referenceMask: [Bool]?,
+        activeThreshold: Float
+    ) -> Attempt {
+        let frameCount = min(reference.count, nearEnd.count)
+        let nearEndWindowSamples = nearEnd.count * Self.envelopeFrameLength
+        let nearEndPeak = nearEnd.max().map(Double.init)
+
+        guard frameCount >= Self.envelopeMinimumActiveReferenceFrames else {
+            return .failure(Failure(
+                reason: "insufficientEnvelopeHistory",
+                validCandidateCount: 0,
+                missingCandidateCount: 0,
+                lowActiveCandidateCount: 0,
+                systemWindowSamples: nearEndWindowSamples,
+                systemPeak: nearEndPeak
+            ))
+        }
+        guard let nearEndPeak, nearEndPeak > Double(Self.envelopeQuietPeak) else {
+            return .failure(Failure(
+                reason: "quietNearEndAudio",
+                validCandidateCount: 0,
+                missingCandidateCount: 0,
+                lowActiveCandidateCount: 0,
+                systemWindowSamples: nearEndWindowSamples,
+                systemPeak: nearEndPeak
+            ))
+        }
+
+        var mask = [Double](repeating: 1, count: frameCount)
+        if let referenceMask {
+            for index in 0..<min(frameCount, referenceMask.count) where !referenceMask[index] {
+                mask[index] = 0
+            }
+        }
+        var activeReferenceFrames = 0
+        for index in 0..<frameCount where mask[index] != 0 && reference[index] >= activeThreshold {
+            activeReferenceFrames += 1
+        }
+        guard activeReferenceFrames >= Self.envelopeMinimumActiveReferenceFrames else {
+            return .failure(Failure(
+                reason: "insufficientActiveReference",
+                validCandidateCount: 0,
+                missingCandidateCount: 0,
+                lowActiveCandidateCount: 0,
+                systemWindowSamples: nearEndWindowSamples,
+                systemPeak: nearEndPeak
+            ))
+        }
+
+        // Per-lag work is six vDSP reductions over these arrays; nothing is sliced or copied per lag.
+        let x = reference.prefix(frameCount).map(Double.init)
+        let y = nearEnd.prefix(frameCount).map(Double.init)
+        let count = vDSP_Length(frameCount)
+        var xm = [Double](repeating: 0, count: frameCount)
+        var x2m = [Double](repeating: 0, count: frameCount)
+        var y2 = [Double](repeating: 0, count: frameCount)
+        vDSP_vmulD(x, 1, mask, 1, &xm, 1, count)
+        vDSP_vmulD(xm, 1, x, 1, &x2m, 1, count)
+        vDSP_vmulD(y, 1, y, 1, &y2, 1, count)
+
+        var scored: [(lagFrames: Int, score: Double, compared: Int)] = []
+        var missingCandidateCount = 0
+        var lowActiveCandidateCount = 0
+
+        for lagFrames in envelopeCandidateLagFrames {
+            let pairs = frameCount - lagFrames
+            guard pairs > 0 else {
+                missingCandidateCount += 1
+                continue
+            }
+            let statistics = Self.maskedPairStatistics(
+                mask: mask, xm: xm, x2m: x2m, y: y, y2: y2, lag: lagFrames, pairs: pairs
+            )
+            let compared = Int(statistics.count.rounded())
+            guard compared >= Self.envelopeMinimumActiveReferenceFrames else {
+                lowActiveCandidateCount += 1
+                continue
+            }
+            scored.append((lagFrames, Self.pearson(statistics), compared))
+        }
+
+        guard let best = scored.max(by: { lhs, rhs in
+            if lhs.score == rhs.score {
+                return lhs.compared < rhs.compared
+            }
+            return lhs.score < rhs.score
+        }) else {
+            return .failure(Failure(
+                reason: "noValidCandidates",
+                validCandidateCount: 0,
+                missingCandidateCount: missingCandidateCount,
+                lowActiveCandidateCount: lowActiveCandidateCount,
+                systemWindowSamples: nearEndWindowSamples,
+                systemPeak: nearEndPeak
+            ))
+        }
+
+        let gridStep = Self.gridStep(of: envelopeCandidateLagFrames)
+        let exclusion = Self.envelopeRunnerUpExclusionSteps * gridStep
+        let runnerUpScore = scored
+            .filter { abs($0.lagFrames - best.lagFrames) > exclusion }
+            .map(\.score)
+            .max() ?? 0
+        let peakRatio = best.score / max(runnerUpScore, Self.envelopeRunnerUpFloor)
+
+        let reason: String?
+        if best.score < Self.envelopeMinimumPeakScore {
+            reason = "lowPeakCorrelation"
+        } else if peakRatio < Self.envelopeMinimumPeakRatio {
+            reason = "ambiguousPeak"
+        } else {
+            reason = nil
+        }
+        if let reason {
+            return .failure(Failure(
+                reason: reason,
+                validCandidateCount: scored.count,
+                missingCandidateCount: missingCandidateCount,
+                lowActiveCandidateCount: lowActiveCandidateCount,
+                systemWindowSamples: nearEndWindowSamples,
+                systemPeak: nearEndPeak
+            ))
+        }
+
+        let delayMs = best.lagFrames * Self.envelopeFrameDurationMs
+        return .result(Result(
+            delaySamples: best.lagFrames * Self.envelopeFrameLength,
+            delayMs: delayMs,
+            score: best.score,
+            confidence: best.score - runnerUpScore,
+            comparedFrames: best.compared,
+            candidateScores: scored.map {
+                MeetingAecDelayCandidateScore(
+                    delayMs: $0.lagFrames * Self.envelopeFrameDurationMs,
+                    score: $0.score,
+                    comparedFrames: $0.compared
+                )
+            },
+            activeReferenceFrames: activeReferenceFrames,
+            peakRatio: peakRatio
+        ))
+    }
+
+    /// Non-overlapping RMS frames; a trailing partial frame is dropped.
+    static func rmsEnvelope(of samples: [Float], frameSize: Int = envelopeFrameLength) -> [Float] {
+        guard frameSize > 0, samples.count >= frameSize else { return [] }
+        let frameCount = samples.count / frameSize
+        var envelope = [Float](repeating: 0, count: frameCount)
+        samples.withUnsafeBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            for frame in 0..<frameCount {
+                vDSP_rmsqv(base + frame * frameSize, 1, &envelope[frame], vDSP_Length(frameSize))
+            }
+        }
+        return envelope
+    }
+
+    /// Subtracts the array mean.
+    static func zeroMeaned(_ envelope: [Float]) -> [Float] {
+        guard !envelope.isEmpty else { return [] }
+        var mean: Float = 0
+        vDSP_meanv(envelope, 1, &mean, vDSP_Length(envelope.count))
+        var negatedMean = -mean
+        var centered = [Float](repeating: 0, count: envelope.count)
+        vDSP_vsadd(envelope, 1, &negatedMean, &centered, 1, vDSP_Length(envelope.count))
+        return centered
+    }
+
+    private struct MaskedPairStatistics {
+        var count = 0.0
+        var sumX = 0.0
+        var sumY = 0.0
+        var sumXX = 0.0
+        var sumYY = 0.0
+        var sumXY = 0.0
+    }
+
+    private static func maskedPairStatistics(
+        mask: [Double], xm: [Double], x2m: [Double], y: [Double], y2: [Double], lag: Int, pairs: Int
+    ) -> MaskedPairStatistics {
+        var statistics = MaskedPairStatistics()
+        let length = vDSP_Length(pairs)
+        mask.withUnsafeBufferPointer { maskBuffer in
+            xm.withUnsafeBufferPointer { xmBuffer in
+                x2m.withUnsafeBufferPointer { x2mBuffer in
+                    y.withUnsafeBufferPointer { yBuffer in
+                        y2.withUnsafeBufferPointer { y2Buffer in
+                            guard let maskBase = maskBuffer.baseAddress,
+                                  let xmBase = xmBuffer.baseAddress,
+                                  let x2mBase = x2mBuffer.baseAddress,
+                                  let yBase = yBuffer.baseAddress,
+                                  let y2Base = y2Buffer.baseAddress
+                            else { return }
+                            vDSP_sveD(maskBase, 1, &statistics.count, length)
+                            vDSP_sveD(xmBase, 1, &statistics.sumX, length)
+                            vDSP_sveD(x2mBase, 1, &statistics.sumXX, length)
+                            vDSP_dotprD(maskBase, 1, yBase + lag, 1, &statistics.sumY, length)
+                            vDSP_dotprD(maskBase, 1, y2Base + lag, 1, &statistics.sumYY, length)
+                            vDSP_dotprD(xmBase, 1, yBase + lag, 1, &statistics.sumXY, length)
+                        }
+                    }
+                }
+            }
+        }
+        return statistics
+    }
+
+    private static func pearson(_ s: MaskedPairStatistics) -> Double {
+        guard s.count > 1 else { return 0 }
+        let covariance = s.sumXY - s.sumX * s.sumY / s.count
+        let varianceX = s.sumXX - s.sumX * s.sumX / s.count
+        let varianceY = s.sumYY - s.sumY * s.sumY / s.count
+        guard varianceX > 1e-12, varianceY > 1e-12 else { return 0 }
+        return covariance / (varianceX * varianceY).squareRoot()
+    }
+
+    private static func gridStep(of lags: [Int]) -> Int {
+        let sorted = lags.sorted()
+        var step = Int.max
+        for index in 1..<max(sorted.count, 1) {
+            let difference = sorted[index] - sorted[index - 1]
+            if difference > 0 {
+                step = min(step, difference)
+            }
+        }
+        return step == Int.max ? 1 : step
+    }
+}
+
+/// Streaming second-order Butterworth high-pass (about 250 Hz) that band-limits audio before
+/// envelope extraction, so low-frequency room rumble does not drive the correlation.
+/// Not thread-safe: owned by the reverse suppressor and used only on MeetingSession's chunkRotationQueue.
+final class MeetingAecEnvelopeHighPassFilter {
+    private let setup: vDSP_biquad_Setup
+    private var delay: [Float]
+
+    init(cutoffHz: Double = 250, sampleRate: Double = 16_000) {
+        let omega = 2 * Double.pi * cutoffHz / sampleRate
+        let cosOmega = cos(omega)
+        let alpha = sin(omega) / 2.0.squareRoot() // sin(w0) / (2Q) with Butterworth Q = 1/sqrt(2)
+        let a0 = 1 + alpha
+        let coefficients: [Double] = [
+            (1 + cosOmega) / 2 / a0,
+            -(1 + cosOmega) / a0,
+            (1 + cosOmega) / 2 / a0,
+            -2 * cosOmega / a0,
+            (1 - alpha) / a0,
+        ]
+        guard let setup = vDSP_biquad_CreateSetup(coefficients, 1) else {
+            preconditionFailure("vDSP_biquad_CreateSetup failed")
+        }
+        self.setup = setup
+        delay = [Float](repeating: 0, count: 2 * 1 + 2)
+    }
+
+    deinit {
+        vDSP_biquad_DestroySetup(setup)
+    }
+
+    /// Filters one block, carrying the filter state into the next call.
+    func process(_ input: [Float]) -> [Float] {
+        guard !input.isEmpty else { return [] }
+        var output = [Float](repeating: 0, count: input.count)
+        vDSP_biquad(setup, &delay, input, 1, &output, 1, vDSP_Length(input.count))
+        return output
+    }
+
+    func reset() {
+        for index in delay.indices {
+            delay[index] = 0
+        }
     }
 }

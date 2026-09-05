@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import CoreAudio
+import MuesliCore
 @testable import MuesliNativeApp
 
 @Suite("StreamingDictationController")
@@ -1133,8 +1134,14 @@ struct Nemotron35LanguageTests {
         let data = try JSONEncoder().encode(cfg)
         let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(json["nemotron35_language"] as? String == "hi")
+        // Onboarding keeps the meeting authority equal to dictation, in the profile shape.
+        let meeting = try #require(json["meeting_spoken_language"] as? [String: Any])
+        #expect(meeting["selectedLanguages"] as? [String] == ["hi"])
+        #expect(meeting["dominantLanguage"] as? String == "hi")
+        #expect(meeting["mode"] == nil)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(decoded.resolvedNemotron35Language == .hindi)
+        #expect(decoded.meetingSpokenLanguage == cfg.meetingSpokenLanguage)
     }
 
     @Test("stream state freezes its language prompt")
@@ -1160,6 +1167,52 @@ struct Nemotron35LanguageTests {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
         #expect(decoded.resolvedNemotron35Language == .auto)
         #expect(decoded.nemotron35Language == Nemotron35Language.auto.rawValue)
+    }
+
+    @Test("a routing decision maps to a prompt id only for a pinned Nemotron language")
+    func promptIdForRoutingDecision() {
+        #expect(Nemotron35Language.promptId(for: .pinned(.hindi)) == Nemotron35Language.hindi.promptId)
+        #expect(Nemotron35Language.promptId(for: .pinned(.arabic)) == Nemotron35Language.arabic.promptId)
+        // KTD4: a fixed decision of a Nemotron language also pins.
+        #expect(Nemotron35Language.promptId(for: .fixed(.english)) == Nemotron35Language.english.promptId)
+        #expect(Nemotron35Language.promptId(for: .pinned(.dutch)) == Nemotron35Language.defaultLanguage.promptId)
+        #expect(Nemotron35Language.promptId(for: .automatic) == 101)
+        #expect(Nemotron35Language.promptId(for: .constrainedCandidates(
+            languages: [.arabic, .english],
+            dominantLanguage: .arabic
+        )) == 101)
+        #expect(Nemotron35Language.promptId(for: .incompatible(.automaticDetectionUnsupported)) == 101)
+    }
+
+    /// U4: the three dictation paths (standard stop, Nemotron streaming,
+    /// computer-use) share one decision helper, so a profile that pins on one
+    /// path pins on all of them.
+    @Test("one dictation helper decides for every dictation path")
+    func dictationDecisionIsSharedAcrossPaths() throws {
+        let bilingual = try LanguageProfile(
+            selectedLanguages: [.arabic, .english],
+            dominantLanguage: .arabic
+        )
+        let whisper = MuesliController.dictationLanguageDecision(
+            profile: bilingual,
+            backend: .whisperLargeTurbo
+        )
+        #expect(whisper == .pinned(.arabic))
+        #expect(Nemotron35Language.promptId(for: whisper) == Nemotron35Language.arabic.promptId)
+
+        // Parakeet v3 cannot pin, so the same profile detects instead of throwing.
+        let parakeet = MuesliController.dictationLanguageDecision(
+            profile: bilingual,
+            backend: .parakeetMultilingual
+        )
+        #expect(parakeet == .automatic)
+
+        // An automatic profile leaves streaming on auto-detect.
+        let automatic = MuesliController.dictationLanguageDecision(
+            profile: .automatic,
+            backend: .nemotron35Multilingual
+        )
+        #expect(Nemotron35Language.promptId(for: automatic) == Nemotron35Language.defaultLanguage.promptId)
     }
 }
 
@@ -1193,6 +1246,19 @@ struct WhisperKitLanguageTests {
         #expect(WhisperKitLanguage.allCases.contains(.german))
     }
 
+    @Test("every app-listed language has a WhisperKit code")
+    func coversEveryTranscriptionLanguage() {
+        for language in TranscriptionLanguage.allCases {
+            let whisper = WhisperKitLanguage(rawValue: language.rawValue)
+            #expect(whisper != nil, "missing \(language.rawValue)")
+            #expect(whisper?.rawValue == language.rawValue)
+        }
+        #expect(WhisperKitLanguage.allCases.count == TranscriptionLanguage.allCases.count + 1)
+        #expect(WhisperKitLanguage.dutch.rawValue == "nl")
+        #expect(WhisperKitLanguage.english.rawValue == "en")
+        #expect(WhisperKitLanguage.english.label == "English")
+    }
+
     @Test("config persists the selected language via snake_case key")
     func configRoundTrip() throws {
         var cfg = AppConfig()
@@ -1204,8 +1270,12 @@ struct WhisperKitLanguageTests {
         let data = try JSONEncoder().encode(cfg)
         let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(json["whisper_language"] as? String == "de")
+        let meeting = try #require(json["meeting_spoken_language"] as? [String: Any])
+        #expect(meeting["selectedLanguages"] as? [String] == ["de"])
+        #expect(meeting["dominantLanguage"] as? String == "de")
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(decoded.resolvedWhisperLanguage == .german)
+        #expect(decoded.meetingSpokenLanguage.selectedLanguages == [.german])
     }
 
     @Test("missing language config falls back to auto-detect")

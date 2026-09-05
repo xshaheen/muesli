@@ -425,6 +425,65 @@ struct MuesliCLITests {
         #expect(throws: Error.self) { try TranscribeCommand.parseLanguageSelection("en,") }
     }
 
+    @Test("pipeline fails fast when the language selection would degrade")
+    func pipelineFailsFastOnDegradedLanguage() async throws {
+        let fixture = try TranscribeFixture()
+        let pipeline = MuesliAudioTranscriptionPipeline(
+            audioPreparer: FakeAudioPreparer(wavURL: fixture.wavURL, durationSeconds: 3),
+            transcriber: FailingTranscriber(),
+            summarizer: SuccessfulSummarizer(notes: "should not run"),
+            dataChangePoster: {}
+        )
+        let degraded: [(TranscribeModel, TranscriptionLanguageSelection)] = [
+            // Parakeet cannot pin, so a single language would only be detected.
+            (.parakeetV3, try TranscriptionLanguageSelection(selectedLanguages: [.arabic])),
+            // Parakeet v2 is fixed English and would ignore Arabic.
+            (.parakeetV2, try TranscriptionLanguageSelection(selectedLanguages: [.arabic, .english])),
+        ]
+        for (model, selection) in degraded {
+            do {
+                _ = try await pipeline.run(
+                    request: MuesliAudioTranscriptionRequest(
+                        sourceURL: fixture.sourceURL,
+                        model: model,
+                        languageSelection: selection,
+                        title: "Degraded",
+                        summarize: false,
+                        saveMeeting: false
+                    ),
+                    context: fixture.context
+                )
+                Issue.record("Expected \(model.rawValue) with \(selection.selectedLanguages) to fail fast")
+            } catch let error as CLIError {
+                #expect(error.errorBody.code == "invalid_input")
+                #expect(error.errorBody.fix?.contains("compatible --model/--language") == true)
+            }
+        }
+    }
+
+    @Test("pipeline runs two languages without a dominant as automatic detection")
+    func pipelineDetectsAmongLanguagesWithoutDominant() async throws {
+        let fixture = try TranscribeFixture()
+        let pipeline = MuesliAudioTranscriptionPipeline(
+            audioPreparer: FakeAudioPreparer(wavURL: fixture.wavURL, durationSeconds: 3),
+            transcriber: FakeTranscriber(text: "detected automatically"),
+            summarizer: SuccessfulSummarizer(notes: "unused"),
+            dataChangePoster: {}
+        )
+        let result = try await pipeline.run(
+            request: MuesliAudioTranscriptionRequest(
+                sourceURL: fixture.sourceURL,
+                model: .whisperLargeTurbo,
+                languageSelection: try TranscriptionLanguageSelection(selectedLanguages: [.arabic, .english]),
+                title: "Detecting",
+                summarize: false,
+                saveMeeting: false
+            ),
+            context: fixture.context
+        )
+        #expect(result.transcript == "detected automatically")
+    }
+
     @Test("loadCustomWords accepts a plain JSON array")
     func loadCustomWordsAcceptsPlainArray() throws {
         let url = FileManager.default.temporaryDirectory
