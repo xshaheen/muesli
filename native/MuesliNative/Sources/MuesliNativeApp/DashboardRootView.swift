@@ -3,6 +3,11 @@ import MuesliCore
 
 struct DashboardRootView: View {
     static let sidebarMinimumWidth: CGFloat = 260
+    /// The collapsed rail is drawn as our own column beside the detail view, not as
+    /// the split view's sidebar: AppKit clamps that sidebar to its own minimum and
+    /// ignores a narrower request, which is what left the rail full of dead space.
+    /// 52pt is one 40pt icon cell with a 6pt gutter each side.
+    static let sidebarCollapsedWidth: CGFloat = 52
     private static let sidebarIdealWidth: CGFloat = 280
     private static let sidebarMaximumWidth: CGFloat = 320
 
@@ -12,44 +17,65 @@ struct DashboardRootView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var isSidebarCollapsed = false
 
+    private var sidebar: some View {
+        SidebarView(
+            appState: appState,
+            controller: controller,
+            isCollapsed: false,
+            onToggleCollapsed: toggleCollapsed,
+            collapseShortcut: Self.collapseShortcut
+        )
+    }
+
+    private var collapsedRail: some View {
+        SidebarView(
+            appState: appState,
+            controller: controller,
+            isCollapsed: true,
+            onToggleCollapsed: toggleCollapsed,
+            collapseShortcut: Self.collapseShortcut
+        )
+        .frame(width: Self.sidebarCollapsedWidth)
+        .frame(maxHeight: .infinity)
+    }
+
+    private static let collapseShortcut = KeyboardShortcut("s", modifiers: [.control, .command])
+
+    /// Collapsing hides the split view's sidebar entirely and shows our own rail,
+    /// so the two never appear at once and the detail view keeps its identity.
+    private func toggleCollapsed() {
+        withAnimation(MuesliTheme.Motion.eased(0.22)) {
+            isSidebarCollapsed.toggle()
+            columnVisibility = isSidebarCollapsed ? .detailOnly : .all
+        }
+    }
+
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(
-                appState: appState,
-                controller: controller,
-                isCollapsed: isSidebarCollapsed,
-                onToggleCollapsed: {
-                    withAnimation(MuesliTheme.Motion.eased(0.22)) {
-                        isSidebarCollapsed.toggle()
-                    }
-                }
-            )
-            .frame(minWidth: isSidebarCollapsed ? 68 : Self.sidebarMinimumWidth)
-            .navigationSplitViewColumnWidth(
-                min: isSidebarCollapsed ? 68 : Self.sidebarMinimumWidth,
-                ideal: isSidebarCollapsed ? 68 : Self.sidebarIdealWidth,
-                max: isSidebarCollapsed ? 68 : Self.sidebarMaximumWidth
-            )
-            // SidebarView draws its own collapse control, so the system chevron
-            // would be a second, competing toggle.
-            .toolbar(removing: .sidebarToggle)
+            sidebar
+                .frame(minWidth: Self.sidebarMinimumWidth)
+                .navigationSplitViewColumnWidth(
+                    min: Self.sidebarMinimumWidth,
+                    ideal: Self.sidebarIdealWidth,
+                    max: Self.sidebarMaximumWidth
+                )
+                // SidebarView draws its own collapse control, so the system chevron
+                // would be a second, competing toggle.
+                .toolbar(removing: .sidebarToggle)
         } detail: {
             detailContent
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(MuesliTheme.backgroundBase)
-        }
-        .navigationSplitViewStyle(.balanced)
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    columnVisibility = Self.toggledColumnVisibility(after: columnVisibility)
-                } label: {
-                    Image(systemName: "sidebar.leading")
+            // The rail lives here rather than in the sidebar column so its width is
+            // ours; safeAreaInset also insets the detail content, so nothing hides
+            // behind it.
+            .safeAreaInset(edge: .leading, spacing: 0) {
+                if isSidebarCollapsed {
+                    collapsedRail
                 }
-                .keyboardShortcut("s", modifiers: [.control, .command])
-                .help("Toggle Sidebar (⌃⌘S)")
             }
         }
+        .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 640, minHeight: 480)
         .preferredColorScheme(appState.config.darkMode ? .dark : .light)
         .onPreferenceChange(FeatureTourTargetPreferenceKey.self) { frames in

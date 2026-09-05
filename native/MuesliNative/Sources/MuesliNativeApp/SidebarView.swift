@@ -3,6 +3,9 @@ import MuesliCore
 
 struct SidebarView: View {
     private let sidebarIconColumnWidth: CGFloat = 20
+    /// Square so the selected cell reads as a deliberate pill rather than a
+    /// squat rectangle, and wide enough to centre inside the 60pt rail.
+    private let collapsedItemSize: CGFloat = 40
     private let meetingsTrailingColumnWidth: CGFloat = 24
     /// Matches the search field's inner padding so the row icon column sits
     /// exactly under the magnifier instead of 6pt to its right.
@@ -17,6 +20,9 @@ struct SidebarView: View {
     let controller: MuesliController
     var isCollapsed: Bool = false
     var onToggleCollapsed: () -> Void = {}
+    /// Carried here because the sidebar draws the only collapse control; the
+    /// toolbar no longer offers a competing one.
+    var collapseShortcut: KeyboardShortcut?
     @Environment(\.colorScheme) private var colorScheme
     @State private var meetingsExpanded = true
     @State private var renamingFolderID: Int64?
@@ -110,10 +116,10 @@ struct SidebarView: View {
     }
 
     private var collapsedSidebar: some View {
-        VStack(spacing: MuesliTheme.spacing8) {
+        VStack(spacing: MuesliTheme.spacing4) {
             sidebarToggleButton
-                .padding(.top, MuesliTheme.spacing16)
-                .padding(.bottom, MuesliTheme.spacing12)
+                .padding(.top, MuesliTheme.spacing12)
+                .padding(.bottom, MuesliTheme.spacing8)
 
             collapsedItem(tab: .timeline, icon: "clock", label: "Timeline")
             collapsedItem(tab: .dictations, icon: "waveform", label: "Dictations")
@@ -121,13 +127,13 @@ struct SidebarView: View {
             collapsedItem(tab: .insights, icon: "chart.bar.xaxis", label: "Insights")
             collapsedItem(tab: .dictionary, icon: "character.book.closed", label: "Dictionary")
 
-            Spacer()
+            Spacer(minLength: MuesliTheme.spacing16)
 
             collapsedItem(tab: .models, icon: "cpu", label: "Models")
             collapsedItem(tab: .shortcuts, icon: "command", label: "Shortcuts")
             collapsedItem(tab: .settings, icon: "gearshape", label: "Settings")
             collapsedItem(tab: .about, icon: "info.circle", label: "About")
-                .padding(.bottom, MuesliTheme.spacing16)
+                .padding(.bottom, MuesliTheme.spacing12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(MuesliTheme.backgroundDeep)
@@ -138,13 +144,14 @@ struct SidebarView: View {
             Image(systemName: "sidebar.left")
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(MuesliTheme.textSecondary)
-                .frame(width: 36, height: 36)
+                .frame(width: isCollapsed ? collapsedItemSize : 36, height: isCollapsed ? collapsedItemSize : 36)
                 .background(MuesliTheme.backgroundRaised.opacity(0.72))
                 .clipShape(Circle())
                 .overlay(Circle().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .help(isCollapsed ? "Expand sidebar" : "Collapse sidebar")
+        .modifier(OptionalKeyboardShortcut(shortcut: collapseShortcut))
+        .help(isCollapsed ? "Expand sidebar (\u{2303}\u{2318}S)" : "Collapse sidebar (\u{2303}\u{2318}S)")
         .accessibilityLabel(isCollapsed ? "Expand sidebar" : "Collapse sidebar")
     }
 
@@ -166,9 +173,9 @@ struct SidebarView: View {
             Image(systemName: icon)
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(appState.selectedTab == tab ? MuesliTheme.accent : MuesliTheme.textSecondary)
-                .frame(width: 40, height: 36)
+                .frame(width: collapsedItemSize, height: collapsedItemSize)
                 .background(appState.selectedTab == tab ? MuesliTheme.surfacePrimary : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         }
         .buttonStyle(.plain)
         .help(label)
@@ -851,5 +858,19 @@ private struct FolderDropDelegate: DropDelegate {
         }
         visit(rootID)
         return result
+    }
+}
+
+/// `keyboardShortcut` takes a non-optional, so applying one only when the host
+/// supplies it needs a modifier rather than an `if` inside the view builder.
+private struct OptionalKeyboardShortcut: ViewModifier {
+    let shortcut: KeyboardShortcut?
+
+    func body(content: Content) -> some View {
+        if let shortcut {
+            content.keyboardShortcut(shortcut)
+        } else {
+            content
+        }
     }
 }
