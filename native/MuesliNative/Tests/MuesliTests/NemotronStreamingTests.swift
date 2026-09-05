@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import CoreAudio
+import MuesliCore
 @testable import MuesliNativeApp
 
 @Suite("StreamingDictationController")
@@ -1167,6 +1168,21 @@ struct Nemotron35LanguageTests {
         #expect(decoded.resolvedNemotron35Language == .auto)
         #expect(decoded.nemotron35Language == Nemotron35Language.auto.rawValue)
     }
+
+    @Test("a routing decision maps to a prompt id only for a pinned Nemotron language")
+    func promptIdForRoutingDecision() {
+        #expect(Nemotron35Language.promptId(for: .pinned(.hindi)) == Nemotron35Language.hindi.promptId)
+        #expect(Nemotron35Language.promptId(for: .pinned(.arabic)) == Nemotron35Language.arabic.promptId)
+        // KTD4: a fixed decision of a Nemotron language also pins.
+        #expect(Nemotron35Language.promptId(for: .fixed(.english)) == Nemotron35Language.english.promptId)
+        #expect(Nemotron35Language.promptId(for: .pinned(.dutch)) == Nemotron35Language.defaultLanguage.promptId)
+        #expect(Nemotron35Language.promptId(for: .automatic) == 101)
+        #expect(Nemotron35Language.promptId(for: .constrainedCandidates(
+            languages: [.arabic, .english],
+            dominantLanguage: .arabic
+        )) == 101)
+        #expect(Nemotron35Language.promptId(for: .incompatible(.automaticDetectionUnsupported)) == 101)
+    }
 }
 
 @Suite("WhisperKitLanguage")
@@ -1197,6 +1213,19 @@ struct WhisperKitLanguageTests {
         }
         #expect(WhisperKitLanguage.allCases.contains(.auto))
         #expect(WhisperKitLanguage.allCases.contains(.german))
+    }
+
+    @Test("every app-listed language has a WhisperKit code")
+    func coversEveryTranscriptionLanguage() {
+        for language in TranscriptionLanguage.allCases {
+            let whisper = WhisperKitLanguage(rawValue: language.rawValue)
+            #expect(whisper != nil, "missing \(language.rawValue)")
+            #expect(whisper?.rawValue == language.rawValue)
+        }
+        #expect(WhisperKitLanguage.allCases.count == TranscriptionLanguage.allCases.count + 1)
+        #expect(WhisperKitLanguage.dutch.rawValue == "nl")
+        #expect(WhisperKitLanguage.english.rawValue == "en")
+        #expect(WhisperKitLanguage.english.label == "English")
     }
 
     @Test("config persists the selected language via snake_case key")

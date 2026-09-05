@@ -23,9 +23,12 @@ struct SessionTraceRuntimeTests {
         #expect(json["selectedLanguages"] as? [String] == ["ar", "en"])
         #expect(json["dominantLanguage"] as? String == "ar")
         #expect(json["meetingOutputPolicy"] as? String == "dominant_language")
-        #expect(json["effectiveLanguage"] == nil)
-        #expect(json["effectiveBehavior"] as? String == "incompatible")
-        #expect(json["routingResult"] as? String == "incompatible")
+        // Reversed under KD2: a fixed-language model now routes to its fixed
+        // arm and ignores the foreign selection instead of being incompatible.
+        #expect(json["effectiveLanguage"] as? String == "en")
+        #expect(json["effectiveBehavior"] as? String == "fixed")
+        #expect(json["routingResult"] as? String == "fixed")
+        #expect(json["candidateCount"] as? Int == 1)
     }
 
     @Test("initial profile evidence is ordered before an immediate terminal failure")

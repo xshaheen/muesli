@@ -289,6 +289,7 @@ struct BackendOption: Equatable {
         let supportsAuto: Bool
         let supportsSingle: Bool
         let fixedLanguage: TranscriptionLanguage?
+        var fallbackLanguage: TranscriptionLanguage?
 
         if self == .parakeetEnglish
             || (backend == "whisper" && WhisperKitLanguage.isEnglishOnlyModel(model)) {
@@ -315,12 +316,14 @@ struct BackendOption: Equatable {
                 })
                 supportsAuto = false
                 supportsSingle = true
+                fallbackLanguage = .english  // CohereTranscribeLanguage.defaultLanguage
             case "indicasr":
                 supported = Set(TranscriptionLanguage.allCases.filter {
                     IndicASRLanguage(rawValue: $0.rawValue) != nil
                 })
                 supportsAuto = false
                 supportsSingle = true
+                fallbackLanguage = .hindi  // IndicASRLanguage.defaultLanguage
             default:
                 supported = Set(TranscriptionLanguage.allCases)
                 supportsAuto = true
@@ -341,11 +344,14 @@ struct BackendOption: Equatable {
             supportedLanguages: supported,
             supportsAutomaticDetection: supportsAuto,
             supportsSingleLanguage: supportsSingle,
-            // U2/U3 must prove KTD3 before either backend enables this pair.
+            // Whisper candidate decoding stays disabled until the score contract
+            // in docs/plans/2026-08-19-002-feat-language-aware-transcription-fluidaudio-upgrade-plan.md
+            // is proven; the dominant-pin and automatic arms cover mixed selections.
             constrainedCandidateLanguages: [],
             constrainedCandidateCapacity: 0,
             hasComparableCandidateConfidence: false,
             fixedLanguage: fixedLanguage,
+            fallbackLanguage: fallbackLanguage,
             supportsCodeSwitching: supportsAuto,
             maximumSafeDuration: nil,
             supportsStreaming: isStreamingDictationBackend,
@@ -412,6 +418,8 @@ struct LanguageSelectionPresentation: Equatable, Sendable {
         case pinned
         case constrained
         case fixed
+        /// The backend runs, but not as the selection asked; `degradation` says how.
+        case degraded
         case incompatible
         case unavailable
     }
@@ -420,6 +428,7 @@ struct LanguageSelectionPresentation: Equatable, Sendable {
     let backendID: TranscriptionBackendID
     let selectedLanguageIDs: [String]
     let routingIdentifier: String
+    let degradation: LanguageRoutingDegradation?
     let explanation: String
 }
 
@@ -430,30 +439,60 @@ extension SpokenLanguageProfile {
         isAvailable: Bool? = nil
     ) -> LanguageSelectionPresentation {
         let capabilities = backend.languageCapabilities(isAvailable: isAvailable)
+        let selection = selection
         let decision = TranscriptionLanguageRouter.resolve(
             selection: selection,
             capabilities: capabilities,
             workload: workload
         )
+        let degradation = decision.degradation(for: selection)
         let state: LanguageSelectionPresentation.State
         let explanation: String
-        switch decision {
-        case .automatic:
+        switch (decision, degradation) {
+        case (_, .notPinned(let language)?):
+            state = .degraded
+            explanation = "\(backend.label) cannot pin \(language.label), so it will detect the spoken language automatically."
+        case (_, .providerFallback(let fallback)?):
+            state = .degraded
+            if let requested = selection.authoritativeLanguage {
+                explanation = "\(backend.label) does not support \(requested.label) and will transcribe in \(fallback.label). Choose a supported language to change this."
+            } else {
+                explanation = "\(backend.label) cannot detect languages automatically and will transcribe in \(fallback.label). Choose a dominant language to change this."
+            }
+        case (.fixed(let fixedLanguage), .fixedLanguageIgnoresSelection(let ignored)?):
+            state = .degraded
+            explanation = "\(backend.label) always transcribes in \(fixedLanguage.label) and ignores \(ignored.label) in this selection."
+        case (_, .fixedLanguageIgnoresSelection(let ignored)?):
+            state = .degraded
+            explanation = "\(backend.label) always transcribes in its fixed language and ignores \(ignored.label) in this selection."
+        case (.automatic, nil):
             state = .automatic
-            explanation = "The selected model will detect the spoken language automatically."
-        case .pinned(let language):
+            explanation = selectedLanguages.count >= 2
+                ? "The selected model will detect the spoken language among \(Self.joinedLabels(selectedLanguages))."
+                : "The selected model will detect the spoken language automatically."
+        case (.pinned(let language), nil):
             state = .pinned
-            explanation = "The selected model will transcribe in \(language.label)."
-        case .constrainedCandidates(let languages, _):
+            let accepted = selectedLanguages.filter { $0 != language }
+            explanation = accepted.isEmpty
+                ? "The selected model will transcribe in \(language.label)."
+                : "The selected model will transcribe in \(language.label); \(Self.joinedLabels(accepted)) also accepted."
+        case (.constrainedCandidates(let languages, _), nil):
             state = .constrained
-            explanation = "The selected model will consider only \(languages.map(\.label).joined(separator: " and "))."
-        case .fixed(let language):
+            explanation = "The selected model will consider only \(Self.joinedLabels(languages))."
+        case (.fixed(let language), nil):
             state = .fixed
             explanation = "This model always transcribes in \(language.label)."
-        case .incompatible(.backendUnavailable):
+        case (.incompatible(.backendUnavailable), nil):
             state = .unavailable
             explanation = "\(backend.label) remains selected but is unavailable. Download it before transcribing."
-        case .incompatible:
+        case (.incompatible(.unsupportedWorkload(let unsupported)), nil):
+            state = .incompatible
+            explanation = unsupported == .meetingLive
+                ? "\(backend.label) does not provide live meeting captions."
+                : "\(backend.label) does not transcribe meetings."
+        case (.incompatible, nil):
+            // Reachable only with capabilities that advertise neither automatic
+            // detection nor a fallback language; no app backend does.
             state = .incompatible
             explanation = "\(backend.label) cannot honor this language selection. Choose a compatible model or language setting."
         }
@@ -462,8 +501,15 @@ extension SpokenLanguageProfile {
             backendID: capabilities.backendID,
             selectedLanguageIDs: selectedLanguages.map(\.rawValue),
             routingIdentifier: decision.identifier,
+            degradation: degradation,
             explanation: explanation
         )
+    }
+
+    private static func joinedLabels(_ languages: [TranscriptionLanguage]) -> String {
+        let labels = languages.map(\.label)
+        guard labels.count > 2 else { return labels.joined(separator: " and ") }
+        return labels.dropLast().joined(separator: ", ") + " and " + labels[labels.count - 1]
     }
 }
 
@@ -535,6 +581,18 @@ enum Nemotron35Language: String, CaseIterable, Codable, Sendable {
     static func resolvedCode(_ rawValue: String?) -> String {
         resolved(rawValue).rawValue
     }
+
+    /// The single owner of decision-to-`prompt_id`: a pinned or fixed Nemotron
+    /// language maps to its id; everything else (automatic detection, a language
+    /// Nemotron lacks, candidates, incompatibilities) is auto-detect.
+    static func promptId(for decision: LanguageRoutingDecision) -> Int32 {
+        switch decision {
+        case .pinned(let language), .fixed(let language):
+            return (Self(rawValue: language.rawValue) ?? defaultLanguage).promptId
+        case .automatic, .constrainedCandidates, .incompatible:
+            return defaultLanguage.promptId
+        }
+    }
 }
 
 /// Language selection for multilingual WhisperKit models.
@@ -553,6 +611,18 @@ enum WhisperKitLanguage: String, CaseIterable, Codable, Sendable {
     case korean = "ko"
     case russian = "ru"
     case arabic = "ar"
+    // WhisperKit takes the raw ISO code, so every language the app lists
+    // (`TranscriptionLanguage`) is pinnable on multilingual checkpoints.
+    case bengali = "bn"
+    case dutch = "nl"
+    case greek = "el"
+    case kannada = "kn"
+    case malayalam = "ml"
+    case marathi = "mr"
+    case polish = "pl"
+    case tamil = "ta"
+    case telugu = "te"
+    case vietnamese = "vi"
 
     static let defaultLanguage: Self = .auto
 
@@ -571,6 +641,16 @@ enum WhisperKitLanguage: String, CaseIterable, Codable, Sendable {
         case .korean: return "Korean"
         case .russian: return "Russian"
         case .arabic: return "Arabic"
+        case .bengali: return "Bengali"
+        case .dutch: return "Dutch"
+        case .greek: return "Greek"
+        case .kannada: return "Kannada"
+        case .malayalam: return "Malayalam"
+        case .marathi: return "Marathi"
+        case .polish: return "Polish"
+        case .tamil: return "Tamil"
+        case .telugu: return "Telugu"
+        case .vietnamese: return "Vietnamese"
         }
     }
 

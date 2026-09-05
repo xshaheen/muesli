@@ -534,8 +534,9 @@ struct LanguageProfileTests {
             selectedLanguages: [.dutch],
             dominantLanguage: .dutch
         )
-        #expect(dutch.resolvedWhisperLanguage == .auto)
-        #expect(dutch.effectiveBehavior(for: .whisperSmall).kind == .providerFallback)
+        // Reversed under KTD11: WhisperKitLanguage now lists all 22 codes, so Dutch pins.
+        #expect(dutch.resolvedWhisperLanguage == .dutch)
+        #expect(dutch.effectiveBehavior(for: .whisperSmall).kind == .pinned)
     }
 
     @Test("English-only backend reports incompatible profiles")
