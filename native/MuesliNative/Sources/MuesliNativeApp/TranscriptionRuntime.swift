@@ -74,6 +74,57 @@ enum DictationCleanupPromptComposer {
         """
     }
 
+    /// On-device Qwen shares a 1,024-token context between the system prompt,
+    /// app context, dictionary, dictated text, and output, so its block is
+    /// bounded harder than the hosted backends'.
+    static let onDeviceCustomInstructionsLimit = 500
+
+    static func customInstructionsLimit(for backend: TranscriptCleanupBackendOption) -> Int {
+        backend == .local ? onDeviceCustomInstructionsLimit : CustomInstructions.maxLength
+    }
+
+    /// The single composition entry point: base, then the custom-instructions
+    /// block when there is one, then the speaker vocabulary. With empty
+    /// instructions the output is byte-identical to the vocabulary append alone.
+    static func systemPrompt(
+        base: String,
+        customInstructions: String = "",
+        customInstructionsLimit: Int = CustomInstructions.maxLength,
+        customWords: [CustomWord] = []
+    ) -> String {
+        let prompt = base + CustomInstructions.promptSuffix(
+            customInstructions,
+            preamble: CustomInstructions.dictationPreamble,
+            limit: customInstructionsLimit
+        )
+        return appendingSpeakerVocabulary(to: prompt, customWords: customWords)
+    }
+
+    /// Resolves the base from the frozen config and an optional style selection,
+    /// and the block budget from the cleanup backend, so every call site is one line.
+    /// A fixed-prompt model (S1-mini) replaces the whole composed prompt with its
+    /// trained one, the same substitution the runtime preload already applies.
+    static func systemPrompt(
+        config: AppConfig,
+        selection: DictationStyleSelectionResult?,
+        cleanupBackend: TranscriptCleanupBackendOption,
+        option: PostProcessorOption? = nil
+    ) -> String {
+        let base: String
+        if let selection, config.adaptiveDictationStylesEnabled {
+            base = compose(styleInstructions: selection.prompt)
+        } else {
+            base = config.postProcessorSystemPrompt
+        }
+        let composed = systemPrompt(
+            base: base,
+            customInstructions: config.customInstructions,
+            customInstructionsLimit: customInstructionsLimit(for: cleanupBackend),
+            customWords: config.customWords
+        )
+        return option?.effectiveSystemPrompt(configuredSystemPrompt: composed) ?? composed
+    }
+
     /// Appends the user's dictionary as model-visible restoration targets.
     /// Literal post-processing cannot repair a garbled or transliterated span
     /// unless the cleanup model first knows the intended vocabulary.
@@ -148,8 +199,8 @@ struct DictationCleanupPolicy: Equatable, Sendable {
     init(enabled: Bool, selection: DictationStyleSelectionResult) {
         self.init(
             readiness: enabled ? .ready : .disabled,
-            systemPromptSnapshot: DictationCleanupPromptComposer.compose(
-                styleInstructions: selection.prompt
+            systemPromptSnapshot: DictationCleanupPromptComposer.systemPrompt(
+                base: DictationCleanupPromptComposer.compose(styleInstructions: selection.prompt)
             ),
             provenance: DictationCleanupStyleProvenance(selection: selection)
         )

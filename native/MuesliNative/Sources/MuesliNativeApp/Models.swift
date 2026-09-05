@@ -1693,15 +1693,27 @@ enum MeetingTranscriptCleanupPrompt {
 
     static func marker(for index: Int) -> String { "\(unitMarker)\(index)>>>" }
 
-    /// The shared repair instructions plus the chunking protocol only meetings use.
-    static let systemPrompt = MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")
-        + """
+    /// The chunking protocol only meetings use. Always last, so it stays
+    /// authoritative over anything the user's preferences say.
+    private static let markerProtocol = """
 
 
         Each line is preceded by a <<<U…>>> marker. Copy every marker exactly as it \
         appears. Markers are structure, not content: never translate, renumber, \
         reorder, merge, or drop one.
         """
+
+    /// The shared repair instructions plus the chunking protocol, with no
+    /// custom instructions. Byte-identical to `systemPrompt(customInstructions: "")`.
+    static let systemPrompt = systemPrompt(customInstructions: "")
+
+    /// Repair core, then the user's preferences when they set any, then the
+    /// marker protocol.
+    static func systemPrompt(customInstructions: String) -> String {
+        MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")
+            + CustomInstructions.promptSuffix(customInstructions, preamble: CustomInstructions.meetingCleanupPreamble)
+            + markerProtocol
+    }
 }
 struct DictionarySuggestion: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
@@ -2115,6 +2127,10 @@ struct AppConfig: Codable {
     var hiddenCalendarEventSourceHints: [String: String] = [:]
     var disabledCalendarIDs: [String] = []
     var enablePostProcessor: Bool = false
+    /// The user's standing preferences for every LLM rewrite of their words:
+    /// dictation cleanup, meeting transcript cleanup, and meeting notes.
+    /// Stored trimmed; `CustomInstructions` owns the cap and the prompt block.
+    var customInstructions: String = ""
     /// Whether finalized meeting transcripts get an AI cleanup pass.
     ///
     /// Off by default: it costs a model pass per meeting, and depending on the
@@ -2283,6 +2299,7 @@ struct AppConfig: Codable {
         case hiddenCalendarEventSourceHints = "hidden_calendar_event_source_hints"
         case disabledCalendarIDs = "disabled_calendar_ids"
         case enablePostProcessor = "enable_post_processor"
+        case customInstructions = "custom_instructions"
         case enableMeetingTranscriptCleanup = "enable_meeting_transcript_cleanup"
         case meetingTranscriptCleanupConsentFingerprint = "meeting_transcript_cleanup_consent_fingerprint"
         case quilBackend = "quil_backend"
@@ -2651,6 +2668,7 @@ struct AppConfig: Codable {
         )) ?? defaults.hiddenCalendarEventSourceHints
         disabledCalendarIDs = (try? c.decode([String].self, forKey: .disabledCalendarIDs)) ?? defaults.disabledCalendarIDs
         enablePostProcessor = (try? c.decode(Bool.self, forKey: .enablePostProcessor)) ?? defaults.enablePostProcessor
+        customInstructions = (try? c.decode(String.self, forKey: .customInstructions)) ?? defaults.customInstructions
         enableMeetingTranscriptCleanup = (try? c.decode(Bool.self, forKey: .enableMeetingTranscriptCleanup))
             ?? defaults.enableMeetingTranscriptCleanup
         meetingTranscriptCleanupConsentFingerprint = try? c.decode(

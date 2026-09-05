@@ -5,6 +5,13 @@ upstream `main`.
 
 ## Unreleased — 12-08-2026
 
+### Custom instructions
+
+#### Features
+
+- Added a global Custom Instructions setting (Settings › Dictation) whose standing preferences are injected into dictation cleanup, meeting transcript cleanup, and meeting notes and titles; empty instructions leave every prompt byte-identical to before.
+- Bounded the block to 2,000 characters, with a 500-character budget on the on-device Qwen cleanup model, and stripped reserved delimiter sequences so the text can never close its own block or forge a transcript marker.
+
 ### Meeting intelligence, audio reliability, and floating UI
 
 #### Features
