@@ -9,6 +9,7 @@ upstream `main`.
 
 #### Features
 
+- Added reverse-leak suppression for meetings: when the far end echoes your own voice back through system audio, that span is now removed from the Others track before transcription, so one sentence is no longer transcribed twice. On by default, with a Meetings > Advanced toggle that takes effect during the meeting in progress and a `MUESLI_REVERSE_LEAK_SUPPRESSION=0` environment override. Saved recordings and re-transcription keep the original audio.
 - Added multi-turn meeting chat to the Responses client and all six supported summary backends.
 - Added a shared meeting-chat conversation model and a chat surface available both during and after meetings.
 - Added one-tap meeting-chat recipes and access from the floating panel, so questions can be asked without leaving a call.
