@@ -209,19 +209,23 @@ enum TranscriptCleanupClient {
         }
     }
 
+    /// - Parameter model: overrides the post-processor-scoped model resolution.
+    ///   Meeting cleanup passes the summary-side model so a cleanup request travels
+    ///   on the same model as the notes; dictation leaves it nil and is unchanged.
     static func clean(
         text: String,
         systemPrompt: String,
         appContext: String?,
         backend: TranscriptCleanupBackendOption,
         config: AppConfig,
+        model modelOverride: String? = nil,
         options: TranscriptCleanupRequestOptions = .dictationDefaults
     ) async throws -> TranscriptCleanupResult {
         guard let llmBackend = backend.llmBackend else {
             throw TranscriptCleanupError.missingConfiguration("Local cleanup is handled by Qwen3PostProcessor.")
         }
 
-        let model = configuredModel(for: backend, config: config)
+        let model = modelOverride ?? configuredModel(for: backend, config: config)
         let userPrompt = Qwen3PostProcessorConfig.formatInput(
             text,
             appContext: appContext,

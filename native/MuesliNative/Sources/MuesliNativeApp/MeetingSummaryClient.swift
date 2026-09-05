@@ -207,6 +207,30 @@ enum MeetingSummaryClient {
     /// The OpenAI and OpenRouter paths return a raw-transcript stub instead of throwing
     /// when their key is missing, so a caller that overwrites stored notes with the
     /// result has to check this first — otherwise the stub is persisted as a summary.
+    /// The model the configured summary backend would use.
+    ///
+    /// Lives here because this type owns the per-backend defaults; meeting cleanup
+    /// reads it so a cleanup request travels on the same model as the notes (KTD3).
+    static func resolvedSummaryModel(config: AppConfig) -> String {
+        let backend = (config.meetingSummaryBackend.isEmpty
+            ? MeetingSummaryBackendOption.chatGPT.backend
+            : config.meetingSummaryBackend).lowercased()
+        switch backend {
+        case MeetingSummaryBackendOption.chatGPT.backend:
+            return config.chatGPTModel.isEmpty ? defaultChatGPTModel : config.chatGPTModel
+        case MeetingSummaryBackendOption.openRouter.backend:
+            return config.openRouterModel
+        case MeetingSummaryBackendOption.ollama.backend:
+            return config.ollamaModel.isEmpty ? defaultOllamaModel : config.ollamaModel
+        case MeetingSummaryBackendOption.lmStudio.backend:
+            return config.lmStudioModel
+        case MeetingSummaryBackendOption.customLLM.backend:
+            return config.customLLMModel
+        default:
+            return config.openAIModel.isEmpty ? defaultOpenAIModel : config.openAIModel
+        }
+    }
+
     static func isBackendConfigured(config: AppConfig, isChatGPTAuthenticated: Bool) -> Bool {
         let backend = (config.meetingSummaryBackend.isEmpty ? MeetingSummaryBackendOption.chatGPT.backend : config.meetingSummaryBackend).lowercased()
         switch backend {

@@ -11,7 +11,13 @@ enum MeetingInstructionsComposer {
     }
 
     /// The transcript-cleanup system prompt for this config.
+    ///
+    /// The worked Arabic examples apply only when the meeting authority actually
+    /// selected Arabic and English; another pair gets the script-neutral text (R3).
     static func cleanupSystemPrompt(for config: AppConfig) -> String {
-        MeetingTranscriptCleanupPrompt.systemPrompt(customInstructions: customInstructions(for: config))
+        MeetingTranscriptCleanupPrompt.systemPrompt(
+            customInstructions: customInstructions(for: config),
+            usesArabicExamples: MixedLanguageRepairPrompt.usesArabicExamples(config.meetingSpokenLanguage)
+        )
     }
 }

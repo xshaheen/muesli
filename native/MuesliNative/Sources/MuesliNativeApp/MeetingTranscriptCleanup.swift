@@ -115,6 +115,7 @@ enum MeetingTranscriptCleanup {
                 appContext: nil,
                 backend: backend,
                 config: config,
+                model: MeetingCleanupTransport.model(for: config),
                 options: TranscriptCleanupRequestOptions(
                     maxOutputTokens: maxOutputTokensPerChunk,
                     disableProviderRetention: true,

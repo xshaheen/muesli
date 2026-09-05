@@ -1869,7 +1869,7 @@ enum MixedLanguageRepairPrompt {
         if useCompact {
             body = compact(subject: subject)
         } else {
-            body = hasArabicEnglishPair(profile) ? core(subject: subject) : neutral(subject: subject)
+            body = usesArabicExamples(profile) ? core(subject: subject) : neutral(subject: subject)
         }
         return "\(openingTag)\n\(body)\n\(closingTag)"
     }
@@ -1878,6 +1878,15 @@ enum MixedLanguageRepairPrompt {
     static func hasArabicEnglishPair(_ profile: SpokenLanguageProfile) -> Bool {
         let selected = Set(profile.selectedLanguages)
         return selected.contains(.arabic) && selected.contains(.english)
+    }
+
+    /// Whether a prompt built for this profile should carry the Arabic examples.
+    ///
+    /// The neutral variant exists to avoid teaching examples from a script the user
+    /// did not choose, so it applies only when the profile names a different
+    /// bilingual pair. A profile that says nothing keeps the historical text.
+    static func usesArabicExamples(_ profile: SpokenLanguageProfile) -> Bool {
+        !profile.isBilingual || hasArabicEnglishPair(profile)
     }
 
     /// The dictation preset: one snippet in, one snippet out, no wire protocol.
@@ -1909,10 +1918,18 @@ enum MeetingTranscriptCleanupPrompt {
     /// custom instructions. Byte-identical to `systemPrompt(customInstructions: "")`.
     static let systemPrompt = systemPrompt(customInstructions: "")
 
-    /// Repair core, then the user's preferences when they set any, then the
+    /// Repair instructions, then the user's preferences when they set any, then the
     /// marker protocol.
-    static func systemPrompt(customInstructions: String) -> String {
-        MixedLanguageRepairPrompt.core(subject: "transcripts of meetings")
+    ///
+    /// The marker protocol stays last so it outranks anything the preferences say:
+    /// a response whose markers drifted is rejected, and a rejection discards the
+    /// whole transcript (KTD7).
+    static func systemPrompt(customInstructions: String, usesArabicExamples: Bool = true) -> String {
+        let subject = "transcripts of meetings"
+        let repair = usesArabicExamples
+            ? MixedLanguageRepairPrompt.core(subject: subject)
+            : MixedLanguageRepairPrompt.neutral(subject: subject)
+        return repair
             + CustomInstructions.promptSuffix(customInstructions, preamble: CustomInstructions.meetingCleanupPreamble)
             + markerProtocol
     }
