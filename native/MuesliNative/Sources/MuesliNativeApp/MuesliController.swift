@@ -57,6 +57,7 @@ private struct PendingStandardDictationStop {
     let correctionTargetApp: DictationSessionTarget?
     let customWords: [[String: Any]]
     let cleanupRequest: DictationCleanupRequestSnapshot
+    let deliveryPolicy: DictationDeliveryPolicy
     let detectedSpeech: Bool
     let recordingSavePolicy: DictationRecordingSavePolicy
     let latencyTrace: DictationLatencyTraceSnapshot?
@@ -82,6 +83,7 @@ private struct StandardDictationJob: Identifiable {
     let correctionTargetApp: DictationSessionTarget?
     let customWords: [[String: Any]]
     let cleanupRequest: DictationCleanupRequestSnapshot
+    let deliveryPolicy: DictationDeliveryPolicy
     let detectedSpeech: Bool
     let recordingSavePolicy: DictationRecordingSavePolicy
     let latencyTrace: DictationLatencyTraceSnapshot?
@@ -10080,7 +10082,7 @@ public final class MuesliController: NSObject {
                             ? .targetApplicationPasteCommand
                             : .keyboardShortcut,
                         retainStagedTextOnFailure: true,
-                        onPasteDispatched: {
+                        onPasteDispatched: { _ in
                             // The post-dictation correction monitor cannot distinguish a
                             // user edit from Quill's deliberate rewrite. Once Quill actually
                             // replaces the selection, the original dictation is no longer a
@@ -12094,6 +12096,7 @@ public final class MuesliController: NSObject {
             correctionTargetApp: correctionTargetApp,
             customWords: serializedCustomWords(from: sessionConfig),
             cleanupRequest: cleanupRequest,
+            deliveryPolicy: deliveryPolicy,
             detectedSpeech: detectedSpeech,
             recordingSavePolicy: sessionConfig.dictationRecordingSavePolicy,
             latencyTrace: detachDictationLatencyTrace("stop_requested"),
@@ -12786,6 +12789,7 @@ public final class MuesliController: NSObject {
             correctionTargetApp: pendingStop.correctionTargetApp,
             customWords: pendingStop.customWords,
             cleanupRequest: pendingStop.cleanupRequest,
+            deliveryPolicy: pendingStop.deliveryPolicy,
             detectedSpeech: pendingStop.detectedSpeech,
             recordingSavePolicy: pendingStop.recordingSavePolicy,
             latencyTrace: pendingStop.latencyTrace,
@@ -13052,13 +13056,44 @@ public final class MuesliController: NSObject {
             } else {
                 try await waitForDictationDeliveryWindow()
                 if canPasteDictation(to: job.correctionTargetApp) {
-                    await PasteController.pasteAndWait(text: text)
+                    var didPressAutoEnter = false
+                    let autoEnter = job.deliveryPolicy.autoEnter
+                    await PasteController.pasteAndWait(
+                        text: text,
+                        onPasteDispatched: { [weak self] ownedStagedClipboard in
+                            guard let self,
+                                  let autoEnter,
+                                  ownedStagedClipboard
+                            else {
+                                return
+                            }
+                            // Scheduled rather than awaited: the callback runs before the
+                            // clipboard restore is armed, and the destination needs a moment
+                            // to consume Cmd+V before a send key means anything.
+                            DispatchQueue.main.asyncAfter(
+                                deadline: .now() + PasteController.autoEnterDelay
+                            ) {
+                                guard self.canDeliverAutoEnter(to: job.correctionTargetApp),
+                                      let frontmost = NSWorkspace.shared.frontmostApplication,
+                                      self.focusedElementAcceptsAutoEnter(in: frontmost)
+                                else {
+                                    return
+                                }
+                                didPressAutoEnter = PasteController.pressReturn(
+                                    commandModifier: autoEnter == .commandReturn
+                                )
+                            }
+                        }
+                    )
                     applyDictationLifecycleActions(dictationLifecycleFeedback.finish(
                         sessionID: job.id,
                         outcome: .success,
                         soundAllowed: shouldPlayDictationLifecycleSounds
                     ))
-                    if cleanupRuntime.config.enableDictionaryCorrectionPrompts {
+                    // A sent message has no editable baseline left, so the correction
+                    // monitor would poll text the user can no longer fix. It still runs
+                    // when the key was suppressed.
+                    if !didPressAutoEnter, cleanupRuntime.config.enableDictionaryCorrectionPrompts {
                         dictationCorrectionMonitor.start(
                             originalText: text,
                             appContext: job.storageContext,
@@ -13196,6 +13231,60 @@ public final class MuesliController: NSObject {
             try Task.checkCancellation()
             try await Task.sleep(for: .milliseconds(50))
         }
+    }
+
+    /// Stricter than `canPasteDictation`: the frozen target must itself be
+    /// frontmost right now.
+    ///
+    /// `canPasteDictation` substitutes `lastExternalApp` when Muesli is frontmost,
+    /// which is right for pasting but wrong for a send key: the key goes to whatever
+    /// is actually focused, so that substitution could submit into Muesli's own
+    /// window. Muesli never satisfies this check.
+    private func canDeliverAutoEnter(to capturedTarget: DictationSessionTarget?) -> Bool {
+        guard let capturedTarget else { return false }
+        guard let frontmost = NSWorkspace.shared.frontmostApplication,
+              frontmost != NSRunningApplication.current
+        else {
+            return false
+        }
+        return capturedTarget.matches(
+            processID: frontmost.processIdentifier,
+            bundleID: frontmost.bundleIdentifier ?? ""
+        )
+    }
+
+    /// Skips the send key when the focused element is a control Return would
+    /// activate rather than a field it would submit.
+    ///
+    /// Fails open: an unreadable role still presses, because web and Electron
+    /// composers routinely report nothing useful and they are the main reason
+    /// auto-enter exists.
+    private func focusedElementAcceptsAutoEnter(in application: NSRunningApplication) -> Bool {
+        guard AXIsProcessTrusted() else { return true }
+        let app = AXUIElementCreateApplication(application.processIdentifier)
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused)
+            == .success,
+            let element = focused
+        else {
+            return true
+        }
+        var role: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element as! AXUIElement,
+            kAXRoleAttribute as CFString,
+            &role
+        ) == .success, let roleName = role as? String else {
+            return true
+        }
+        let nonTextRoles: Set<String> = [
+            kAXButtonRole as String,
+            kAXMenuItemRole as String,
+            kAXCheckBoxRole as String,
+            kAXRadioButtonRole as String,
+            "AXLink",
+        ]
+        return !nonTextRoles.contains(roleName)
     }
 
     private func canPasteDictation(to capturedTarget: DictationSessionTarget?) -> Bool {
