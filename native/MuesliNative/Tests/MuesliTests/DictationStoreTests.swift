@@ -4905,6 +4905,56 @@ struct DictationStoreTests {
         ) == ["0"])
     }
 
+    @Test("a column added to the base migration reaches a database that already passed it")
+    func deferredColumnsArriveOnUpgradedDatabases() throws {
+        // Reproduces the shipped failure: target_app_name and target_app_bundle_id were
+        // appended to the base migration after databases had recorded a later version, so
+        // they never arrived. backfillLegacyTargetApplicationsIfNeeded writes both, which
+        // made every launch throw and left the diagnostics stores nil.
+        let (store, url) = try makeStoreWithURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try rawExec(
+            url,
+            """
+            ALTER TABLE dictations DROP COLUMN target_app_name;
+            ALTER TABLE dictations DROP COLUMN target_app_bundle_id;
+            DELETE FROM local_migrations;
+            PRAGMA user_version = 4;
+            """
+        )
+        #expect(try columnNames(url, "dictations").contains("target_app_name") == false)
+
+        try store.migrateIfNeeded()
+
+        let columns = try columnNames(url, "dictations")
+        #expect(columns.contains("target_app_name"))
+        #expect(columns.contains("target_app_bundle_id"))
+        #expect(try firstTextColumns(url, "PRAGMA user_version", count: 1)
+            == [String(DictationStore.currentSchemaVersion)])
+        // The store the controller builds after migrating is the thing the user sees as
+        // "Diagnostics Unavailable" when this throws.
+        #expect(throws: Never.self) { try SessionTraceStore(databaseURL: url, migrateDatabase: false) }
+    }
+
+    private func columnNames(_ url: URL, _ table: String) throws -> Set<String> {
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(\(table))", -1, &statement, nil) == SQLITE_OK else {
+            throw sqliteTestError(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(statement) }
+        var names: Set<String> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let raw = sqlite3_column_text(statement, 1) {
+                names.insert(String(cString: raw))
+            }
+        }
+        return names
+    }
+
     @Test("re-running the device-local migration on a current database changes nothing")
     func deviceLocalTableMigrationIsIdempotent() throws {
         let (store, url) = try makeStoreWithURL()

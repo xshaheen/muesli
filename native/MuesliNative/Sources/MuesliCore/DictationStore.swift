@@ -47,7 +47,7 @@ public final class DictationStore {
     private static let targetApplicationBackfillMigration = "dictation_target_application_from_app_context_v1"
     private static let quillStatisticsBackfillMigration = "quill_statistics_spoken_instruction_v1"
     public static let defaultTombstoneRetentionInterval: TimeInterval = 30 * 24 * 60 * 60
-    static let currentSchemaVersion: Int32 = 4
+    static let currentSchemaVersion: Int32 = 5
 
     private static let iso8601Formatter = ISO8601DateFormatter()
     private static let iso8601FormatterLock = NSLock()
@@ -130,9 +130,14 @@ public final class DictationStore {
                     validate: validateRecordingArtifactSchema
                 ),
                 SQLiteMigrationRunner.Migration(
-                    version: Self.currentSchemaVersion,
+                    version: 4,
                     apply: addDeviceLocalTableSchema,
                     validate: validateDeviceLocalTableSchema
+                ),
+                SQLiteMigrationRunner.Migration(
+                    version: Self.currentSchemaVersion,
+                    apply: addDeferredColumnSchema,
+                    validate: validateDeferredColumnSchema
                 ),
             ],
             checkpoint: migrationCheckpoint
@@ -170,6 +175,71 @@ public final class DictationStore {
             throw error
         }
     }
+
+    /// Columns added to the base schema after it shipped.
+    ///
+    /// Replayed by both the base migration and the deferred-column migration, from this
+    /// one list. A column appended here reaches a database that already passed the base
+    /// migration only because the later migration replays the whole list; keeping two
+    /// copies is what stranded `target_app_name` on every upgraded database and made the
+    /// one-shot backfill that writes it throw on every launch.
+    static let columnMigrations: [(table: String, column: String, definition: String)] = [
+        ("meetings", "folder_id", "INTEGER REFERENCES meeting_folders(id)"),
+        ("meetings", "selected_template_id", "TEXT"),
+        ("meetings", "selected_template_name", "TEXT"),
+        ("meetings", "selected_template_kind", "TEXT"),
+        ("meetings", "selected_template_prompt", "TEXT"),
+        ("meetings", "saved_recording_path", "TEXT"),
+        ("meetings", "meeting_status", "TEXT NOT NULL DEFAULT 'completed'"),
+        ("meetings", "manual_notes", "TEXT NOT NULL DEFAULT ''"),
+        ("meetings", "chat_history_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("meetings", "source", "TEXT NOT NULL DEFAULT 'meeting'"),
+        ("dictations", "source", "TEXT NOT NULL DEFAULT 'dictation'"),
+        ("dictations", "updated_at", "REAL NOT NULL DEFAULT 0"),
+        ("dictations", "deleted_at", "REAL"),
+        ("dictations", "cloud_record_name", "TEXT"),
+        ("dictations", "cloud_change_tag", "TEXT"),
+        ("dictations", "cloud_system_fields", "BLOB"),
+        ("dictations", "last_synced_at", "REAL"),
+        ("dictations", "sync_dirty", "INTEGER NOT NULL DEFAULT 1"),
+        ("dictations", "dictation_style_id", "TEXT"),
+        ("dictations", "dictation_style_name", "TEXT"),
+        ("dictations", "dictation_style_selection_source", "TEXT"),
+        ("dictations", "dictation_cleanup_outcome", "TEXT"),
+        ("dictations", "target_app_name", "TEXT"),
+        ("dictations", "target_app_bundle_id", "TEXT"),
+        // Databases predating the sync columns still have to satisfy the schema
+        // postcondition and feed the sync export SELECTs. SQLite rejects a
+        // non-constant DEFAULT on ADD COLUMN, so created_at backfills as NULL here
+        // rather than datetime('now') as in the CREATE TABLE above.
+        ("dictations", "started_at", "TEXT"),
+        ("dictations", "ended_at", "TEXT"),
+        ("dictations", "created_at", "TEXT"),
+        ("meetings", "updated_at", "REAL NOT NULL DEFAULT 0"),
+        ("meetings", "deleted_at", "REAL"),
+        ("meetings", "cloud_record_name", "TEXT"),
+        ("meetings", "cloud_change_tag", "TEXT"),
+        ("meetings", "cloud_system_fields", "BLOB"),
+        ("meetings", "cloud_transcript_record_name", "TEXT"),
+        ("meetings", "last_synced_at", "REAL"),
+        ("meetings", "sync_dirty", "INTEGER NOT NULL DEFAULT 1"),
+        ("meetings", "calendar_occurrence_key", "TEXT"),
+        ("meetings", "calendar_source", "TEXT"),
+        ("meetings", "calendar_id", "TEXT"),
+        ("meetings", "calendar_series_id", "TEXT"),
+        ("meetings", "calendar_occurrence_start", "REAL"),
+        ("meetings", "cleaned_transcript", "TEXT NOT NULL DEFAULT ''"),
+        // Nullable, matching the CREATE TABLE above: absent visual context is NULL,
+        // not an empty string, so callers can tell "never captured" from "captured nothing".
+        ("meetings", "visual_context", "TEXT"),
+        ("meetings", "previous_meeting_notes", "TEXT NOT NULL DEFAULT ''"),
+        ("meetings", "notes_source", "TEXT NOT NULL DEFAULT 'raw'"),
+        ("meeting_folders", "parent_id", "INTEGER REFERENCES meeting_folders(id)"),
+        ("meetings", "follow_up_to_id", "INTEGER REFERENCES meetings(id) ON DELETE SET NULL"),
+        ("meetings", "follow_up_to_record_name", "TEXT"),
+        ("meeting_participants", "source", "TEXT NOT NULL DEFAULT 'manual'"),
+        ("meeting_participants", "is_suppressed", "INTEGER NOT NULL DEFAULT 0"),
+    ]
 
     private func normalizeLegacySchema(db: OpaquePointer?) throws {
 
@@ -317,63 +387,7 @@ public final class DictationStore {
         // These columns are present in CREATE TABLE for fresh databases. The
         // inspected ALTER path upgrades supported legacy and partially migrated
         // databases without swallowing unrelated SQLite errors.
-        let columnMigrations: [(table: String, column: String, definition: String)] = [
-            ("meetings", "folder_id", "INTEGER REFERENCES meeting_folders(id)"),
-            ("meetings", "selected_template_id", "TEXT"),
-            ("meetings", "selected_template_name", "TEXT"),
-            ("meetings", "selected_template_kind", "TEXT"),
-            ("meetings", "selected_template_prompt", "TEXT"),
-            ("meetings", "saved_recording_path", "TEXT"),
-            ("meetings", "meeting_status", "TEXT NOT NULL DEFAULT 'completed'"),
-            ("meetings", "manual_notes", "TEXT NOT NULL DEFAULT ''"),
-            ("meetings", "chat_history_json", "TEXT NOT NULL DEFAULT '[]'"),
-            ("meetings", "source", "TEXT NOT NULL DEFAULT 'meeting'"),
-            ("dictations", "source", "TEXT NOT NULL DEFAULT 'dictation'"),
-            ("dictations", "updated_at", "REAL NOT NULL DEFAULT 0"),
-            ("dictations", "deleted_at", "REAL"),
-            ("dictations", "cloud_record_name", "TEXT"),
-            ("dictations", "cloud_change_tag", "TEXT"),
-            ("dictations", "cloud_system_fields", "BLOB"),
-            ("dictations", "last_synced_at", "REAL"),
-            ("dictations", "sync_dirty", "INTEGER NOT NULL DEFAULT 1"),
-            ("dictations", "dictation_style_id", "TEXT"),
-            ("dictations", "dictation_style_name", "TEXT"),
-            ("dictations", "dictation_style_selection_source", "TEXT"),
-            ("dictations", "dictation_cleanup_outcome", "TEXT"),
-            ("dictations", "target_app_name", "TEXT"),
-            ("dictations", "target_app_bundle_id", "TEXT"),
-            // Databases predating the sync columns still have to satisfy the schema
-            // postcondition and feed the sync export SELECTs. SQLite rejects a
-            // non-constant DEFAULT on ADD COLUMN, so created_at backfills as NULL here
-            // rather than datetime('now') as in the CREATE TABLE above.
-            ("dictations", "started_at", "TEXT"),
-            ("dictations", "ended_at", "TEXT"),
-            ("dictations", "created_at", "TEXT"),
-            ("meetings", "updated_at", "REAL NOT NULL DEFAULT 0"),
-            ("meetings", "deleted_at", "REAL"),
-            ("meetings", "cloud_record_name", "TEXT"),
-            ("meetings", "cloud_change_tag", "TEXT"),
-            ("meetings", "cloud_system_fields", "BLOB"),
-            ("meetings", "cloud_transcript_record_name", "TEXT"),
-            ("meetings", "last_synced_at", "REAL"),
-            ("meetings", "sync_dirty", "INTEGER NOT NULL DEFAULT 1"),
-            ("meetings", "calendar_occurrence_key", "TEXT"),
-            ("meetings", "calendar_source", "TEXT"),
-            ("meetings", "calendar_id", "TEXT"),
-            ("meetings", "calendar_series_id", "TEXT"),
-            ("meetings", "calendar_occurrence_start", "REAL"),
-            ("meetings", "cleaned_transcript", "TEXT NOT NULL DEFAULT ''"),
-            // Nullable, matching the CREATE TABLE above: absent visual context is NULL,
-            // not an empty string, so callers can tell "never captured" from "captured nothing".
-            ("meetings", "visual_context", "TEXT"),
-            ("meetings", "previous_meeting_notes", "TEXT NOT NULL DEFAULT ''"),
-            ("meetings", "notes_source", "TEXT NOT NULL DEFAULT 'raw'"),
-            ("meeting_folders", "parent_id", "INTEGER REFERENCES meeting_folders(id)"),
-            ("meetings", "follow_up_to_id", "INTEGER REFERENCES meetings(id) ON DELETE SET NULL"),
-            ("meetings", "follow_up_to_record_name", "TEXT"),
-            ("meeting_participants", "source", "TEXT NOT NULL DEFAULT 'manual'"),
-            ("meeting_participants", "is_suppressed", "INTEGER NOT NULL DEFAULT 0"),
-        ]
+        let columnMigrations = Self.columnMigrations
         for migration in columnMigrations {
             try addColumnIfNeeded(
                 migration.column,
@@ -506,6 +520,40 @@ public final class DictationStore {
     ///
     /// Written `IF NOT EXISTS` and column-by-column so it is a no-op on a database that
     /// already has both tables, including one created fresh by version 1.
+    /// Adds every column in `columnMigrations` that this database is missing.
+    ///
+    /// Those columns are declared inside the base migration, which the runner never
+    /// replays, so a column appended after a database passed that version never reached
+    /// it. `dictations.target_app_name` and `target_app_bundle_id` were stranded that
+    /// way, and `backfillLegacyTargetApplicationsIfNeeded` writes both: every launch
+    /// threw "no such column", `migrateIfNeeded` failed, and the controller then left
+    /// the session-trace and recording-artifact stores nil, which is what surfaced as
+    /// "Diagnostics Unavailable".
+    ///
+    /// `addColumnIfNeeded` skips a column that already exists, so this is a no-op on a
+    /// database created fresh by the base migration.
+    private func addDeferredColumnSchema(db: OpaquePointer?) throws {
+        for migration in Self.columnMigrations {
+            try addColumnIfNeeded(
+                migration.column,
+                definition: migration.definition,
+                to: migration.table,
+                db: db
+            )
+        }
+    }
+
+    private func validateDeferredColumnSchema(db: OpaquePointer?) throws {
+        try validateDeviceLocalTableSchema(db: db)
+        for migration in Self.columnMigrations {
+            guard try columnExists(migration.column, in: migration.table, db: db) else {
+                throw schemaPostconditionError(
+                    "\(migration.table).\(migration.column) is missing after the deferred-column migration"
+                )
+            }
+        }
+    }
+
     private func addDeviceLocalTableSchema(db: OpaquePointer?) throws {
         try exec(
             """
