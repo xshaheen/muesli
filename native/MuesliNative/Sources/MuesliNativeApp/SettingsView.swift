@@ -1167,11 +1167,36 @@ struct SettingsView: View {
         return "Live preview does not follow meeting languages."
     }
 
+    /// Whether repair is actually reaching dictations, and why not when it is not (R8).
+    ///
+    /// A bilingual user is told repair is automatic, so silence here would read as
+    /// "it is working" in exactly the case where it is not.
+    private var mixedLanguageRepairStatus: String? {
+        guard appState.config.dictationLanguageProfile.isBilingual else { return nil }
+        guard appState.config.enablePostProcessor else {
+            return "Mixed-language repair needs AI transcript cleanup switched on."
+        }
+        guard !cleanupModelUsesFixedPrompt else {
+            // S1-mini substitutes its own trained prompt for the composed one, so
+            // the repair block never reaches the model.
+            return "S1-mini uses its own instructions, so mixed-language repair does not apply."
+        }
+        return "Mixed-language repair is on for your selected dictation languages."
+    }
+
     private var dictationCleanupSettingsSection: some View {
         settingsSection("Dictation Cleanup") {
-            settingsRow("AI transcript cleanup") {
-                settingsSwitch(isOn: appState.config.enablePostProcessor) { newValue in
-                    controller.setPostProcessorEnabled(newValue)
+            if let mixedLanguageRepairStatus {
+                settingsRow("AI transcript cleanup", description: mixedLanguageRepairStatus) {
+                    settingsSwitch(isOn: appState.config.enablePostProcessor) { newValue in
+                        controller.setPostProcessorEnabled(newValue)
+                    }
+                }
+            } else {
+                settingsRow("AI transcript cleanup") {
+                    settingsSwitch(isOn: appState.config.enablePostProcessor) { newValue in
+                        controller.setPostProcessorEnabled(newValue)
+                    }
                 }
             }
             if appState.config.enablePostProcessor {

@@ -853,6 +853,9 @@ public final class MuesliController: NSObject {
 
     func start() {
         hasStarted = true
+        // Covers the user who was already bilingual before this build shipped;
+        // the latch keeps it to one attempt (R7).
+        applyBilingualRepairAutoEnableIfNeeded()
         Task.detached(priority: .utility) {
             MeetingSessionDiagnostics.prepareStore()
         }
@@ -2231,7 +2234,8 @@ public final class MuesliController: NSObject {
         config = persisted
         appState.config = persisted
         statusBarController?.refresh()
-        return persisted
+        applyBilingualRepairAutoEnableIfNeeded()
+        return config
     }
 
     /// Commits the meeting language authority. A meeting save never touches the
@@ -3458,6 +3462,18 @@ public final class MuesliController: NSObject {
         }
         updateConfig { $0.enablePostProcessor = enabled }
         preloadExperimentalTranscriptionFeatures()
+    }
+
+    /// Turns dictation cleanup on once for a bilingual profile (KTD6, R7).
+    ///
+    /// Records the attempt before enabling, so a readiness refusal does not leave
+    /// the latch open for a retry on every launch.
+    func applyBilingualRepairAutoEnableIfNeeded() {
+        let decision = BilingualRepairAutoEnable.decide(config: config)
+        guard decision.recordsAttempt else { return }
+        updateConfig { $0.bilingualRepairAutoEnableApplied = true }
+        guard decision.enablesPostProcessor else { return }
+        setPostProcessorEnabled(true)
     }
 
     /// Enables AI cleanup of finalized meeting transcripts.
