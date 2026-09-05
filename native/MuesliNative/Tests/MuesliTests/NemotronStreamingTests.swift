@@ -1183,6 +1183,37 @@ struct Nemotron35LanguageTests {
         )) == 101)
         #expect(Nemotron35Language.promptId(for: .incompatible(.automaticDetectionUnsupported)) == 101)
     }
+
+    /// U4: the three dictation paths (standard stop, Nemotron streaming,
+    /// computer-use) share one decision helper, so a profile that pins on one
+    /// path pins on all of them.
+    @Test("one dictation helper decides for every dictation path")
+    func dictationDecisionIsSharedAcrossPaths() throws {
+        let bilingual = try LanguageProfile(
+            selectedLanguages: [.arabic, .english],
+            dominantLanguage: .arabic
+        )
+        let whisper = MuesliController.dictationLanguageDecision(
+            profile: bilingual,
+            backend: .whisperLargeTurbo
+        )
+        #expect(whisper == .pinned(.arabic))
+        #expect(Nemotron35Language.promptId(for: whisper) == Nemotron35Language.arabic.promptId)
+
+        // Parakeet v3 cannot pin, so the same profile detects instead of throwing.
+        let parakeet = MuesliController.dictationLanguageDecision(
+            profile: bilingual,
+            backend: .parakeetMultilingual
+        )
+        #expect(parakeet == .automatic)
+
+        // An automatic profile leaves streaming on auto-detect.
+        let automatic = MuesliController.dictationLanguageDecision(
+            profile: .automatic,
+            backend: .nemotron35Multilingual
+        )
+        #expect(Nemotron35Language.promptId(for: automatic) == Nemotron35Language.defaultLanguage.promptId)
+    }
 }
 
 @Suite("WhisperKitLanguage")

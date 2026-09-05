@@ -1464,6 +1464,26 @@ public final class MuesliController: NSObject {
         ))
     }
 
+    /// The one place a dictation profile becomes a routing decision. All three
+    /// dictation paths — the standard stop, Nemotron double-tap streaming, and
+    /// computer-use — resolve through here so they agree on what a selection
+    /// means for a backend. The router degrades rather than throwing, so an
+    /// unpinnable selection detects instead of failing the dictation (KD2).
+    nonisolated static func dictationLanguageDecision(
+        profile: LanguageProfile,
+        backend: BackendOption
+    ) -> LanguageRoutingDecision {
+        let selection = (try? TranscriptionLanguageSelection(
+            selectedLanguages: profile.selectedLanguages,
+            dominantLanguage: profile.dominantLanguage
+        )) ?? .automatic
+        return TranscriptionLanguageRouter.resolve(
+            selection: selection,
+            capabilities: backend.languageCapabilities(isAvailable: true),
+            workload: .dictation
+        )
+    }
+
     nonisolated static func migrateLegacyMeetingRecordings(
         historyStore: DictationStore,
         artifactStore: RecordingArtifactStore
@@ -10396,6 +10416,10 @@ public final class MuesliController: NSObject {
                 let result = try await self.transcriptionCoordinator.transcribeDictation(
                     at: wavURL,
                     backend: backend,
+                    languageDecision: Self.dictationLanguageDecision(
+                        profile: languageProfile,
+                        backend: backend
+                    ),
                     cohereLanguage: languageProfile.resolvedCohereLanguage,
                     indicASRLanguage: languageProfile.resolvedIndicASRLanguage,
                     nemotron35Language: languageProfile.resolvedNemotron35Language,
@@ -11515,7 +11539,12 @@ public final class MuesliController: NSObject {
             }
             fputs("[muesli-native] got Nemotron 3.5 transcriber\n", stderr)
             let chunkSamples = transcriber.chunkSamples
-            let promptId = languageProfile.resolvedNemotron35Language.promptId
+            let promptId = Nemotron35Language.promptId(
+                for: Self.dictationLanguageDecision(
+                    profile: languageProfile,
+                    backend: .nemotron35Multilingual
+                )
+            )
             let makeController: @MainActor (AudioObjectID?) -> StreamingDictationController = { preferredID in
                 StreamingDictationController(
                     transcriber: transcriber,
@@ -12881,14 +12910,9 @@ public final class MuesliController: NSObject {
                 await Self.recordDictationTraceEvent(event, trace: job.sessionTrace)
             }
             await job.sessionTrace.recordStageStarted("speech_recognition")
-            let frozenLanguageSelection = (try? TranscriptionLanguageSelection(
-                selectedLanguages: job.languageProfile.selectedLanguages,
-                dominantLanguage: job.languageProfile.dominantLanguage
-            )) ?? .automatic
-            let frozenLanguageDecision = TranscriptionLanguageRouter.resolve(
-                selection: frozenLanguageSelection,
-                capabilities: job.backend.languageCapabilities(isAvailable: true),
-                workload: .dictation
+            let frozenLanguageDecision = Self.dictationLanguageDecision(
+                profile: job.languageProfile,
+                backend: job.backend
             )
             let result = try await transcriptionCoordinator.transcribeDictationWithCleanupOutcome(
                 at: job.wavURL,
