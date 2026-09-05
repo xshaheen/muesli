@@ -126,17 +126,18 @@ enum MeetingTranscriptCleanup {
     }
 
     /// Whether cleanup should run at all for the current configuration.
+    /// Cleanup is a consequence of the meeting language selection (KTD1, R10).
+    ///
+    /// No separate toggle: repair runs when the user told Muesli the meeting is
+    /// bilingual and the summary backend it already uses can accept the request.
     static func isEnabled(
         config: AppConfig,
         backend: TranscriptCleanupBackendOption,
         isChatGPTAuthenticated: Bool
     ) -> Bool {
-        guard MeetingTranscriptCleanupPolicy.hasCurrentConsent(for: backend, config: config) else {
-            return false
-        }
+        guard config.meetingSpokenLanguage.isBilingual else { return false }
         guard MeetingTranscriptCleanupPolicy.isEligible(backend) else { return false }
-        return TranscriptCleanupClient.hasRequiredSettings(
-            for: backend,
+        return MeetingCleanupTransport.isConfigured(
             config: config,
             isChatGPTAuthenticated: isChatGPTAuthenticated
         )

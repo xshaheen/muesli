@@ -1627,25 +1627,22 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    /// Read-only: meeting repair follows the meeting language selection, so there
+    /// is nothing to toggle here (R11).
     private var meetingTranscriptCleanupSection: some View {
-        let backend = appState.selectedPostProcessorBackend
-        let eligible = MeetingTranscriptCleanupPolicy.isEligible(backend)
-        settingsSection("Meeting Transcript Cleanup") {
+        let status = MeetingCleanupStatus.describe(
+            config: appState.config,
+            isChatGPTAuthenticated: appState.isChatGPTAuthenticated
+        )
+        return settingsSection("Meeting Transcript Cleanup") {
             settingsRow(
                 "Repair mixed-language transcripts",
-                description: MeetingTranscriptCleanupPolicy.ineligibilityReason(backend)
-                    ?? MeetingTranscriptCleanupPolicy.disclosure(for: backend, config: appState.config),
+                description: status.detail,
                 controlWidth: meetingControlWidth
             ) {
-                settingsSwitch(
-                    isOn: MeetingTranscriptCleanupPolicy.hasCurrentConsent(
-                        for: backend,
-                        config: appState.config
-                    ) && eligible
-                ) { newValue in
-                    controller.setMeetingTranscriptCleanupEnabled(newValue)
-                }
-                .disabled(!eligible)
+                Text(status.state)
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textSecondary)
             }
         }
     }

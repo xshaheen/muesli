@@ -226,68 +226,24 @@ struct MeetingCleanupPromptTests {
         #expect(MeetingTranscriptCleanupPolicy.locality(for: .local, config: AppConfig()) == nil)
     }
 
-    // MARK: - Setting
+    // MARK: - Retired keys
 
-    @Test("meeting cleanup is off by default")
-    func settingDefaultsOff() {
-        #expect(AppConfig().enableMeetingTranscriptCleanup == false)
-    }
-
-    @Test("a config saved before this feature decodes as off, not on")
-    func absentKeyDecodesOff() throws {
-        let json = Data(#"{"enable_post_processor": true}"#.utf8)
+    @Test("a config carrying the retired cleanup keys still decodes")
+    func retiredKeysStillDecode() throws {
+        // R14: an older config must load; the keys are simply no longer read.
+        let json = Data(#"{"enable_meeting_transcript_cleanup": true,"meeting_transcript_cleanup_consent_fingerprint":"abc","enable_post_processor": true}"#.utf8)
 
         let config = try JSONDecoder().decode(AppConfig.self, from: json)
 
-        #expect(config.enableMeetingTranscriptCleanup == false)
+        #expect(config.enablePostProcessor)
     }
 
-    @Test("legacy cleanup consent without a destination fingerprint fails closed")
-    func legacyConsentWithoutFingerprintFailsClosed() throws {
-        let json = Data(#"{"enable_meeting_transcript_cleanup": true,"post_processor_backend":"ollama"}"#.utf8)
+    @Test("a save no longer writes the retired cleanup keys")
+    func retiredKeysAreNotWritten() throws {
+        let data = try JSONEncoder().encode(AppConfig())
+        let json = try #require(String(data: data, encoding: .utf8))
 
-        let config = try JSONDecoder().decode(AppConfig.self, from: json)
-
-        #expect(config.enableMeetingTranscriptCleanup == false)
-        #expect(config.meetingTranscriptCleanupConsentFingerprint == nil)
-    }
-
-    @Test("the setting round-trips through encoding")
-    func settingRoundTrips() throws {
-        var config = AppConfig()
-        config.postProcessorBackend = TranscriptCleanupBackendOption.hosted(.ollama).backend
-        #expect(MeetingTranscriptCleanupPolicy.grantConsent(
-            for: .hosted(.ollama),
-            config: &config
-        ))
-
-        let data = try JSONEncoder().encode(config)
-        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
-
-        #expect(decoded.enableMeetingTranscriptCleanup)
-        #expect(MeetingTranscriptCleanupPolicy.hasCurrentConsent(
-            for: .hosted(.ollama),
-            config: decoded
-        ))
-    }
-
-    @Test("equivalent endpoint spellings keep the same consent fingerprint")
-    func consentFingerprintNormalizesDestination() {
-        var first = AppConfig()
-        first.ollamaURL = "HTTPS://EXAMPLE.COM:443/"
-        var second = first
-        second.ollamaURL = "https://example.com"
-
-        let firstFingerprint = MeetingTranscriptCleanupPolicy.consentFingerprint(
-            for: .hosted(.ollama),
-            config: first
-        )
-        let secondFingerprint = MeetingTranscriptCleanupPolicy.consentFingerprint(
-            for: .hosted(.ollama),
-            config: second
-        )
-
-        #expect(firstFingerprint != nil)
-        #expect(firstFingerprint == secondFingerprint)
+        #expect(!json.contains("enable_meeting_transcript_cleanup"))
+        #expect(!json.contains("meeting_transcript_cleanup_consent_fingerprint"))
     }
 }

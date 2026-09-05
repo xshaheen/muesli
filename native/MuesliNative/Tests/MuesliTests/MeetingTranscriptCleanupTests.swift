@@ -346,23 +346,44 @@ struct MeetingTranscriptCleanupTests {
 
     // MARK: - Gating
 
-    @Test("cleanup is skipped when the setting is off")
-    func disabledSettingSkipsCleanup() {
+    private func bilingualConfig() throws -> AppConfig {
         var config = AppConfig()
-        config.enableMeetingTranscriptCleanup = false
+        config.meetingSpokenLanguage = try SpokenLanguageProfile(
+            selectedLanguages: [.arabic, .english]
+        )
+        return config
+    }
+
+    @Test("cleanup is skipped for a monolingual meeting selection")
+    func monolingualSelectionSkipsCleanup() throws {
+        var config = AppConfig()
+        config.meetingSpokenLanguage = try SpokenLanguageProfile(selectedLanguages: [.english])
         config.openAIAPIKey = "sk-test"
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.openAI.backend
 
         #expect(MeetingTranscriptCleanup.isEnabled(
             config: config,
-            backend: .hosted(.openAI),
+            backend: MeetingCleanupTransport.backend(for: config),
             isChatGPTAuthenticated: false
         ) == false)
     }
 
+    @Test("cleanup runs for a bilingual selection on a configured summary backend")
+    func bilingualSelectionEnablesCleanup() throws {
+        var config = try bilingualConfig()
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.openAI.backend
+        config.openAIAPIKey = "sk-test"
+
+        #expect(MeetingTranscriptCleanup.isEnabled(
+            config: config,
+            backend: MeetingCleanupTransport.backend(for: config),
+            isChatGPTAuthenticated: false
+        ))
+    }
+
     @Test("cleanup is skipped for the on-device post-processors")
-    func ineligibleBackendSkipsCleanup() {
-        var config = AppConfig()
-        config.enableMeetingTranscriptCleanup = true
+    func ineligibleBackendSkipsCleanup() throws {
+        let config = try bilingualConfig()
 
         #expect(MeetingTranscriptCleanup.isEnabled(
             config: config,
@@ -371,59 +392,33 @@ struct MeetingTranscriptCleanupTests {
         ) == false)
     }
 
-    @Test("cleanup is skipped when the backend has no credentials")
-    func unconfiguredBackendSkipsCleanup() {
-        var config = AppConfig()
-        config.postProcessorBackend = TranscriptCleanupBackendOption.hosted(.openAI).backend
-        #expect(MeetingTranscriptCleanupPolicy.grantConsent(
-            for: .hosted(.openAI),
-            config: &config
-        ))
+    @Test("cleanup is skipped when the summary backend has no credentials")
+    func unconfiguredBackendSkipsCleanup() throws {
+        var config = try bilingualConfig()
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.openAI.backend
         config.openAIAPIKey = ""
 
         let enabled = MeetingTranscriptCleanup.isEnabled(
             config: config,
-            backend: .hosted(.openAI),
+            backend: MeetingCleanupTransport.backend(for: config),
             isChatGPTAuthenticated: false
         )
 
         #expect(enabled == (ProcessInfo.processInfo.environment["OPENAI_API_KEY"] != nil))
     }
 
-    @Test("cleanup is skipped when consent belongs to another destination")
-    func staleDestinationConsentSkipsCleanup() {
-        var config = AppConfig()
-        config.postProcessorBackend = TranscriptCleanupBackendOption.hosted(.ollama).backend
-        #expect(MeetingTranscriptCleanupPolicy.grantConsent(
-            for: .hosted(.ollama),
-            config: &config
-        ))
-        config.ollamaURL = "http://192.168.1.50:11434"
+    @Test("cleanup follows the summary backend, not the dictation post-processor")
+    func gateFollowsSummaryBackend() throws {
+        var config = try bilingualConfig()
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.chatGPT.backend
+        // The dictation post-processor stays on-device; it must not decide meetings.
+        config.postProcessorBackend = TranscriptCleanupBackendOption.local.backend
 
         #expect(MeetingTranscriptCleanup.isEnabled(
             config: config,
-            backend: .hosted(.ollama),
-            isChatGPTAuthenticated: false
-        ) == false)
-    }
-
-    @Test("reconcile reports when it auto-revokes previously granted consent")
-    func reconcileReportsAutoRevocation() {
-        var config = AppConfig()
-        config.postProcessorBackend = TranscriptCleanupBackendOption.hosted(.ollama).backend
-        #expect(MeetingTranscriptCleanupPolicy.grantConsent(for: .hosted(.ollama), config: &config))
-
-        // Consent still matches its destination: nothing to revoke.
-        #expect(MeetingTranscriptCleanupPolicy.reconcileConsent(in: &config) == false)
-        #expect(config.enableMeetingTranscriptCleanup)
-
-        // Destination changed under the granted consent: revokes and says so.
-        config.ollamaURL = "http://192.168.1.50:11434"
-        #expect(MeetingTranscriptCleanupPolicy.reconcileConsent(in: &config))
-        #expect(config.enableMeetingTranscriptCleanup == false)
-
-        // Already revoked: nothing further to report.
-        #expect(MeetingTranscriptCleanupPolicy.reconcileConsent(in: &config) == false)
+            backend: MeetingCleanupTransport.backend(for: config),
+            isChatGPTAuthenticated: true
+        ))
     }
 }
 

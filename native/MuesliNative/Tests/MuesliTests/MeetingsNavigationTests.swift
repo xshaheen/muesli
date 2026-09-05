@@ -59,11 +59,12 @@ struct MeetingsNavigationTests {
             systemAudioPath: nil
         )
         let configStore = ConfigStore(supportDirectory: makeSupportDirectory())
-        let backend = TranscriptCleanupBackendOption.hosted(.ollama)
         var config = AppConfig()
-        config.postProcessorBackend = backend.backend
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.ollama.backend
         config.ollamaURL = "http://localhost:11434"
-        #expect(MeetingTranscriptCleanupPolicy.grantConsent(for: backend, config: &config))
+        config.meetingSpokenLanguage = try SpokenLanguageProfile(
+            selectedLanguages: [.arabic, .english]
+        )
         configStore.save(config)
 
         let probe = CancellableMeetingCleanupSenderProbe()
@@ -1440,74 +1441,91 @@ struct MeetingsNavigationTests {
         #expect(controller.appState.config.postProcessorBackend == TranscriptCleanupBackendOption.local.backend)
     }
 
-    @Test("changing the meeting cleanup destination requires renewed consent")
-    func changingMeetingCleanupDestinationRequiresRenewedConsent() {
+    @Test("meeting cleanup follows the meeting language selection, with no toggle")
+    func meetingCleanupFollowsLanguageSelection() throws {
         let controller = makeController()
-        controller.selectPostProcessorBackend(.hosted(.ollama))
-        controller.updateConfig { $0.ollamaURL = "http://localhost:11434" }
-        controller.setMeetingTranscriptCleanupEnabled(true)
+        controller.updateConfig {
+            $0.meetingSummaryBackend = MeetingSummaryBackendOption.ollama.backend
+            $0.ollamaURL = "http://localhost:11434"
+        }
 
-        #expect(controller.config.enableMeetingTranscriptCleanup)
-        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint != nil)
+        // Monolingual: nothing to repair, so cleanup stays off.
+        controller.updateConfig {
+            $0.meetingSpokenLanguage = (try? SpokenLanguageProfile(selectedLanguages: [.english]))
+                ?? .automatic
+        }
+        #expect(MeetingTranscriptCleanup.isEnabled(
+            config: controller.config,
+            backend: MeetingCleanupTransport.backend(for: controller.config),
+            isChatGPTAuthenticated: controller.appState.isChatGPTAuthenticated
+        ) == false)
 
-        controller.updateConfig { $0.ollamaURL = "http://192.168.1.50:11434" }
-
-        #expect(controller.config.enableMeetingTranscriptCleanup == false)
-        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint == nil)
-
-        controller.setMeetingTranscriptCleanupEnabled(true)
-
-        #expect(controller.config.enableMeetingTranscriptCleanup)
-        #expect(MeetingTranscriptCleanupPolicy.hasCurrentConsent(
-            for: .hosted(.ollama),
-            config: controller.config
+        // Selecting a second language is the whole opt-in.
+        controller.updateConfig {
+            $0.meetingSpokenLanguage = (try? SpokenLanguageProfile(
+                selectedLanguages: [.arabic, .english]
+            )) ?? .automatic
+        }
+        #expect(MeetingTranscriptCleanup.isEnabled(
+            config: controller.config,
+            backend: MeetingCleanupTransport.backend(for: controller.config),
+            isChatGPTAuthenticated: controller.appState.isChatGPTAuthenticated
         ))
     }
 
-    @Test("changing the meeting cleanup backend requires renewed consent")
-    func changingMeetingCleanupBackendRequiresRenewedConsent() {
+    @Test("the dictation post-processor backend does not gate meeting cleanup")
+    func dictationBackendDoesNotGateMeetingCleanup() throws {
         let controller = makeController()
-        controller.selectPostProcessorBackend(.hosted(.ollama))
-        controller.setMeetingTranscriptCleanupEnabled(true)
+        controller.updateConfig {
+            $0.meetingSummaryBackend = MeetingSummaryBackendOption.ollama.backend
+            $0.ollamaURL = "http://localhost:11434"
+            $0.meetingSpokenLanguage = (try? SpokenLanguageProfile(
+                selectedLanguages: [.arabic, .english]
+            )) ?? .automatic
+        }
+        controller.selectPostProcessorBackend(.local)
 
-        controller.selectPostProcessorBackend(.hosted(.openAI))
-
-        #expect(controller.config.enableMeetingTranscriptCleanup == false)
-        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint == nil)
+        #expect(MeetingTranscriptCleanup.isEnabled(
+            config: controller.config,
+            backend: MeetingCleanupTransport.backend(for: controller.config),
+            isChatGPTAuthenticated: controller.appState.isChatGPTAuthenticated
+        ))
     }
 
-    @Test("changing cleanup destination cancels in-flight chunk uploads")
+    @Test("changing the summary backend cancels in-flight chunk uploads")
     func changingCleanupDestinationCancelsInFlightUploads() async throws {
         let (controller, meetingID, probe) = try makeInFlightCleanupController()
         controller.scheduleMeetingTranscriptCleanup(meetingID: meetingID)
         await waitForCleanupSend(probe)
         #expect(await probe.sendCount == 1)
 
-        controller.updateConfig { $0.ollamaURL = "http://192.168.1.50:11434" }
+        controller.updateConfig {
+            $0.meetingSummaryBackend = MeetingSummaryBackendOption.openAI.backend
+        }
         await waitForCleanupSend(probe, toFinish: true)
 
         #expect(controller.inFlightMeetingTranscriptCleanupCount == 0)
         #expect(await probe.sendCount == 1)
         #expect(await probe.finishedSendCount == 1)
-        #expect(controller.config.enableMeetingTranscriptCleanup == false)
-        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint == nil)
     }
 
-    @Test("disabling cleanup cancels in-flight chunk uploads")
+    @Test("removing a meeting language cancels in-flight chunk uploads")
     func disablingCleanupCancelsInFlightUploads() async throws {
         let (controller, meetingID, probe) = try makeInFlightCleanupController()
         controller.scheduleMeetingTranscriptCleanup(meetingID: meetingID)
         await waitForCleanupSend(probe)
         #expect(await probe.sendCount == 1)
 
-        controller.setMeetingTranscriptCleanupEnabled(false)
+        // Dropping back to one meeting language withdraws the condition cleanup runs on.
+        controller.updateConfig {
+            $0.meetingSpokenLanguage = (try? SpokenLanguageProfile(selectedLanguages: [.english]))
+                ?? .automatic
+        }
         await waitForCleanupSend(probe, toFinish: true)
 
         #expect(controller.inFlightMeetingTranscriptCleanupCount == 0)
         #expect(await probe.sendCount == 1)
         #expect(await probe.finishedSendCount == 1)
-        #expect(controller.config.enableMeetingTranscriptCleanup == false)
-        #expect(controller.config.meetingTranscriptCleanupConsentFingerprint == nil)
     }
 
     @Test("switching to Indic ASR disables S1-mini cleanup")

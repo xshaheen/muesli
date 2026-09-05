@@ -2360,10 +2360,9 @@ struct AppConfig: Codable {
     /// Off by default: it costs a model pass per meeting, and depending on the
     /// configured endpoint it may send the full transcript of a private
     /// conversation to a third party.
-    var enableMeetingTranscriptCleanup: Bool = false
-    /// SHA-256 identity of the backend and resolved destination the user approved.
-    /// Nil means there is no consent, including configs saved before this field.
-    var meetingTranscriptCleanupConsentFingerprint: String?
+// Retired: meeting cleanup now follows the meeting language selection (R10).
+    // `enable_meeting_transcript_cleanup` and the consent fingerprint decode as
+    // legacy keys and are no longer written.
     var quilBackend: String = TranscriptCleanupBackendOption.local.backend
     var quilModel: String = PostProcessorOption.defaultQuilOption.id
     var postProcessorBackend: String = TranscriptCleanupBackendOption.local.backend
@@ -2522,8 +2521,6 @@ struct AppConfig: Codable {
         case enablePostProcessor = "enable_post_processor"
         case bilingualRepairAutoEnableApplied = "bilingual_repair_auto_enable_applied"
         case customInstructions = "custom_instructions"
-        case enableMeetingTranscriptCleanup = "enable_meeting_transcript_cleanup"
-        case meetingTranscriptCleanupConsentFingerprint = "meeting_transcript_cleanup_consent_fingerprint"
         case quilBackend = "quil_backend"
         case quilModel = "quil_model"
         case postProcessorBackend = "post_processor_backend"
@@ -2921,12 +2918,6 @@ struct AppConfig: Codable {
         bilingualRepairAutoEnableApplied = (try? c.decode(Bool.self, forKey: .bilingualRepairAutoEnableApplied))
             ?? defaults.bilingualRepairAutoEnableApplied
         customInstructions = (try? c.decode(String.self, forKey: .customInstructions)) ?? defaults.customInstructions
-        enableMeetingTranscriptCleanup = (try? c.decode(Bool.self, forKey: .enableMeetingTranscriptCleanup))
-            ?? defaults.enableMeetingTranscriptCleanup
-        meetingTranscriptCleanupConsentFingerprint = try? c.decode(
-            String.self,
-            forKey: .meetingTranscriptCleanupConsentFingerprint
-        )
         quilBackend = TranscriptCleanupBackendOption
             .resolved(try? c.decode(String.self, forKey: .quilBackend))
             .backend
@@ -3017,7 +3008,6 @@ struct AppConfig: Codable {
             activeTranscriptCleanupPromptId = defaults.activeTranscriptCleanupPromptId
             postProcessorSystemPrompt = defaults.postProcessorSystemPrompt
         }
-        MeetingTranscriptCleanupPolicy.reconcileConsent(in: &self)
     }
 
     /// Read-only hybrid projection onto the combined `LanguageProfile` for

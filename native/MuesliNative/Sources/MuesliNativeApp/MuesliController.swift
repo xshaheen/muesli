@@ -753,7 +753,6 @@ public final class MuesliController: NSObject {
             loadedPostProcessorBackend = .local
             loadedConfig.postProcessorBackend = loadedPostProcessorBackend.backend
             loadedConfig.enablePostProcessor = false
-            MeetingTranscriptCleanupPolicy.reconcileConsent(in: &loadedConfig)
             repairedCleanupConfiguration = true
         }
         if repairedCleanupConfiguration {
@@ -2107,9 +2106,7 @@ public final class MuesliController: NSObject {
     }
 
     func updateConfig(_ mutate: (inout AppConfig) -> Void) {
-        let previousMeetingCleanupFingerprint = config.enableMeetingTranscriptCleanup
-            ? config.meetingTranscriptCleanupConsentFingerprint
-            : nil
+        let previousMeetingCleanupIdentity = meetingCleanupIdentity(config)
         let wasICloudSyncEnabled = config.iCloudSyncEnabled
         let wasUsingAppleSpeech = selectedBackend.backend == "apple-speech"
             || selectedMeetingTranscriptionBackend.backend == "apple-speech"
@@ -2158,15 +2155,7 @@ public final class MuesliController: NSObject {
             config.postProcessorBackend = TranscriptCleanupBackendOption.local.backend
             config.enablePostProcessor = false
         }
-        if MeetingTranscriptCleanupPolicy.reconcileConsent(in: &config) {
-            Self.meetingCleanupLogger.notice(
-                "Meeting transcript cleanup consent auto-revoked: backend or destination changed since consent was granted"
-            )
-        }
-        let currentMeetingCleanupFingerprint = config.enableMeetingTranscriptCleanup
-            ? config.meetingTranscriptCleanupConsentFingerprint
-            : nil
-        if currentMeetingCleanupFingerprint != previousMeetingCleanupFingerprint {
+        if meetingCleanupIdentity(config) != previousMeetingCleanupIdentity {
             cancelMeetingTranscriptCleanupTasks()
         }
         let configuredMeetingTranscriptionBackend = BackendOption.all.first(where: {
@@ -3474,27 +3463,6 @@ public final class MuesliController: NSObject {
         updateConfig { $0.bilingualRepairAutoEnableApplied = true }
         guard decision.enablesPostProcessor else { return }
         setPostProcessorEnabled(true)
-    }
-
-    /// Enables AI cleanup of finalized meeting transcripts.
-    ///
-    /// Refuses to turn on for a backend that cannot serve it, rather than leaving a
-    /// switch that reads as enabled while every meeting silently skips cleanup.
-    func setMeetingTranscriptCleanupEnabled(_ enabled: Bool) {
-        guard enabled else {
-            updateConfig { MeetingTranscriptCleanupPolicy.revokeConsent(in: &$0) }
-            return
-        }
-        guard MeetingTranscriptCleanupPolicy.isEligible(selectedPostProcessorBackend) else {
-            updateConfig { MeetingTranscriptCleanupPolicy.revokeConsent(in: &$0) }
-            return
-        }
-        updateConfig {
-            MeetingTranscriptCleanupPolicy.grantConsent(
-                for: selectedPostProcessorBackend,
-                config: &$0
-            )
-        }
     }
 
     func preloadExperimentalTranscriptionFeatures() {
@@ -8788,7 +8756,7 @@ public final class MuesliController: NSObject {
     /// `persistImportedAudioMeeting`. An imported Arabic recording has exactly the
     /// same cross-language damage as a recorded one.
     func scheduleMeetingTranscriptCleanup(meetingID: Int64) {
-        let backend = selectedPostProcessorBackend
+        let backend = MeetingCleanupTransport.backend(for: config)
         guard MeetingTranscriptCleanup.isEnabled(
             config: config,
             backend: backend,
@@ -8798,15 +8766,12 @@ public final class MuesliController: NSObject {
             // a cleanup that ran and failed — the exact hole this line plugs.
             fputs(
                 "[meeting-cleanup] skipped for meeting \(meetingID): "
-                    + "consent=\(MeetingTranscriptCleanupPolicy.hasCurrentConsent(for: backend, config: config)) "
+                    + "bilingual=\(config.meetingSpokenLanguage.isBilingual) "
                     + "eligible=\(MeetingTranscriptCleanupPolicy.isEligible(backend)) "
-                    + "configured=\(TranscriptCleanupClient.hasRequiredSettings(for: backend, config: config, isChatGPTAuthenticated: appState.isChatGPTAuthenticated)) "
+                    + "configured=\(MeetingCleanupTransport.isConfigured(config: config, isChatGPTAuthenticated: appState.isChatGPTAuthenticated)) "
                     + "chatgptAuthFlag=\(appState.isChatGPTAuthenticated)\n",
                 stderr
             )
-            return
-        }
-        guard let consentFingerprint = config.meetingTranscriptCleanupConsentFingerprint else {
             return
         }
         fputs("[meeting-cleanup] scheduled for meeting \(meetingID) via \(backend.backend)\n", stderr)
@@ -8826,10 +8791,7 @@ public final class MuesliController: NSObject {
                 transcript: raw,
                 isAuthorized: { [weak self] in
                     guard let self else { return false }
-                    return self.isMeetingTranscriptCleanupAuthorized(
-                        backend: backend,
-                        consentFingerprint: consentFingerprint
-                    )
+                    return self.isMeetingTranscriptCleanupAuthorized(backend: backend)
                 },
                 send: sender
             )
@@ -8856,17 +8818,26 @@ public final class MuesliController: NSObject {
         meetingTranscriptCleanupTasks[meetingID] = (taskID, task)
     }
 
+    /// Rechecked before every chunk leaves the process (R12).
+    ///
+    /// The meeting language selection and the summary backend are both mutable
+    /// while a long transcript is being processed, so authorization at scheduling
+    /// time is not enough.
     private func isMeetingTranscriptCleanupAuthorized(
-        backend: TranscriptCleanupBackendOption,
-        consentFingerprint: String
+        backend: TranscriptCleanupBackendOption
     ) -> Bool {
-        selectedPostProcessorBackend == backend
-            && config.meetingTranscriptCleanupConsentFingerprint == consentFingerprint
+        MeetingCleanupTransport.backend(for: config) == backend
             && MeetingTranscriptCleanup.isEnabled(
                 config: config,
                 backend: backend,
                 isChatGPTAuthenticated: appState.isChatGPTAuthenticated
             )
+    }
+
+    /// What a running cleanup depends on. A change here cancels it.
+    private func meetingCleanupIdentity(_ config: AppConfig) -> String? {
+        guard config.meetingSpokenLanguage.isBilingual else { return nil }
+        return "\(config.meetingSummaryBackend)|\(MeetingCleanupTransport.model(for: config))"
     }
 
     private func cancelMeetingTranscriptCleanupTasks() {
