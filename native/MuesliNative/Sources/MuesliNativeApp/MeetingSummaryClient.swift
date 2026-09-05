@@ -159,7 +159,8 @@ enum MeetingSummaryClient {
     static func titleInstructions(
         transcript: String,
         manualNotes: String?,
-        languageProfile: LanguageProfile = .automatic
+        languageProfile: LanguageProfile = .automatic,
+        customInstructions: String = ""
     ) -> String {
         let languageInstructions: String
         switch MeetingOutputLanguage.resolve(
@@ -172,7 +173,11 @@ enum MeetingSummaryClient {
         case .unspecified:
             languageInstructions = ""
         }
-        return baseTitleInstructions + languageInstructions
+        let preferences = CustomInstructions.promptBlock(
+            customInstructions,
+            preamble: CustomInstructions.meetingNotesPreamble
+        ).map { "\n\n" + $0 } ?? ""
+        return baseTitleInstructions + preferences + languageInstructions
     }
 
     static func summarize(
@@ -271,6 +276,7 @@ enum MeetingSummaryClient {
             manualNotes: manualNotesToRetain
         )
         let backend = (config.meetingSummaryBackend.isEmpty ? MeetingSummaryBackendOption.chatGPT.backend : config.meetingSummaryBackend).lowercased()
+        let customInstructions = MeetingInstructionsComposer.customInstructions(for: config)
         let generatedNotes: String
         if backend == MeetingSummaryBackendOption.chatGPT.backend {
             generatedNotes = try await summarizeWithChatGPT(
@@ -279,6 +285,7 @@ enum MeetingSummaryClient {
                 existingNotes: existingNotes,
                 manualNotes: manualNotesToRetain,
                 config: config,
+                customInstructions: customInstructions,
                 template: template,
                 visualContext: visualContext,
                 previousMeetingNotes: previousMeetingNotes
@@ -292,6 +299,7 @@ enum MeetingSummaryClient {
                 existingNotes: existingNotes,
                 manualNotes: manualNotesToRetain,
                 config: config,
+                customInstructions: customInstructions,
                 template: template,
                 visualContext: visualContext,
                 previousMeetingNotes: previousMeetingNotes
@@ -305,6 +313,7 @@ enum MeetingSummaryClient {
                 existingNotes: existingNotes,
                 manualNotes: manualNotesToRetain,
                 config: config,
+                customInstructions: customInstructions,
                 template: template,
                 visualContext: visualContext,
                 previousMeetingNotes: previousMeetingNotes
@@ -318,6 +327,7 @@ enum MeetingSummaryClient {
                 existingNotes: existingNotes,
                 manualNotes: manualNotesToRetain,
                 config: config,
+                customInstructions: customInstructions,
                 template: template,
                 visualContext: visualContext,
                 previousMeetingNotes: previousMeetingNotes
@@ -331,6 +341,7 @@ enum MeetingSummaryClient {
                 existingNotes: existingNotes,
                 manualNotes: manualNotesToRetain,
                 config: config,
+                customInstructions: customInstructions,
                 template: template,
                 visualContext: visualContext,
                 previousMeetingNotes: previousMeetingNotes
@@ -343,6 +354,7 @@ enum MeetingSummaryClient {
             existingNotes: existingNotes,
             manualNotes: manualNotesToRetain,
             config: config,
+            customInstructions: customInstructions,
             template: template,
             visualContext: visualContext,
             previousMeetingNotes: previousMeetingNotes
@@ -382,7 +394,8 @@ enum MeetingSummaryClient {
         existingNotes: String? = nil,
         manualNotes: String? = nil,
         previousMeetingNotes: String? = nil,
-        languageProfile: LanguageProfile = .automatic
+        languageProfile: LanguageProfile = .automatic,
+        customInstructions: String = ""
     ) -> String {
         let notePreservationInstructions: String
         let hasManualNotes = !(manualNotes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
@@ -411,12 +424,18 @@ enum MeetingSummaryClient {
             languageInstructions = ""
         }
 
+        let preferences = CustomInstructions.promptBlock(
+            customInstructions,
+            preamble: CustomInstructions.meetingNotesPreamble
+        ).map { "\n\n" + $0 } ?? ""
+
         return baseSummaryInstructions
             + notePreservationInstructions
             + manualNoteInstructions
             + followUpInstructions
             + "\n\nFollow this note template exactly:\n\n"
             + template.prompt
+            + preferences
             + languageInstructions
     }
 
@@ -576,6 +595,7 @@ enum MeetingSummaryClient {
         existingNotes: String?,
         manualNotes: String?,
         config: AppConfig,
+        customInstructions: String,
         template: MeetingTemplateSnapshot,
         visualContext: String? = nil,
         previousMeetingNotes: String? = nil
@@ -589,7 +609,7 @@ enum MeetingSummaryClient {
             )
         }
 
-        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes, languageProfile: config.languageProfile)
+        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes, languageProfile: config.languageProfile, customInstructions: customInstructions)
         let userPrompt = summaryUserPrompt(
             transcript: transcript,
             meetingTitle: meetingTitle,
@@ -633,6 +653,7 @@ enum MeetingSummaryClient {
         existingNotes: String?,
         manualNotes: String?,
         config: AppConfig,
+        customInstructions: String,
         template: MeetingTemplateSnapshot,
         visualContext: String? = nil,
         previousMeetingNotes: String? = nil
@@ -648,7 +669,7 @@ enum MeetingSummaryClient {
 
         let configuredModel = config.openRouterModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuredModel.isEmpty ? defaultOpenRouterModel : configuredModel
-        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes, languageProfile: config.languageProfile)
+        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes, languageProfile: config.languageProfile, customInstructions: customInstructions)
         let userPrompt = summaryUserPrompt(
             transcript: transcript,
             meetingTitle: meetingTitle,
@@ -699,12 +720,13 @@ enum MeetingSummaryClient {
         existingNotes: String?,
         manualNotes: String?,
         config: AppConfig,
+        customInstructions: String,
         template: MeetingTemplateSnapshot,
         visualContext: String? = nil,
         previousMeetingNotes: String? = nil
     ) async throws -> String {
         do {
-            let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes, languageProfile: config.languageProfile)
+            let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes, languageProfile: config.languageProfile, customInstructions: customInstructions)
             let text = try await ChatGPTResponsesClient.respond(
                 systemPrompt: instructions,
                 userPrompt: summaryUserPrompt(
@@ -734,6 +756,7 @@ enum MeetingSummaryClient {
         existingNotes: String?,
         manualNotes: String?,
         config: AppConfig,
+        customInstructions: String,
         template: MeetingTemplateSnapshot,
         visualContext: String? = nil,
         previousMeetingNotes: String? = nil
@@ -752,7 +775,7 @@ enum MeetingSummaryClient {
 
         let configuredModel = config.ollamaModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuredModel.isEmpty ? defaultOllamaModel : configuredModel
-        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes, languageProfile: config.languageProfile)
+        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes, languageProfile: config.languageProfile, customInstructions: customInstructions)
         let userPrompt = summaryUserPrompt(
             transcript: transcript,
             meetingTitle: meetingTitle,
@@ -803,6 +826,7 @@ enum MeetingSummaryClient {
         existingNotes: String?,
         manualNotes: String?,
         config: AppConfig,
+        customInstructions: String,
         template: MeetingTemplateSnapshot,
         visualContext: String? = nil,
         previousMeetingNotes: String? = nil
@@ -828,6 +852,7 @@ enum MeetingSummaryClient {
             existingNotes: existingNotes,
             manualNotes: manualNotes,
             config: config,
+            customInstructions: customInstructions,
             template: template,
             visualContext: visualContext,
             previousMeetingNotes: previousMeetingNotes,
@@ -841,6 +866,7 @@ enum MeetingSummaryClient {
         existingNotes: String?,
         manualNotes: String?,
         config: AppConfig,
+        customInstructions: String,
         template: MeetingTemplateSnapshot,
         visualContext: String? = nil,
         previousMeetingNotes: String? = nil
@@ -878,6 +904,7 @@ enum MeetingSummaryClient {
                 existingNotes: existingNotes,
                 manualNotes: manualNotes,
                 config: config,
+                customInstructions: customInstructions,
                 template: template,
                 visualContext: visualContext,
                 previousMeetingNotes: previousMeetingNotes,
@@ -894,6 +921,7 @@ enum MeetingSummaryClient {
                 existingNotes: existingNotes,
                 manualNotes: manualNotes,
                 config: config,
+                customInstructions: customInstructions,
                 template: template,
                 visualContext: visualContext,
                 previousMeetingNotes: previousMeetingNotes,
@@ -926,12 +954,13 @@ enum MeetingSummaryClient {
         existingNotes: String?,
         manualNotes: String?,
         config: AppConfig,
+        customInstructions: String,
         template: MeetingTemplateSnapshot,
         visualContext: String?,
         previousMeetingNotes: String?,
         timeout: TimeInterval
     ) async throws -> String {
-        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes, languageProfile: config.languageProfile)
+        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes, languageProfile: config.languageProfile, customInstructions: customInstructions)
         let userPrompt = summaryUserPrompt(
             transcript: transcript,
             meetingTitle: meetingTitle,
@@ -988,12 +1017,13 @@ enum MeetingSummaryClient {
         existingNotes: String?,
         manualNotes: String?,
         config: AppConfig,
+        customInstructions: String,
         template: MeetingTemplateSnapshot,
         visualContext: String?,
         previousMeetingNotes: String?,
         timeout: TimeInterval
     ) async throws -> String {
-        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes, languageProfile: config.languageProfile)
+        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes, languageProfile: config.languageProfile, customInstructions: customInstructions)
         let userPrompt = summaryUserPrompt(
             transcript: transcript,
             meetingTitle: meetingTitle,
@@ -1216,7 +1246,8 @@ enum MeetingSummaryClient {
         let instructions = titleInstructions(
             transcript: transcript,
             manualNotes: manualNotes,
-            languageProfile: config.languageProfile
+            languageProfile: config.languageProfile,
+            customInstructions: MeetingInstructionsComposer.customInstructions(for: config)
         )
 
         if backend == MeetingSummaryBackendOption.chatGPT.backend {
