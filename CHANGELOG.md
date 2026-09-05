@@ -5,6 +5,22 @@ upstream `main`.
 
 ## Unreleased — 12-08-2026
 
+### Meeting languages and language conditioning
+
+#### Features
+
+- Added a **Meeting languages** card in Settings › Meetings: meetings now have their own spoken-language selection (`meeting_spoken_language`), separate from the dictation one, plus a Notes language row over `meeting_artifact_language_policy`.
+- Every meeting, retranscription, audio import and Nemotron live caption is now conditioned on the meeting selection. A meeting freezes its selection at start, so a settings save mid-recording applies to the next meeting, while the routing decision follows a mid-meeting model swap.
+- Meeting notes, titles and failure notes take their output language from the notes-language policy alone. An explicit Arabic policy is honored whatever the transcript says and whatever the dictation profile holds.
+
+#### Changes and fixes
+
+- A language selection no longer aborts transcription. A dominant language pins the recognizers that can pin, other selected languages are accepted, models that cannot pin detect automatically, and Cohere and Indic fall back to their provider language, each explained in Settings.
+- Unified the three dictation paths (hold-to-talk, double-tap streaming, computer-use) on one language decision, so a selection that pins on one path pins on the others.
+- Extended WhisperKit pinning to all 22 listed languages; ten of them previously failed to pin.
+- Saving one language card no longer disturbs the other: a meeting save leaves `dictation_language_profile`, the legacy provider pins and the migration banner untouched.
+- Session traces now record the real workload for meeting, retranscription and import runs instead of labelling them dictation.
+
 ### Meeting intelligence, audio reliability, and floating UI
 
 #### Features
