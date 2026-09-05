@@ -1,0 +1,6 @@
+{
+  "reverseLeakOverhead": {
+    "committedBlockCapMilliseconds": 2.0,
+    "committedEstimateCapMilliseconds": 20.0
+  }
+}

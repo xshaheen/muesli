@@ -102,7 +102,9 @@ struct MeetingTranscriptHealthSnapshot: Sendable {
 }
 
 enum MeetingTranscriptHealthMonitor {
-    private static let minimumEvaluatedSpeechDuration: TimeInterval = 0.8
+    /// Segments shorter than this are ignored by `evaluate`; the reverse-leak mask planner
+    /// reads it so a subtracted remainder that would be ignored anyway is dropped instead.
+    static let minimumEvaluatedSpeechDuration: TimeInterval = 0.8
     private static let minimumCoverageRatio = 0.55
     private static let fullFallbackCoverageThreshold = 0.60
     private static let degradedCoverageThreshold = 0.80

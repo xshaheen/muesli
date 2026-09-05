@@ -2286,6 +2286,9 @@ struct AppConfig: Codable {
     var enableScreenContext: Bool = false
     var enableDictationOCRContext: Bool = false
     var useCoreAudioTap: Bool = true
+    /// Gates leaked local speech out of the meeting system track before the
+    /// system VAD, chunk recorder and live captions consume it.
+    var meetingReverseLeakSuppression: Bool = true
     /// Enables the explicitly selected live meeting transcription mode.
     var enableLiveStreamingPartials: Bool = false
     var meetingLiveCaptionBackend: String = MeetingLiveCaptionBackend.defaultBackend.rawValue
@@ -2436,6 +2439,7 @@ struct AppConfig: Codable {
         case enableScreenContext = "enable_screen_context"
         case enableDictationOCRContext = "enable_dictation_ocr_context"
         case useCoreAudioTap = "use_core_audio_tap"
+        case meetingReverseLeakSuppression = "meeting_reverse_leak_suppression"
         case enableLiveStreamingPartials = "enable_live_streaming_partials"
         case meetingLiveCaptionBackend = "meeting_live_caption_backend"
         case useLiveMeetingTranscriptAsFinal = "use_live_meeting_transcript_as_final"
@@ -2864,6 +2868,7 @@ struct AppConfig: Codable {
         enableScreenContext = (try? c.decode(Bool.self, forKey: .enableScreenContext)) ?? defaults.enableScreenContext
         enableDictationOCRContext = (try? c.decode(Bool.self, forKey: .enableDictationOCRContext)) ?? defaults.enableDictationOCRContext
         useCoreAudioTap = (try? c.decode(Bool.self, forKey: .useCoreAudioTap)) ?? defaults.useCoreAudioTap
+        meetingReverseLeakSuppression = (try? c.decode(Bool.self, forKey: .meetingReverseLeakSuppression)) ?? defaults.meetingReverseLeakSuppression
         enableLiveStreamingPartials = (try? c.decode(Bool.self, forKey: .enableLiveStreamingPartials)) ?? defaults.enableLiveStreamingPartials
         meetingLiveCaptionBackend = MeetingLiveCaptionBackend
             .resolved(try? c.decode(String.self, forKey: .meetingLiveCaptionBackend))

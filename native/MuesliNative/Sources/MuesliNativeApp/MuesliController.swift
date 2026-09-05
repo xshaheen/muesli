@@ -2117,7 +2117,19 @@ public final class MuesliController: NSObject {
         let previousMeetingRecordingHotkeyTriggerThresholdMS = config.meetingRecordingHotkeyTriggerThresholdMS
         let previousEnableDictionaryCorrectionPrompts = config.enableDictionaryCorrectionPrompts
         let previousEnableLiveStreamingPartials = config.enableLiveStreamingPartials
+        let previousMeetingReverseLeakSuppression = config.meetingReverseLeakSuppression
         mutate(&config)
+        if previousMeetingReverseLeakSuppression != config.meetingReverseLeakSuppression {
+            // R14: turning it off opens the gate for the meeting in progress; turning it back
+            // on resumes gating from the estimator's current lock state.
+            if config.meetingReverseLeakSuppression {
+                preparingMeetingSession?.releaseReverseLeakGate()
+                activeMeetingSession?.releaseReverseLeakGate()
+            } else {
+                preparingMeetingSession?.forceOpenReverseLeakGate()
+                activeMeetingSession?.forceOpenReverseLeakGate()
+            }
+        }
         if previousEnableLiveStreamingPartials, !config.enableLiveStreamingPartials {
             preparingMeetingSession?.stopStreamingPartials()
             activeMeetingSession?.stopStreamingPartials()
