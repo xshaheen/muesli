@@ -1469,6 +1469,20 @@ public final class MuesliController: NSObject {
     /// computer-use — resolve through here so they agree on what a selection
     /// means for a backend. The router degrades rather than throwing, so an
     /// unpinnable selection detects instead of failing the dictation (KD2).
+    /// The local summary config a resumed meeting is regenerated with. It is a
+    /// copy: the frozen profile reaches the MEETING authority only, so resuming
+    /// never rewrites the live dictation languages, the legacy pins, or the
+    /// confirmation flag. Pure and internal so the isolation is testable without
+    /// a session or a summarizer (R22).
+    nonisolated static func resumeSummaryConfig(
+        base: AppConfig,
+        result: MeetingSessionResult
+    ) -> AppConfig {
+        var summaryConfig = base
+        summaryConfig.applyFrozenMeetingLanguageProfile(result.languageProfile)
+        return summaryConfig
+    }
+
     nonisolated static func dictationLanguageDecision(
         profile: LanguageProfile,
         backend: BackendOption
@@ -5539,7 +5553,7 @@ public final class MuesliController: NSObject {
                         meetingTitle: meeting.title,
                         error: error,
                         manualNotes: meeting.manualNotes,
-                        languageProfile: retranscriptionConfig.languageProfile
+                        languageProfile: retranscriptionConfig.meetingLanguageProfile
                     )
                 }
 
@@ -8920,8 +8934,7 @@ public final class MuesliController: NSObject {
         }
 
         let regeneratedNotes: String
-        var summaryConfig = config
-        summaryConfig.applyLegacyLanguageProfile(result.languageProfile)
+        let summaryConfig = Self.resumeSummaryConfig(base: config, result: result)
         do {
             regeneratedNotes = try await MeetingSummaryClient.summarize(
                 transcript: combined,

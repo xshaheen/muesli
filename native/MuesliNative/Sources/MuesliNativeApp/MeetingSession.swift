@@ -1472,7 +1472,7 @@ final class MeetingSession {
                 meetingTitle: generatedTitle,
                 error: error,
                 manualNotes: manualNotes,
-                languageProfile: config.languageProfile
+                languageProfile: frozenMeetingProfile
             )
         }
         let summaryElapsedMilliseconds = max(
@@ -1522,7 +1522,7 @@ final class MeetingSession {
             retainedRecordingError: retainedRecordingWriterError,
             systemRecordingURL: systemAudioURL,
             templateSnapshot: templateSnapshot,
-            languageProfile: config.languageProfile,
+            languageProfile: frozenMeetingProfile,
             recordingSavePolicy: config.meetingRecordingSavePolicy,
             recordingFileFormat: config.resolvedMeetingRecordingFileFormat,
             visualContext: visualContext,

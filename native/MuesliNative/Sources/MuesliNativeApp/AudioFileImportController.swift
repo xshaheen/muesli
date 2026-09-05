@@ -418,7 +418,7 @@ enum AudioFileImportController {
                 meetingTitle: generatedTitle,
                 error: error,
                 manualNotes: "",
-                languageProfile: config.languageProfile
+                languageProfile: config.meetingLanguageProfile
             )
         }
         let summaryElapsedMilliseconds = stageElapsedMilliseconds(since: summaryStartedAt)

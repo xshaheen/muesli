@@ -2929,6 +2929,20 @@ struct AppConfig: Codable {
         )) ?? .automatic
     }
 
+    /// Apply a finished meeting's frozen profile to the MEETING authority only.
+    /// The resume merge summarizes with the languages the meeting recorded
+    /// under, so it must not touch `dictationLanguageProfile`, the legacy pins,
+    /// or the confirmation flag the dictation card owns (R22).
+    mutating func applyFrozenMeetingLanguageProfile(_ profile: LanguageProfile) {
+        meetingSpokenLanguage = (try? SpokenLanguageProfile(
+            selectedLanguages: profile.selectedLanguages,
+            dominantLanguage: profile.dominantLanguage
+        )) ?? .automatic
+        meetingArtifactLanguagePolicy = profile.meetingOutputPolicy.artifactPolicy(
+            dominantLanguage: profile.dominantLanguage
+        )
+    }
+
     mutating func applyLegacyLanguageProfile(_ profile: LanguageProfile) {
         dictationLanguageProfile = (try? SpokenLanguageProfile(
             selectedLanguages: profile.selectedLanguages,
