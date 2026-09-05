@@ -259,6 +259,9 @@ enum SessionTraceSnapshot {
         boundedIdentifier("\(kind):\(value)")
     }
 
+    /// Dictation traces. Meeting, retranscription and import traces take the
+    /// workload overload below so the recorded routing matches the call they
+    /// describe.
     static func languageProfile(
         backend: BackendOption,
         profile: LanguageProfile
@@ -267,11 +270,25 @@ enum SessionTraceSnapshot {
             selectedLanguages: profile.selectedLanguages,
             dominantLanguage: profile.dominantLanguage
         )) ?? .automatic
+        return languageProfile(
+            backend: backend,
+            selection: dictationProfile.selection,
+            workload: .dictation,
+            meetingOutputPolicy: profile.meetingOutputPolicy
+        )
+    }
+
+    static func languageProfile(
+        backend: BackendOption,
+        selection: TranscriptionLanguageSelection,
+        workload: TranscriptionWorkload,
+        meetingOutputPolicy: MeetingOutputLanguagePolicy
+    ) -> String {
         let capabilities = backend.languageCapabilities(isAvailable: true)
         let routing = TranscriptionLanguageRouter.resolve(
-            selection: dictationProfile.selection,
+            selection: selection,
             capabilities: capabilities,
-            workload: .dictation
+            workload: workload
         )
         let effectiveLanguage: TranscriptionLanguage?
         let candidateCount: Int
@@ -289,9 +306,9 @@ enum SessionTraceSnapshot {
         return encode(EncodedLanguageProfile(
             backend: backend.backend,
             backendID: capabilities.backendID.rawValue,
-            selectedLanguages: profile.selectedLanguages.map(\.rawValue),
-            dominantLanguage: profile.dominantLanguage?.rawValue,
-            meetingOutputPolicy: profile.meetingOutputPolicy.rawValue,
+            selectedLanguages: selection.selectedLanguages.map(\.rawValue),
+            dominantLanguage: selection.dominantLanguage?.rawValue,
+            meetingOutputPolicy: meetingOutputPolicy.rawValue,
             effectiveLanguage: effectiveLanguage?.rawValue,
             effectiveBehavior: routing.identifier,
             routingResult: routing.identifier,

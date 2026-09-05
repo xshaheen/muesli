@@ -255,7 +255,14 @@ enum AudioFileImportController {
             transcriptionEvidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
                 at: wavURL,
                 backend: backend,
-                profile: config.languageProfile,
+                // An import follows the meeting selection current at the time
+                // of the import, resolved for the file-import workload.
+                languageDecision: MeetingSession.meetingLanguageDecision(
+                    selection: config.meetingSpokenLanguage.selection,
+                    backend: backend,
+                    workload: .fileImport
+                ),
+                profile: config.meetingLanguageProfile,
                 appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
                 customWords: config.customWords
             )

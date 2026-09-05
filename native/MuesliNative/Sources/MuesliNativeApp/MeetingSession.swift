@@ -459,6 +459,14 @@ final class MeetingSession {
     )
     private let runtime: RuntimePaths
     private let config: AppConfig
+    /// The meeting spoken-language selection frozen when this meeting started.
+    /// A settings save during the recording applies to the next meeting; only
+    /// the decision derived from it follows a mid-meeting backend swap.
+    let frozenLanguageSelection: TranscriptionLanguageSelection
+    /// The meeting-derived legacy profile handed to every transcribe call. The
+    /// runtime reads it only on the nil-decision branch, where a dictation-derived
+    /// profile would pin Cohere and Indic to the wrong language.
+    let frozenMeetingProfile: LanguageProfile
     private let templateSnapshot: MeetingTemplateSnapshot
     private let transcriptionCoordinator: TranscriptionCoordinator
     private let systemAudioRecorder: SystemAudioCapturing
@@ -580,6 +588,8 @@ final class MeetingSession {
         }
         self.runtime = runtime
         self.config = config
+        self.frozenLanguageSelection = config.meetingSpokenLanguage.selection
+        self.frozenMeetingProfile = config.meetingLanguageProfile
         self.templateSnapshot = templateSnapshot
         self.transcriptionCoordinator = transcriptionCoordinator
         self.meetingMicRecorder = meetingMicRecorder
@@ -762,6 +772,51 @@ final class MeetingSession {
         transcriptionAuthorityLock.withLock { $0.backend }
     }
 
+    /// The decision a meeting transcription call hands the runtime: the frozen
+    /// meeting selection resolved against the backend that call just read.
+    /// Nil for every incompatibility, so the call keeps its legacy language
+    /// arguments instead of receiving a value the runtime throws on. Callers
+    /// pass `isAvailable: true` because an unavailable model still fails at
+    /// load, exactly as it does today. Retranscription and file import resolve
+    /// through here too, with their own workloads.
+    nonisolated static func meetingLanguageDecision(
+        selection: TranscriptionLanguageSelection,
+        backend: BackendOption,
+        workload: TranscriptionWorkload
+    ) -> LanguageRoutingDecision? {
+        TranscriptionLanguageRouter.runtimeDecision(
+            selection: selection,
+            capabilities: backend.languageCapabilities(isAvailable: true),
+            workload: workload
+        )
+    }
+
+    /// The live-caption `prompt_id`: the same selection resolved against
+    /// Nemotron's own capabilities with `.meetingLive`, then mapped by the one
+    /// decision-to-prompt-id owner, so the Settings footer and the engine agree
+    /// by construction. `MeetingLiveCaptionBackend` is not a `BackendOption`,
+    /// which is why the capabilities are named here.
+    nonisolated static func liveCaptionNemotronPromptId(
+        selection: TranscriptionLanguageSelection
+    ) -> Int32 {
+        let decision = meetingLanguageDecision(
+            selection: selection,
+            backend: .nemotron35Multilingual,
+            workload: .meetingLive
+        )
+        return Nemotron35Language.promptId(for: decision ?? .automatic)
+    }
+
+    private func meetingFinalLanguageDecision(
+        backend: BackendOption
+    ) -> LanguageRoutingDecision? {
+        Self.meetingLanguageDecision(
+            selection: frozenLanguageSelection,
+            backend: backend,
+            workload: .meetingFinal
+        )
+    }
+
     func usesLiveNemotronTranscriptAsFinal() -> Bool {
         transcriptionAuthorityLock.withLock { $0.usesUnifiedNemotronTranscript }
     }
@@ -872,13 +927,17 @@ final class MeetingSession {
                     let shared = try? await self.transcriptionCoordinator.getLoadedNemotron35Transcriber()
                     engines = try await MeetingLiveCaptionModelStore.makeEngines(
                         backend: backend,
-                        nemotronPromptId: self.config.resolvedNemotron35Language.promptId,
+                        nemotronPromptId: Self.liveCaptionNemotronPromptId(
+                            selection: self.frozenLanguageSelection
+                        ),
                         sharedNemotron35: shared
                     )
                 } else {
                     engines = try await MeetingLiveCaptionModelStore.makeEngines(
                         backend: backend,
-                        nemotronPromptId: self.config.resolvedNemotron35Language.promptId
+                        nemotronPromptId: Self.liveCaptionNemotronPromptId(
+                            selection: self.frozenLanguageSelection
+                        )
                     )
                 }
                 guard self.chunkRotationQueue.sync(execute: { self.isRecording }),
@@ -1199,10 +1258,12 @@ final class MeetingSession {
             if !usesUnifiedNemotronTranscript || systemSegments.isEmpty {
                 fputs("[meeting] transcribing final system chunk (offset=\(String(format: "%.0f", chunkOffset))s)\n", stderr)
                 do {
+                    let backend = currentBackend()
                     let evidence = try await transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                         at: lastSystemChunkURL,
-                        backend: currentBackend(),
-                        profile: config.languageProfile,
+                        backend: backend,
+                        languageDecision: meetingFinalLanguageDecision(backend: backend),
+                        profile: frozenMeetingProfile,
                         appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
                         customWords: config.customWords
                     )
@@ -1590,7 +1651,8 @@ final class MeetingSession {
                 let evidence = try await self.transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                     at: chunkURL,
                     backend: backend,
-                    profile: config.languageProfile,
+                    languageDecision: self.meetingFinalLanguageDecision(backend: backend),
+                    profile: self.frozenMeetingProfile,
                     appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
                     customWords: config.customWords
                 )
@@ -1981,10 +2043,12 @@ final class MeetingSession {
     ) async -> [SpeechSegment]? {
         fputs("\(logPrefix) (offset=\(String(format: "%.0f", chunkOffset))s, source=raw)\n", stderr)
         do {
+            let backend = currentBackend()
             let evidence = try await transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                 at: url,
-                backend: currentBackend(),
-                profile: config.languageProfile,
+                backend: backend,
+                languageDecision: meetingFinalLanguageDecision(backend: backend),
+                profile: frozenMeetingProfile,
                 appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
                 customWords: config.customWords
             )
@@ -2096,12 +2160,14 @@ final class MeetingSession {
                     )
                     defer { try? FileManager.default.removeItem(at: segmentURL) }
 
+                    let repairBackend = currentBackend()
                     let evidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
                         at: segmentURL,
-                        backend: currentBackend(),
-                profile: config.languageProfile,
-                appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
-                customWords: config.customWords
+                        backend: repairBackend,
+                        languageDecision: meetingFinalLanguageDecision(backend: repairBackend),
+                        profile: frozenMeetingProfile,
+                        appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
+                        customWords: config.customWords
                     )
                     repairedSegments.append(contentsOf: normalizeSystemTranscription(
                         result: evidence.cleaned,
@@ -2129,10 +2195,12 @@ final class MeetingSession {
     ) async -> [SpeechSegment] {
         fputs("[meeting] no system chunks survived, falling back to full-session system transcription\n", stderr)
         do {
+            let backend = currentBackend()
             let evidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
                 at: systemAudioURL,
-                backend: currentBackend(),
-                profile: config.languageProfile,
+                backend: backend,
+                languageDecision: meetingFinalLanguageDecision(backend: backend),
+                profile: frozenMeetingProfile,
                 appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
                 customWords: config.customWords
             )

@@ -5455,10 +5455,15 @@ public final class MuesliController: NSObject {
                 }
                 let retranscriptionConfig = self.config
                 let retranscriptionStartedAt = Date()
+                // Retranscription is an action taken now, so it follows the
+                // meeting selection current at the time of the action.
+                let retranscriptionSelection = retranscriptionConfig.meetingSpokenLanguage.selection
                 let trace = self.makeMeetingSessionTrace(
                     backend: backend,
                     startedAt: retranscriptionStartedAt,
-                    languageProfile: retranscriptionConfig.languageProfile
+                    selection: retranscriptionSelection,
+                    workload: .retranscription,
+                    meetingOutputPolicy: retranscriptionConfig.meetingArtifactLanguagePolicy.outputPolicy
                 )
                 sessionTrace = trace
                 await trace.associate(meetingID: meeting.id)
@@ -5479,7 +5484,12 @@ public final class MuesliController: NSObject {
                 let transcription = try await self.transcriptionCoordinator.transcribeMeetingWithEvidence(
                     at: recordingURL,
                     backend: backend,
-                    profile: retranscriptionConfig.languageProfile,
+                    languageDecision: MeetingSession.meetingLanguageDecision(
+                        selection: retranscriptionSelection,
+                        backend: backend,
+                        workload: .retranscription
+                    ),
+                    profile: retranscriptionConfig.meetingLanguageProfile,
                     appleSpeechLanguage: self.config.resolvedAppleSpeechLanguage,
                     customWords: retranscriptionConfig.customWords
                 )
@@ -6668,7 +6678,9 @@ public final class MuesliController: NSObject {
         let sessionTrace = makeMeetingSessionTrace(
             backend: meetingBackend,
             startedAt: meetingStartedAt,
-            languageProfile: meetingConfig.languageProfile
+            selection: meetingConfig.meetingSpokenLanguage.selection,
+            workload: .meetingFinal,
+            meetingOutputPolicy: meetingConfig.meetingArtifactLanguagePolicy.outputPolicy
         )
         let templateSnapshot = defaultMeetingTemplate()
         let resolvedCalendarEventID = calendarOccurrence?.eventID ?? calendarEventID
@@ -6858,7 +6870,9 @@ public final class MuesliController: NSObject {
         let sessionTrace = makeMeetingSessionTrace(
             backend: meetingBackend,
             startedAt: Date(),
-            languageProfile: meetingConfig.languageProfile
+            selection: meetingConfig.meetingSpokenLanguage.selection,
+            workload: .meetingFinal,
+            meetingOutputPolicy: meetingConfig.meetingArtifactLanguagePolicy.outputPolicy
         )
         meetingSessionTraces[meetingID] = sessionTrace
         Task {
@@ -7023,7 +7037,9 @@ public final class MuesliController: NSObject {
             id: sessionID,
             backend: importContext.backend,
             startedAt: Date(),
-            languageProfile: importContext.config.languageProfile
+            selection: importContext.config.meetingSpokenLanguage.selection,
+            workload: .fileImport,
+            meetingOutputPolicy: importContext.config.meetingArtifactLanguagePolicy.outputPolicy
         )
         importSessionTrace = sessionTrace
         await sessionTrace.storeArtifact("", kind: .contextSources)
@@ -12168,11 +12184,15 @@ public final class MuesliController: NSObject {
         )
     }
 
+    /// Meeting-family traces record the meeting selection resolved with the
+    /// workload of the call they describe, not dictation routing.
     private func makeMeetingSessionTrace(
         id: UUID = UUID(),
         backend: BackendOption,
         startedAt: Date,
-        languageProfile: LanguageProfile
+        selection: TranscriptionLanguageSelection,
+        workload: TranscriptionWorkload,
+        meetingOutputPolicy: MeetingOutputLanguagePolicy
     ) -> SessionRunTrace {
         let trace = SessionRunTrace(
             id: id,
@@ -12188,7 +12208,9 @@ public final class MuesliController: NSObject {
                 SessionTraceInitialArtifact(
                     content: SessionTraceSnapshot.languageProfile(
                         backend: backend,
-                        profile: languageProfile
+                        selection: selection,
+                        workload: workload,
+                        meetingOutputPolicy: meetingOutputPolicy
                     ),
                     kind: .languageProfile
                 ),
