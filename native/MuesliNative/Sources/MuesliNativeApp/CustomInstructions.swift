@@ -13,6 +13,21 @@ enum CustomInstructions {
     static let openingTag = "<CUSTOM-INSTRUCTIONS>"
     static let closingTag = "</CUSTOM-INSTRUCTIONS>"
 
+    static let modeOpeningTag = "<MODE-INSTRUCTIONS>"
+    static let modeClosingTag = "</MODE-INSTRUCTIONS>"
+
+    /// Sequences stripped only when both blocks are in the same prompt.
+    ///
+    /// Kept out of `reservedSequences` on purpose: with no mode in play the
+    /// custom block must come out byte-for-byte as it does today, and widening
+    /// the shared list would silently rewrite text that has always been legal.
+    static let modeReservedSequences = [modeClosingTag, modeOpeningTag]
+
+    static let modePreamble = """
+    The user's instructions for this destination. They take precedence over the \
+    standing preferences above where the two disagree.
+    """
+
     /// Sequences the text may never carry: the block's own tags, which would let
     /// the text close the block early, and the meeting unit-marker prefix, which
     /// would let it forge a marker the cleanup validator trusts.
@@ -44,8 +59,15 @@ enum CustomInstructions {
     ///
     /// `limit` lets a consumer with a tighter context budget shorten the body
     /// below the global cap; it never raises it.
-    static func promptBlock(_ text: String, preamble: String, limit: Int = maxLength) -> String? {
-        let stripped = removingReservedSequences(normalized(text))
+    static func promptBlock(
+        _ text: String,
+        preamble: String,
+        limit: Int = maxLength,
+        openingTag: String = CustomInstructions.openingTag,
+        closingTag: String = CustomInstructions.closingTag,
+        extraReserved: [String] = []
+    ) -> String? {
+        let stripped = removingReservedSequences(normalized(text), extra: extraReserved)
         let body = String(stripped.prefix(max(0, min(limit, maxLength))))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return nil }
@@ -61,19 +83,33 @@ enum CustomInstructions {
     /// The block ready to append to a prompt: a blank line plus the block, or an
     /// empty string when there is no block, so callers stay byte-identical when
     /// the user set nothing.
-    static func promptSuffix(_ text: String, preamble: String, limit: Int = maxLength) -> String {
-        guard let block = promptBlock(text, preamble: preamble, limit: limit) else { return "" }
+    static func promptSuffix(
+        _ text: String,
+        preamble: String,
+        limit: Int = maxLength,
+        openingTag: String = CustomInstructions.openingTag,
+        closingTag: String = CustomInstructions.closingTag,
+        extraReserved: [String] = []
+    ) -> String {
+        guard let block = promptBlock(
+            text,
+            preamble: preamble,
+            limit: limit,
+            openingTag: openingTag,
+            closingTag: closingTag,
+            extraReserved: extraReserved
+        ) else { return "" }
         return "\n\n" + block
     }
 
     /// Repeats until no reserved sequence remains, so one that a removal
     /// reassembles from its neighbours is removed too.
-    private static func removingReservedSequences(_ text: String) -> String {
+    private static func removingReservedSequences(_ text: String, extra: [String] = []) -> String {
         var result = text
         var changed = true
         while changed {
             changed = false
-            for sequence in reservedSequences where result.contains(sequence) {
+            for sequence in reservedSequences + extra where result.contains(sequence) {
                 result = result.replacingOccurrences(of: sequence, with: "")
                 changed = true
             }

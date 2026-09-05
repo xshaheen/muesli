@@ -57,6 +57,7 @@ private struct PendingStandardDictationStop {
     let correctionTargetApp: DictationSessionTarget?
     let customWords: [[String: Any]]
     let cleanupRequest: DictationCleanupRequestSnapshot
+    let deliveryPolicy: DictationDeliveryPolicy
     let detectedSpeech: Bool
     let recordingSavePolicy: DictationRecordingSavePolicy
     let latencyTrace: DictationLatencyTraceSnapshot?
@@ -82,6 +83,7 @@ private struct StandardDictationJob: Identifiable {
     let correctionTargetApp: DictationSessionTarget?
     let customWords: [[String: Any]]
     let cleanupRequest: DictationCleanupRequestSnapshot
+    let deliveryPolicy: DictationDeliveryPolicy
     let detectedSpeech: Bool
     let recordingSavePolicy: DictationRecordingSavePolicy
     let latencyTrace: DictationLatencyTraceSnapshot?
@@ -634,6 +636,10 @@ public final class MuesliController: NSObject {
     private var activeDictationContextResult: DictationSessionContextResult?
     private var stoppedDictationStyleSession: DictationStyleSessionSnapshot?
     private var stoppedDictationContextResult: DictationSessionContextResult?
+    /// Identity for the active session, and the copy frozen at stop. Kept beside the
+    /// context results so the clear and freeze helpers below cannot forget it.
+    private var activeDictationIdentity: (sessionID: UUID, identity: DictationSessionIdentity)?
+    private var stoppedDictationIdentity: (sessionID: UUID, identity: DictationSessionIdentity)?
     private var workspaceObserver: NSObjectProtocol?
     private var dataDidChangeObserver: NSObjectProtocol?
     private var iCloudAppActiveObserver: NSObjectProtocol?
@@ -2219,19 +2225,6 @@ public final class MuesliController: NSObject {
         }
     }
 
-    /// Persists all style definitions and assignments as one candidate before
-    /// publishing them to the live runtime. A thrown error leaves both unchanged.
-    func updateDictationStyleConfiguration(_ mutate: (inout AppConfig) -> Void) throws {
-        let persisted = try DictationStyleSettingsModel.committing(
-            current: config,
-            mutate: mutate,
-            persist: configStore.saveDictationStyleConfiguration
-        )
-        config = persisted
-        appState.config = persisted
-        statusBarController?.refresh()
-    }
-
     /// Commits the language authority as one persisted transaction. Existing
     /// recordings keep their frozen profile snapshots; only future sessions see
     /// the newly published value.
@@ -2244,6 +2237,31 @@ public final class MuesliController: NSObject {
         appState.config = persisted
         statusBarController?.refresh()
         return persisted
+    }
+
+    /// One persist-and-publish path for the Modes screen: the cards and the editor
+    /// both go through it, so neither can drift into its own write.
+    ///
+    /// Deliberately does not refresh the preloaded cleanup prompt: the per-dictation
+    /// snapshot already carries the mode, unlike a custom-instructions edit.
+    func updateDictationModesConfiguration(_ modes: [DictationMode]) throws -> [DictationMode] {
+        var candidate = config
+        candidate.dictationModes = modes
+        let persisted = try configStore.saveDictationStyleConfiguration(candidate)
+        config = persisted
+        appState.config = persisted
+        statusBarController?.refresh()
+        return persisted.dictationModes
+    }
+
+    func dictationModesClient() -> DictationModesClient {
+        DictationModesClient(
+            load: { [weak self] in self?.config.dictationModes ?? [] },
+            save: { [weak self] modes in
+                guard let self else { throw DictationModesClient.Error.controllerUnavailable }
+                return try self.updateDictationModesConfiguration(modes)
+            }
+        )
     }
 
     /// Commits the meeting language authority. A meeting save never touches the
@@ -2260,8 +2278,7 @@ public final class MuesliController: NSObject {
     }
 
     /// The notes language saves through the throwing canonical seam rather than
-    /// `updateConfig`, whose save is a silent no-op while the dictation-style
-    /// ruleset is quarantined; a failure has to be visible in the card (R6).
+    /// `updateConfig`, so a write failure is visible in the card instead of silent (R6).
     @discardableResult
     func saveMeetingArtifactLanguagePolicy(_ policy: MeetingArtifactLanguagePolicy) throws -> AppConfig {
         var candidate = config
@@ -2300,27 +2317,6 @@ public final class MuesliController: NSObject {
                 return try self.saveLanguageProfile(profile).dictationLanguageProfile
             }
         )
-    }
-
-    /// Applies a previously reviewed portable replacement in the same
-    /// validate-write-publish transaction used by local Writing Styles edits.
-    /// Cancellation never calls this method and therefore has no side effects.
-    func replaceDictationStyleRuleset(_ preview: DictationStyleRulesetPreview) throws {
-        let candidate = try DictationStyleSettingsModel.replacementCandidate(
-            for: preview,
-            replacing: config
-        )
-        let expected = try DictationStyleRulesetCodec.ruleset(from: candidate)
-        guard expected == preview.ruleset else {
-            throw DictationStyleRulesetCodec.Error.fidelityMismatch
-        }
-        let persisted = try configStore.saveDictationStyleRulesetConfiguration(
-            candidate,
-            expectedRuleset: expected
-        )
-        config = persisted
-        appState.config = persisted
-        statusBarController?.refresh()
     }
 
     /// Applies the configured theme to app-level chrome. The fullscreen
@@ -3441,7 +3437,7 @@ public final class MuesliController: NSObject {
             option: option ?? runtimePostProcessorOption(config: runtimeConfig, backend: backend),
             systemPrompt: DictationCleanupPromptComposer.systemPrompt(
                 config: runtimeConfig,
-                selection: nil,
+                mode: nil,
                 cleanupBackend: backend
             ),
             config: runtimeConfig
@@ -3614,49 +3610,6 @@ public final class MuesliController: NSObject {
             }
         }
         guard config.enablePostProcessor else { return }
-        preloadExperimentalTranscriptionFeatures()
-    }
-
-    func selectTranscriptCleanupPrompt(id: String) throws {
-        let preset = TranscriptCleanupPrompts.resolve(id: id, custom: config.customTranscriptCleanupPrompts)
-        try updateDictationStyleConfiguration {
-            $0.activeTranscriptCleanupPromptId = preset.id
-            $0.postProcessorSystemPrompt = preset.prompt
-        }
-        preloadExperimentalTranscriptionFeatures()
-    }
-
-    func createTranscriptCleanupPrompt(name: String, prompt: String) throws {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty, !trimmedPrompt.isEmpty else { return }
-        let preset = CustomTranscriptCleanupPrompt(name: trimmedName, prompt: trimmedPrompt)
-        try updateDictationStyleConfiguration {
-            $0.customTranscriptCleanupPrompts.append(preset)
-            $0.activeTranscriptCleanupPromptId = preset.id
-            $0.postProcessorSystemPrompt = preset.prompt
-        }
-        preloadExperimentalTranscriptionFeatures()
-    }
-
-    func updateTranscriptCleanupPrompt(id: String, name: String, prompt: String) throws {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty, !trimmedPrompt.isEmpty else { return }
-        try updateDictationStyleConfiguration {
-            guard let index = $0.customTranscriptCleanupPrompts.firstIndex(where: { $0.id == id }) else { return }
-            $0.customTranscriptCleanupPrompts[index].name = trimmedName
-            $0.customTranscriptCleanupPrompts[index].prompt = trimmedPrompt
-            if $0.activeTranscriptCleanupPromptId == id {
-                $0.postProcessorSystemPrompt = trimmedPrompt
-            }
-        }
-        preloadExperimentalTranscriptionFeatures()
-    }
-
-    func deleteTranscriptCleanupPrompt(id: String) throws {
-        let repaired = DictationStyleSettingsModel.deletingStyle(id: id, from: config)
-        try updateDictationStyleConfiguration { $0 = repaired }
         preloadExperimentalTranscriptionFeatures()
     }
 
@@ -10187,7 +10140,7 @@ public final class MuesliController: NSObject {
                             ? .targetApplicationPasteCommand
                             : .keyboardShortcut,
                         retainStagedTextOnFailure: true,
-                        onPasteDispatched: {
+                        onPasteDispatched: { _ in
                             // The post-dictation correction monitor cannot distinguish a
                             // user edit from Quill's deliberate rewrite. Once Quill actually
                             // replaces the selection, the original dictation is no longer a
@@ -11506,8 +11459,37 @@ public final class MuesliController: NSObject {
     private func clearCapturedDictationSessionContext() {
         activeDictationStyleSession = nil
         activeDictationContextResult = nil
+        activeDictationIdentity = nil
         stoppedDictationStyleSession = nil
         stoppedDictationContextResult = nil
+        stoppedDictationIdentity = nil
+        captureDictationIdentityIfNeeded()
+    }
+
+    /// Starts at session start, not when audio goes live, and at user-initiated
+    /// priority: a one-second dictation must still resolve its website mode, and the
+    /// full context capture is too late and too broad to serve that.
+    private func captureDictationIdentityIfNeeded() {
+        guard let session = activeDictationStyleSession,
+              session.mode.allowsDictationModes,
+              !isDictationTestMode,
+              session.config.matchModesByWebsite,
+              let target = session.target,
+              session.config.dictationModes.contains(where: {
+                  $0.isEnabled && !$0.websiteHostnames.isEmpty
+              })
+        else {
+            return
+        }
+        let sessionID = session.id
+        Task.detached(priority: .userInitiated) {
+            guard let identity = DictationContextCapture.captureIdentity(target: target) else { return }
+            await MainActor.run {
+                guard self.activeDictationStyleSession?.id == sessionID else { return }
+                self.activeDictationIdentity = (sessionID, identity)
+                self.markDictationLatency("identity_capture_ready")
+            }
+        }
     }
 
     private func beginDictationStyleSession(mode: DictationStyleSessionMode) {
@@ -11551,8 +11533,10 @@ public final class MuesliController: NSObject {
     private func freezeDictationStyleSessionAtStop() {
         stoppedDictationStyleSession = activeDictationStyleSession
         stoppedDictationContextResult = activeDictationContextResult
+        stoppedDictationIdentity = activeDictationIdentity
         activeDictationStyleSession = nil
         activeDictationContextResult = nil
+        activeDictationIdentity = nil
     }
 
     /// The external app that owned focus, ignoring Muesli itself, for dictation
@@ -12133,7 +12117,7 @@ public final class MuesliController: NSObject {
         let frozenLanguageProfile = transcriptionSelection.languageProfile
         let capturedContext = styleSession?.matchingContext(contextResult)
         let correctionTargetApp = styleSession?.target
-        let cleanupRuntime = styleSession?.mode.allowsAdaptiveStyles == true
+        let cleanupRuntime = styleSession?.mode.allowsDictationModes == true
             ? styleSession?.cleanupRuntime
             : nil
         let cleanupBackend = cleanupRuntime?.backend
@@ -12146,14 +12130,27 @@ public final class MuesliController: NSObject {
             transcriptionBackend: transcriptionBackend,
             cleanupBackend: cleanupBackend
         )
-        let cleanupPolicy = styleSession?.cleanupPolicy(
-            readiness: cleanupReadiness,
-            context: contextResult
-        ) ?? DictationCleanupPolicy(
+        // One resolution, two policies (KTD6): the prompt and the delivery key must
+        // come from the same mode, and the inputs are already frozen at this point.
+        let frozenIdentity = stoppedDictationIdentity.flatMap {
+            $0.sessionID == styleSession?.id ? $0.identity : nil
+        }
+        let modeSelection = styleSession?.resolveMode(
+            context: contextResult,
+            identity: frozenIdentity
+        )
+        let deliveryPolicy = modeSelection.flatMap { selection in
+            styleSession?.deliveryPolicy(selection: selection)
+        } ?? .none
+        let cleanupPolicy = modeSelection.flatMap { selection in
+            styleSession?.mode.allowsDictationModes == true
+                ? styleSession?.cleanupPolicy(readiness: cleanupReadiness, selection: selection)
+                : nil
+        } ?? DictationCleanupPolicy(
             readiness: cleanupReadiness,
             systemPromptSnapshot: DictationCleanupPromptComposer.systemPrompt(
                 config: sessionConfig,
-                selection: nil,
+                mode: nil,
                 cleanupBackend: cleanupBackend,
                 option: ppOption
             )
@@ -12203,6 +12200,7 @@ public final class MuesliController: NSObject {
             correctionTargetApp: correctionTargetApp,
             customWords: serializedCustomWords(from: sessionConfig),
             cleanupRequest: cleanupRequest,
+            deliveryPolicy: deliveryPolicy,
             detectedSpeech: detectedSpeech,
             recordingSavePolicy: sessionConfig.dictationRecordingSavePolicy,
             latencyTrace: detachDictationLatencyTrace("stop_requested"),
@@ -12901,6 +12899,7 @@ public final class MuesliController: NSObject {
             correctionTargetApp: pendingStop.correctionTargetApp,
             customWords: pendingStop.customWords,
             cleanupRequest: pendingStop.cleanupRequest,
+            deliveryPolicy: pendingStop.deliveryPolicy,
             detectedSpeech: pendingStop.detectedSpeech,
             recordingSavePolicy: pendingStop.recordingSavePolicy,
             latencyTrace: pendingStop.latencyTrace,
@@ -13162,13 +13161,44 @@ public final class MuesliController: NSObject {
             } else {
                 try await waitForDictationDeliveryWindow()
                 if canPasteDictation(to: job.correctionTargetApp) {
-                    await PasteController.pasteAndWait(text: text)
+                    var didPressAutoEnter = false
+                    let autoEnter = job.deliveryPolicy.autoEnter
+                    await PasteController.pasteAndWait(
+                        text: text,
+                        onPasteDispatched: { [weak self] ownedStagedClipboard in
+                            guard let self,
+                                  let autoEnter,
+                                  ownedStagedClipboard
+                            else {
+                                return
+                            }
+                            // Scheduled rather than awaited: the callback runs before the
+                            // clipboard restore is armed, and the destination needs a moment
+                            // to consume Cmd+V before a send key means anything.
+                            DispatchQueue.main.asyncAfter(
+                                deadline: .now() + PasteController.autoEnterDelay
+                            ) {
+                                guard self.canDeliverAutoEnter(to: job.correctionTargetApp),
+                                      let frontmost = NSWorkspace.shared.frontmostApplication,
+                                      self.focusedElementAcceptsAutoEnter(in: frontmost)
+                                else {
+                                    return
+                                }
+                                didPressAutoEnter = PasteController.pressReturn(
+                                    commandModifier: autoEnter == .commandReturn
+                                )
+                            }
+                        }
+                    )
                     applyDictationLifecycleActions(dictationLifecycleFeedback.finish(
                         sessionID: job.id,
                         outcome: .success,
                         soundAllowed: shouldPlayDictationLifecycleSounds
                     ))
-                    if cleanupRuntime.config.enableDictionaryCorrectionPrompts {
+                    // A sent message has no editable baseline left, so the correction
+                    // monitor would poll text the user can no longer fix. It still runs
+                    // when the key was suppressed.
+                    if !didPressAutoEnter, cleanupRuntime.config.enableDictionaryCorrectionPrompts {
                         dictationCorrectionMonitor.start(
                             originalText: text,
                             appContext: job.storageContext,
@@ -13191,10 +13221,10 @@ public final class MuesliController: NSObject {
             if let trace = job.latencyTrace {
                 markDictationLatency("pipeline_completed chars:\(text.count)", trace: trace)
             }
-            var telemetryParameters = DictationStyleObservability.parameters(
-                for: DictationStyleObservabilityInput(
+            var telemetryParameters = DictationModeObservability.parameters(
+                for: DictationModeObservabilityInput(
                     selectionSource: result.cleanupStyle?.source,
-                    isCustomStyle: result.cleanupStyle?.isCustom,
+                    usedMode: result.cleanupStyle?.usedMode,
                     cleanupOutcome: result.cleanupOutcome,
                     cleanupBackend: cleanupRuntime.backend
                 )
@@ -13306,6 +13336,60 @@ public final class MuesliController: NSObject {
             try Task.checkCancellation()
             try await Task.sleep(for: .milliseconds(50))
         }
+    }
+
+    /// Stricter than `canPasteDictation`: the frozen target must itself be
+    /// frontmost right now.
+    ///
+    /// `canPasteDictation` substitutes `lastExternalApp` when Muesli is frontmost,
+    /// which is right for pasting but wrong for a send key: the key goes to whatever
+    /// is actually focused, so that substitution could submit into Muesli's own
+    /// window. Muesli never satisfies this check.
+    private func canDeliverAutoEnter(to capturedTarget: DictationSessionTarget?) -> Bool {
+        guard let capturedTarget else { return false }
+        guard let frontmost = NSWorkspace.shared.frontmostApplication,
+              frontmost != NSRunningApplication.current
+        else {
+            return false
+        }
+        return capturedTarget.matches(
+            processID: frontmost.processIdentifier,
+            bundleID: frontmost.bundleIdentifier ?? ""
+        )
+    }
+
+    /// Skips the send key when the focused element is a control Return would
+    /// activate rather than a field it would submit.
+    ///
+    /// Fails open: an unreadable role still presses, because web and Electron
+    /// composers routinely report nothing useful and they are the main reason
+    /// auto-enter exists.
+    private func focusedElementAcceptsAutoEnter(in application: NSRunningApplication) -> Bool {
+        guard AXIsProcessTrusted() else { return true }
+        let app = AXUIElementCreateApplication(application.processIdentifier)
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused)
+            == .success,
+            let element = focused
+        else {
+            return true
+        }
+        var role: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element as! AXUIElement,
+            kAXRoleAttribute as CFString,
+            &role
+        ) == .success, let roleName = role as? String else {
+            return true
+        }
+        let nonTextRoles: Set<String> = [
+            kAXButtonRole as String,
+            kAXMenuItemRole as String,
+            kAXCheckBoxRole as String,
+            kAXRadioButtonRole as String,
+            "AXLink",
+        ]
+        return !nonTextRoles.contains(roleName)
     }
 
     private func canPasteDictation(to capturedTarget: DictationSessionTarget?) -> Bool {

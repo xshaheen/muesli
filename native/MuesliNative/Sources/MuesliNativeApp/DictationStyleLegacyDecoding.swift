@@ -1,5 +1,8 @@
 import Foundation
 
+/// What is left of the Writing Styles resolver: the decode path that turns a
+/// pre-Modes config into groups and exceptions, which the mode migration then
+/// reads once. Nothing here runs for a config that already has modes.
 enum DictationStyleResolver {
     enum ConfigurationError: Error, Equatable, LocalizedError {
         case invalidCanonical(String)
@@ -33,73 +36,20 @@ enum DictationStyleResolver {
         "web.whatsapp.com": .messages,
     ]
 
-    static func normalizeBundleID(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard isValidDotSeparatedIdentifier(normalized, requiresMultipleLabels: true) else {
-            return nil
-        }
-        return normalized
-    }
-
-    static func normalizeHostname(_ value: String?) -> String? {
-        guard let value else { return nil }
-        var normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !normalized.isEmpty,
-              normalized.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
-              normalized.rangeOfCharacter(from: CharacterSet(charactersIn: "/?#@")) == nil
-        else {
-            return nil
-        }
-
-        let colonCount = normalized.reduce(into: 0) { count, character in
-            if character == ":" { count += 1 }
-        }
-        if colonCount == 1, let colon = normalized.lastIndex(of: ":") {
-            let port = normalized[normalized.index(after: colon)...]
-            guard !port.isEmpty,
-                  port.allSatisfy(\.isNumber),
-                  let portNumber = Int(port),
-                  (1 ... 65_535).contains(portNumber)
-            else {
-                return nil
-            }
-            normalized = String(normalized[..<colon])
-        } else if colonCount > 0 {
-            return nil
-        }
-
-        if normalized.hasSuffix(".") {
-            normalized.removeLast()
-        }
-        guard isValidDotSeparatedIdentifier(normalized, requiresMultipleLabels: false) else {
-            return nil
-        }
-        return normalized
-    }
-
     static func hasAppRuleCollision(
         bundleID: String,
         in rules: [DictationStyleAppRule]
     ) -> Bool {
-        guard let candidate = normalizeBundleID(bundleID) else { return false }
-        return rules.contains { normalizeBundleID($0.bundleID) == candidate }
+        guard let candidate = DictationModes.normalizedBundleID(bundleID) else { return false }
+        return rules.contains { DictationModes.normalizedBundleID($0.bundleID) == candidate }
     }
 
     static func hasDomainRuleCollision(
         hostname: String,
         in rules: [DictationStyleDomainRule]
     ) -> Bool {
-        guard let candidate = normalizeHostname(hostname) else { return false }
-        return rules.contains { normalizeHostname($0.hostname) == candidate }
-    }
-
-    static func resolve(
-        config: AppConfig,
-        bundleID: String?,
-        hostname: String?
-    ) -> DictationStyleSelectionResult {
-        resolve(config: config, target: DictationStyleTarget(bundleID: bundleID, hostname: hostname))
+        guard let candidate = DictationModes.normalizedHostname(hostname) else { return false }
+        return rules.contains { DictationModes.normalizedHostname($0.hostname) == candidate }
     }
 
     static func resolve(
@@ -215,54 +165,6 @@ enum DictationStyleResolver {
         return nil
     }
 
-    static func enablingAdaptiveStyles(in config: AppConfig) -> AppConfig {
-        guard !config.adaptiveDictationStylesEnabled || !config.dictationStyleRulesetInitialized else { return config }
-        var candidate = config
-        candidate.adaptiveDictationStylesEnabled = true
-        if candidate.dictationStyleRulesetInitialized { return candidate }
-        let migration = projectLegacyConfiguration(candidate)
-        if migration.initialized {
-            candidate.dictationStyleRulesetInitialized = true
-            candidate.dictationStyleGroups = migration.groups
-            candidate.dictationStyleExactExceptions = migration.exceptions
-            return candidate
-        }
-        candidate.dictationStyleRulesetInitialized = true
-        candidate.dictationStyleGroups = starterGroups()
-        return candidate
-    }
-
-    static func deletingCustomStyle(id: String, from config: AppConfig) -> AppConfig {
-        guard !TranscriptCleanupPrompts.reservedIDs.contains(id),
-              config.customTranscriptCleanupPrompts.contains(where: { $0.id == id })
-        else {
-            return config
-        }
-
-        var candidate = config
-        candidate.customTranscriptCleanupPrompts.removeAll { $0.id == id }
-        if candidate.activeTranscriptCleanupPromptId == id {
-            candidate.activeTranscriptCleanupPromptId = TranscriptCleanupPrompts.defaultID
-            candidate.postProcessorSystemPrompt = PostProcessorOption.defaultSystemPrompt
-        }
-        candidate.dictationStyleGroups.removeAll { normalizedReference($0.styleID) == id }
-        candidate.dictationStyleExactExceptions.removeAll { normalizedReference($0.styleID) == id }
-        candidate.dictationStyleCategoryAssignments = candidate.dictationStyleCategoryAssignments.filter {
-            normalizedReference($0.value) != id
-        }
-        candidate.dictationStyleAppRules = candidate.dictationStyleAppRules.compactMap { rule in
-            var repaired = rule
-            if normalizedReference(repaired.styleID) == id { repaired.styleID = nil }
-            return hasAssignment(categoryID: repaired.categoryID, styleID: repaired.styleID) ? repaired : nil
-        }
-        candidate.dictationStyleDomainRules = candidate.dictationStyleDomainRules.compactMap { rule in
-            var repaired = rule
-            if normalizedReference(repaired.styleID) == id { repaired.styleID = nil }
-            return hasAssignment(categoryID: repaired.categoryID, styleID: repaired.styleID) ? repaired : nil
-        }
-        return candidate
-    }
-
     static func sanitizeConfiguration(_ config: AppConfig) -> AppConfig {
         var candidate = config
         candidate.customTranscriptCleanupPrompts = sanitizedCustomStyles(config.customTranscriptCleanupPrompts)
@@ -272,91 +174,6 @@ enum DictationStyleResolver {
         candidate.dictationStyleAppRules = sanitizedAppRules(config.dictationStyleAppRules)
         candidate.dictationStyleDomainRules = sanitizedDomainRules(config.dictationStyleDomainRules)
         return candidate
-    }
-
-    /// Strict, pure preparation for settings commits and import. It never
-    /// normalizes away canonical conflicts: callers must fix those explicitly.
-    static func prepareCanonicalConfiguration(_ config: AppConfig) throws -> AppConfig {
-        guard config.dictationStyleRulesetQuarantineReason == nil else {
-            throw ConfigurationError.invalidCanonical(config.dictationStyleRulesetQuarantineReason!)
-        }
-        guard config.dictationStyleRulesetInitialized else {
-            var migrated = sanitizeConfiguration(config)
-            let projection = projectLegacyConfiguration(migrated)
-            if projection.initialized {
-                migrated.dictationStyleRulesetInitialized = true
-                migrated.dictationStyleGroups = projection.groups
-                migrated.dictationStyleExactExceptions = projection.exceptions
-            }
-            return migrated
-        }
-        let styles = config.customTranscriptCleanupPrompts
-        var styleIDs = Set<String>()
-        var styleNames = Set<String>()
-        for style in styles {
-            guard let id = nonEmpty(style.id),
-                  id == style.id,
-                  !TranscriptCleanupPrompts.reservedIDs.contains(id),
-                  styleIDs.insert(id).inserted,
-                  let name = nonEmpty(style.name),
-                  !TranscriptCleanupPrompts.builtIns.contains(where: {
-                      normalizedStyleName($0.name) == normalizedStyleName(name)
-                  }),
-                  styleNames.insert(normalizedStyleName(name)).inserted,
-                  nonEmpty(style.prompt) != nil
-            else { throw ConfigurationError.invalidCanonical("Invalid custom writing style") }
-        }
-        guard validStyleID(config.activeTranscriptCleanupPromptId, customStyles: styles),
-              nonEmpty(config.postProcessorSystemPrompt) != nil
-        else { throw ConfigurationError.invalidCanonical("Invalid global writing style") }
-
-        var entityIDs = Set<String>()
-        var groupNames = Set<String>()
-        var matcherIDs = Set<String>()
-        var matcherPatterns = Set<String>()
-        var targets = Set<String>()
-        var matchers: [(groupID: String, matcher: DictationStyleMatcher)] = []
-        for group in config.dictationStyleGroups {
-            guard !group.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  entityIDs.insert(group.id).inserted,
-                  let name = nonEmpty(group.name),
-                  groupNames.insert(normalizedStyleName(name)).inserted,
-                  validStyleID(group.styleID, customStyles: styles)
-            else { throw ConfigurationError.invalidCanonical("Invalid writing-style group") }
-            for matcher in group.matchers {
-                guard !matcher.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                      matcherIDs.insert(matcher.id).inserted,
-                      let pattern = canonicalPattern(matcher.pattern, kind: matcher.kind),
-                      pattern == matcher.pattern,
-                      matcherPatterns.insert("\(matcher.kind.rawValue):\(pattern)").inserted
-                else { throw ConfigurationError.invalidCanonical("Invalid writing-style matcher") }
-                matchers.append((group.id, matcher))
-            }
-        }
-        for exception in config.dictationStyleExactExceptions {
-            guard !exception.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  entityIDs.insert(exception.id).inserted,
-                  validStyleID(exception.styleID, customStyles: styles),
-                  normalizedTarget(exception.target, kind: exception.kind) == exception.target,
-                  targets.insert("\(exception.kind.rawValue):\(exception.target)").inserted
-            else { throw ConfigurationError.invalidCanonical("Invalid writing-style exact exception") }
-        }
-        for leftIndex in matchers.indices {
-            for rightIndex in matchers.indices.dropFirst(leftIndex + 1) {
-                let left = matchers[leftIndex]
-                let right = matchers[rightIndex]
-                let leftRank = matcherRank(left.matcher.pattern)
-                let rightRank = matcherRank(right.matcher.pattern)
-                guard left.groupID != right.groupID,
-                      left.matcher.kind == right.matcher.kind,
-                      leftRank.exact == rightRank.exact,
-                      leftRank.specificity == rightRank.specificity,
-                      patternsOverlap(left.matcher.pattern, right.matcher.pattern)
-                else { continue }
-                throw ConfigurationError.invalidCanonical("Ambiguous writing-style matchers")
-            }
-        }
-        return config
     }
 
     /// Projects only valid legacy records. This is intentionally the sole
@@ -370,13 +187,13 @@ enum DictationStyleResolver {
         var exactTargets = Set<String>()
         var exceptions: [DictationStyleExactException] = []
         for rule in sanitized.dictationStyleDomainRules {
-            if let styleID = validStyle(rule.styleID), let target = normalizeHostname(rule.hostname) {
+            if let styleID = validStyle(rule.styleID), let target = DictationModes.normalizedHostname(rule.hostname) {
                 exactTargets.insert("hostname:\(target)")
                 exceptions.append(DictationStyleExactException(id: "legacy-exception-hostname-\(target)", kind: .hostname, target: target, styleID: styleID))
             }
         }
         for rule in sanitized.dictationStyleAppRules {
-            if let styleID = validStyle(rule.styleID), let target = normalizeBundleID(rule.bundleID) {
+            if let styleID = validStyle(rule.styleID), let target = DictationModes.normalizedBundleID(rule.bundleID) {
                 exactTargets.insert("bundle_id:\(target)")
                 exceptions.append(DictationStyleExactException(id: "legacy-exception-bundle-id-\(target)", kind: .bundleID, target: target, styleID: styleID))
             }
@@ -392,12 +209,12 @@ enum DictationStyleResolver {
                 matchers.append(DictationStyleMatcher(id: "legacy-group-\(legacyCategory.rawValue)-bundle-id-\(target)", kind: .bundleID, pattern: target))
             }
             for rule in sanitized.dictationStyleDomainRules where category(id: rule.categoryID) == legacyCategory {
-                if let target = normalizeHostname(rule.hostname) {
+                if let target = DictationModes.normalizedHostname(rule.hostname) {
                     matchers.append(DictationStyleMatcher(id: "legacy-group-\(legacyCategory.rawValue)-hostname-\(target)", kind: .hostname, pattern: target))
                 }
             }
             for rule in sanitized.dictationStyleAppRules where category(id: rule.categoryID) == legacyCategory {
-                if let target = normalizeBundleID(rule.bundleID) {
+                if let target = DictationModes.normalizedBundleID(rule.bundleID) {
                     matchers.append(DictationStyleMatcher(id: "legacy-group-\(legacyCategory.rawValue)-bundle-id-\(target)", kind: .bundleID, pattern: target))
                 }
             }
@@ -406,18 +223,6 @@ enum DictationStyleResolver {
             groups.append(DictationStyleGroup(id: "legacy-group-\(legacyCategory.rawValue)", name: legacyCategory.displayName, styleID: styleID, matchers: matchers))
         }
         return LegacyProjection(initialized: !groups.isEmpty || !exceptions.isEmpty, groups: groups, exceptions: exceptions)
-    }
-
-    static func starterGroups() -> [DictationStyleGroup] {
-        DictationStyleCategory.allCases.map { category in
-            let bundleMatchers = curatedBundleCategories.compactMap { target, mapped in
-                mapped == category ? DictationStyleMatcher(id: "starter-\(category.rawValue)-bundle-id-\(target)", kind: .bundleID, pattern: target) : nil
-            }
-            let hostnameMatchers = curatedHostnameCategories.compactMap { target, mapped in
-                mapped == category ? DictationStyleMatcher(id: "starter-\(category.rawValue)-hostname-\(target)", kind: .hostname, pattern: target) : nil
-            }
-            return DictationStyleGroup(id: "starter-group-\(category.rawValue)", name: category.displayName, styleID: category.defaultStyleID, matchers: bundleMatchers + hostnameMatchers)
-        }
     }
 
     static func canonicalPattern(_ value: String?, kind: DictationStyleMatcherKind) -> String? {
@@ -480,8 +285,8 @@ enum DictationStyleResolver {
 
     private static func normalizedTarget(_ value: String, kind: DictationStyleMatcherKind) -> String? {
         switch kind {
-        case .bundleID: return normalizeBundleID(value)
-        case .hostname: return normalizeHostname(value)
+        case .bundleID: return DictationModes.normalizedBundleID(value)
+        case .hostname: return DictationModes.normalizedHostname(value)
         }
     }
 
@@ -664,14 +469,14 @@ enum DictationStyleResolver {
         for bundleID: String,
         in rules: [DictationStyleAppRule]
     ) -> DictationStyleAppRule? {
-        rules.last { normalizeBundleID($0.bundleID) == bundleID }
+        rules.last { DictationModes.normalizedBundleID($0.bundleID) == bundleID }
     }
 
     private static func lastDomainRule(
         for hostname: String,
         in rules: [DictationStyleDomainRule]
     ) -> DictationStyleDomainRule? {
-        rules.last { normalizeHostname($0.hostname) == hostname }
+        rules.last { DictationModes.normalizedHostname($0.hostname) == hostname }
     }
 
     private static func sanitizedCustomStyles(
@@ -722,7 +527,7 @@ enum DictationStyleResolver {
     private static func sanitizedAppRules(_ rules: [DictationStyleAppRule]) -> [DictationStyleAppRule] {
         var seenBundleIDs = Set<String>()
         let retained = rules.reversed().compactMap { rule -> DictationStyleAppRule? in
-            guard let bundleID = normalizeBundleID(rule.bundleID) else { return nil }
+            guard let bundleID = DictationModes.normalizedBundleID(rule.bundleID) else { return nil }
             guard seenBundleIDs.insert(bundleID).inserted else { return nil }
             let categoryID = category(id: rule.categoryID)?.rawValue
             let styleID = normalizedReference(rule.styleID)
@@ -742,7 +547,7 @@ enum DictationStyleResolver {
     ) -> [DictationStyleDomainRule] {
         var seenHostnames = Set<String>()
         let retained = rules.reversed().compactMap { rule -> DictationStyleDomainRule? in
-            guard let hostname = normalizeHostname(rule.hostname) else { return nil }
+            guard let hostname = DictationModes.normalizedHostname(rule.hostname) else { return nil }
             guard seenHostnames.insert(hostname).inserted else { return nil }
             let categoryID = category(id: rule.categoryID)?.rawValue
             let styleID = normalizedReference(rule.styleID)

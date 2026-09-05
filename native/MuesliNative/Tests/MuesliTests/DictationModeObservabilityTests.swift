@@ -3,7 +3,7 @@ import Testing
 @testable import MuesliNativeApp
 
 @Suite("Dictation style observability")
-struct DictationStyleObservabilityTests {
+struct DictationModeObservabilityTests {
     private let sources: [DictationStyleSelectionSource] = [
         .exception, .group, .global, .builtInFallback,
     ]
@@ -14,18 +14,18 @@ struct DictationStyleObservabilityTests {
             for isCustom in [false, true] {
                 for outcome in DictationCleanupOutcome.allCases {
                     for backend in TranscriptCleanupBackendOption.all {
-                        let parameters = DictationStyleObservability.parameters(
-                            for: DictationStyleObservabilityInput(
+                        let parameters = DictationModeObservability.parameters(
+                            for: DictationModeObservabilityInput(
                                 selectionSource: source,
-                                isCustomStyle: isCustom,
+                                usedMode: isCustom,
                                 cleanupOutcome: outcome,
                                 cleanupBackend: backend
                             )
                         )
 
-                        #expect(Set(parameters.keys) == DictationStyleObservability.parameterKeys)
+                        #expect(Set(parameters.keys) == DictationModeObservability.parameterKeys)
                         #expect(parameters["style_selection_source"] == source.rawValue)
-                        #expect(parameters["style_class"] == (isCustom ? "custom" : "built_in"))
+                        #expect(parameters["style_class"] == (isCustom ? "mode" : "default"))
                         #expect(parameters["cleanup_outcome"] == outcome.rawValue)
                         #expect(parameters["cleanup_backend"] == backend.backend)
                     }
@@ -36,16 +36,16 @@ struct DictationStyleObservabilityTests {
 
     @Test("telemetry allowlist has no identity or content keys")
     func excludesSensitiveKeys() {
-        let parameters = DictationStyleObservability.parameters(
-            for: DictationStyleObservabilityInput(
+        let parameters = DictationModeObservability.parameters(
+            for: DictationModeObservabilityInput(
                 selectionSource: .exception,
-                isCustomStyle: true,
+                usedMode: true,
                 cleanupOutcome: .fallbackError,
                 cleanupBackend: .hosted(.openAI)
             )
         )
 
-        #expect(Set(parameters.keys) == DictationStyleObservability.parameterKeys)
+        #expect(Set(parameters.keys) == DictationModeObservability.parameterKeys)
         let prohibitedFragments = [
             "bundle", "host", "app_name", "style_id", "style_name", "prompt",
             "transcript", "url", "selected_text", "ocr", "context",
@@ -55,10 +55,10 @@ struct DictationStyleObservabilityTests {
 
     @Test("missing style provenance stays coarse")
     func missingProvenance() {
-        let parameters = DictationStyleObservability.parameters(
-            for: DictationStyleObservabilityInput(
+        let parameters = DictationModeObservability.parameters(
+            for: DictationModeObservabilityInput(
                 selectionSource: nil,
-                isCustomStyle: nil,
+                usedMode: nil,
                 cleanupOutcome: .skippedStreaming,
                 cleanupBackend: .local
             )
@@ -133,8 +133,7 @@ struct DictationStyleObservabilityTests {
         #expect(entries.map(\.cleanupOutcome) == ["applied", "fallback_error"])
         #expect(entries.allSatisfy { $0.selectedStyleID == "private-style-id" })
         #expect(entries.allSatisfy { $0.styleSelectionSource == "group" })
-        #expect(entries.allSatisfy { $0.styleCategoryID == "messages" })
-        #expect(entries.allSatisfy { $0.styleGroupID == "stable-group-id" })
+        #expect(entries.allSatisfy { $0.styleModeID == "stable-group-id" })
         #expect(entries[0].rawASRText.hasSuffix("...[truncated]"))
     }
 
