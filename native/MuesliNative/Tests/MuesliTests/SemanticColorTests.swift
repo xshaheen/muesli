@@ -33,7 +33,6 @@ private let sweptViewFiles = [
     "ModelsView.swift",
     "OnboardingView.swift",
     "SettingsView.swift",
-    "TranscriptCleanupPromptsManagerView.swift",
     "WritingStylesView.swift",
 ]
 

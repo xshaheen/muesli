@@ -3,7 +3,7 @@ import SwiftUI
 import MuesliCore
 
 @MainActor
-private enum TargetApplicationIconResolver {
+enum TargetApplicationIconResolver {
     private static let cache = NSCache<NSString, NSImage>()
 
     static func icon(bundleIdentifier: String?) -> NSImage? {
@@ -37,9 +37,12 @@ struct TargetApplicationIconView: View {
     let appName: String
     let bundleIdentifier: String?
     var size: CGFloat = 20
+    /// Overridable because the same icon means different things in different places:
+    /// a history row shows where a dictation landed, a mode card shows what activates it.
+    var accessibilityLabel: String?
 
     private var accessibilityText: String {
-        "Dictated into \(appName)"
+        accessibilityLabel ?? "Dictated into \(appName)"
     }
 
     var body: some View {
