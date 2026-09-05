@@ -2,81 +2,44 @@ import Foundation
 import MuesliCore
 
 final class ConfigStore {
-    enum DictationStyleLoadResult {
-        case loaded(AppConfig)
-        case quarantined(AppConfig, String)
-    }
-
-    enum DictationStylePersistenceError: Error, LocalizedError {
-        case quarantined(String)
-
-        var errorDescription: String? {
-            switch self { case .quarantined(let reason): "Writing styles are quarantined: \(reason)" }
-        }
-    }
-
     private let configURL: URL
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
-    private var dictationStyleQuarantineReason: String?
 
     init(supportDirectory: URL = AppIdentity.supportDirectoryURL) {
         self.configURL = supportDirectory.appendingPathComponent("config.json")
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
 
+    /// A missing config file is a genuinely fresh install, so the built-in modes
+    /// arrive enabled there and only there (R8). An unreadable file is not: it keeps
+    /// its bytes on disk, writes nothing, and loads defaults in memory, so a parse
+    /// bug can never cost the user a config it could not read.
     func load() -> AppConfig {
-        switch loadResult() {
-        case .loaded(let config), .quarantined(let config, _): return config
-        }
-    }
-
-    func loadResult() -> DictationStyleLoadResult {
         ensureDirectory()
         guard let data = try? Data(contentsOf: configURL) else {
-            return .loaded(AppConfig())
+            var fresh = AppConfig()
+            fresh.dictationModes = DictationModes.builtInModes(isEnabled: true)
+            return fresh
         }
         guard let decoded = try? decoder.decode(AppConfig.self, from: data) else {
-            return .loaded(AppConfig())
+            fputs("[config-store] config.json is unreadable; loading defaults without overwriting it\n", stderr)
+            return AppConfig()
         }
-        do {
-            _ = try DictationStyleResolver.prepareCanonicalConfiguration(decoded)
-            // R3: a migrated selection reaches disk on the launch that migrated it, so the
-            // rewrite survives a crash and cannot be re-derived from stale keys.
-            //
-            // This holds only on the non-quarantined path. If the ruleset above throws,
-            // control leaves for `catch` before this runs, and `dictationStyleQuarantineReason`
-            // then makes every later `save(_:)` a no-op — so a quarantined user who also had a
-            // retired backend keeps `qwen` in config.json, is re-migrated in memory on each
-            // launch (dictation stays correct), and cannot dismiss the removal notice because
-            // the dismissal write is refused too. That is deliberate for now: the refusal
-            // exists to stop a corrupt-but-recoverable ruleset being overwritten, and a
-            // repeating notice is a smaller harm than trading that away. Fixing it properly
-            // means letting a write through that provably touches no dictation-style key.
-            if decoded.retiredASRBackendMigrationApplied {
-                save(decoded)
-            }
-            return .loaded(decoded)
-        } catch {
-            let reason = error.localizedDescription
-            dictationStyleQuarantineReason = reason
-            var fallback = decoded
-            fallback.adaptiveDictationStylesEnabled = false
-            fallback.dictationStyleRulesetQuarantineReason = reason
-            return .quarantined(fallback, reason)
+        // A migrated selection reaches disk on the launch that migrated it, so the
+        // rewrite survives a crash and cannot be re-derived from stale keys.
+        if decoded.retiredASRBackendMigrationApplied {
+            save(decoded)
         }
+        return decoded
     }
 
     func save(_ config: AppConfig) {
-        guard dictationStyleQuarantineReason == nil else {
-            fputs("[config-store] refusing to overwrite quarantined dictation styles\n", stderr)
-            return
-        }
         ensureDirectory()
-        guard let candidate = try? DictationStyleResolver.prepareCanonicalConfiguration(config),
-              let data = try? encoder.encode(candidate)
-        else {
-            fputs("[config-store] refusing to persist invalid dictation styles\n", stderr)
+        // Normalization is total: nothing about mode content can refuse a save, so an
+        // unrelated setting is never held hostage by a bad mode array (R4).
+        guard let data = try? encoder.encode(DictationModes.sanitized(config)) else {
+            fputs("[config-store] failed to encode config\n", stderr)
             return
         }
         do {
@@ -97,10 +60,7 @@ final class ConfigStore {
     }
 
     private func saveCanonicalConfiguration(_ config: AppConfig) throws -> AppConfig {
-        if let reason = dictationStyleQuarantineReason {
-            throw DictationStylePersistenceError.quarantined(reason)
-        }
-        let candidate = try DictationStyleResolver.prepareCanonicalConfiguration(config)
+        let candidate = DictationModes.sanitized(config)
         let directory = configURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(
             at: directory,

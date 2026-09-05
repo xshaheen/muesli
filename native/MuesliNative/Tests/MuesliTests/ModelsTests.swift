@@ -1260,8 +1260,10 @@ struct AppConfigTests {
         #expect(config.dictationStyleDomainRules.isEmpty)
     }
 
-    @Test("legacy style fields migrate and encode only canonical snake-case keys")
-    func dictationStyleFieldsMigrateAndRoundTripCanonically() throws {
+    /// R3. Every legacy Writing Styles key is decode-only now: a config that carries
+    /// them in memory writes back `dictation_modes` and the live base prompt instead.
+    @Test("legacy style fields are decoded but never encoded")
+    func dictationStyleFieldsAreDecodeOnly() throws {
         var config = AppConfig()
         config.adaptiveDictationStylesEnabled = true
         config.dictationStyleCategoryAssignments = ["messages": "message"]
@@ -1280,19 +1282,47 @@ struct AppConfigTests {
 
         let data = try JSONEncoder().encode(config)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
 
-        #expect(object["adaptive_dictation_styles_enabled"] != nil)
-        #expect(object["dictation_style_category_assignments"] == nil)
-        #expect(object["dictation_style_app_rules"] == nil)
-        #expect(object["dictation_style_domain_rules"] == nil)
-        #expect(object["dictation_style_ruleset_initialized"] != nil)
-        #expect(object["dictation_style_groups"] != nil)
-        #expect(object["dictation_style_exact_exceptions"] != nil)
-        #expect(decoded.adaptiveDictationStylesEnabled)
-        #expect(decoded.dictationStyleRulesetInitialized)
-        #expect(!decoded.dictationStyleGroups.isEmpty)
-        #expect(!decoded.dictationStyleExactExceptions.isEmpty)
+        for key in [
+            "active_transcript_cleanup_prompt_id",
+            "custom_transcript_cleanup_prompts",
+            "adaptive_dictation_styles_enabled",
+            "dictation_style_ruleset_initialized",
+            "dictation_style_groups",
+            "dictation_style_exact_exceptions",
+            "dictation_style_category_assignments",
+            "dictation_style_app_rules",
+            "dictation_style_domain_rules",
+        ] {
+            #expect(object[key] == nil, "\(key) must not be encoded")
+        }
+        #expect(object["dictation_modes"] != nil)
+        #expect(object["post_processor_system_prompt"] != nil)
+
+        let legacyJSON = """
+        {
+          "adaptive_dictation_styles_enabled": true,
+          "dictation_style_ruleset_initialized": true,
+          "dictation_style_groups": [
+            {"id": "work", "name": "Work", "style_id": "email", "matchers": []}
+          ],
+          "dictation_style_exact_exceptions": [
+            {"id": "one", "kind": "bundle_id", "target": "com.apple.mail", "style_id": "email"}
+          ],
+          "custom_transcript_cleanup_prompts": [
+            {"id": "formal", "name": "Formal", "prompt": "Be formal."}
+          ],
+          "active_transcript_cleanup_prompt_id": "formal"
+        }
+        """
+        let decodedLegacy = try JSONDecoder().decode(AppConfig.self, from: Data(legacyJSON.utf8))
+
+        #expect(decodedLegacy.adaptiveDictationStylesEnabled)
+        #expect(decodedLegacy.dictationStyleRulesetInitialized)
+        #expect(decodedLegacy.dictationStyleGroups.map(\.id) == ["work"])
+        #expect(decodedLegacy.dictationStyleExactExceptions.map(\.id) == ["one"])
+        #expect(decodedLegacy.customTranscriptCleanupPrompts.map(\.id) == ["formal"])
+        #expect(decodedLegacy.activeTranscriptCleanupPromptId == "formal")
     }
 
     @Test("reserved duplicate IDs and normalized target collisions sanitize deterministically")
@@ -1316,7 +1346,9 @@ struct AppConfigTests {
         """
 
         let first = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
-        let second = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(first))
+        // R3 made these keys decode-only, so determinism is proven by decoding the
+        // same legacy bytes twice rather than by re-encoding the result.
+        let second = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
 
         #expect(first.customTranscriptCleanupPrompts.map(\.id) == ["custom-style-1", "duplicate", "custom-style-2"])
         #expect(second.customTranscriptCleanupPrompts.map(\.id) == first.customTranscriptCleanupPrompts.map(\.id))
@@ -1587,9 +1619,10 @@ struct AppConfigTests {
         #expect(decoded.postProcessorOllamaModel == "qwen3.5")
         #expect(decoded.postProcessorLMStudioModel == "lmstudio-loaded")
         #expect(decoded.postProcessorCustomLLMModel == "custom-cleanup")
-        #expect(decoded.activeTranscriptCleanupPromptId == "cleanup_custom_1")
-        #expect(decoded.customTranscriptCleanupPrompts.count == 1)
-        #expect(decoded.customTranscriptCleanupPrompts.first?.name == "Strict Dictation")
+        // R3: the preset id and the custom-prompt list are decode-only now, so a
+        // round-trip through encode drops them. The base prompt is still live.
+        #expect(decoded.activeTranscriptCleanupPromptId == TranscriptCleanupPrompts.defaultID)
+        #expect(decoded.customTranscriptCleanupPrompts.isEmpty)
         #expect(decoded.postProcessorSystemPrompt == "Preserve labels and quotes.")
         #expect(decoded.enableScreenContext == true)
         #expect(decoded.enableDictationOCRContext == true)
@@ -1681,15 +1714,18 @@ struct AppConfigTests {
         #expect(json["post_processor_ollama_model"] != nil)
         #expect(json["post_processor_lmstudio_model"] != nil)
         #expect(json["post_processor_custom_llm_model"] != nil)
-        #expect(json["active_transcript_cleanup_prompt_id"] != nil)
-        #expect(json["custom_transcript_cleanup_prompts"] != nil)
-        #expect(json["adaptive_dictation_styles_enabled"] != nil)
+        #expect(json["post_processor_system_prompt"] != nil)
+        #expect(json["dictation_modes"] != nil)
+        // R3. The nine legacy style keys decode but are never written back.
+        #expect(json["active_transcript_cleanup_prompt_id"] == nil)
+        #expect(json["custom_transcript_cleanup_prompts"] == nil)
+        #expect(json["adaptive_dictation_styles_enabled"] == nil)
         #expect(json["dictation_style_category_assignments"] == nil)
         #expect(json["dictation_style_app_rules"] == nil)
         #expect(json["dictation_style_domain_rules"] == nil)
-        #expect(json["dictation_style_ruleset_initialized"] != nil)
-        #expect(json["dictation_style_groups"] != nil)
-        #expect(json["dictation_style_exact_exceptions"] != nil)
+        #expect(json["dictation_style_ruleset_initialized"] == nil)
+        #expect(json["dictation_style_groups"] == nil)
+        #expect(json["dictation_style_exact_exceptions"] == nil)
         #expect(json["enable_screen_context"] != nil)
         #expect(json["enable_dictation_ocr_context"] != nil)
         #expect(json["enable_live_streaming_partials"] != nil)
