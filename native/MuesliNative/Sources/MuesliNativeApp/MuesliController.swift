@@ -2206,6 +2206,31 @@ public final class MuesliController: NSObject {
         return persisted
     }
 
+    /// One persist-and-publish path for the Modes screen: the cards and the editor
+    /// both go through it, so neither can drift into its own write.
+    ///
+    /// Deliberately does not refresh the preloaded cleanup prompt: the per-dictation
+    /// snapshot already carries the mode, unlike a custom-instructions edit.
+    func updateDictationModesConfiguration(_ modes: [DictationMode]) throws -> [DictationMode] {
+        var candidate = config
+        candidate.dictationModes = modes
+        let persisted = try configStore.saveDictationStyleConfiguration(candidate)
+        config = persisted
+        appState.config = persisted
+        statusBarController?.refresh()
+        return persisted.dictationModes
+    }
+
+    func dictationModesClient() -> DictationModesClient {
+        DictationModesClient(
+            load: { [weak self] in self?.config.dictationModes ?? [] },
+            save: { [weak self] modes in
+                guard let self else { throw DictationModesClient.Error.controllerUnavailable }
+                return try self.updateDictationModesConfiguration(modes)
+            }
+        )
+    }
+
     func languageProfileClient() -> LanguageProfileClient {
         LanguageProfileClient(
             load: { [weak self] in self?.config.dictationLanguageProfile ?? .automatic },
