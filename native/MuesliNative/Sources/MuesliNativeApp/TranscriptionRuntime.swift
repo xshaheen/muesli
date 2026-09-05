@@ -90,13 +90,20 @@ enum DictationCleanupPromptComposer {
         base: String,
         customInstructions: String = "",
         customInstructionsLimit: Int = CustomInstructions.maxLength,
+        mixedLanguageRepair: String? = nil,
         customWords: [CustomWord] = []
     ) -> String {
-        let prompt = base + CustomInstructions.promptSuffix(
+        var prompt = base + CustomInstructions.promptSuffix(
             customInstructions,
             preamble: CustomInstructions.dictationPreamble,
             limit: customInstructionsLimit
         )
+        // After the user's preferences and before the vocabulary: the repair rules
+        // must outrank a preference that would conflict with them, and the
+        // vocabulary is the restoration target the repair reads.
+        if let mixedLanguageRepair, !mixedLanguageRepair.isEmpty {
+            prompt += "\n\n" + mixedLanguageRepair
+        }
         return appendingSpeakerVocabulary(to: prompt, customWords: customWords)
     }
 
@@ -120,6 +127,12 @@ enum DictationCleanupPromptComposer {
             base: base,
             customInstructions: config.customInstructions,
             customInstructionsLimit: customInstructionsLimit(for: cleanupBackend),
+            // On-device cleanup shares a 1,024-token context with the dictated text,
+            // so it gets the compact variant.
+            mixedLanguageRepair: MixedLanguageRepairPrompt.block(
+                for: config.dictationLanguageProfile,
+                compact: cleanupBackend.isOnDevice
+            ),
             customWords: config.customWords
         )
         return option?.effectiveSystemPrompt(configuredSystemPrompt: composed) ?? composed
