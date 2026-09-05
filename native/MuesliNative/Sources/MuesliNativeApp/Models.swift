@@ -1760,6 +1760,37 @@ enum TranscriptCleanupPrompts {
 /// البرايمريكية *is* changing the words.
 enum MixedLanguageRepairPrompt {
 
+    /// Delimiters for the dictation block. The dictation prompt already carries a
+    /// custom-instructions block, so this one is bounded the same way rather than
+    /// running loose into whatever follows it.
+    static let openingTag = "<MIXED-LANGUAGE-REPAIR>"
+    static let closingTag = "</MIXED-LANGUAGE-REPAIR>"
+
+    /// Names the exception the surrounding prompt would otherwise forbid.
+    ///
+    /// The dictation base prompt says never to paraphrase or change words, and the
+    /// model sees both blocks in one system prompt. Without this sentence the two
+    /// read as a contradiction, and the safest reading -- change nothing -- is the
+    /// one that makes the repair a no-op.
+    private static let restorationAllowance = """
+    Restoring a term the recognizer wrote in the wrong script is not paraphrasing; \
+    it is the correction this block asks for. Every word the recognizer heard \
+    correctly stays exactly as the speaker said it.
+    """
+
+    private static let rules = """
+    You MUST:
+    - Change words when the recognizer misheard them. This is the entire task.
+    - Keep every other word as the speaker said it, in the language they said it.
+    - Return every line you were given, in the same order.
+    - Return the full text of every line, however long.
+
+    You MUST NOT:
+    - Summarize, shorten, or omit anything.
+    - Translate the text into another language.
+    - Add commentary, headings, or content nobody said.
+    """
+
     /// The repair instructions themselves, shared by dictation and meetings.
     ///
     /// Carries no `<APP-CONTEXT>` block: it is about the words, not about what was
@@ -1778,19 +1809,75 @@ enum MixedLanguageRepairPrompt {
         technical discussion is "one-to-many", not the Arabic question it looks like. \
         Use the surrounding context to decide which reading is meant.
 
+        \(restorationAllowance)
+
         Add sentence punctuation where it is missing.
 
-        You MUST:
-        - Change words when the recognizer misheard them. This is the entire task.
-        - Keep every other word as the speaker said it, in the language they said it.
-        - Return every line you were given, in the same order.
-        - Return the full text of every line, however long.
-
-        You MUST NOT:
-        - Summarize, shorten, or omit anything.
-        - Translate the text into another language.
-        - Add commentary, headings, or content nobody said.
+        \(rules)
         """
+    }
+
+    /// The same repair for a bilingual pair we carry no worked examples for.
+    ///
+    /// Examples in a script the user never selected would teach the wrong lesson,
+    /// so this variant states the rule and lets the model apply it to the pair in
+    /// front of it.
+    static func neutral(subject: String) -> String {
+        """
+        You repair \(subject) that mix two languages.
+
+        The speech recognizer was monolingual, so terms from the other language were \
+        transcribed phonetically into the text's own script and are now nonsense. \
+        Restore technical terms, product names, and borrowed words to their correct \
+        original spelling, using the surrounding context to decide which reading is \
+        meant.
+
+        \(restorationAllowance)
+
+        Add sentence punctuation where it is missing.
+
+        \(rules)
+        """
+    }
+
+    /// The on-device variant.
+    ///
+    /// `Qwen3PostProcessor.maxContextTokens` is 1024 for the prompt, the dictated
+    /// text, and the output together, so the full block would crowd out the words
+    /// it is meant to repair. This keeps the instruction and the prohibitions and
+    /// drops the worked examples.
+    static func compact(subject: String) -> String {
+        """
+        You repair \(subject) that mix two languages. The recognizer was monolingual, \
+        so foreign terms were written phonetically in the wrong script. Restore them \
+        to their correct original spelling.
+
+        \(restorationAllowance)
+
+        Do not translate, summarize, omit, reorder, or add anything.
+        """
+    }
+
+    /// The dictation block for a profile, or nil when the profile is not bilingual.
+    ///
+    /// The profile is the only input: repair follows the languages the user selected
+    /// rather than a stored preference (KTD1).
+    static func block(for profile: SpokenLanguageProfile, compact useCompact: Bool) -> String? {
+        guard profile.isBilingual else { return nil }
+        let subject = "dictated text"
+        let body: String
+        if useCompact {
+            body = compact(subject: subject)
+        } else {
+            body = hasArabicEnglishPair(profile) ? core(subject: subject) : neutral(subject: subject)
+        }
+        return "\(openingTag)\n\(body)\n\(closingTag)"
+    }
+
+    /// Whether the worked Arabic examples apply to this selection.
+    static func hasArabicEnglishPair(_ profile: SpokenLanguageProfile) -> Bool {
+        let selected = Set(profile.selectedLanguages)
+        return selected.contains(.arabic) && selected.contains(.english)
     }
 
     /// The dictation preset: one snippet in, one snippet out, no wire protocol.
