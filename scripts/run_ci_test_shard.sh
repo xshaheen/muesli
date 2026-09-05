@@ -169,6 +169,7 @@ case "${shard}" in
       MeetingTemplatesDefaultFallbackTests
       RouteAwareMeetingMicRecorderTests
       StreamingMicRecorderConfigChangeTests
+      StreamingVadFrameAccumulatorTests
       SystemAudioRecorderTests
       MeetingMicFailoverAttemptTrackerTests
       MeetingMicFailoverPolicyTests
