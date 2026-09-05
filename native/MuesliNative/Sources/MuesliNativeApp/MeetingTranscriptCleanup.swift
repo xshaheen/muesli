@@ -125,8 +125,8 @@ enum MeetingTranscriptCleanup {
         }
     }
 
-    /// Whether cleanup should run at all for the current configuration.
-    /// Cleanup is a consequence of the meeting language selection (KTD1, R10).
+    /// Whether cleanup should run at all, decided by the meeting language
+    /// selection (KTD1, R10).
     ///
     /// No separate toggle: repair runs when the user told Muesli the meeting is
     /// bilingual and the summary backend it already uses can accept the request.

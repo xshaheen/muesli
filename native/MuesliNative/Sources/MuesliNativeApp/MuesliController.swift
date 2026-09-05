@@ -852,9 +852,6 @@ public final class MuesliController: NSObject {
 
     func start() {
         hasStarted = true
-        // Covers the user who was already bilingual before this build shipped;
-        // the latch keeps it to one attempt (R7).
-        applyBilingualRepairAutoEnableIfNeeded()
         Task.detached(priority: .utility) {
             MeetingSessionDiagnostics.prepareStore()
         }
@@ -1218,6 +1215,11 @@ public final class MuesliController: NSObject {
                 }
             }
         }
+
+        // Last, so the whole startup wiring is in place before this can turn the
+        // post-processor on. Covers the user who was already bilingual before this
+        // build shipped; the latch keeps it to one attempt (R7).
+        applyBilingualRepairAutoEnableIfNeeded()
     }
 
     func shutdown() async {

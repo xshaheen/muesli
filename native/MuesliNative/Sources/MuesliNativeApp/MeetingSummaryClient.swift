@@ -204,18 +204,22 @@ enum MeetingSummaryClient {
 
     /// Whether the configured summary backend has everything it needs to produce notes.
     ///
-    /// The OpenAI and OpenRouter paths return a raw-transcript stub instead of throwing
-    /// when their key is missing, so a caller that overwrites stored notes with the
-    /// result has to check this first — otherwise the stub is persisted as a summary.
+    /// The configured summary backend identifier, normalized.
+    ///
+    /// One owner, because an empty stored value means the default rather than an
+    /// unknown backend, and both readers below depend on that reading.
+    private static func normalizedSummaryBackend(config: AppConfig) -> String {
+        (config.meetingSummaryBackend.isEmpty
+            ? MeetingSummaryBackendOption.chatGPT.backend
+            : config.meetingSummaryBackend).lowercased()
+    }
+
     /// The model the configured summary backend would use.
     ///
     /// Lives here because this type owns the per-backend defaults; meeting cleanup
     /// reads it so a cleanup request travels on the same model as the notes (KTD3).
     static func resolvedSummaryModel(config: AppConfig) -> String {
-        let backend = (config.meetingSummaryBackend.isEmpty
-            ? MeetingSummaryBackendOption.chatGPT.backend
-            : config.meetingSummaryBackend).lowercased()
-        switch backend {
+        switch normalizedSummaryBackend(config: config) {
         case MeetingSummaryBackendOption.chatGPT.backend:
             return config.chatGPTModel.isEmpty ? defaultChatGPTModel : config.chatGPTModel
         case MeetingSummaryBackendOption.openRouter.backend:
@@ -231,9 +235,11 @@ enum MeetingSummaryClient {
         }
     }
 
+    /// The OpenAI and OpenRouter paths return a raw-transcript stub instead of throwing
+    /// when their key is missing, so a caller that overwrites stored notes with the
+    /// result has to check this first — otherwise the stub is persisted as a summary.
     static func isBackendConfigured(config: AppConfig, isChatGPTAuthenticated: Bool) -> Bool {
-        let backend = (config.meetingSummaryBackend.isEmpty ? MeetingSummaryBackendOption.chatGPT.backend : config.meetingSummaryBackend).lowercased()
-        switch backend {
+        switch normalizedSummaryBackend(config: config) {
         case MeetingSummaryBackendOption.chatGPT.backend:
             return isChatGPTAuthenticated
         case MeetingSummaryBackendOption.openRouter.backend:
