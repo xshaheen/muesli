@@ -284,6 +284,12 @@ struct SessionDiagnosticsView: View {
 
     @ViewBuilder
     private var sessionList: some View {
+        sessionListContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var sessionListContent: some View {
         switch loadState {
         case .loading:
             ProgressView("Loading diagnostics…")
@@ -329,6 +335,12 @@ struct SessionDiagnosticsView: View {
 
     @ViewBuilder
     private var detailPane: some View {
+        detailPaneContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var detailPaneContent: some View {
         switch detailState {
         case .none:
             ContentUnavailableView("Select a Session", systemImage: "list.bullet.rectangle")

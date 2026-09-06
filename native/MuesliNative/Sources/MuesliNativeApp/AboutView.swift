@@ -22,9 +22,6 @@ struct AboutView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing32) {
-                Text("About")
-                    .font(MuesliTheme.title1())
-                    .foregroundStyle(MuesliTheme.textPrimary)
 
                 if let banner = updateBanner {
                     updateBannerView(banner)
