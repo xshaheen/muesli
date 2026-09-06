@@ -6,6 +6,10 @@ struct SidebarView: View {
     /// Square so the selected cell reads as a deliberate pill rather than a
     /// squat rectangle, and wide enough to centre inside the 60pt rail.
     private let collapsedItemSize: CGFloat = 40
+    /// The window has no titlebar band, so its content starts at the top edge and the
+    /// traffic lights float over whatever is there. Both sidebar states inset by the
+    /// standard titlebar height so nothing sits under them.
+    private static let titlebarHeight: CGFloat = 28
     private let meetingsTrailingColumnWidth: CGFloat = 24
     /// Matches the search field's inner padding so the row icon column sits
     /// exactly under the magnifier instead of 6pt to its right.
@@ -118,7 +122,7 @@ struct SidebarView: View {
     private var collapsedSidebar: some View {
         VStack(spacing: MuesliTheme.spacing4) {
             sidebarToggleButton
-                .padding(.top, MuesliTheme.spacing12)
+                .padding(.top, Self.titlebarHeight + MuesliTheme.spacing8)
                 .padding(.bottom, MuesliTheme.spacing8)
 
             collapsedItem(tab: .timeline, icon: "clock", label: "Timeline")
@@ -281,7 +285,7 @@ struct SidebarView: View {
             sidebarToggleButton
         }
         .padding(.horizontal, MuesliTheme.spacing16)
-        .padding(.top, MuesliTheme.pageTop)
+        .padding(.top, Self.titlebarHeight + MuesliTheme.pageTop)
         .padding(.bottom, MuesliTheme.spacing20)
     }
 

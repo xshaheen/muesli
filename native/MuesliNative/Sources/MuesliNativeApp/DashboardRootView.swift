@@ -34,6 +34,25 @@ struct DashboardRootView: View {
         }
     }
 
+    /// The page title, pinned above the scrolling content.
+    ///
+    /// There is no titlebar band to hold it: the window runs its content to the top edge,
+    /// so this row is what sits beside the traffic lights. `titlebarHeight` keeps it clear
+    /// of them, which matters most with the rail collapsed, where the lights reach past
+    /// the 52pt rail and into this column.
+    private var pageHeader: some View {
+        Text(pageTitle)
+            .font(MuesliTheme.title1())
+            .foregroundStyle(MuesliTheme.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, MuesliTheme.spacing24)
+            .padding(.top, Self.titlebarHeight + MuesliTheme.pageTop)
+            .padding(.bottom, MuesliTheme.spacing12)
+    }
+
+    /// The standard macOS titlebar height, which the traffic lights sit inside.
+    private static let titlebarHeight: CGFloat = 28
+
     private var sidebar: some View {
         SidebarView(
             appState: appState,
@@ -80,7 +99,10 @@ struct DashboardRootView: View {
                 // would be a second, competing toggle.
                 .toolbar(removing: .sidebarToggle)
         } detail: {
-            detailContent
+            VStack(alignment: .leading, spacing: 0) {
+                pageHeader
+                detailContent
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(MuesliTheme.backgroundBase)
             // The rail lives here rather than in the sidebar column so its width is
@@ -93,13 +115,7 @@ struct DashboardRootView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text(pageTitle)
-                    .font(MuesliTheme.headline())
-                    .foregroundStyle(MuesliTheme.textPrimary)
-            }
-        }
+
         .frame(minWidth: 640, minHeight: 480)
         .preferredColorScheme(appState.config.darkMode ? .dark : .light)
         .onPreferenceChange(FeatureTourTargetPreferenceKey.self) { frames in
@@ -261,3 +277,5 @@ struct DashboardRootView: View {
         }
     }
 }
+
+

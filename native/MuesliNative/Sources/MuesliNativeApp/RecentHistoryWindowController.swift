@@ -138,12 +138,14 @@ final class RecentHistoryWindowController: NSObject, NSWindowDelegate {
         window.contentMinSize = NSSize(width: 640, height: 480)
         window.isReleasedWhenClosed = false
         window.delegate = self
-        // Opaque titlebar: with .fullSizeContentView a transparent titlebar
-        // renders the system chrome material over the detail column, and that
-        // material follows the OS theme rather than the app's (dark strip with
-        // OS dark + app light). An opaque titlebar resolves against the
-        // window's own appearance and background color, which we control.
-        window.titlebarAppearsTransparent = false
+        // No titlebar band: with .fullSizeContentView the content runs to the top of the
+        // window and the traffic lights float over it, so there is no strip to fill.
+        //
+        // A transparent titlebar previously rendered the system chrome material against
+        // the OS theme instead of the app's, which is why this was opaque. `applyAppearance`
+        // below pins `window.appearance` to the app's own light/dark choice, so that
+        // material now resolves against the same theme the content uses.
+        window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
         window.titleVisibility = .hidden
         window.backgroundColor = MuesliTheme.backgroundDeepNSColor
