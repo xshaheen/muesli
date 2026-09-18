@@ -245,6 +245,32 @@ struct BackendOptionTests {
         #expect(RetiredASRBackendCache.detectAll(in: root, fileManager: fm).isEmpty)
     }
 
+    @Test("a retired backend outside the FluidAudio root is still reclaimable")
+    func retiredBackendCacheOutsideModelsRootIsDetected() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory
+            .appendingPathComponent("imla-retired-app-cache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: root) }
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+
+        #expect(RetiredASRBackend.indicASR.cacheRoot == .appModelCache)
+        for name in RetiredASRBackend.indicASR.cacheDirectoryNames {
+            let directory = root.appendingPathComponent(name, isDirectory: true)
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data(repeating: 0x02, count: 4096)
+                .write(to: directory.appendingPathComponent("weights.bin"))
+        }
+
+        let cache = try #require(
+            RetiredASRBackendCache.detect(.indicASR, in: [root], fileManager: fm)
+        )
+        #expect(cache.backend == .indicASR)
+        #expect(cache.byteCount >= 4096)
+
+        try await ModelDeletionExecutor.execute(.retiredCache(directories: cache.directories))
+        #expect(RetiredASRBackendCache.detect(.indicASR, in: [root], fileManager: fm) == nil)
+    }
+
     @Test("deleting an absent retired cache is a no-op rather than an error")
     func retiredBackendCacheDeletionToleratesAbsentDirectories() async throws {
         let root = FileManager.default.temporaryDirectory

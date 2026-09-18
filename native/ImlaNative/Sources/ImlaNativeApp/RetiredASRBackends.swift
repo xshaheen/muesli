@@ -33,19 +33,32 @@ enum RetiredASRBackend: String, CaseIterable, Sendable {
         }
     }
 
-    /// Cache directories the removed backend may still occupy under the shared
-    /// FluidAudio models root. Qwen kept two: FluidAudio's `Repo.folderName` strips the
-    /// `-coreml` suffix (issue #380), so a manual or pre-fix install can sit under the
-    /// longer name while the managed download sits under the shorter one.
+    /// Where a removed backend's weights live, since they did not all download to
+    /// the same place.
+    enum CacheRoot: Equatable, Sendable {
+        /// The shared FluidAudio models root every managed ASR download lands under.
+        case fluidAudioModels
+        /// The app's own model cache. Its directory name changed with the rename,
+        /// and an install from before it was never migrated automatically, so both
+        /// spellings are searched.
+        case appModelCache
+    }
+
+    var cacheRoot: CacheRoot {
+        switch self {
+        case .qwen3ASR: .fluidAudioModels
+        case .indicASR: .appModelCache
+        }
+    }
+
+    /// Cache directories the removed backend may still occupy under its own root.
+    /// Qwen kept two: FluidAudio's `Repo.folderName` strips the `-coreml` suffix
+    /// (issue #380), so a manual or pre-fix install can sit under the longer name
+    /// while the managed download sits under the shorter one.
     var cacheDirectoryNames: [String] {
         switch self {
         case .qwen3ASR: ["qwen3-asr-0.6b", "qwen3-asr-0.6b-coreml"]
-        // IndicASR's weights never lived under the FluidAudio models root that
-        // `RetiredASRBackendCache` scans, so listing its directory here would
-        // look for it in the wrong place. Reclaiming that space needs a
-        // per-backend root first; until then the migration and the notice run
-        // and only the cleanup offer is missing.
-        case .indicASR: []
+        case .indicASR: ["indic-conformer-rnnt-coreml"]
         }
     }
 
@@ -82,23 +95,44 @@ struct RetiredASRBackendCache: Equatable, Sendable {
             .appendingPathComponent("Library/Application Support/FluidAudio/Models", isDirectory: true)
     }
 
+    /// The app's own model cache, under both the current and the pre-rename name.
+    static func appModelCacheRoots(fileManager: FileManager = .default) -> [URL] {
+        ["imla", "muesli"].map {
+            fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent(".cache/\($0)/models", isDirectory: true)
+        }
+    }
+
+    static func roots(
+        for backend: RetiredASRBackend,
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        switch backend.cacheRoot {
+        case .fluidAudioModels: [modelsRoot(fileManager: fileManager)]
+        case .appModelCache: appModelCacheRoots(fileManager: fileManager)
+        }
+    }
+
+    /// `modelsRoot` overrides every backend's root, which is what the tests drive.
     static func detectAll(
         in modelsRoot: URL? = nil,
         fileManager: FileManager = .default
     ) -> [RetiredASRBackendCache] {
-        let root = modelsRoot ?? Self.modelsRoot(fileManager: fileManager)
-        return RetiredASRBackend.allCases.compactMap {
-            detect($0, in: root, fileManager: fileManager)
+        RetiredASRBackend.allCases.compactMap { backend in
+            let roots = modelsRoot.map { [$0] } ?? roots(for: backend, fileManager: fileManager)
+            return detect(backend, in: roots, fileManager: fileManager)
         }
     }
 
     static func detect(
         _ backend: RetiredASRBackend,
-        in modelsRoot: URL,
+        in roots: [URL],
         fileManager: FileManager = .default
     ) -> RetiredASRBackendCache? {
-        let directories = backend.cacheDirectoryNames
-            .map { modelsRoot.appendingPathComponent($0, isDirectory: true) }
+        let directories = roots
+            .flatMap { root in
+                backend.cacheDirectoryNames.map { root.appendingPathComponent($0, isDirectory: true) }
+            }
             .filter { fileManager.fileExists(atPath: $0.path) }
         guard !directories.isEmpty else { return nil }
         return RetiredASRBackendCache(
