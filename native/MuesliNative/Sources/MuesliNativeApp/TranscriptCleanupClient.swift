@@ -54,6 +54,9 @@ struct TranscriptCleanupRequestOptions {
     /// Bounds the provider request itself. Dictation sets this to match its
     /// user-visible cleanup deadline; meeting cleanup keeps the existing default.
     var timeoutInterval: TimeInterval?
+    /// The user's cleanup reasoning preference. `nil` lets the model's own default
+    /// stand; a model that rejects a reasoning parameter gets none either way.
+    var reasoningEffort: ReasoningEffort?
 
     static let dictationDefaults = TranscriptCleanupRequestOptions()
 }
@@ -108,7 +111,7 @@ enum TranscriptCleanupClient {
         case .some(.openAI):
             return SummaryModelPreset.openAIModels.first?.id ?? "gpt-5.4-mini"
         case .some(.openRouter):
-            return SummaryModelPreset.openRouterModels.first?.id ?? "stepfun/step-3.5-flash:free"
+            return SummaryModelPreset.openRouterModels.first?.id ?? "openrouter/free"
         case .some(.ollama):
             return "qwen3.5"
         case .some(.lmStudio), .some(.customLLM):
@@ -147,7 +150,7 @@ enum TranscriptCleanupClient {
         return trimmed.isEmpty ? defaultModel(for: backend) : trimmed
     }
 
-    static func hasRequiredSettings(for backend: TranscriptCleanupBackendOption, config: AppConfig, isChatGPTAuthenticated: Bool) -> Bool {
+    static func hasRequiredSettings(for backend: TranscriptCleanupBackendOption, config: AppConfig, isChatGPTAuthenticated: Bool, modelOverride: String? = nil) -> Bool {
         if backend == .gemma4LiteRT {
             let model = Gemma4LiteRTModel.resolved(config.postProcessorGemmaModel)
             return Gemma4LiteRTModelStore.isAvailableLocally(model: model)
@@ -159,16 +162,15 @@ enum TranscriptCleanupClient {
             return !config.openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || ProcessInfo.processInfo.environment["OPENAI_API_KEY"] != nil
         case .some(.openRouter):
-            return !config.openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] != nil
+            return !resolvedOpenRouterAPIKey(config: config).isEmpty
         case .some(.ollama):
             return resolveConfiguredOllamaURL(config: config) != nil
         case .some(.lmStudio):
-            let model = configuredModel(for: backend, config: config)
+            let model = modelOverride ?? configuredModel(for: backend, config: config)
             return !model.isEmpty
                 && MeetingSummaryClient.resolveLMStudioURL(config: cleanupConfig(config, model: model)) != nil
         case .some(.customLLM):
-            let model = configuredModel(for: backend, config: config)
+            let model = modelOverride ?? configuredModel(for: backend, config: config)
             let format = CustomLLMFormat(rawValue: config.customLLMFormat) ?? .openAI
             let key = config.customLLMAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
             return !model.isEmpty
@@ -309,6 +311,7 @@ enum TranscriptCleanupClient {
         model: String,
         config: AppConfig,
         maxOutputTokens: Int? = nil,
+        reasoningEffort: ReasoningEffort? = nil,
         logCategory: String = "generation"
     ) async throws -> String {
         guard let llmBackend = backend.llmBackend else {
@@ -434,10 +437,14 @@ enum TranscriptCleanupClient {
 
     static func resolvedOpenRouterAPIKey(
         config: AppConfig,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        credentialStore: OpenRouterCredentialStore = OpenRouterCredentialStore()
     ) -> String {
-        let key = config.openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        return key.isEmpty ? (environment["OPENROUTER_API_KEY"] ?? "") : key
+        OpenRouterCredentialResolver.resolvedAPIKey(
+            legacyAPIKey: config.openRouterAPIKey,
+            environment: environment,
+            credentialStore: credentialStore
+        )
     }
 
     private static func cleanupConfig(_ config: AppConfig, model: String) -> AppConfig {
@@ -474,7 +481,7 @@ enum TranscriptCleanupClient {
         if options.disableProviderRetention {
             body["store"] = false
         }
-        if let effort = SummaryModelPreset.reasoningEffort(for: model) {
+        if let effort = ReasoningEffortPolicy.apiValue(for: model, preferred: options.reasoningEffort) {
             body["reasoning"] = ["effort": effort]
         }
         var request = URLRequest(url: openAIResponsesURL)
@@ -511,6 +518,25 @@ enum TranscriptCleanupClient {
             "stream": false,
             "options": ["num_predict": options.maxOutputTokens ?? defaultMaxOutputTokens],
         ]
+    }
+
+    static func openAIRequestBody(
+        systemPrompt: String,
+        userPrompt: String,
+        model: String,
+        maxOutputTokens: Int = defaultMaxOutputTokens,
+        reasoningEffort: ReasoningEffort? = nil
+    ) -> [String: Any] {
+        var body: [String: Any] = [
+            "model": model,
+            "instructions": systemPrompt,
+            "input": userPrompt,
+            "max_output_tokens": maxOutputTokens,
+        ]
+        if let effort = ReasoningEffortPolicy.apiValue(for: model, preferred: reasoningEffort) {
+            body["reasoning"] = ["effort": effort]
+        }
+        return body
     }
 
     private static func cleanWithOllama(

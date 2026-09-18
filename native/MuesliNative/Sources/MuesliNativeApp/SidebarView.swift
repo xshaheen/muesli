@@ -1,6 +1,33 @@
 import SwiftUI
 import MuesliCore
 
+struct SidebarToggleButton: View {
+    static let accessibilityIdentifier = "dashboard.sidebar.toggle"
+
+    let isCollapsed: Bool
+    let action: () -> Void
+
+    var accessibilityTitle: String {
+        isCollapsed ? "Expand sidebar" : "Collapse sidebar"
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .frame(width: 36, height: 36)
+                .background(MuesliTheme.backgroundRaised.opacity(0.72))
+                .clipShape(Circle())
+                .overlay(Circle().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help(accessibilityTitle)
+        .accessibilityLabel(accessibilityTitle)
+        .accessibilityIdentifier(Self.accessibilityIdentifier)
+    }
+}
+
 struct SidebarView: View {
     private let sidebarIconColumnWidth: CGFloat = 20
     /// Square so the selected cell reads as a deliberate pill rather than a

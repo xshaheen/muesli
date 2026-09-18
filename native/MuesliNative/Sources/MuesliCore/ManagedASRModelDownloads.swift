@@ -24,6 +24,8 @@ public struct ManagedASRModelPlan: Sendable {
     public let revision: String
     public let cacheDirectory: URL
     public let selections: [HuggingFaceModelSelection]
+    /// Optional immutable Muesli mirror used before Hugging Face discovery.
+    public let mirror: MuesliModelMirror?
     /// Every inner group is an either/or requirement; every group must be satisfied.
     public let requiredArtifactAlternatives: [[String]]
     public let maximumConcurrency: Int
@@ -36,6 +38,7 @@ public struct ManagedASRModelPlan: Sendable {
         cacheDirectory: URL,
         selections: [HuggingFaceModelSelection],
         requiredArtifactAlternatives: [[String]],
+        mirror: MuesliModelMirror? = nil,
         maximumConcurrency: Int = 2,
         integrityValidator: IntegrityValidator? = nil
     ) {
@@ -45,6 +48,7 @@ public struct ManagedASRModelPlan: Sendable {
         self.cacheDirectory = cacheDirectory
         self.selections = selections
         self.requiredArtifactAlternatives = requiredArtifactAlternatives
+        self.mirror = mirror
         self.maximumConcurrency = maximumConcurrency
         self.integrityValidator = integrityValidator
     }
@@ -341,11 +345,20 @@ public enum ManagedASRModelPlans {
         )
     }
 
+    // No plan configures a mirror, so every download goes straight to Hugging
+    // Face. Upstream points these at its own R2 bucket; this fork has no such
+    // bucket, and silently routing a user's model downloads through the
+    // upstream project's infrastructure is a network path they never chose.
+    // The mirror transport, its manifest trust pin, and the cache-recovery
+    // paths below are kept intact and tested so pointing this at a bucket we
+    // do control stays a one-line change.
+
     private static func fluidAudioPlan(
         modelID: String,
         repository: String,
         directoryName: String,
         required: [String],
+        mirror: MuesliModelMirror? = nil,
         modelsRoot: URL?
     ) -> ManagedASRModelPlan {
         let directory = (modelsRoot ?? fluidAudioModelsRoot())
@@ -355,7 +368,8 @@ public enum ManagedASRModelPlans {
             repository: repository,
             cacheDirectory: directory,
             selections: [HuggingFaceModelSelection(includedPaths: Set(required))],
-            requiredArtifactAlternatives: completenessRequirements(for: required)
+            requiredArtifactAlternatives: completenessRequirements(for: required),
+            mirror: mirror
         )
     }
 
@@ -382,9 +396,10 @@ public enum ManagedASRModelDownloader {
         progress: ((Double, String?) -> Void)? = nil,
         progressSnapshot: ModelDownloadProgressHandler? = nil,
         resolver: HuggingFaceModelManifestResolver = .shared,
+        mirrorResolver: MuesliModelMirrorManifestResolver = .shared,
         coordinator: ModelDownloadCoordinator = .shared
     ) async throws -> URL {
-        try await operations.run(modelID: plan.modelID) {
+        try await operations.run(modelID: plan.modelID) { cancellation in
             if plan.isAvailableLocally() { return plan.cacheDirectory }
             if plan.requiresIntegrityRepair() {
                 try plan.delete()
@@ -395,7 +410,9 @@ public enum ManagedASRModelDownloader {
                 progress: progress,
                 progressSnapshot: progressSnapshot,
                 resolver: resolver,
-                coordinator: coordinator
+                mirrorResolver: mirrorResolver,
+                coordinator: coordinator,
+                cancellation: cancellation
             )
         }
     }
@@ -409,6 +426,7 @@ public enum ManagedASRModelDownloader {
         progress: ((Double, String?) -> Void)? = nil,
         progressSnapshot: ModelDownloadProgressHandler? = nil,
         resolver: HuggingFaceModelManifestResolver = .shared,
+        mirrorResolver: MuesliModelMirrorManifestResolver = .shared,
         coordinator: ModelDownloadCoordinator = .shared,
         load: (URL) async throws -> T
     ) async throws -> T {
@@ -418,6 +436,7 @@ public enum ManagedASRModelDownloader {
             progress: progress,
             progressSnapshot: progressSnapshot,
             resolver: resolver,
+            mirrorResolver: mirrorResolver,
             coordinator: coordinator
         )
 
@@ -449,6 +468,7 @@ public enum ManagedASRModelDownloader {
                 progress: progress,
                 progressSnapshot: progressSnapshot,
                 resolver: resolver,
+                mirrorResolver: mirrorResolver,
                 coordinator: coordinator
             )
             return try await load(repairedDirectory)
@@ -461,8 +481,12 @@ public enum ManagedASRModelDownloader {
         modelID: String,
         coordinator: ModelDownloadCoordinator = .shared
     ) async {
-        await operations.cancel(modelID: modelID)
         await coordinator.cancel(modelID: modelID)
+        // Mark the high-level operation last. That makes a download started
+        // immediately after this method returns wait for cancellation cleanup
+        // and begin a fresh attempt, rather than attaching to the cancelled
+        // task during the observer's cleanup window.
+        await operations.cancel(modelID: modelID)
     }
 
     /// Cancels and awaits manifest discovery plus any registered transfer.
@@ -470,6 +494,10 @@ public enum ManagedASRModelDownloader {
         modelID: String,
         coordinator: ModelDownloadCoordinator = .shared
     ) async {
+        // The coordinator owns the actual URLSession tasks. Stop those first
+        // so awaiting the high-level mirror/fallback operation cannot leave a
+        // detached transfer writing its cache in the background.
+        await coordinator.cancel(modelID: modelID)
         await operations.cancelAndWait(modelID: modelID)
         await coordinator.cancelAndWait(modelID: modelID)
     }
@@ -493,34 +521,171 @@ public enum ManagedASRModelDownloader {
         progress: ((Double, String?) -> Void)?,
         progressSnapshot: ModelDownloadProgressHandler?,
         resolver: HuggingFaceModelManifestResolver,
-        coordinator: ModelDownloadCoordinator
+        mirrorResolver: MuesliModelMirrorManifestResolver,
+        coordinator: ModelDownloadCoordinator,
+        cancellation: ManagedASRModelCancellationToken
     ) async throws -> URL {
-        try Task.checkCancellation()
+        func checkCancellation() throws {
+            try Task.checkCancellation()
+            try cancellation.check()
+        }
+
+        try checkCancellation()
+        try recoverInterruptedFallbackCache(for: plan)
 
         let scalarProgress = ManagedASRScalarProgressRelay(progress)
-        scalarProgress.call(0.01, "Finding model files...")
-        progressSnapshot?(ModelDownloadProgress.preparing(
-            modelID: plan.modelID,
-            message: "Finding model files..."
-        ))
-        let manifest = try await resolver.resolve(
-            modelID: plan.modelID,
-            repository: plan.repository,
-            revision: plan.revision,
-            selections: plan.selections,
-            maximumConcurrency: plan.maximumConcurrency
-        )
-        try await coordinator.download(manifest, to: plan.cacheDirectory) { snapshot in
-            if let fraction = snapshot.fractionCompleted {
-                scalarProgress.call(fraction, snapshot.message)
-            }
-            progressSnapshot?(snapshot)
+        func report(_ message: String) {
+            scalarProgress.call(0.01, message)
+            progressSnapshot?(ModelDownloadProgress.preparing(
+                modelID: plan.modelID,
+                message: message
+            ))
         }
-        try plan.recordSuccessfulInstallation(manifest)
-        guard plan.isComplete() else {
-            throw HuggingFaceModelManifestError.emptySelection(plan.repository)
+        func download(_ manifest: ModelDownloadManifest) async throws {
+            try await coordinator.download(manifest, to: plan.cacheDirectory) { snapshot in
+                if let fraction = snapshot.fractionCompleted {
+                    scalarProgress.call(fraction, snapshot.message)
+                }
+                progressSnapshot?(snapshot)
+            }
+        }
+
+        var mirrorTransferStarted = false
+        var fallbackCacheBackup: URL?
+        if let mirror = plan.mirror {
+            do {
+                report("Checking Muesli model mirror...")
+                let manifest = try await mirrorResolver.resolve(
+                    modelID: plan.modelID,
+                    mirror: mirror,
+                    maximumConcurrency: plan.maximumConcurrency
+                )
+                try checkCancellation()
+                // Once a mirror transfer starts, Hugging Face must not resume
+                // any files in the same directory against another revision.
+                mirrorTransferStarted = true
+                try await download(manifest)
+                try checkCancellation()
+                try plan.recordSuccessfulInstallation(manifest)
+                guard plan.isComplete() else {
+                    throw MuesliModelMirrorManifestError.invalidManifest(mirror.manifestURL)
+                }
+                return plan.cacheDirectory
+            } catch {
+                if isCancellation(error) || cancellation.isCancelled { throw CancellationError() }
+                if mirrorTransferStarted {
+                    // Download the fallback into a new directory so it cannot
+                    // resume mirror bytes or stale partial files. Keep the
+                    // prior directory aside until the fallback succeeds: valid
+                    // files reused by the failed mirror remain available if
+                    // Hugging Face is unavailable too.
+                    fallbackCacheBackup = try moveCacheAside(plan.cacheDirectory)
+                }
+                report("Muesli mirror unavailable; trying Hugging Face...")
+            }
+        } else {
+            report("Finding model files...")
+        }
+
+        do {
+            let manifest = try await resolver.resolve(
+                modelID: plan.modelID,
+                repository: plan.repository,
+                revision: plan.revision,
+                selections: plan.selections,
+                maximumConcurrency: plan.maximumConcurrency
+            )
+            try checkCancellation()
+            try await download(manifest)
+            try checkCancellation()
+            try plan.recordSuccessfulInstallation(manifest)
+            guard plan.isComplete() else {
+                throw HuggingFaceModelManifestError.emptySelection(plan.repository)
+            }
+        } catch {
+            if let fallbackCacheBackup {
+                try restoreCache(from: fallbackCacheBackup, to: plan.cacheDirectory)
+            }
+            if isCancellation(error) || cancellation.isCancelled {
+                throw CancellationError()
+            }
+            throw error
+        }
+
+        // The fallback's completion marker has made the replacement durable.
+        // A failed best-effort cleanup does not invalidate the new install.
+        if let fallbackCacheBackup {
+            try? FileManager.default.removeItem(at: fallbackCacheBackup)
         }
         return plan.cacheDirectory
+    }
+
+    /// Moves a plan-owned cache out of the fallback's destination directory.
+    /// The unique sibling avoids sharing resumable state between origins.
+    private static func moveCacheAside(_ cacheDirectory: URL) throws -> URL? {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: cacheDirectory.path) else { return nil }
+
+        let backup = cacheDirectory.deletingLastPathComponent().appendingPathComponent(
+            ".\(cacheDirectory.lastPathComponent).muesli-mirror-fallback-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.moveItem(at: cacheDirectory, to: backup)
+        return backup
+    }
+
+    /// Restores the last mirror cache if the app was terminated while an
+    /// origin-isolated Hugging Face fallback was in progress.  A surviving
+    /// backup is itself the transaction marker: normal fallback completion or
+    /// failure always removes or restores it before returning.  Restoring it
+    /// before another attempt prevents a later mirror download from seeing
+    /// partial bytes that came from Hugging Face.
+    private static func recoverInterruptedFallbackCache(for plan: ManagedASRModelPlan) throws {
+        let fileManager = FileManager.default
+        let cacheDirectory = plan.cacheDirectory
+        let prefix = ".\(cacheDirectory.lastPathComponent).muesli-mirror-fallback-"
+        let parentDirectory = cacheDirectory.deletingLastPathComponent()
+        let contents = (try? fileManager.contentsOfDirectory(
+            at: parentDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey]
+        )) ?? []
+        let backups = contents.filter { url in
+            guard url.lastPathComponent.hasPrefix(prefix) else { return false }
+            return (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }
+        guard let backup = backups.max(by: { lhs, rhs in
+            let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            return lhsDate < rhsDate
+        }) else { return }
+
+        if fileManager.fileExists(atPath: cacheDirectory.path) {
+            try fileManager.removeItem(at: cacheDirectory)
+        }
+        try fileManager.moveItem(at: backup, to: cacheDirectory)
+
+        // A previous abrupt termination could have left more than one stale
+        // backup. They cannot belong to the active operation (per-model work
+        // is serialized), and retaining them only consumes model storage.
+        for staleBackup in backups where staleBackup != backup {
+            try? fileManager.removeItem(at: staleBackup)
+        }
+    }
+
+    /// Restores a pre-fallback cache after Hugging Face fails. Removing the
+    /// fallback attempt first prevents incomplete fallback bytes surviving.
+    private static func restoreCache(from backup: URL, to cacheDirectory: URL) throws {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: cacheDirectory.path) {
+            try fileManager.removeItem(at: cacheDirectory)
+        }
+        try fileManager.moveItem(at: backup, to: cacheDirectory)
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        Task.isCancelled
+            || error is CancellationError
+            || (error as? URLError)?.code == .cancelled
     }
 }
 
@@ -533,38 +698,79 @@ private actor ManagedASRModelOperations {
     private struct Operation {
         let id: UUID
         let task: Task<URL, Error>
+        let cancellation: ManagedASRModelCancellationToken
+        var cancellationRequested = false
     }
 
-    private var operations: [String: [UUID: Operation]] = [:]
+    // A model's mirror and fallback state transitions share one cache
+    // directory, so callers for the same model must share one operation.
+    private var operations: [String: Operation] = [:]
+    private var completionWaiters: [UUID: [UUID: CheckedContinuation<URL, Error>]] = [:]
     private var deletionTokens: [String: UUID] = [:]
 
     func run(
         modelID: String,
-        operation: @escaping @Sendable () async throws -> URL
+        operation: @escaping @Sendable (ManagedASRModelCancellationToken) async throws -> URL
     ) async throws -> URL {
         guard deletionTokens[modelID] == nil else { throw CancellationError() }
-        let id = UUID()
-        let task = Task { try await operation() }
-        operations[modelID, default: [:]][id] = Operation(id: id, task: task)
-        defer { operations[modelID]?[id] = nil }
-        return try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: {
-            task.cancel()
+        if let active = operations[modelID] {
+            // An explicit model cancellation means the next user-initiated
+            // download is a new attempt, not another observer of the task
+            // that is already winding down.  We still wait for that task to
+            // finish before starting it so two attempts cannot mutate the
+            // same cache directory concurrently.
+            if active.cancellationRequested {
+                _ = try? await waitForCompletion(of: active)
+                try Task.checkCancellation()
+                return try await run(modelID: modelID, operation: operation)
+            }
+            return try await waitForCompletion(of: active)
         }
+
+        let id = UUID()
+        let cancellation = ManagedASRModelCancellationToken()
+        let task = Task { try await operation(cancellation) }
+        let active = Operation(id: id, task: task, cancellation: cancellation)
+        operations[modelID] = active
+        Task { [weak self] in
+            let result: Result<URL, Error>
+            do {
+                result = .success(try await task.value)
+            } catch {
+                result = .failure(error)
+            }
+            await self?.finish(modelID: modelID, operationID: id, result: result)
+        }
+        return try await waitForCompletion(of: active)
     }
 
     func cancel(modelID: String) {
-        guard let active = operations[modelID]?.values else { return }
-        for operation in active {
-            operation.task.cancel()
-        }
+        requestCancellation(modelID: modelID)?.task.cancel()
     }
 
     func cancelAndWait(modelID: String) async {
-        let active = operations[modelID].map { Array($0.values) } ?? []
-        for operation in active { operation.task.cancel() }
-        for operation in active { _ = try? await operation.task.value }
+        guard let active = requestCancellation(modelID: modelID) else { return }
+        let result: Result<URL, Error>
+        do {
+            result = .success(try await active.task.value)
+        } catch {
+            result = .failure(error)
+        }
+
+        // The detached completion observer also calls `finish`, but a caller
+        // that awaits cancellation must not return while this cancelled
+        // operation is still eligible for a new caller to join. The operation
+        // ID guard in `finish` makes this safe if the observer already ran or
+        // a newer operation has since replaced it.
+        finish(modelID: modelID, operationID: active.id, result: result)
+    }
+
+    private func requestCancellation(modelID: String) -> Operation? {
+        guard var active = operations[modelID] else { return nil }
+        active.cancellationRequested = true
+        operations[modelID] = active
+        active.cancellation.cancel()
+        return active
     }
 
     func beginDeletion(modelID: String) async -> ManagedASRModelDeletionToken {
@@ -577,6 +783,69 @@ private actor ManagedASRModelOperations {
     func endDeletion(_ token: ManagedASRModelDeletionToken) {
         guard deletionTokens[token.modelID] == token.id else { return }
         deletionTokens[token.modelID] = nil
+    }
+
+    /// Each caller waits independently. Cancelling a caller therefore detaches
+    /// it from the shared model operation; only explicit model cancellation
+    /// above stops the transfer for every caller.
+    private func waitForCompletion(of operation: Operation) async throws -> URL {
+        let callerID = UUID()
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    completionWaiters[operation.id, default: [:]][callerID] = continuation
+                }
+            }
+        }, onCancel: {
+            Task { await self.cancelWaiter(callerID, for: operation.id) }
+        })
+    }
+
+    private func cancelWaiter(_ callerID: UUID, for operationID: UUID) {
+        guard let continuation = completionWaiters[operationID]?[callerID] else { return }
+        completionWaiters[operationID]?[callerID] = nil
+        if completionWaiters[operationID]?.isEmpty == true {
+            completionWaiters[operationID] = nil
+        }
+        continuation.resume(throwing: CancellationError())
+    }
+
+    private func finish(
+        modelID: String,
+        operationID: UUID,
+        result: Result<URL, Error>
+    ) {
+        guard operations[modelID]?.id == operationID else { return }
+        operations[modelID] = nil
+        let waiters = completionWaiters.removeValue(forKey: operationID) ?? [:]
+        for continuation in waiters.values {
+            continuation.resume(with: result)
+        }
+    }
+}
+
+/// Explicit model cancellation must survive the small URLSession race where a
+/// manifest response completes just as its parent task is cancelled.
+private final class ManagedASRModelCancellationToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    func check() throws {
+        guard !isCancelled else { throw CancellationError() }
     }
 }
 

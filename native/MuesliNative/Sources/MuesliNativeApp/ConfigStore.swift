@@ -8,11 +8,13 @@ final class ConfigStore {
     static let legacyBackupFileName = "config.pre-modes.json"
 
     private let configURL: URL
+    private let openRouterCredentialStore: OpenRouterCredentialStore
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     init(supportDirectory: URL = AppIdentity.supportDirectoryURL) {
         self.configURL = supportDirectory.appendingPathComponent("config.json")
+        self.openRouterCredentialStore = OpenRouterCredentialStore(supportDirectory: supportDirectory)
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
 
@@ -27,13 +29,22 @@ final class ConfigStore {
             fresh.dictationModes = DictationModes.builtInModes(isEnabled: true)
             return fresh
         }
-        guard let decoded = try? decoder.decode(AppConfig.self, from: data) else {
+        guard var decoded = try? decoder.decode(AppConfig.self, from: data) else {
             fputs("[config-store] config.json is unreadable; loading defaults without overwriting it\n", stderr)
             return AppConfig()
         }
+        let hadLegacyOpenRouterKey = !decoded.openRouterAPIKey
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+        migrateLegacyOpenRouterCredential(in: &decoded)
+        let movedOpenRouterCredential = hadLegacyOpenRouterKey && decoded.openRouterAPIKey.isEmpty
         // A migrated selection reaches disk on the launch that migrated it, so the
-        // rewrite survives a crash and cannot be re-derived from stale keys.
-        guard decoded.retiredASRBackendMigrationApplied || decoded.dictationModesMigrationApplied else {
+        // rewrite survives a crash and cannot be re-derived from stale keys. The
+        // credential move has the same requirement: the key left config.json in
+        // memory only, so a launch that skips the save would offer it again.
+        guard movedOpenRouterCredential
+                || decoded.retiredASRBackendMigrationApplied
+                || decoded.dictationModesMigrationApplied else {
             return decoded
         }
         // R9: the backup goes down before the only save that removes the legacy keys.
@@ -53,7 +64,9 @@ final class ConfigStore {
     }
 
     func save(_ config: AppConfig) {
-        _ = write(config)
+        var persistedConfig = config
+        migrateLegacyOpenRouterCredential(in: &persistedConfig)
+        _ = write(persistedConfig)
     }
 
     /// Provider credential keys that must never persist in the rollback copy. The
@@ -195,6 +208,28 @@ final class ConfigStore {
         candidate.languageProfileNeedsConfirmation = false
         candidate.mirrorLanguageProfileToLegacyPins()
         return try saveCanonicalConfiguration(candidate)
+    /// Moves the legacy config.json key into the dedicated owner-only
+    /// credential file. If that write fails, keep the old value in config so
+    /// migration can retry without losing the user's credential.
+    private func migrateLegacyOpenRouterCredential(in config: inout AppConfig) {
+        let legacyKey = config.openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !legacyKey.isEmpty else { return }
+        do {
+            if let existingCredential = try openRouterCredentialStore.load(),
+               !existingCredential.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // A dedicated credential may have been created after this stale
+                // config value was written. Keep the newer destination value and
+                // only remove the legacy duplicate from config.json.
+                config.openRouterAPIKey = ""
+                return
+            }
+            try openRouterCredentialStore.save(
+                OpenRouterCredential(apiKey: legacyKey, userID: nil)
+            )
+            config.openRouterAPIKey = ""
+        } catch {
+            fputs("[config-store] failed to migrate OpenRouter credential\n", stderr)
+        }
     }
 
     func configPath() -> URL {

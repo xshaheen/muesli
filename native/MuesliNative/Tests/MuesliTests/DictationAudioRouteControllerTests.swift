@@ -4,6 +4,34 @@ import Testing
 
 @Suite("DictationAudioRouteController")
 struct DictationAudioRouteControllerTests {
+    @Test("construction and UI route reads return while HAL inspection is blocked")
+    @MainActor
+    func blockedInspectorDoesNotBlockUI() {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let inspector = FakeCoreAudioDeviceInspector(
+            defaultOutputDeviceID: 10, outputRouteKind: .headphoneLike, builtInInputDeviceID: 82
+        )
+        inspector.onOutputInspection = {
+            #expect(!Thread.isMainThread)
+            entered.signal()
+            #expect(release.wait(timeout: .now() + 2) == .success)
+        }
+        let routeQueue = DispatchQueue(label: "test.blocked-hal")
+        let controller = DictationAudioRouteController(
+            inspector: inspector, queue: routeQueue, observesDefaultOutputChanges: false
+        )
+        #expect(entered.wait(timeout: .now() + 1) == .success)
+        #expect(controller.preferredInputDeviceIDForDictation() == nil)
+        #expect(controller.preferredInputDeviceIDForMeeting() == nil)
+        #expect(controller.availableInputDevices().isEmpty)
+        #expect(controller.currentOutputRouteKindForDebug() == .unknown)
+        release.signal()
+        routeQueue.sync {}
+        inspector.onOutputInspection = nil
+        #expect(controller.preferredInputDeviceIDForDictation() == 82)
+    }
+
     @Test("dictation follows the system default input for headphone output")
     func dictationFollowsSystemDefaultInputForHeadphoneOutput() {
         // Auto used to prefer the built-in mic when a headset was connected, which
@@ -14,11 +42,13 @@ struct DictationAudioRouteControllerTests {
             outputRouteKind: .headphoneLike,
             builtInInputDeviceID: 82
         )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.headphone-like")
         let controller = DictationAudioRouteController(
             inspector: inspector,
-            queue: DispatchQueue(label: "test.dictation-audio-route.headphone-like"),
+            queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
 
         #expect(controller.preferredInputDeviceIDForDictation() == nil)
         #expect(controller.cachedPreferredInputDeviceIDForDictation() == nil)
@@ -31,11 +61,13 @@ struct DictationAudioRouteControllerTests {
             outputRouteKind: .headphoneLike,
             builtInInputDeviceID: 82
         )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.meeting-headphone-like")
         let controller = DictationAudioRouteController(
             inspector: inspector,
-            queue: DispatchQueue(label: "test.dictation-audio-route.meeting-headphone-like"),
+            queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
 
         #expect(controller.preferredInputDeviceIDForMeeting() == nil)
         #expect(controller.meetingInputRouteSnapshot().preferredInputDeviceID == nil)
@@ -50,11 +82,13 @@ struct DictationAudioRouteControllerTests {
             defaultInputDeviceID: 82,
             builtInInputDeviceID: 82
         )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.meeting-default-built-in")
         let controller = DictationAudioRouteController(
             inspector: inspector,
-            queue: DispatchQueue(label: "test.dictation-audio-route.meeting-default-built-in"),
+            queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
 
         #expect(controller.preferredInputDeviceIDForMeeting() == nil)
         #expect(controller.meetingInputRouteSnapshot().preferredInputDeviceID == nil)
@@ -75,6 +109,7 @@ struct DictationAudioRouteControllerTests {
             queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
         // Drain the initialization refresh before measuring the synchronous call.
         routeQueue.sync {}
         let inspectionCountBeforeSnapshot = inspector.inspectionCallCount
@@ -94,11 +129,13 @@ struct DictationAudioRouteControllerTests {
             defaultInputDeviceID: 82,
             builtInInputDeviceID: 82
         )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.speaker-like")
         let controller = DictationAudioRouteController(
             inspector: inspector,
-            queue: DispatchQueue(label: "test.dictation-audio-route.speaker-like"),
+            queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
 
         #expect(controller.preferredInputDeviceIDForDictation() == nil)
         #expect(controller.cachedPreferredInputDeviceIDForDictation() == nil)
@@ -115,11 +152,13 @@ struct DictationAudioRouteControllerTests {
             defaultInputDeviceID: 91,
             builtInInputDeviceID: 82
         )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.speaker-like-risky-input")
         let controller = DictationAudioRouteController(
             inspector: inspector,
-            queue: DispatchQueue(label: "test.dictation-audio-route.speaker-like-risky-input"),
+            queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
 
         #expect(controller.preferredInputDeviceIDForDictation() == nil)
         #expect(!controller.systemDefaultInputIsBuiltInForDictation())
@@ -133,11 +172,13 @@ struct DictationAudioRouteControllerTests {
             outputIsAmbiguousBluetooth: true,
             builtInInputDeviceID: 82
         )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.unknown")
         let controller = DictationAudioRouteController(
             inspector: inspector,
-            queue: DispatchQueue(label: "test.dictation-audio-route.unknown"),
+            queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
 
         #expect(controller.preferredInputDeviceIDForDictation() == nil)
         #expect(controller.cachedPreferredInputDeviceIDForDictation() == nil)
@@ -151,11 +192,13 @@ struct DictationAudioRouteControllerTests {
             outputIsAmbiguousBluetooth: false,
             builtInInputDeviceID: 82
         )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.unknown-non-bluetooth")
         let controller = DictationAudioRouteController(
             inspector: inspector,
-            queue: DispatchQueue(label: "test.dictation-audio-route.unknown-non-bluetooth"),
+            queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
 
         #expect(controller.preferredInputDeviceIDForDictation() == nil)
         #expect(controller.cachedPreferredInputDeviceIDForDictation() == nil)
@@ -168,11 +211,13 @@ struct DictationAudioRouteControllerTests {
             outputRouteKind: .headphoneLike,
             builtInInputDeviceID: nil
         )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.no-built-in")
         let controller = DictationAudioRouteController(
             inspector: inspector,
-            queue: DispatchQueue(label: "test.dictation-audio-route.no-built-in"),
+            queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
 
         #expect(controller.preferredInputDeviceIDForDictation() == nil)
         #expect(controller.cachedPreferredInputDeviceIDForDictation() == nil)
@@ -189,11 +234,13 @@ struct DictationAudioRouteControllerTests {
                 AudioInputDeviceInfo(uid: "built-in-mic", name: "MacBook Microphone", deviceID: 82, isBuiltIn: true),
             ]
         )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.selected-input")
         let controller = DictationAudioRouteController(
             inspector: inspector,
-            queue: DispatchQueue(label: "test.dictation-audio-route.selected-input"),
+            queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
         controller.selectedInputDeviceUID = "external-mic"
 
         #expect(controller.preferredInputDeviceIDForDictation() == 91)
@@ -220,6 +267,7 @@ struct DictationAudioRouteControllerTests {
             queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
         controller.selectedMeetingInputDeviceUID = "external-mic"
         routeQueue.sync {}
 
@@ -248,6 +296,7 @@ struct DictationAudioRouteControllerTests {
             queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
         // Warm the UID-to-device cache, then prevent the setter's asynchronous
         // verification from hiding whether its synchronous cache update works.
         routeQueue.sync {}
@@ -294,6 +343,7 @@ struct DictationAudioRouteControllerTests {
             observesDefaultOutputChanges: false
         )
         routeQueue.sync {}
+        routeQueue.sync {}
 
         #expect(controller.preferredInputDeviceIDForMeeting() == nil)
         let snapshot = controller.meetingInputRouteSnapshot()
@@ -322,6 +372,7 @@ struct DictationAudioRouteControllerTests {
             observesDefaultOutputChanges: false
         )
         routeQueue.sync {}
+        routeQueue.sync {}
 
         #expect(controller.meetingInputRouteSnapshot().defaultInputDeviceName == "External Mic")
     }
@@ -344,6 +395,7 @@ struct DictationAudioRouteControllerTests {
             queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
         controller.selectedMeetingInputDeviceUID = "external-mic"
         routeQueue.sync {}
 
@@ -367,8 +419,8 @@ struct DictationAudioRouteControllerTests {
         #expect(controller.meetingInputRouteSnapshot().selectedInputDeviceResolved)
     }
 
-    @Test("synchronous route refresh clears an unavailable cached microphone")
-    func synchronousRouteRefreshClearsUnavailableCachedMicrophone() {
+    @Test("asynchronous route refresh clears an unavailable cached microphone")
+    func asynchronousRouteRefreshClearsUnavailableCachedMicrophone() {
         let inspector = FakeCoreAudioDeviceInspector(
             defaultOutputDeviceID: 10,
             outputRouteKind: .speakerLike,
@@ -385,12 +437,15 @@ struct DictationAudioRouteControllerTests {
             queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
         controller.selectedInputDeviceUID = "external-mic"
         controller.selectedMeetingInputDeviceUID = "external-mic"
         routeQueue.sync {}
         #expect(controller.cachedPreferredInputDeviceIDForDictation() == 91)
 
         inspector.inputDevices.removeAll { $0.uid == "external-mic" }
+        controller.refreshRouteAfterDictationSession()
+        routeQueue.sync {}
 
         #expect(controller.preferredInputDeviceIDForDictation() == nil)
         #expect(controller.cachedPreferredInputDeviceIDForDictation() == nil)
@@ -408,11 +463,13 @@ struct DictationAudioRouteControllerTests {
                 AudioInputDeviceInfo(uid: "built-in-mic", name: "MacBook Microphone", deviceID: 82, isBuiltIn: true),
             ]
         )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.missing-selected-input")
         let controller = DictationAudioRouteController(
             inspector: inspector,
-            queue: DispatchQueue(label: "test.dictation-audio-route.missing-selected-input"),
+            queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
         controller.selectedInputDeviceUID = "missing-mic"
 
         #expect(controller.preferredInputDeviceIDForDictation() == nil)
@@ -430,16 +487,50 @@ struct DictationAudioRouteControllerTests {
                 AudioInputDeviceInfo(uid: "built-in-mic", name: "MacBook Microphone", deviceID: 82, isBuiltIn: true),
             ]
         )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.system-aggregate")
         let controller = DictationAudioRouteController(
             inspector: inspector,
-            queue: DispatchQueue(label: "test.dictation-audio-route.system-aggregate"),
+            queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
 
         #expect(controller.availableInputDevices().map(\.uid) == ["built-in-mic"])
 
         controller.selectedInputDeviceUID = "CADefaultDeviceAggregate-28219-0"
         #expect(controller.preferredInputDeviceIDForDictation() == nil)
+    }
+
+    @Test("settings device inventory reads use the route cache")
+    func settingsDeviceInventoryReadsUseRouteCache() {
+        let inspector = FakeCoreAudioDeviceInspector(
+            defaultOutputDeviceID: 10,
+            outputRouteKind: .speakerLike,
+            builtInInputDeviceID: 82,
+            inputDevices: [
+                AudioInputDeviceInfo(uid: "built-in-mic", name: "MacBook Microphone", deviceID: 82, isBuiltIn: true),
+            ]
+        )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.cached-device-inventory")
+        let controller = DictationAudioRouteController(
+            inspector: inspector,
+            queue: routeQueue,
+            observesDefaultOutputChanges: false
+        )
+        routeQueue.sync {}
+        routeQueue.sync {}
+        let inspectionCountBeforeRead = inspector.inspectionCallCount
+
+        #expect(controller.cachedAvailableInputDevices().map(\.uid) == ["built-in-mic"])
+        #expect(inspector.inspectionCallCount == inspectionCountBeforeRead)
+
+        inspector.inputDevices.append(
+            AudioInputDeviceInfo(uid: "external-mic", name: "External Mic", deviceID: 91, isBuiltIn: false)
+        )
+        controller.refreshAvailableInputDevices { _ in }
+        routeQueue.sync {}
+
+        #expect(controller.cachedAvailableInputDevices().map(\.uid) == ["built-in-mic", "external-mic"])
     }
 
     @Test("default input refresh can notify even when preferred route is unchanged")
@@ -449,23 +540,90 @@ struct DictationAudioRouteControllerTests {
             outputRouteKind: .speakerLike,
             builtInInputDeviceID: 82
         )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.default-input-refresh")
         let controller = DictationAudioRouteController(
             inspector: inspector,
-            queue: DispatchQueue(label: "test.dictation-audio-route.default-input-refresh"),
+            queue: routeQueue,
             observesDefaultOutputChanges: false
         )
+        routeQueue.sync {}
         _ = controller.preferredInputDeviceIDForDictation()
         var preferredInputChanges: [AudioObjectID?] = []
         controller.onPreferredInputDeviceChanged = { preferredInputChanges.append($0) }
 
         controller.refreshRouteCache(notifyEvenIfPreferredUnchanged: true)
-        _ = controller.preferredInputDeviceIDForDictation()
+        routeQueue.sync {}
 
         #expect(preferredInputChanges == [nil])
+    }
+
+    @Test("route change bursts coalesce into one inventory refresh and notification")
+    func routeChangeBurstCoalesces() async throws {
+        let inspector = FakeCoreAudioDeviceInspector(
+            defaultOutputDeviceID: 10,
+            outputRouteKind: .speakerLike,
+            defaultInputDeviceID: 82,
+            builtInInputDeviceID: 82
+        )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.coalesced-route-change")
+        let controller = DictationAudioRouteController(
+            inspector: inspector,
+            queue: routeQueue,
+            observesDefaultOutputChanges: false,
+            routeChangeSettleDelay: 0.02,
+            routeChangeMaximumDelay: 0.05
+        )
+        routeQueue.sync {}
+        routeQueue.sync {}
+        let inventoryReadsBeforeBurst = inspector.availableInputDevicesCallCount
+        var dictationNotifications = 0
+        var meetingNotifications = 0
+        controller.onPreferredInputDeviceChanged = { _ in dictationNotifications += 1 }
+        controller.onMeetingPreferredInputDeviceChanged = { _ in meetingNotifications += 1 }
+
+        controller.scheduleRouteChangeRefresh(.defaultOutput)
+        controller.scheduleRouteChangeRefresh(.defaultInput)
+        controller.scheduleRouteChangeRefresh(.deviceInventory)
+        controller.scheduleRouteChangeRefresh(.defaultOutput)
+        try await Task.sleep(for: .milliseconds(100))
+        routeQueue.sync {}
+
+        #expect(inspector.availableInputDevicesCallCount == inventoryReadsBeforeBurst + 1)
+        #expect(dictationNotifications == 1)
+        #expect(meetingNotifications == 1)
+    }
+
+    @Test("default device events reuse cached inventory")
+    func defaultDeviceEventsReuseCachedInventory() async throws {
+        let inspector = FakeCoreAudioDeviceInspector(
+            defaultOutputDeviceID: 10,
+            outputRouteKind: .speakerLike,
+            defaultInputDeviceID: 82,
+            builtInInputDeviceID: 82
+        )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.cached-route-change")
+        let controller = DictationAudioRouteController(
+            inspector: inspector,
+            queue: routeQueue,
+            observesDefaultOutputChanges: false,
+            routeChangeSettleDelay: 0.01,
+            routeChangeMaximumDelay: 0.02
+        )
+        routeQueue.sync {}
+        routeQueue.sync {}
+        let inventoryReadsBeforeChange = inspector.availableInputDevicesCallCount
+
+        controller.scheduleRouteChangeRefresh(.defaultOutput)
+        controller.scheduleRouteChangeRefresh(.defaultInput)
+        try await Task.sleep(for: .milliseconds(60))
+        routeQueue.sync {}
+
+        #expect(inspector.availableInputDevicesCallCount == inventoryReadsBeforeChange)
     }
 }
 
 private final class FakeCoreAudioDeviceInspector: CoreAudioDeviceInspecting {
+    var onOutputInspection: (() -> Void)?
     var defaultOutputDeviceIDValue: AudioObjectID?
     var defaultInputDeviceIDValue: AudioObjectID?
     var outputRouteKindValue: AudioOutputRouteKind
@@ -473,6 +631,7 @@ private final class FakeCoreAudioDeviceInspector: CoreAudioDeviceInspecting {
     var builtInInputDeviceIDValue: AudioObjectID?
     var inputDevices: [AudioInputDeviceInfo]
     private(set) var inspectionCallCount = 0
+    private(set) var availableInputDevicesCallCount = 0
 
     init(
         defaultOutputDeviceID: AudioObjectID?,
@@ -491,6 +650,7 @@ private final class FakeCoreAudioDeviceInspector: CoreAudioDeviceInspecting {
     }
 
     func defaultOutputDeviceID() -> AudioObjectID? {
+        onOutputInspection?()
         inspectionCallCount += 1
         return defaultOutputDeviceIDValue
     }
@@ -506,6 +666,7 @@ private final class FakeCoreAudioDeviceInspector: CoreAudioDeviceInspecting {
 
     func availableInputDevices() -> [AudioInputDeviceInfo] {
         inspectionCallCount += 1
+        availableInputDevicesCallCount += 1
         return inputDevices.filter { !$0.uid.hasPrefix("CADefaultDeviceAggregate") }
     }
 

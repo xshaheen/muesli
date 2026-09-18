@@ -33,13 +33,31 @@ case "${shard}" in
       RecordingArtifactPlaybackTests
       LocalDiagnosticsTests
       SessionDiagnosticsPresentationTests
+      ComputerUseExecutorTests
+      ComputerUseObservationCaptureTests
+      ComputerUseObservationTests
+      ComputerUsePlannerModelTests
+      ComputerUsePlannerRequestTests
+      ComputerUsePlannerResponseTests
+      ComputerUsePlannerRuntimeTests
+      ComputerUseRunDiagnosticsTests
+      ComputerUseToolRegistryTests
+      ComputerUseTraceFormatterTests
       MuesliCKSyncEngineTests
       MuesliCLITests
       ChatGPTAuthTests
+      ChatGPTResponsesTransportTests
       ChatGPTTokenStorageTests
       ComputerUseCursorOverlayTests
       FloatingMeetingPanelStyleTests
       DictationMiniPlacementTests
+      OpenRouterAuthTests
+      SettingsPermissionRefreshReasonTests
+      InteractionPermissionMonitorTests
+      AccessibilityPermissionGuideTests
+      DictationTestLifecycleTests
+      OnboardingFlowTests
+      OnboardingProgressTests
       WindowAppearanceTests
       OpenAILogoShapeTests
       StandardMenuShortcutTests
@@ -60,7 +78,10 @@ case "${shard}" in
       MarkdownRichTextEditorTests
       CustomWordDictionaryTests
       ModelDownloadCoordinatorTests
-      IndicASRBackendTests
+      BodhanBackendTests
+      BodhanArtifactValidationTests
+      BodhanLifecycleTests
+      DictationBackendPreparationTests
       ContributionMilestoneTests
     )
     ;;
@@ -90,10 +111,18 @@ case "${shard}" in
       DiarizerPreloadDiagnosticsTests
       DiarizerPreloadCoordinationTests
       PasteControllerTests
+      DictationPasteSpacingPolicyTests
+      DictationPasteSpacingTests
       QuilTransformationTests
+      QuilAvailabilityGateTests
+      QuilDirectAudioTests
       BackendOptionTests
+      OpenAIDictationProviderTests
+      OpenRouterTranscriptionClientTests
       SummaryModelPresetTests
       HotkeyMonitorTests
+      PushToTalkEnablementPolicyTests
+      ShortcutFeatureEnablementPolicyTests
       InteractiveAudioSessionOwnershipTests
       DictationStateTests
       HotkeyConfigTests
@@ -130,11 +159,25 @@ case "${shard}" in
     ;;
   meetings)
     filters=(
+      AudioAttributionServiceTests
+      CameraActivityMonitorTests
+      MicrophoneActivityMonitorTests
+      MeetingCaptureLifecycleTests
+      AudioQueueInputRecorderTests
+      FallbackStreamingDictationRecorderTests
+      MeetingCaptureShutdownTests
+      MeetingMonitoringModePolicyTests
+      MeetingAudioRecoveryDeadlinesTests
+      MeetingSignalRefreshPolicyTests
+      MeetingMicRecoveryCoordinatorTests
+      MeetingMicHealthTrackerTests
+      MeetingSystemAudioWatchdogTests
       AudioGraphExceptionBridgeTests
       DiagnosticIncidentTests
       DiagnosticIncidentReporterTests
       DictationAudioRouteControllerTests
       MeetingContactIdentityTests
+      MeetingContactResolverTests
       MeetingDetectorTests
       MeetingActivityDetectionPolicyTests
       MeetingParticipantStoreTests
@@ -188,6 +231,8 @@ case "${shard}" in
       MeetingCleanupPromptTests
       MeetingTranscriptAccessorTests
       MeetingTranscriptCleanupTests
+      CalendarEventQueryTests
+      CalendarMonitorLifecycleTests
       DisabledCalendarFilterTests
       GoogleCalendarTests
       NaturalTextDirectionTests
@@ -205,6 +250,12 @@ if [[ "${list_filters}" == true ]]; then
 fi
 
 args=(--package-path native/MuesliNative)
+if [[ "${shard}" == meetings ]]; then
+  # Concurrent suites can starve the utility-priority caption tasks on small
+  # runners. Serialize test cases, preserving concurrency exercised inside each
+  # test, rather than weakening their deadlines or changing production QoS.
+  args+=(--no-parallel)
+fi
 if [[ -n "${MUESLI_SWIFTPM_SCRATCH_PATH:-}" ]]; then
   args+=(--scratch-path "${MUESLI_SWIFTPM_SCRATCH_PATH}")
 fi

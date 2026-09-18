@@ -24,7 +24,6 @@ enum ComputerUsePlannerError: LocalizedError, Equatable {
 }
 
 enum ComputerUsePlannerClient {
-    private static let whamURL = URL(string: "https://chatgpt.com/backend-api/wham/responses")!
     static let defaultModel = "gpt-5.6-sol"
 
     static var instructions: String {
@@ -64,11 +63,12 @@ enum ComputerUsePlannerClient {
         config: AppConfig
     ) async throws -> ComputerUsePlannerResponse {
         do {
-            return try await callWHAM(
+            return try await callChatGPTResponses(
                 systemPrompt: instructions,
                 userPrompt: requestPrompt(for: request),
                 imageDataURL: request.latestWindowState.screenshot?.imageDataURL,
-                model: plannerModel(for: config)
+                model: plannerModel(for: config),
+                reasoningEffort: config.computerUseReasoningEffort
             )
         } catch ChatGPTAuthError.notAuthenticated {
             throw ComputerUsePlannerError.notAuthenticated
@@ -93,28 +93,27 @@ enum ComputerUsePlannerClient {
         return String(data: data, encoding: .utf8) ?? "{}"
     }
 
-    private static func callWHAM(
+    private static func callChatGPTResponses(
         systemPrompt: String,
         userPrompt: String,
         imageDataURL: String?,
-        model: String
+        model: String,
+        reasoningEffort: ReasoningEffort?
     ) async throws -> ComputerUsePlannerResponse {
         let (token, accountId) = try await ChatGPTAuthManager.shared.validAccessToken()
         let body = requestBody(
             systemPrompt: systemPrompt,
             userPrompt: userPrompt,
             imageDataURL: imageDataURL,
-            model: model
+            model: model,
+            reasoningEffort: reasoningEffort
         )
 
-        var urlRequest = URLRequest(url: whamURL)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if !accountId.isEmpty {
-            urlRequest.setValue(accountId, forHTTPHeaderField: "ChatGPT-Account-Id")
-        }
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let urlRequest = try ChatGPTResponsesTransport.makeRequest(
+            body: body,
+            token: token,
+            accountId: accountId
+        )
 
         let (bytes, response) = try await URLSession.shared.bytes(for: urlRequest)
         let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -138,6 +137,10 @@ enum ComputerUsePlannerClient {
             guard let data = jsonString.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
 
+            if let failure = streamedFailure(in: json) {
+                throw ComputerUsePlannerError.backendFailed(statusCode: httpStatus, message: failure)
+            }
+
             if let outputText = json["output_text"] as? String, !outputText.isEmpty {
                 fullText = outputText
             }
@@ -160,7 +163,7 @@ enum ComputerUsePlannerClient {
                 throw ComputerUsePlannerError.invalidToolCall(
                     name: nativeToolCall.name,
                     arguments: nativeToolCall.arguments,
-                    message: error.localizedDescription
+                    message: ComputerUsePlannerResponse.decodingFailureDetail(error)
                 )
             }
         }
@@ -173,11 +176,29 @@ enum ComputerUsePlannerClient {
         )
     }
 
+    static func streamedFailure(in json: [String: Any]) -> String? {
+        guard let type = json["type"] as? String,
+              type == "error" || type == "response.failed" else { return nil }
+        return String((streamErrorMessage(in: json) ?? "The provider reported a failed response.").prefix(800))
+    }
+
+    private static func streamErrorMessage(in json: [String: Any], depth: Int = 0) -> String? {
+        guard depth <= 16 else { return nil }
+        if let message = json["message"] as? String, !message.isEmpty { return message }
+        for key in ["error", "response"] {
+            if let nested = json[key] as? [String: Any],
+               let message = streamErrorMessage(in: nested, depth: depth + 1) { return message }
+        }
+        if let code = json["code"] as? String, !code.isEmpty { return code }
+        return nil
+    }
+
     static func requestBody(
         systemPrompt: String,
         userPrompt: String,
         imageDataURL: String?,
-        model: String
+        model: String,
+        reasoningEffort: ReasoningEffort? = nil
     ) -> [String: Any] {
         var content: [[String: Any]] = [
             ["type": "input_text", "text": userPrompt],
@@ -200,7 +221,7 @@ enum ComputerUsePlannerClient {
                 ] as [String: Any],
             ],
         ]
-        if let effort = SummaryModelPreset.reasoningEffort(for: model) {
+        if let effort = ReasoningEffortPolicy.apiValue(for: model, preferred: reasoningEffort) {
             body["reasoning"] = ["effort": effort]
         }
         return body

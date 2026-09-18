@@ -19,6 +19,40 @@ struct DictationStoreTests {
         return store
     }
 
+    @Test("startup interrupts only running CUA traces and preserves their events")
+    func reconcileRunningComputerUseTraces() throws {
+        let store = try makeStore()
+        let event = ComputerUseTraceEvent(kind: "tool_result", title: "Listed apps", body: "OK")
+        var ids: [Int64] = []
+        for status in ["running", "done", "cancelled"] {
+            let id = try store.insertDictation(text: status, durationSeconds: 1, source: "cua", startedAt: Date(), endedAt: Date())
+            try store.insertComputerUseTrace(dictationID: id, finalStatus: status, finalMessage: status, events: [event])
+            ids.append(id)
+        }
+        #expect(try store.markRunningComputerUseTracesInterrupted() == 1)
+        #expect(try store.markRunningComputerUseTracesInterrupted() == 0)
+        let rows = try store.recentDictations(limit: 10)
+        for (index, status) in ["interrupted", "done", "cancelled"].enumerated() {
+            let row = try #require(rows.first { $0.id == ids[index] })
+            #expect(row.computerUseTrace?.finalStatus == status)
+            #expect(row.computerUseTrace?.events == [event])
+        }
+    }
+
+    @Test("malformed CUA trace JSON keeps the trace status with an empty event list")
+    func malformedComputerUseTraceIsReadable() throws {
+        let store = try makeStore()
+        let id = try store.insertDictation(text: "test", durationSeconds: 1, source: "cua", startedAt: Date(), endedAt: Date())
+        try store.insertComputerUseTrace(dictationID: id, finalStatus: "interrupted", finalMessage: "Stopped", events: [])
+        var db: OpaquePointer?
+        #expect(sqlite3_open(store.databasePath().path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        #expect(sqlite3_exec(db, "UPDATE computer_use_traces SET trace_json = 'invalid json'", nil, nil, nil) == SQLITE_OK)
+        let trace = try #require(store.dictation(id: id)?.computerUseTrace)
+        #expect(trace.finalStatus == "interrupted")
+        #expect(trace.events.isEmpty)
+    }
+
     private func makeLegacyStore() throws -> DictationStore {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-legacy-test-\(UUID().uuidString).db")
@@ -602,6 +636,46 @@ struct DictationStoreTests {
         #expect(try store.claimCloudSyncAccountScope("scope-a", forKey: "account-owner"))
         #expect(try !store.claimCloudSyncAccountScope("scope-b", forKey: "account-owner"))
         #expect(try store.cloudSyncStateData(forKey: "account-owner") == Data("scope-a".utf8))
+    }
+
+    @Test("legacy reconnect refuses a different account without mutating sync state")
+    func legacyReconnectCannotCrossAccountBoundary() throws {
+        let store = try makeStore()
+        _ = try store.insertDictation(
+            text: "Keep account A text private",
+            durationSeconds: 1,
+            startedAt: Date().addingTimeInterval(-1),
+            endedAt: Date()
+        )
+        let record = try #require(try store.textRecordsNeedingSync().first)
+        #expect(try store.markTextRecordSynced(
+            kind: record.kind,
+            recordName: record.id,
+            changeTag: "account-a-tag",
+            systemFields: Data([0x01, 0x02]),
+            recordUpdatedAt: record.updatedAt
+        ))
+        try store.saveCloudSyncStateData(Data("scope-a".utf8), forKey: "legacy-owner")
+        try store.saveCloudSyncStateData(Data("legacy-cursor".utf8), forKey: "legacy-state")
+        try store.saveCloudSyncStateData(Data("current-cursor".utf8), forKey: "current-state")
+
+        #expect(try !store.reconnectCloudSyncAccountScope(
+            expectedScope: "scope-b",
+            accountScopeKey: "current-owner",
+            stateKey: "current-state",
+            legacyAccountScopeKey: "legacy-owner",
+            legacyStateKey: "legacy-state"
+        ))
+
+        #expect(try store.cloudSyncStateData(forKey: "current-owner") == nil)
+        #expect(try store.cloudSyncStateData(forKey: "current-state") == Data("current-cursor".utf8))
+        #expect(try store.cloudSyncStateData(forKey: "legacy-owner") == Data("scope-a".utf8))
+        #expect(try store.cloudSyncStateData(forKey: "legacy-state") == Data("legacy-cursor".utf8))
+        #expect(try !store.hasTextRecordsNeedingSync())
+        let preserved = try #require(try store.textRecordForSync(recordName: record.id))
+        #expect(preserved.text == "Keep account A text private")
+        #expect(preserved.cloudChangeTag == "account-a-tag")
+        #expect(preserved.cloudSystemFields == Data([0x01, 0x02]))
     }
 
     @Test("account verification ignores local-only rows and includes cloud-backed rows")

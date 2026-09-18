@@ -119,7 +119,8 @@ enum MeetingTranscriptCleanup {
                 options: TranscriptCleanupRequestOptions(
                     maxOutputTokens: maxOutputTokensPerChunk,
                     disableProviderRetention: true,
-                    preserveLineStructure: true
+                    preserveLineStructure: true,
+                    reasoningEffort: config.transcriptCleanupReasoningEffort
                 )
             )
         }
