@@ -42,7 +42,7 @@ let package = Package(
                 "ImlaCore",
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "LLM", package: "LLM.swift"),
-                .target(name: "CLiteRTLMBridge", condition: .when(platforms: [.macOS])),
+                .target(name: "CLiteRTLM_mac_lib", condition: .when(platforms: [.macOS])),
                 .product(name: "WhisperKit", package: "WhisperKit"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "TelemetryDeck", package: "SwiftSDK"),
@@ -98,19 +98,18 @@ let package = Package(
             path: "Sources/LocalVQEBridge",
             publicHeadersPath: "include"
         ),
-        // Thin source wrapper that owns the CLiteRTLM module declaration.
-        // This avoids a module.modulemap collision between CLiteRTLM_mac_lib and
-        // FluidAudio's NemoTextProcessing xcframeworks when both are linked, as
-        // the build system (SwiftPM/xcodebuild) flattens all xcframework headers
-        // to the same include/ output dir and conflicts on the filename.
-        .target(
-            name: "CLiteRTLMBridge",
-            dependencies: [
-                .target(name: "CLiteRTLM_mac_lib", condition: .when(platforms: [.macOS])),
-            ],
-            path: "Sources/CLiteRTLMBridge",
-            publicHeadersPath: "include"
-        ),
+        // The xcframework already ships Headers/module.modulemap declaring
+        // `module CLiteRTLM` over engine.h and capabilities_c.h, so a source
+        // wrapper re-declaring it only produces "redefinition of module
+        // 'CLiteRTLM'". Depend on the binary target directly.
+        //
+        // This and FluidAudio's NemoTextProcessing.xcframework each ship a
+        // Headers/module.modulemap. Their module *names* differ, but the
+        // swiftbuild engine stages every binary target's headers into one flat
+        // Products/<cfg>/include/, so the two files collide on filename and the
+        // build fails with "Multiple commands produce .../include/module.modulemap".
+        // The legacy engine passes each -I separately and does not collide,
+        // which is why the build scripts pin --build-system native.
         .binaryTarget(
             name: "CLiteRTLM_mac_lib",
             url: "https://github.com/google-ai-edge/LiteRT-LM/releases/download/v0.13.1/CLiteRTLM_mac.xcframework.zip",
