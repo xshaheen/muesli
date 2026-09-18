@@ -411,6 +411,8 @@ struct ConfigStoreTests {
 
         let attributes = try FileManager.default.attributesOfItem(atPath: store.legacyBackupURL().path)
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+    }
+
     @Test("legacy migration preserves an existing dedicated credential")
     func legacyMigrationPreservesExistingCredential() throws {
         let supportDirectory = makeSupportDirectory(label: "migration-existing")

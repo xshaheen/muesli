@@ -161,7 +161,9 @@ final class MeetingCaptureLifecycle: @unchecked Sendable {
                     },
                     systemAudio: {
                         _ = try? await systemStart?.value
-                        return try? await Self.onDriverQueue { systemAudio.stop() }
+                        // System-audio stop is already async in this fork, so it
+                        // needs no hop onto the synchronous driver queue.
+                        return await systemAudio.stop()
                     },
                     onQuiesced: { [self] in
                         self.state.withLock { $0.phase = .stopped }

@@ -236,6 +236,16 @@ struct MeetingAutoStopPolicyTests {
             .calendarAutoRecord,
             .scheduledMeetingPrompt,
             .joinAndRecord,
+        ]
+
+        for origin in origins {
+            #expect(origin.enablesMeetingAutoStop)
+            #expect(origin.signalLossResponse == .autoStopAfterWarning)
+            #expect(origin.signalLossSource(explicitSource: explicitSource, recentSource: recentSource) == explicitSource)
+            #expect(origin.signalLossSource(explicitSource: nil, recentSource: recentSource) == recentSource)
+        }
+    }
+
     @Test("room identity wins over browser attribution and shared suppression IDs")
     func roomMatching() {
         let source = MeetingAutoStopSource(candidate: candidate())

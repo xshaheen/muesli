@@ -888,6 +888,19 @@ private actor MeetingDetectionService {
         }
     }
 
+    /// While monitoring a recording's own source, a candidate that does not match
+    /// that source is not this meeting and must not drive its liveness.
+    private func scopedActivityCandidate(
+        _ candidate: MeetingCandidate?,
+        monitoringMode: MeetingMonitoringMode
+    ) -> MeetingCandidate? {
+        guard case .sourceLiveness(_, let source) = monitoringMode else {
+            return candidate
+        }
+        guard let candidate else { return nil }
+        return MeetingAutoStopPolicy.matches(candidate: candidate, source: source) ? candidate : nil
+    }
+
     private func debounceDelay(for trigger: MeetingDetectionTrigger) -> TimeInterval {
         switch trigger {
         case .startup, .fallbackTimer:

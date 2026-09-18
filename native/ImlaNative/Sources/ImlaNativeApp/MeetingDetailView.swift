@@ -1326,6 +1326,22 @@ struct MeetingDetailView: View {
         }
     }
 
+    /// The compact quick-notes header has room for a single row, so it carries
+    /// the action rail's controls without the rail's divider chrome.
+    @ViewBuilder
+    private func compactHeaderActions(
+        for meeting: MeetingRecord,
+        appliedTemplate: MeetingTemplateSnapshot
+    ) -> some View {
+        HStack(spacing: ImlaTheme.spacing8) {
+            templateMenu(for: meeting, appliedTemplate: appliedTemplate)
+            exportMenu(for: meeting)
+            summaryAction(for: meeting)
+            editButton(for: meeting)
+            moreActionsMenu(for: meeting)
+        }
+    }
+
     @ViewBuilder
     private func templateMenu(for meeting: MeetingRecord, appliedTemplate: MeetingTemplateSnapshot) -> some View {
         let templateLabel = labelForSelection(on: meeting, appliedTemplate: appliedTemplate)

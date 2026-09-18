@@ -815,7 +815,11 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
             var overflow = false
             let shouldDrain = state.withLock { s -> Bool in
                 guard !s.isStopped, !s.didFail else { return false }
-                s.pendingSegments.append(PendingSegment(id: id, prefixLength: 0))
+                s.pendingSegments.append(PendingSegment(
+                    id: id,
+                    prefixLength: 0,
+                    sequence: s.currentSegmentSequence
+                ))
                 if !s.sampleBuffer.isEmpty {
                     s.chunkQueue.append(.audio(
                         s.sampleBuffer,
@@ -827,6 +831,7 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
                     s.sampleBuffer.removeAll(keepingCapacity: true)
                 }
                 s.chunkQueue.append(.boundary(id))
+                s.currentSegmentSequence &+= 1
                 if s.chunkQueue.count > Self.maxNativeQueuedChunks {
                     overflow = true
                     return false

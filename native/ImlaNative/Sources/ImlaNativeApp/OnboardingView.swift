@@ -21,6 +21,11 @@ struct OnboardingView: View {
     @State private var openRouterSignInDone = false
     @State private var openRouterSignInError: String?
     @State private var isEnteringOpenRouterAPIKey = false
+    // This fork keeps direct Google Calendar sign-in, which upstream dropped in
+    // favour of EventKit alone.
+    @State private var isSigningInGoogleCal = false
+    @State private var googleCalSignInDone = false
+    @State private var googleCalSignInError: String?
 
     // Permission states — polled from OS every second
     @State private var micGranted = false

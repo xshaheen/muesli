@@ -572,7 +572,6 @@ final class MeetingSession {
     private let discardCleanup = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
     var capturePhase: MeetingCapturePhase { captureLifecycle.phase }
     func beginStoppingCapture() { captureLifecycle.requestStop() }
-    private let neuralAec = MeetingNeuralAec()
     private let inputObservationQueue = DispatchQueue(label: "com.xshaheen.imla.meeting-input-controls")
     private let inputMuted = OSAllocatedUnfairLock<Bool?>(initialState: nil)
     private let inputObserver: CoreAudioMicrophoneActivityObserver
@@ -605,6 +604,7 @@ final class MeetingSession {
     private let micRecoveryCoordinator = MeetingMicRecoveryCoordinator()
     private let systemAudioWatchdog = MeetingSystemAudioWatchdog()
     private let chunkRotationQueue = DispatchQueue(label: "ImlaNative.MeetingSession.chunkRotation")
+    private let pausedDisplayLock = OSAllocatedUnfairLock(initialState: false)
     private var chunkTimingTracker = MeetingChunkTimingTracker()
     private var systemChunkTimingTracker = MeetingChunkTimingTracker()
     /// Set after a system-capture interruption so the first recovered callback
@@ -840,10 +840,13 @@ final class MeetingSession {
                 meetingMicRecorder.preferredInputDeviceID = configuredDeviceID
             }
         }
-    func setPreferredMicrophoneInputDeviceID(_ deviceID: AudioObjectID?) {
+        // The mute observer follows the device the session actually records
+        // from, so a route change re-points it before the next health sample.
         inputMuted.withLock { $0 = nil }
-        inputObservationQueue.async { [inputObserver] in inputObserver.selectInput(deviceID) }
-        meetingMicRecorder.preferredInputDeviceID = deviceID
+        let selectedInputDeviceID = meetingMicRecorder.preferredInputDeviceID
+        inputObservationQueue.async { [inputObserver] in
+            inputObserver.selectInput(selectedInputDeviceID)
+        }
     }
 
     private func currentBackend() -> BackendOption {
@@ -944,7 +947,6 @@ final class MeetingSession {
 
         do {
             try await captureLifecycle.start()
-            startSystemAudioWatchdog()
         } catch {
             await sessionTrace?.recordStageFailed(
                 "meeting_capture",
@@ -1023,6 +1025,7 @@ final class MeetingSession {
                         nemotronPromptId: Self.liveCaptionNemotronPromptId(
                             selection: self.frozenLanguageSelection
                         ),
+                        appleSpeechLanguage: self.config.resolvedAppleSpeechLanguage,
                         sharedNemotron35: shared
                     )
                 } else {
@@ -1030,7 +1033,8 @@ final class MeetingSession {
                         backend: backend,
                         nemotronPromptId: Self.liveCaptionNemotronPromptId(
                             selection: self.frozenLanguageSelection
-                        )
+                        ),
+                        appleSpeechLanguage: self.config.resolvedAppleSpeechLanguage
                     )
                 }
                 guard self.chunkRotationQueue.sync(execute: { self.isRecording }),

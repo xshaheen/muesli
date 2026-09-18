@@ -199,6 +199,8 @@ enum DiagnosticErrorCatalog {
             (caseName, summary, status) = ("file_creation_failed", "System audio capture file could not be created", nil)
         case .noDefaultOutputDevice:
             (caseName, summary, status) = ("no_default_output_device", "No default system audio output was available", nil)
+        case .invalidTapIdentity:
+            (caseName, summary, status) = ("invalid_tap_identity", "CoreAudio returned no usable capture tap", nil)
         case .tapCreationFailed(let value):
             (caseName, summary, status) = ("tap_creation_failed", "CoreAudio process tap creation failed", value)
         case .aggregateDeviceCreationFailed(let value):

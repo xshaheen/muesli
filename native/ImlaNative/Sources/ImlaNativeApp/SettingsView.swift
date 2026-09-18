@@ -213,6 +213,8 @@ struct SettingsView: View {
     @State private var audioInputDevices: [AudioInputDeviceInfo] = []
     @State private var audioInputDeviceRefreshTask: Task<Void, Never>?
     @State private var permissionMonitoringClientID = UUID()
+    @State private var googleCalSignInError: String?
+    @State private var isSigningInGoogleCal = false
     @State private var isModesPresented = false
     @State private var notesLanguageErrorMessage: String?
     @State private var isSessionDiagnosticsPresented = false

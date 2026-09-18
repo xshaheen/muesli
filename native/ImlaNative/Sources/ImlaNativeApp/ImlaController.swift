@@ -570,6 +570,8 @@ public final class ImlaController: NSObject {
     private let meetingSourceWindowLocator = MeetingSourceWindowLocator()
 
     private let chatGPTAuth = ChatGPTAuthManager.shared
+    private let googleCalAuth = GoogleCalendarAuthManager.shared
+    private let googleCalClient = GoogleCalendarClient()
     private let openRouterAuth: OpenRouterAuthManager
     private let openRouterModelCatalogClient: OpenRouterModelCatalogClient
     private var calendarCheckTimer: Timer?
@@ -744,7 +746,7 @@ public final class ImlaController: NSObject {
     private var meetingSignalLossPromptState = MeetingSignalLossPromptState()
     private let meetingAutoStopGracePeriod: TimeInterval = 20
     private var meetingActivity: NSObjectProtocol?
-    private var isStoppingMeetingRecording: Bool { meetingCapture?.session.capturePhase == .stopping }
+    private var isStoppingMeetingRecording = false
     private var isPresentingMeetingTerminationConfirmation = false
     private var isTerminatingAfterMeetingConfirmation = false
     private var backgroundMeetingProcessingCount = 0
@@ -755,10 +757,10 @@ public final class ImlaController: NSObject {
     private var pendingMeetingCompletionNotification: PendingMeetingCompletionNotification?
     private var contributionMilestonePromptDismissedThisLaunch = false
     private var contributionMilestonePromptSeenIDsThisLaunch: Set<String> = []
-    // Operation identity rejects a cancelled start's late UI work, including
-    // when the same persisted meeting is resumed. It is not a capture phase.
-    private var meetingStartAttempt: (id: Int64, owner: ObjectIdentifier, task: Task<Void, Never>)?
-    private var meetingStartMeetingID: Int64? { meetingStartAttempt?.id }
+    // The meeting ID a start belongs to rejects a cancelled start's late UI
+    // work, including when the same persisted meeting is resumed.
+    private var meetingStartTask: Task<Void, Never>?
+    private var meetingStartMeetingID: Int64?
     private var importTask: Task<Void, Never>?
     private var importSessionID: UUID?
     private var meetingFinalizationTasks: [UUID: Task<Void, Never>] = [:]
@@ -1208,8 +1210,8 @@ public final class ImlaController: NSObject {
         meetingMonitor.recordingLifecycleProvider = { [weak self] in
             guard let self else { return .idle }
             return MeetingRecordingLifecycleSnapshot(
-                phase: self.meetingCapture?.session.capturePhase ?? .stopped,
-                sessionID: self.meetingCapture?.id,
+                phase: self.activeMeetingSession?.capturePhase ?? .stopped,
+                sessionID: self.activeMeetingID,
                 autoStopSource: self.activeMeetingAutoStop.source
             )
         }
@@ -1357,7 +1359,6 @@ public final class ImlaController: NSObject {
         computerUseCommandTask?.cancel()
         activeComputerUseTrace?.finish(status: "interrupted", message: "The app stopped.")
         activeComputerUseTrace = nil
-        indicator.setComputerUseCancellationAvailable(false)
         computerUseCommandTask = nil
         computerUseCommandTaskID = nil
         cancelHostedDictation()
@@ -1391,9 +1392,11 @@ public final class ImlaController: NSObject {
         meetingRecordingPanel.close()
         activeMeetingPanelOwnerID = nil
         dictationCorrectionMonitor.cancel()
-        if let capture = meetingCapture {
-            capture.session.discard()
-            resolveLiveMeetingAfterStopFailure(id: capture.id)
+        if let session = activeMeetingSession {
+            session.discard()
+            if let activeMeetingID {
+                resolveLiveMeetingAfterStopFailure(id: activeMeetingID)
+            }
         }
         activeMeetingAudioWarning = nil
         endMeetingActivity()
@@ -2008,6 +2011,9 @@ public final class ImlaController: NSObject {
         appState.meetingStartStatus = meetingStartStatus
         appState.activeMeetingAudioWarning = activeMeetingAudioWarning
         appState.isChatGPTAuthenticated = chatGPTAuth.isAuthenticated
+        appState.isGoogleCalendarAvailable = googleCalAuth.isAvailable
+        appState.isGoogleCalendarVerified = googleCalAuth.isVerified
+        appState.isGoogleCalendarAuthenticated = googleCalAuth.isAuthenticated
         appState.isOpenRouterAuthenticated = openRouterAuth.isAuthenticated
         appState.isOpenRouterEnvironmentManaged = openRouterAuth.hasEnvironmentCredential
         appState.hasStoredOpenRouterCredential = openRouterAuth.hasStoredCredential
@@ -3720,17 +3726,12 @@ public final class ImlaController: NSObject {
     private func beginDictationBackendPreparation() -> UUID {
         // Clear the previous selection's spinner synchronously, even when the new
         // provider needs no local warmup. Its suspended task no longer owns the UI.
-        let token = dictationBackendPreparation.begin(isHosted: selectedDictationProvider.isHosted)
-        indicator.hideLoading()
-        return token
+        return dictationBackendPreparation.begin(isHosted: selectedDictationProvider.isHosted)
     }
 
     private func prepareDictationBackend(_ backend: BackendOption, preparation: UUID) async -> Bool {
         guard dictationBackendPreparation.owns(preparation),
               !selectedDictationProvider.isHosted else { return false }
-        if BodhanModel(rawValue: backend.model) != nil || backend.backend == "whisper" {
-            indicator.showLoading("Warming up \(backend.label)...")
-        }
         do {
             try await transcriptionCoordinator.preloadRequired(
                 backend: backend,
@@ -3738,13 +3739,11 @@ public final class ImlaController: NSObject {
                 includeMeetingHelpers: false,
                 appleSpeechLanguage: config.resolvedAppleSpeechLanguage
             )
-            guard selectedBackend == backend else { return false }
-            dictationBackendReadiness = .ready
+            guard dictationBackendPreparation.finish(preparation, succeeded: true) else { return false }
             return true
         } catch {
             fputs("[imla-native] dictation backend preparation failed for \(backend.backend)/\(backend.model): \(error)\n", stderr)
-            guard selectedBackend == backend else { return false }
-            dictationBackendReadiness = .failed
+            guard dictationBackendPreparation.finish(preparation, succeeded: false) else { return false }
             return false
         }
     }
@@ -4495,6 +4494,61 @@ public final class ImlaController: NSObject {
 
     /// Refresh the EventKit-available calendars list without making the main
     /// actor wait for EventKit's synchronous calendar-store enumeration.
+    // MARK: - Google Calendar
+
+    func signInWithGoogleCalendar() async -> String? {
+        do {
+            try await googleCalAuth.signIn()
+            syncAppState()
+            Task {
+                await refreshUpcomingCalendarEvents()
+                await refreshGoogleCalendarList()
+            }
+            return nil
+        } catch {
+            fputs("[imla-native] Google Calendar sign-in failed: \(error)\n", stderr)
+            return error.localizedDescription
+        }
+    }
+
+    func signOutGoogleCalendar() {
+        invalidateGoogleCalendarAuth()
+        Task { await refreshUpcomingCalendarEvents() }
+    }
+
+    private func invalidateGoogleCalendarAuth() {
+        googleCalAuth.signOut()
+        googleCalClient.resetSync()
+        appState.availableGoogleCalendars = []
+        appState.googleCalendarListLoadState = .idle
+        syncAppState()
+    }
+
+    /// Refresh the Google calendar list via the Calendar API. No-op when OAuth
+    /// is not available or the user is not authenticated.
+    func refreshGoogleCalendarList() async {
+        guard googleCalAuth.isAuthenticated else {
+            appState.availableGoogleCalendars = []
+            appState.googleCalendarListLoadState = .idle
+            return
+        }
+        appState.googleCalendarListLoadState = .loading
+        do {
+            let list = try await googleCalClient.fetchCalendarList()
+            appState.availableGoogleCalendars = list
+            appState.googleCalendarListLoadState = .loaded
+        } catch GoogleCalendarAuthError.notAuthenticated {
+            invalidateGoogleCalendarAuth()
+            fputs("[imla-native] Google Calendar token invalid while loading calendar list, signed out\n", stderr)
+        } catch GoogleCalendarAuthError.refreshFailed(let message) {
+            fputs("[imla-native] Google Calendar token refresh failed while loading calendar list: \(message)\n", stderr)
+            appState.googleCalendarListLoadState = .failed("Token refresh failed: \(message)")
+        } catch {
+            fputs("[imla-native] Google calendarList fetch failed: \(error)\n", stderr)
+            appState.googleCalendarListLoadState = .failed(error.localizedDescription)
+        }
+    }
+
     func refreshAvailableEventKitCalendars() async {
         let calendars = await Task.detached(priority: .utility) {
             CalendarMonitor.availableCalendars()
@@ -4516,8 +4570,31 @@ public final class ImlaController: NSObject {
                 now: refreshNow
             )
         }), !Task.isCancelled, calendarEventQuery.isCurrent(result) else { return false }
-        let ekEvents = result.events
-        let observedEventIDs = Set(ekEvents.map(\.id))
+        var ekEvents = result.events
+        var observedEventIDs = Set(ekEvents.map(\.id))
+        var canConfirmMissingGoogleEvents = false
+
+        if googleCalAuth.isAuthenticated {
+            do {
+                let googleResult = try await googleCalClient.fetchUpcomingEvents(
+                    daysAhead: dayCount,
+                    disabledCalendarIDs: disabledIDs,
+                    now: refreshNow
+                )
+                canConfirmMissingGoogleEvents = googleResult.wasComplete
+                observedEventIDs.formUnion(googleResult.events.map(\.id))
+                ekEvents = GoogleCalendarClient.mergeEvents(eventKit: ekEvents, google: googleResult.events)
+            } catch GoogleCalendarAuthError.notAuthenticated {
+                invalidateGoogleCalendarAuth()
+                fputs("[imla-native] Google Calendar token invalid, signed out\n", stderr)
+            } catch GoogleCalendarAuthError.refreshFailed(let message) {
+                fputs("[imla-native] Google Calendar token refresh failed: \(message)\n", stderr)
+            } catch GoogleCalendarClientError.staleRequest {
+                return false
+            } catch {
+                fputs("[imla-native] Google Calendar fetch failed: \(error)\n", stderr)
+            }
+        }
         let currentDisabledIDs = Set(config.disabledCalendarIDs)
         let currentDayCount = UpcomingMeetingsWindow.resolve(dayCount: config.upcomingMeetingsDayCount).dayCount
         let currentStartOfDay = Calendar.current.startOfDay(for: Date())
@@ -4544,8 +4621,7 @@ public final class ImlaController: NSObject {
                 case .some(.eventKit):
                     return canConfirmMissingEventKitEvents
                 case .some(.googleCalendar):
-                    // Preserve historical Google-only hidden IDs while direct integration is unavailable.
-                    return false
+                    return canConfirmMissingGoogleEvents
                 case .none:
                     return false
                 }
@@ -7950,6 +8026,7 @@ public final class ImlaController: NSObject {
                 try Task.checkCancellation()
                 try await self.startMeetingCapture(
                     title: title,
+                    calendarEventID: resolvedCalendarEventID,
                     meetingID: meetingID,
                     owner: attemptOwner,
                     backend: meetingBackend,
@@ -7999,7 +8076,7 @@ public final class ImlaController: NSObject {
                     self.presentMeetingStartFailureAlert(error: error)
                 }
             }
-            self.finishMeetingStartAttempt(meetingID: meetingID, owner: attemptOwner)
+            self.finishMeetingStartAttempt(meetingID: meetingID)
         }
         return true
     }
@@ -8099,8 +8176,6 @@ public final class ImlaController: NSObject {
             .flatMap { MeetingFollowUpPolicy.carriedContext(from: $0) }
 
         // REUSE the existing row — do NOT call createLiveMeeting.
-        installMeetingCapture(id: meetingID, title: meeting.title, calendarEventID: meeting.calendarEventID,
-            backend: meetingBackend, templateSnapshot: meetingTemplateSnapshot(for: meeting))
         activeMeetingAudioWarning = nil
         activeMeetingAudioWarningState.reset()
         syncAppState()
@@ -8129,6 +8204,7 @@ public final class ImlaController: NSObject {
                 try Task.checkCancellation()
                 try await self.startMeetingCapture(
                     title: meeting.title,
+                    calendarEventID: meeting.calendarEventID,
                     meetingID: meetingID,
                     owner: attemptOwner,
                     backend: meetingBackend,
@@ -8170,7 +8246,7 @@ public final class ImlaController: NSObject {
                     self.presentMeetingStartFailureAlert(error: error)
                 }
             }
-            self.finishMeetingStartAttempt(meetingID: meetingID, owner: attemptOwner)
+            self.finishMeetingStartAttempt(meetingID: meetingID)
         }
     }
 
@@ -8508,8 +8584,8 @@ public final class ImlaController: NSObject {
         syncAppState()
     }
 
-    private func finishMeetingStartAttempt(meetingID: Int64, owner: ObjectIdentifier) {
-        guard meetingStartAttempt?.owner == owner else { return }
+    private func finishMeetingStartAttempt(meetingID: Int64) {
+        guard meetingStartMeetingID == meetingID else { return }
         let didStartActiveSession = activeMeetingID == meetingID && activeMeetingSession != nil
         canceledMeetingStartIDs.remove(meetingID)
         meetingStartTask = nil
@@ -8532,42 +8608,36 @@ public final class ImlaController: NSObject {
         meetingRecordingHotkeyMonitor.cancelToggleMode()
     }
 
-    private func installMeetingCapture(id: Int64, title: String, calendarEventID: String?,
-                                       backend: BackendOption, templateSnapshot: MeetingTemplateSnapshot) {
-        let routingController = dictationAudioRoutingController
-        let route = routingController.meetingInputRouteSnapshot()
-        let microphone = RouteAwareMeetingMicRecorder(
-            routeSnapshotProvider: { routingController.meetingInputRouteSnapshot() }
-        )
-        microphone.preferredInputDeviceID = route.preferredInputDeviceID
-        let session = MeetingSession(title: title, calendarEventID: calendarEventID,
-            backend: backend, runtime: runtime, config: config, templateSnapshot: templateSnapshot,
-            transcriptionCoordinator: transcriptionCoordinator, meetingMicRecorder: microphone)
-        let owner = ObjectIdentifier(session)
-        session.onCaptureQuiesced = { [weak self] in
-            Task { @MainActor [weak self] in self?.completeMeetingCaptureShutdown(owner: owner) }
-        }
-        session.onCaptureShutdownTimedOut = { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self, let capture = self.meetingCapture,
-                      ObjectIdentifier(capture.session) == owner, self.isStoppingMeetingRecording else { return }
-                self.presentErrorAlert(title: "Audio Capture Is Still Stopping",
-                    message: "The audio device is not responding. Imla is saving the audio already captured. New recording is paused until the device finishes stopping.")
-            }
-        }
-        meetingCapture = (id, session)
+    /// Enters the stopping phase on the session this controller owns. Detection
+    /// stays suppressed from here until the capture drivers report quiescence,
+    /// so a meeting that is still releasing its devices cannot prompt a new one.
+    private func beginMeetingCaptureShutdown(session: MeetingSession) {
+        guard activeMeetingSession === session || preparingMeetingSession === session else { return }
+        session.beginStoppingCapture()
+        meetingMonitor.suppressWhileActive()
+        meetingMonitor.refreshState()
     }
 
-    private func runMeetingStart(meetingID: Int64, operation: @escaping (ObjectIdentifier) async -> Void) {
-        guard let capture = meetingCapture, capture.id == meetingID else { return }
-        let owner = ObjectIdentifier(capture.session)
-        meetingStartAttempt = (meetingID, owner, Task { @MainActor in await operation(owner) })
+    /// The capture drivers retired. Identity is checked first: a stale callback
+    /// from a previous recording must not release detection for a newer one.
+    private func completeMeetingCaptureShutdown(owner: ObjectIdentifier) {
+        guard let session = activeMeetingSession, ObjectIdentifier(session) == owner else { return }
+        meetingMonitor.resumeAfterCooldown()
+        meetingMonitor.refreshState()
+        syncDictationRecorderWarmup(intent: .idlePrewarm(.meetingStateChanged))
+        syncAppState()
+    }
+
+    private func runMeetingStart(meetingID: Int64, operation: @escaping (Int64) async -> Void) {
+        meetingStartMeetingID = meetingID
+        meetingStartTask = Task { @MainActor in await operation(meetingID) }
     }
 
     private func startMeetingCapture(
         title: String,
+        calendarEventID: String?,
         meetingID: Int64,
-        owner: ObjectIdentifier,
+        owner meetingIdentity: Int64,
         backend: BackendOption,
         config meetingConfig: AppConfig,
         templateSnapshot: MeetingTemplateSnapshot,
@@ -8587,7 +8657,7 @@ public final class ImlaController: NSObject {
             appleSpeechLanguage: config.resolvedAppleSpeechLanguage
         )
         try Task.checkCancellation()
-        try checkMeetingStartStillCurrent(owner)
+        try checkMeetingStartStillCurrent(meetingIdentity)
 
         do {
             try Task.checkCancellation()
@@ -8609,6 +8679,23 @@ public final class ImlaController: NSObject {
                 sessionTrace: meetingSessionTraces[meetingID]
             )
             let transcriptGeneration = UUID()
+            let captureOwner = ObjectIdentifier(meetingSession)
+            meetingSession.onCaptureQuiesced = { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.completeMeetingCaptureShutdown(owner: captureOwner)
+                }
+            }
+            meetingSession.onCaptureShutdownTimedOut = { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self, let session = self.activeMeetingSession,
+                          ObjectIdentifier(session) == captureOwner,
+                          self.isStoppingMeetingRecording else { return }
+                    self.presentErrorAlert(
+                        title: "Audio Capture Is Still Stopping",
+                        message: "The audio device is not responding. Imla is saving the audio already captured. New recording is paused until the device finishes stopping."
+                    )
+                }
+            }
             meetingSession.previousMeetingNotes = previousMeetingNotes
             // Silent-mic failover needs current device names and IDs, not the
             // snapshot taken at meeting start. Reading the routing controller's
@@ -8879,7 +8966,7 @@ public final class ImlaController: NSObject {
                 return
             } catch {
                 // Explicit Stop/Discard owns finalization once it retires this attempt.
-                guard meetingStartAttempt?.owner == owner else { throw error }
+                guard meetingStartMeetingID == meetingIdentity else { throw error }
                 clearLiveMeetingTranscript(ownerID: meetingID, generation: transcriptGeneration)
                 beginMeetingCaptureShutdown(session: meetingSession)
                 meetingSession.discard()
@@ -8888,8 +8975,8 @@ public final class ImlaController: NSObject {
         }
     }
 
-    private func checkMeetingStartStillCurrent(_ owner: ObjectIdentifier) throws {
-        if meetingStartAttempt?.owner != owner {
+    private func checkMeetingStartStillCurrent(_ meetingID: Int64) throws {
+        if meetingStartMeetingID != meetingID || canceledMeetingStartIDs.contains(meetingID) {
             throw CancellationError()
         }
     }
@@ -9120,10 +9207,10 @@ public final class ImlaController: NSObject {
     }
 
     private func discardMeetingRecording(resolution: MeetingDiscardResolution = .discardRecording) {
-        guard let capture = meetingCapture, capture.session.capturePhase.isRecording else { return }
-        let meetingID = capture.id
-        meetingStartAttempt?.task.cancel()
-        meetingStartAttempt = nil
+        guard let session = activeMeetingSession, session.capturePhase.isRecording else { return }
+        let meetingID = activeMeetingID
+        meetingStartTask?.cancel()
+        meetingStartTask = nil
         meetingRecordingHotkeyMonitor.cancelToggleMode()
         clearLiveMeetingTranscript()
         guard let sessionToDiscard = activeMeetingSession else {
@@ -9167,7 +9254,6 @@ public final class ImlaController: NSObject {
         } else {
             finishDiscardMeetingRecording()
         }
-        resolveLiveMeetingAfterDiscard(id: meetingID, resolution: resolution)
     }
 
     private func finishDiscardMeetingRecording() {
@@ -10538,7 +10624,6 @@ public final class ImlaController: NSObject {
                 dictationMiniIndicator.showRecoveryWarningAfterFailure(
                     "Saved in Recent Dictations — target changed"
                 )
-                )
             }
         }
     }
@@ -11115,11 +11200,11 @@ public final class ImlaController: NSObject {
         _ stage: MeetingProcessingStage,
         panelOwnerID: UUID?
     ) {
-        if stage.allowsDictation, isDictationActivityInProgress { return }
+        if stage.allowsDictation, isInteractiveAudioActivityInProgress { return }
 
         switch stage {
         case .stoppingCapture:
-            setMeetingProcessingStatus("Stopping Audio")
+            setMeetingProcessingStatus("Stopping Audio", panelOwnerID: panelOwnerID)
         case .transcribingAudio:
             setMeetingProcessingStatus("Transcribing", panelOwnerID: panelOwnerID)
         case .cleaningAudio:
@@ -11133,7 +11218,7 @@ public final class ImlaController: NSObject {
 
     @MainActor
     private func setMeetingProcessingStatus(_ status: String, panelOwnerID: UUID?) {
-        guard !isDictationActivityInProgress else { return }
+        guard !isInteractiveAudioActivityInProgress else { return }
         statusBarController?.setStatus(status)
         statusBarController?.refresh()
         if let panelOwnerID {
@@ -11633,7 +11718,6 @@ public final class ImlaController: NSObject {
         computerUseCommandTask?.cancel()
         activeComputerUseTrace?.finish(status: "cancelled", message: "Stopped by the user.")
         activeComputerUseTrace = nil
-        indicator.setComputerUseCancellationAvailable(false)
         computerUseCommandTask = nil
         computerUseCommandTaskID = nil
         computerUseAudioSessionManager.cancel(reason: "computer_use_cancel")
@@ -11874,7 +11958,6 @@ public final class ImlaController: NSObject {
         taskID: UUID
     ) async {
         guard computerUseCommandTaskID == taskID else { return }
-        indicator.setComputerUseCancellationAvailable(true)
         resetComputerUseFloatingStatus()
         presentComputerUseTranscript(transcript)
         let runTrace = ComputerUseRunTrace { [weak self] events, status, message in
@@ -11913,7 +11996,6 @@ public final class ImlaController: NSObject {
         guard computerUseCommandTaskID == taskID else { return }
         runTrace.finish(status: computerUseTraceStatus(result.status), message: result.message, finalEvents: result.traceEvents)
         activeComputerUseTrace = nil
-        indicator.setComputerUseCancellationAvailable(false)
         ComputerUseCursorOverlay.shared.hideTarget()
         // A cancelled run has nothing to report: the overlay goes away without a
         // terminal message and without waiting out the status dwell.
@@ -12154,7 +12236,7 @@ public final class ImlaController: NSObject {
     private func blockHostedDictationStart(status: String, warning: String) -> Bool {
         statusBarController?.setStatus(status)
         statusBarController?.refresh()
-        indicator.showWarning(warning, icon: "!", duration: 3)
+        dictationMiniIndicator.showWarning(warning)
         return false
     }
 
@@ -12944,10 +13026,6 @@ public final class ImlaController: NSObject {
         (hostedDictationSession != nil, finalizingHostedDictationSession != nil)
     }
     #endif
-
-    private func captureDictationCorrectionTargetApp() {
-        capturedDictationCorrectionTargetApp = currentExternalDictationTargetApp()
-    }
 
     private func handleStart() {
         if shouldRejectDictationForComputerUseActivity() { return }
@@ -14080,9 +14158,6 @@ public final class ImlaController: NSObject {
               let store = recordingArtifactStore else {
             if let wavURL = capture.wavURL {
                 try? FileManager.default.removeItem(at: wavURL)
-                if !isTestMode {
-                    self.clearInFlightDictationTranscription(id: transcriptionTaskID)
-                }
             }
             return
         }

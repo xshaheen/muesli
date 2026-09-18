@@ -852,8 +852,8 @@ enum MeetingSummaryClient {
                     previousMeetingNotes: previousMeetingNotes
                 ),
                 model: config.chatGPTModel.isEmpty ? defaultChatGPTModel : config.chatGPTModel,
-                reasoningEffort: config.meetingSummaryReasoningEffort,
-                logCategory: "summary"
+                logCategory: "summary",
+                reasoningEffort: config.meetingSummaryReasoningEffort
             )
             guard !text.isEmpty else {
                 throw MeetingSummaryError.emptyResponse(backend: "ChatGPT")
@@ -1600,8 +1600,8 @@ enum MeetingSummaryClient {
                 systemPrompt: instructions,
                 userPrompt: transcript,
                 model: model,
-                reasoningEffort: config.meetingSummaryReasoningEffort,
-                logCategory: "summary"
+                logCategory: "summary",
+                reasoningEffort: config.meetingSummaryReasoningEffort
             )
             let title = result.trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: "\"")))
             guard !title.isEmpty else { return nil }

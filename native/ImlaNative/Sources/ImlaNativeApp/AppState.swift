@@ -120,6 +120,13 @@ enum SparkleUpdateStatus: Equatable {
     case failed(message: String)
 }
 
+enum GoogleCalendarListLoadState: Equatable {
+    case idle
+    case loading
+    case loaded
+    case failed(String)
+}
+
 enum ICloudBridgeState: Equatable {
     case notConfigured
     case checkingICloud
@@ -220,6 +227,14 @@ final class AppState {
     var config: AppConfig = AppConfig()
     var launchAtLoginRegistrationState: LaunchAtLoginRegistrationState = .disabled
     var interactionPermissionSnapshot: InteractionPermissionSnapshot?
+
+    // This fork keeps direct Google Calendar sign-in alongside EventKit, which
+    // upstream removed.
+    var isGoogleCalendarAvailable: Bool = false
+    var isGoogleCalendarVerified: Bool = false
+    var isGoogleCalendarAuthenticated: Bool = false
+    var availableGoogleCalendars: [GoogleCalendarSummary] = []
+    var googleCalendarListLoadState: GoogleCalendarListLoadState = .idle
 
     // Live status
     var isMeetingRecording: Bool = false

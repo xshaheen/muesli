@@ -318,7 +318,7 @@ enum MeetingChatClient {
         [
             "model": model,
             "input": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
-            "reasoning": ["effort": SummaryModelPreset.reasoningEffort(for: model) ?? "low"],
+            "reasoning": ["effort": ReasoningEffortPolicy.apiValue(for: model) ?? "low"],
             "text": ["verbosity": "low"],
             "max_output_tokens": maxAnswerTokens,
             "store": false,

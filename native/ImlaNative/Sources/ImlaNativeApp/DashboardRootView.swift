@@ -153,7 +153,7 @@ struct DashboardRootView: View {
     /// Swaps the leading column between the full sidebar and the icon rail.
     private func toggleCollapsed() {
         withAnimation(ImlaTheme.Motion.eased(0.22)) {
-            isSidebarCollapsed.toggle()
+            sidebarPresentation.toggle()
         }
     }
 
@@ -167,7 +167,7 @@ struct DashboardRootView: View {
         // sidebar's own surface the way they do in Finder and WhatsApp. Nothing here used
         // the split view's navigation, and it also clamped the collapsed rail's width.
         HStack(spacing: 0) {
-            if isSidebarCollapsed {
+            if sidebarPresentation.isCollapsed {
                 collapsedRail
             } else {
                 sidebar

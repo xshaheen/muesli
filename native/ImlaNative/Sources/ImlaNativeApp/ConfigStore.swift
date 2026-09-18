@@ -193,21 +193,22 @@ final class ConfigStore {
         return candidate
     }
 
-    /// Persists a validated language profile before callers publish it as the
-    /// live runtime authority. Legacy provider pins are mirrored only so an
-    /// older build can read a deterministic rollback value.
     /// The meeting authority's save. Deliberately not the dictation seam: it must
     /// not clear the dictation migration flag or re-mirror the legacy provider
-    /// pins, which belong to the dictation profile (R3).
+    /// pins, which belong to the dictation profile.
     func saveMeetingLanguageProfileConfiguration(_ config: AppConfig) throws -> AppConfig {
         try saveCanonicalConfiguration(config)
     }
 
+    /// Persists a validated dictation language profile before callers publish it
+    /// as the live runtime authority. Legacy provider pins are mirrored only so
+    /// an older build can read a deterministic rollback value.
     func saveLanguageProfileConfiguration(_ config: AppConfig) throws -> AppConfig {
         var candidate = config
         candidate.languageProfileNeedsConfirmation = false
         candidate.mirrorLanguageProfileToLegacyPins()
         return try saveCanonicalConfiguration(candidate)
+    }
     /// Moves the legacy config.json key into the dedicated owner-only
     /// credential file. If that write fails, keep the old value in config so
     /// migration can retry without losing the user's credential.
