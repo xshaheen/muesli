@@ -33,8 +33,8 @@ case "${shard}" in
       RecordingArtifactPlaybackTests
       LocalDiagnosticsTests
       SessionDiagnosticsPresentationTests
-      MuesliCKSyncEngineTests
-      MuesliCLITests
+      ImlaCKSyncEngineTests
+      ImlaCLITests
       ChatGPTAuthTests
       ChatGPTTokenStorageTests
       ComputerUseCursorOverlayTests
@@ -204,7 +204,7 @@ if [[ "${list_filters}" == true ]]; then
   exit 0
 fi
 
-args=(--package-path native/MuesliNative)
+args=(--package-path native/ImlaNative)
 if [[ -n "${MUESLI_SWIFTPM_SCRATCH_PATH:-}" ]]; then
   args+=(--scratch-path "${MUESLI_SWIFTPM_SCRATCH_PATH}")
 fi

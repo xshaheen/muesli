@@ -1,0 +1,376 @@
+// Purpose: Scrolling live transcript view with auto-scroll during active meetings
+// Created: 2026-05-22
+
+import AppKit
+import Observation
+import SwiftUI
+
+enum LiveTranscriptCopyContent {
+    static func text(transcript: String, partialYou: String, partialOthers: String) -> String {
+        var sections: [String] = []
+        let committed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !committed.isEmpty {
+            sections.append(committed)
+        }
+        let others = partialOthers.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !others.isEmpty {
+            sections.append("Others: \(others)")
+        }
+        let you = partialYou.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !you.isEmpty {
+            sections.append("You: \(you)")
+        }
+        return sections.joined(separator: "\n")
+    }
+}
+
+struct LiveTranscriptBubble: View {
+    let speaker: String?
+    let timestamp: String?
+    let lines: [String]
+    let isUser: Bool
+    let isPartial: Bool
+    var onOpen: (() -> Void)? = nil
+    @State private var isHovered = false
+    @State private var didCopy = false
+
+    static func contentDirection(for lines: [String]) -> NaturalTextDirection {
+        if lines.count == 1, let line = lines.first {
+            return NaturalTextDirection.resolve(line)
+        }
+        return NaturalTextDirection.resolve(lines.joined(separator: "\n"))
+    }
+
+    var body: some View {
+        let contentDirection = Self.contentDirection(for: lines)
+
+        HStack(alignment: .bottom, spacing: 6) {
+            if isUser { Spacer(minLength: 40) }
+            if isUser { actionButtons }
+            MeetingSelectableText(attributedText: MeetingSelectableTextContent.transcript(
+                metadata: speaker.map { $0 + (timestamp.map { "  \($0)" } ?? "") },
+                body: lines.joined(separator: "\n"),
+                bodyPointSize: 13,
+                isPartial: isPartial
+            ))
+            .environment(\.layoutDirection, contentDirection.layoutDirection)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(bubbleBackground)
+            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                    .strokeBorder(
+                        bubbleBorder,
+                        style: StrokeStyle(lineWidth: 1, dash: isPartial ? [4, 3] : [])
+                    )
+            }
+            if !isUser { actionButtons }
+            if !isUser { Spacer(minLength: 40) }
+        }
+        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+        .onHover { isHovered = $0 }
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 2) {
+            copyButton
+            openButton
+        }
+    }
+
+    private var copyButton: some View {
+        Button(action: copyMessage) {
+            Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(didCopy ? ImlaTheme.success : ImlaTheme.textSecondary)
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Copy message")
+        .opacity(isHovered ? 1 : 0.45)
+        .accessibilityLabel(didCopy ? "Message copied" : "Copy message")
+    }
+
+    @ViewBuilder
+    private var openButton: some View {
+        if let onOpen {
+            Button(action: onOpen) {
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Open meeting details")
+            .opacity(isHovered ? 1 : 0.45)
+            .accessibilityLabel("Open meeting details")
+        }
+    }
+
+    private func copyMessage() {
+        let text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        didCopy = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            didCopy = false
+        }
+    }
+
+    private var bubbleBackground: Color {
+        if isPartial {
+            return isUser ? ImlaTheme.accent.opacity(0.06) : ImlaTheme.surfacePrimary.opacity(0.5)
+        }
+        return isUser ? ImlaTheme.accent.opacity(0.15) : ImlaTheme.surfacePrimary
+    }
+
+    private var bubbleBorder: Color {
+        if isPartial { return ImlaTheme.surfaceBorder }
+        return isUser ? ImlaTheme.accent.opacity(0.2) : ImlaTheme.surfaceBorder
+    }
+}
+
+@MainActor
+@Observable
+final class LiveTranscriptPresentationModel {
+    var transcript = ""
+    var partialYou = ""
+    var partialOthers = ""
+    var messages: [TranscriptChatMessage] = []
+    /// Flips at most once per session. Bodies that only need "is there anything yet"
+    /// observe this instead of `transcript`, whose every chunk would re-render them.
+    private(set) var hasContent = false
+
+    func update(transcript: String, partialYou: String, partialOthers: String) {
+        guard self.transcript != transcript ||
+                self.partialYou != partialYou ||
+                self.partialOthers != partialOthers else { return }
+
+        if transcript != self.transcript {
+            if transcript.hasPrefix(self.transcript) {
+                let appended = String(transcript.dropFirst(self.transcript.count))
+                messages.append(contentsOf: TranscriptChatMessage.messages(
+                    from: appended,
+                    startingAt: messages.count
+                ))
+            } else {
+                messages = TranscriptChatMessage.messages(from: transcript)
+            }
+            self.transcript = transcript
+            // Guarded write: an unconditional set would notify observers on every
+            // chunk, which is the exact churn this flag exists to absorb.
+            let nowHasContent = !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if hasContent != nowHasContent {
+                hasContent = nowHasContent
+            }
+        }
+        self.partialYou = partialYou
+        self.partialOthers = partialOthers
+    }
+
+    func reset() {
+        transcript = ""
+        partialYou = ""
+        partialOthers = ""
+        messages = []
+        hasContent = false
+    }
+}
+
+struct LiveTranscriptFeedView: View {
+    static let bottomAnchorID = "liveTranscriptBottom"
+
+    let messages: [TranscriptChatMessage]
+    let partialYou: String
+    let partialOthers: String
+    var horizontalPadding: CGFloat
+    var topPadding: CGFloat
+    var bottomPadding: CGFloat
+    var onOpen: (() -> Void)? = nil
+
+    private var trimmedPartialYou: String {
+        partialYou.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedPartialOthers: String {
+        partialOthers.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 6) {
+            if messages.isEmpty && trimmedPartialYou.isEmpty && trimmedPartialOthers.isEmpty {
+                Text("Waiting for speech…")
+                    .font(ImlaTheme.body())
+                    .foregroundStyle(ImlaTheme.textTertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, ImlaTheme.spacing8)
+            } else {
+                ForEach(messages) { message in
+                    LiveTranscriptBubble(
+                        speaker: message.speaker,
+                        timestamp: message.timestamp,
+                        lines: [message.text],
+                        isUser: message.isUser,
+                        isPartial: false,
+                        onOpen: onOpen
+                    )
+                }
+                if !trimmedPartialOthers.isEmpty {
+                    LiveTranscriptBubble(
+                        speaker: "Others",
+                        timestamp: nil,
+                        lines: [trimmedPartialOthers],
+                        isUser: false,
+                        isPartial: true,
+                        onOpen: onOpen
+                    )
+                }
+                if !trimmedPartialYou.isEmpty {
+                    LiveTranscriptBubble(
+                        speaker: "You",
+                        timestamp: nil,
+                        lines: [trimmedPartialYou],
+                        isUser: true,
+                        isPartial: true,
+                        onOpen: onOpen
+                    )
+                }
+                Color.clear
+                    .frame(height: 1)
+                    .id(Self.bottomAnchorID)
+            }
+        }
+        .padding(.horizontal, horizontalPadding)
+        .padding(.top, topPadding)
+        .padding(.bottom, bottomPadding)
+    }
+}
+
+struct LiveTranscriptView: View {
+    let transcript: String
+    /// Provisional streaming tails render after committed captions and remain
+    /// outside the durable transcript until their chunk is committed.
+    var partialYou: String = ""
+    var partialOthers: String = ""
+    @State private var presentation = LiveTranscriptPresentationModel()
+    @State private var didCopy = false
+
+    private var copyText: String {
+        LiveTranscriptCopyContent.text(
+            transcript: transcript,
+            partialYou: partialYou,
+            partialOthers: partialOthers
+        )
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LiveTranscriptFeedView(
+                        messages: presentation.messages,
+                        partialYou: presentation.partialYou,
+                        partialOthers: presentation.partialOthers,
+                        horizontalPadding: ImlaTheme.spacing16,
+                        topPadding: 44,
+                        bottomPadding: ImlaTheme.spacing8
+                    )
+                    .textSelection(.enabled)
+                }
+                .onChange(of: transcript) { _, newTranscript in
+                    presentation.update(
+                        transcript: newTranscript,
+                        partialYou: partialYou,
+                        partialOthers: partialOthers
+                    )
+                    DispatchQueue.main.async {
+                        withAnimation(ImlaTheme.Motion.easedOut(0.15)) {
+                            proxy.scrollTo(LiveTranscriptFeedView.bottomAnchorID, anchor: .bottom)
+                        }
+                    }
+                }
+                // Partials update every engine chunk; scrolling on each growth
+                // would yank a user who scrolled up back to the bottom every few
+                // seconds. Scroll only when a tail appears (empty → non-empty);
+                // committed captions keep their existing scroll behavior.
+                .onChange(of: partialYou) { old, new in
+                    presentation.update(
+                        transcript: transcript,
+                        partialYou: new,
+                        partialOthers: partialOthers
+                    )
+                    if old.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       !new.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        scrollToBottom(proxy)
+                    }
+                }
+                .onChange(of: partialOthers) { old, new in
+                    presentation.update(
+                        transcript: transcript,
+                        partialYou: partialYou,
+                        partialOthers: new
+                    )
+                    if old.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       !new.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        scrollToBottom(proxy)
+                    }
+                }
+                .onAppear {
+                    presentation.update(
+                        transcript: transcript,
+                        partialYou: partialYou,
+                        partialOthers: partialOthers
+                    )
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(LiveTranscriptFeedView.bottomAnchorID, anchor: .bottom)
+                    }
+                }
+            }
+
+            Button(action: copyTranscript) {
+                HStack(spacing: 6) {
+                    Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(didCopy ? "Copied" : "Copy")
+                        .font(ImlaTheme.font(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(didCopy ? ImlaTheme.success : ImlaTheme.textPrimary)
+                .padding(.horizontal, ImlaTheme.spacing12)
+                .frame(height: 30)
+                .background(ImlaTheme.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                        .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(copyText.isEmpty)
+            .padding(.top, ImlaTheme.spacing8)
+            .padding(.trailing, ImlaTheme.spacing16)
+        }
+    }
+
+    private func copyTranscript() {
+        guard !copyText.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(copyText, forType: .string)
+        didCopy = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            didCopy = false
+        }
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            withAnimation(ImlaTheme.Motion.easedOut(0.15)) {
+                proxy.scrollTo(LiveTranscriptFeedView.bottomAnchorID, anchor: .bottom)
+            }
+        }
+    }
+}

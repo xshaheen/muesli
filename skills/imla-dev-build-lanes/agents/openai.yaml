@@ -1,0 +1,4 @@
+interface:
+  display_name: "Imla Dev Build Lanes"
+  short_description: "Build local Imla dev lanes safely across worktrees."
+  default_prompt: "Use the Imla dev build lanes workflow for local-only or signed dev app builds across multiple worktrees."

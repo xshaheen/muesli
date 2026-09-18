@@ -8,13 +8,13 @@ set -euo pipefail
 # landing page, llms.txt, or Homebrew tap.
 #
 # It builds:
-#   - App name: MuesliPreprod
-#   - Bundle ID: com.muesli.preprod
-#   - Support dir: ~/Library/Application Support/MuesliPreprod
+#   - App name: ImlaPreprod
+#   - Bundle ID: com.xshaheen.imla.preprod
+#   - Support dir: ~/Library/Application Support/ImlaPreprod
 #   - Sparkle feed: https://muesli-hq.github.io/muesli/appcast-preprod.xml
 #
 # Required signing environment:
-#   MUESLI_PROVISIONING_PROFILE=/path/to/com.muesli.preprod.profile
+#   MUESLI_PROVISIONING_PROFILE=/path/to/com.xshaheen.imla.preprod.profile
 #   MUESLI_SIGN_IDENTITY="Developer ID Application: ... (TEAMID)"
 #
 # Usage: ./scripts/release-preprod.sh [version]
@@ -23,14 +23,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-source "$ROOT/scripts/muesli_spm_cache.sh"
-source "$ROOT/scripts/muesli_telemetry_channels.sh"
+source "$ROOT/scripts/imla_spm_cache.sh"
+source "$ROOT/scripts/imla_telemetry_channels.sh"
 
-PACKAGE_DIR="$ROOT/native/MuesliNative"
+PACKAGE_DIR="$ROOT/native/ImlaNative"
 SWIFTPM_SCRATCH_PATH=""
 SWIFT_TEST_ARGS=(--package-path "$PACKAGE_DIR")
 BUILD_ENV=()
-# Pin the compile path to the xcodebuild path (native/MuesliXcode), which is
+# Pin the compile path to the xcodebuild path (native/ImlaXcode), which is
 # the only path that generates Contents/Resources/Metadata.appintents and
 # therefore the only path where Shortcuts/Siri actions ship. Production/
 # notarized builds must never silently pick up a MUESLI_USE_XCODE_BUILD=0
@@ -40,8 +40,8 @@ BUILD_ENV+=(MUESLI_USE_XCODE_BUILD=1)
 # The preprod channel is intentionally shared across worktrees. Do not run this
 # script concurrently from multiple worktrees unless you set an isolated
 # MUESLI_SWIFTPM_SCRATCH_PATH or MUESLI_SWIFTPM_SCRATCH_CHANNEL.
-if ! muesli_spm_scratch_disabled; then
-  SWIFTPM_SCRATCH_PATH="$(muesli_resolve_spm_scratch_path preprod)"
+if ! imla_spm_scratch_disabled; then
+  SWIFTPM_SCRATCH_PATH="$(imla_resolve_spm_scratch_path preprod)"
   SWIFT_TEST_ARGS+=(--scratch-path "$SWIFTPM_SCRATCH_PATH")
   BUILD_ENV+=(MUESLI_SWIFTPM_SCRATCH_PATH="$SWIFTPM_SCRATCH_PATH")
   # Keep the xcodebuild cache under the same scratch root so an isolated
@@ -50,18 +50,18 @@ if ! muesli_spm_scratch_disabled; then
 else
   BUILD_ENV+=(MUESLI_DISABLE_SWIFTPM_SCRATCH_PATH=1)
 fi
-PROFILE_NAME="${MUESLI_NOTARY_PROFILE:-MuesliNotary}"
+PROFILE_NAME="${MUESLI_NOTARY_PROFILE:-ImlaNotary}"
 SIGN_IDENTITY="${MUESLI_SIGN_IDENTITY:-Apple Development: mxshaheen@icloud.com (AMM3J847CY)}"
 PROVISIONING_PROFILE="${MUESLI_PROVISIONING_PROFILE:-}"
-APP_NAME="MuesliPreprod"
-BUNDLE_ID="com.muesli.preprod"
-SUPPORT_DIR_NAME="MuesliPreprod"
+APP_NAME="ImlaPreprod"
+BUNDLE_ID="com.xshaheen.imla.preprod"
+SUPPORT_DIR_NAME="ImlaPreprod"
 PREPROD_FEED_URL="https://muesli-hq.github.io/muesli/appcast-preprod.xml"
 OUTPUT_DIR="$ROOT/dist-preprod"
 INSTALL_DIR="$OUTPUT_DIR/install-root"
 APP_DIR="$INSTALL_DIR/${APP_NAME}.app"
 APPCAST_PATH="$ROOT/docs/appcast-preprod.xml"
-GENERATE_APPCAST="$(muesli_spm_artifacts_dir "$PACKAGE_DIR" "$SWIFTPM_SCRATCH_PATH")/sparkle/Sparkle/bin/generate_appcast"
+GENERATE_APPCAST="$(imla_spm_artifacts_dir "$PACKAGE_DIR" "$SWIFTPM_SCRATCH_PATH")/sparkle/Sparkle/bin/generate_appcast"
 UPDATE_APPCAST_RELEASE_NOTES="$ROOT/scripts/update_appcast_release_notes.py"
 VERIFY_DIR=""
 MOUNT_POINT=""
@@ -157,7 +157,7 @@ Pre-production build for validating the Sparkle update flow before a stable rele
 3. Launch ${APP_NAME} from Applications
 
 ### Notes
-- Installs alongside production Muesli.
+- Installs alongside production Imla.
 - Stores data separately in \`~/Library/Application Support/${SUPPORT_DIR_NAME}/\`.
 - Uses the pre-production Sparkle feed: \`${PREPROD_FEED_URL}\`.
 - Does not update the production appcast, public download page, or Homebrew tap.
@@ -386,7 +386,7 @@ echo "  Hosted asset verified and prerelease published."
 echo "[11/11] Updating preprod appcast..."
 "$GENERATE_APPCAST" "$OUTPUT_DIR" -o "$APPCAST_PATH"
 
-perl -0pi -e 's{https://muesli-hq\.github\.io/muesli/(MuesliPreprod-([0-9][0-9A-Za-z\.\-]*)\.dmg)}{"https://github.com/Muesli-HQ/muesli/releases/download/v$2/$1"}ge' "$APPCAST_PATH"
+perl -0pi -e 's{https://muesli-hq\.github\.io/muesli/(ImlaPreprod-([0-9][0-9A-Za-z\.\-]*)\.dmg)}{"https://github.com/xshaheen/muesli/releases/download/v$2/$1"}ge' "$APPCAST_PATH"
 perl -0pi -e 's{^\h*<enclosure\b[^>]*\bsparkle:deltaFrom="[^"]*"[^>]*/>\n}{}mg' "$APPCAST_PATH"
 perl -0pi -e 's{^\h*<sparkle:deltas>\s*</sparkle:deltas>\n}{}mg' "$APPCAST_PATH"
 python3 - "$APPCAST_PATH" "$SPARKLE_BUILD_VERSION" "$VERSION" <<'PY'

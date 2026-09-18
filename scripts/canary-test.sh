@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Builds and launches an isolated "MuesliCanary" app for Canary CoreML testing.
+# Builds and launches an isolated "ImlaCanary" app for Canary CoreML testing.
 #
-# - Separate bundle ID (com.muesli.canary)
-# - Separate support directory (~/Library/Application Support/MuesliCanary/)
+# - Separate bundle ID (com.xshaheen.imla.canary)
+# - Separate support directory (~/Library/Application Support/ImlaCanary/)
 # - Optional onboarding reset / clean wipe
 # - Optional local model seeding from the sibling stt-quantize-coreml repo
 #
@@ -15,9 +15,9 @@ set -euo pipefail
 #   ./scripts/canary-test.sh --no-seed
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$ROOT/scripts/muesli_telemetry_channels.sh"
-CANARY_SUPPORT_DIR="${MUESLI_CANARY_SUPPORT_DIR:-$HOME/Library/Application Support/MuesliCanary}"
-CANARY_APP="${MUESLI_CANARY_APP_PATH:-/Applications/MuesliCanary.app}"
+source "$ROOT/scripts/imla_telemetry_channels.sh"
+CANARY_SUPPORT_DIR="${MUESLI_CANARY_SUPPORT_DIR:-$HOME/Library/Application Support/ImlaCanary}"
+CANARY_APP="${MUESLI_CANARY_APP_PATH:-/Applications/ImlaCanary.app}"
 CANARY_MODEL_CACHE="${MUESLI_CANARY_CACHE_DIR:-$HOME/.cache/muesli/models/canary-qwen-2.5b-coreml-int8}"
 STT_ROOT_DEFAULT="$(cd "$ROOT/.." && pwd)/stt-quantize-coreml"
 STT_ROOT="${MUESLI_CANARY_STT_ROOT:-$STT_ROOT_DEFAULT}"
@@ -29,7 +29,7 @@ SEED=1
 
 usage() {
   cat <<'EOF'
-Build and launch an isolated MuesliCanary app.
+Build and launch an isolated ImlaCanary app.
 
 Options:
   --clean     Wipe Canary support data before launch.
@@ -131,7 +131,7 @@ configure_postproc_override() {
   fi
 }
 
-pkill -f "MuesliCanary.app" 2>/dev/null || true
+pkill -f "ImlaCanary.app" 2>/dev/null || true
 sleep 0.5
 
 if [[ "$CLEAN" -eq 1 ]]; then
@@ -157,18 +157,18 @@ fi
 
 configure_postproc_override
 
-log "Building MuesliCanary (debug, signed)..."
-MUESLI_APP_NAME=MuesliCanary \
-MUESLI_BUNDLE_ID=com.muesli.canary \
-MUESLI_SUPPORT_DIR_NAME=MuesliCanary \
-MUESLI_DISPLAY_NAME="MuesliCanary" \
+log "Building ImlaCanary (debug, signed)..."
+MUESLI_APP_NAME=ImlaCanary \
+MUESLI_BUNDLE_ID=com.xshaheen.imla.canary \
+MUESLI_SUPPORT_DIR_NAME=ImlaCanary \
+MUESLI_DISPLAY_NAME="ImlaCanary" \
 MUESLI_SPARKLE_FEED_URL="" \
 MUESLI_TELEMETRYDECK_APP_ID="$MUESLI_TELEMETRYDECK_DEV_APP_ID" \
 MUESLI_TELEMETRY_CHANNEL="canary" \
 "$ROOT/scripts/build_native_app.sh" debug
 
 log ""
-log "Launching MuesliCanary..."
+log "Launching ImlaCanary..."
 open "$CANARY_APP"
 
 log ""

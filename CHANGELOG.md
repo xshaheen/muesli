@@ -15,10 +15,10 @@ upstream `main`.
 
 #### Features
 
-- Replaced Writing Styles with Modes. A mode carries its own instructions, the apps and websites it applies to, an "override default" switch, and an optional key to press after pasting. Muesli picks one automatically from the app or website you are dictating into.
+- Replaced Writing Styles with Modes. A mode carries its own instructions, the apps and websites it applies to, an "override default" switch, and an optional key to press after pasting. Imla picks one automatically from the app or website you are dictating into.
 - Added a Modes screen (Settings > Dictation > Manage modes) with the global custom instructions on top, a card per mode, a searchable installed-app picker, a website list, and Reset modes.
 - Added auto-enter: a mode can press Return or Cmd+Return after the text is pasted, so a dictated message sends without touching the keyboard. It only fires when the paste actually dispatched into the app you were dictating into and the focused control is a text field.
-- Website modes now work without turning on App Context, behind a new "Match modes by website" setting. Muesli reads only the address of the page you are dictating into, uses it to pick a mode, and never stores, logs or sends it.
+- Website modes now work without turning on App Context, behind a new "Match modes by website" setting. Imla reads only the address of the page you are dictating into, uses it to pick a mode, and never stores, logs or sends it.
 
 #### Changes
 

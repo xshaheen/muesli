@@ -7,7 +7,7 @@ VERSION=""
 SHORT_VERSION=""
 ARTIFACT_VERSION=""
 DMG_PATH=""
-APP_NAME="Muesli"
+APP_NAME="Imla"
 EXPECTED_FEED_URL="https://muesli-hq.github.io/muesli/appcast.xml"
 SKIP_DMG=0
 REQUIRE_NOTARIZED=0
@@ -25,8 +25,8 @@ Options:
   --short-version <version> Require the latest short/display version. Defaults to --version.
   --artifact-version <ver>  Version string used in the DMG filename. Defaults to --version.
   --appcast <path>          Appcast XML path. Defaults to docs/appcast.xml.
-  --dmg <path>              DMG path. Defaults to dist-release/Muesli-<version>.dmg.
-  --app-name <name>         App bundle/update artifact name. Defaults to Muesli.
+  --dmg <path>              DMG path. Defaults to dist-release/Imla-<version>.dmg.
+  --app-name <name>         App bundle/update artifact name. Defaults to Imla.
   --feed-url <url>          Expected SUFeedURL. Defaults to the production appcast.
   --skip-dmg                Only validate appcast metadata. Suitable for CI.
   --require-release-notes   Require item-level release notes in the appcast.
@@ -150,7 +150,7 @@ if not signature:
     raise SystemExit("ERROR: latest appcast enclosure is missing sparkle:edSignature")
 
 expected_artifact_version = artifact_version or version
-expected_url = f"https://github.com/Muesli-HQ/muesli/releases/download/v{expected_artifact_version}/{app_name}-{expected_artifact_version}.dmg"
+expected_url = f"https://github.com/xshaheen/muesli/releases/download/v{expected_artifact_version}/{app_name}-{expected_artifact_version}.dmg"
 if url != expected_url:
     raise SystemExit(f"ERROR: latest appcast URL is {url!r}, expected {expected_url!r}")
 
@@ -298,7 +298,7 @@ fi
 echo "Bundle metadata OK."
 
 # SwiftPM-built bundles place Sparkle.framework under Contents/MacOS; the
-# xcodebuild path (native/MuesliXcode) stages frameworks under
+# xcodebuild path (native/ImlaXcode) stages frameworks under
 # Contents/Frameworks. Accept either layout.
 SPARKLE_FRAMEWORK="$APP_PATH/Contents/MacOS/Sparkle.framework"
 if [[ ! -d "$SPARKLE_FRAMEWORK" ]]; then

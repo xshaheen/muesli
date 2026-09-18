@@ -1,5 +1,0 @@
-module CLiteRTLM {
-    header "engine.h"
-    header "capabilities_c.h"
-    export *
-}

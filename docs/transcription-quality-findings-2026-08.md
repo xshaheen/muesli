@@ -15,7 +15,7 @@ the repository, because the receipt is 11 MB of per-utterance detail.
 Every backend ran on **automatic language detection**. That was forced: Qwen3 ASR accepts no
 language argument, and pinning only its competitors would have compared a hobbled model against
 tuned ones. The consequence is that **this run does not describe how anyone actually uses
-Muesli** — real configurations pin a language. See "What this run does not answer" below; it is
+Imla** — real configurations pin a language. See "What this run does not answer" below; it is
 not a footnote.
 
 A backend must clear a **faithfulness gate of 0.90** before its error rate counts. Faithfulness
@@ -58,7 +58,7 @@ Excluded by the faithfulness gate — these did not keep the language:
 | Whisper Tiny | 0.858 | 0.784 |
 
 **Parakeet v3 scores 0.005 faithfulness on Arabic — it essentially never emits Arabic script.**
-Parakeet v3 is Muesli's default model. Any user dictating Arabic on the default is getting
+Parakeet v3 is Imla's default model. Any user dictating Arabic on the default is getting
 something that is not Arabic.
 
 ### The pooled figure hides a large effect
@@ -101,7 +101,7 @@ Two diagnoses only the split makes visible:
 | Cohere Transcribe | 1.823 | 0.204 |
 
 Under automatic detection, no local backend preserves both languages through a code-switched
-utterance. This is the measured form of the complaint that Muesli "translates Arabic to English
+utterance. This is the measured form of the complaint that Imla "translates Arabic to English
 and vice versa".
 
 **This conclusion is the one most likely to be overturned** — see below.
@@ -142,7 +142,7 @@ and vice versa".
 MUESLI_ASR_CORPUS_DIR="$HOME/Dev/oss/muesli-asr-corpus" \
 MUESLI_ASR_HARNESS=1 \
 MUESLI_ASR_HARNESS_OUT="$HOME/Dev/oss/muesli-asr-runs" \
-swift test --package-path native/MuesliNative --filter TranscriptionQualityHarnessTests
+swift test --package-path native/ImlaNative --filter TranscriptionQualityHarnessTests
 ```
 
 The harness refuses to run in CI, refuses to download models, and never copies corpus text into
@@ -203,7 +203,7 @@ interval excludes zero is reported; one whose interval contains zero is recorded
 
 **Cohere and Nemotron reproduced bit-identically** across the two runs — delta exactly zero on
 every cohort. Neither routes through FluidAudio's parakeet pipeline (Cohere is its own Core ML,
-Nemotron runs Muesli's own engine), so no change was expected, and the exact reproduction is
+Nemotron runs Imla's own engine), so no change was expected, and the exact reproduction is
 also a useful check that the harness itself is deterministic.
 
 ## This answers the open P1

@@ -1,4 +1,4 @@
-# Common Muesli tasks. The real logic lives in scripts/ — this file is a thin,
+# Common Imla tasks. The real logic lives in scripts/ — this file is a thin,
 # discoverable layer over build_native_app.sh, create_dmg.sh, dev-test.sh, and
 # release.sh so it cannot drift from them.
 #
@@ -15,8 +15,8 @@ SHELL := /bin/bash -eu -o pipefail
 #
 # Entitlements follow the certificate *kind*, not the name: only a Developer ID
 # Application certificate can back the iCloud/CloudKit entitlements in
-# scripts/Muesli.entitlements without a provisioning profile, so every other
-# identity signs with scripts/MuesliLocalOnly.entitlements (iCloud sync off).
+# scripts/Imla.entitlements without a provisioning profile, so every other
+# identity signs with scripts/ImlaLocalOnly.entitlements (iCloud sync off).
 #
 # The maintainer identity below is an Apple Development certificate, so local
 # builds are local-only by default and DMGs built here are NOT notarized —
@@ -35,7 +35,7 @@ LANE     ?=
 # FILTER narrows `make test` to matching suites/tests, e.g. FILTER=DictationStore.
 FILTER   ?=
 # APP_PATH must match where `make build` installs the app (MUESLI_INSTALL_DIR).
-APP_PATH ?= /Applications/Muesli.app
+APP_PATH ?= /Applications/Imla.app
 DMG_DIR  ?= dist-release
 
 VERSION_ENV := $(if $(VERSION),MUESLI_BUILD_VERSION='$(VERSION)')
@@ -43,33 +43,33 @@ XCODE_ENV   := $(if $(XCODE),MUESLI_USE_XCODE_BUILD=1)
 
 # Resolved inside each recipe rather than via $(shell ...): identity names
 # contain parentheses, which Make's function parser cannot swallow. Sets
-# muesli_identity and muesli_ent in shell scope for that recipe.
+# imla_identity and imla_ent in shell scope for that recipe.
 define resolve_signing
 if [ -n '$(SIGN_IDENTITY)' ]; then \
-  muesli_identity='$(SIGN_IDENTITY)'; \
+  imla_identity='$(SIGN_IDENTITY)'; \
 else \
   identities=$$(security find-identity -v -p codesigning 2>/dev/null \
     | sed -n 's/^[[:space:]]*[0-9][0-9]*) [0-9A-F]* "\(.*\)"$$/\1/p' || true); \
   case "$$identities" in \
     *"$(OFFICIAL_SIGN_IDENTITY)"*) \
-      muesli_identity='$(OFFICIAL_SIGN_IDENTITY)' ;; \
+      imla_identity='$(OFFICIAL_SIGN_IDENTITY)' ;; \
     *) \
-      IFS= read -r muesli_identity <<< "$$identities" ;; \
+      IFS= read -r imla_identity <<< "$$identities" ;; \
   esac; \
 fi; \
-if [ -z "$$muesli_identity" ]; then \
+if [ -z "$$imla_identity" ]; then \
   echo "error: no codesigning identity found in the keychain." >&2; \
   echo "       Pass SIGN_IDENTITY=\"...\" explicitly." >&2; \
   exit 2; \
 fi; \
-muesli_ent='$(ENTITLEMENTS)'; \
-if [ -z "$$muesli_ent" ]; then \
-  case "$$muesli_identity" in \
-    "Developer ID Application:"*) muesli_ent='scripts/Muesli.entitlements' ;; \
-    *) muesli_ent='scripts/MuesliLocalOnly.entitlements' ;; \
+imla_ent='$(ENTITLEMENTS)'; \
+if [ -z "$$imla_ent" ]; then \
+  case "$$imla_identity" in \
+    "Developer ID Application:"*) imla_ent='scripts/Imla.entitlements' ;; \
+    *) imla_ent='scripts/ImlaLocalOnly.entitlements' ;; \
   esac; \
 fi; \
-printf 'Signing identity: %s\nEntitlements:     %s\n' "$$muesli_identity" "$$muesli_ent"
+printf 'Signing identity: %s\nEntitlements:     %s\n' "$$imla_identity" "$$imla_ent"
 endef
 
 .PHONY: help
@@ -88,29 +88,29 @@ config: ## Show the resolved signing identity and entitlements.
 	@$(resolve_signing)
 
 .PHONY: build
-build: ## Signed Muesli.app installed to APP_PATH (replaces existing).
+build: ## Signed Imla.app installed to APP_PATH (replaces existing).
 	@$(resolve_signing); \
 	$(VERSION_ENV) $(XCODE_ENV) \
-	MUESLI_SIGN_IDENTITY="$$muesli_identity" MUESLI_ENTITLEMENTS="$$muesli_ent" \
+	MUESLI_SIGN_IDENTITY="$$imla_identity" MUESLI_ENTITLEMENTS="$$imla_ent" \
 	./scripts/build_native_app.sh
 
 .PHONY: dmg
-dmg: build ## Signed installer at DMG_DIR/Muesli-<version>.dmg (builds first).
+dmg: build ## Signed installer at DMG_DIR/Imla-<version>.dmg (builds first).
 	@$(resolve_signing); \
 	$(VERSION_ENV) \
-	MUESLI_SIGN_IDENTITY="$$muesli_identity" \
+	MUESLI_SIGN_IDENTITY="$$imla_identity" \
 	./scripts/create_dmg.sh "$(APP_PATH)" "$(DMG_DIR)"
 
 .PHONY: dev
-dev: ## Isolated dev/test build, MuesliDev.app; LANE=A/B/C for parallel lanes.
+dev: ## Isolated dev/test build, ImlaDev.app; LANE=A/B/C for parallel lanes.
 	./scripts/dev-test.sh $(if $(LANE),--lane $(LANE),)
 
 .PHONY: test
 test: ## Run the SwiftPM test suite; FILTER=<suite or test> narrows.
-	swift test --package-path native/MuesliNative $(if $(FILTER),--filter '$(FILTER)',)
+	swift test --package-path native/ImlaNative $(if $(FILTER),--filter '$(FILTER)',)
 
 .PHONY: release
-release: ## Official notarized release pipeline (Developer ID + MuesliNotary); VERSION=x.y.z pins.
+release: ## Official notarized release pipeline (Developer ID + ImlaNotary); VERSION=x.y.z pins.
 	./scripts/release.sh $(VERSION)
 
 .PHONY: clean

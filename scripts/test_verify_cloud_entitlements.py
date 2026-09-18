@@ -24,7 +24,7 @@ def run(entitlements: dict, profile: dict | None = None) -> subprocess.Completed
             "python3", str(VALIDATOR),
             "--entitlements", str(entitlements_path),
             "--environment", "Production",
-            "--bundle-id", "com.muesli.app",
+            "--bundle-id", "com.xshaheen.imla",
             "--container", "iCloud.com.mueslihq.muesli",
             "--aps-environment", "production",
         ]
@@ -36,7 +36,7 @@ def run(entitlements: dict, profile: dict | None = None) -> subprocess.Completed
 
 
 base_entitlements = {
-    "com.apple.application-identifier": "TEAMIDTEST.com.muesli.app",
+    "com.apple.application-identifier": "TEAMIDTEST.com.xshaheen.imla",
     "com.apple.developer.team-identifier": "TEAMIDTEST",
     "com.apple.developer.icloud-container-environment": "Production",
     "com.apple.developer.icloud-container-identifiers": ["iCloud.com.mueslihq.muesli"],
@@ -45,7 +45,7 @@ base_entitlements = {
 }
 base_profile = {
     "Entitlements": {
-        "com.apple.application-identifier": "TEAMIDTEST.com.muesli.app",
+        "com.apple.application-identifier": "TEAMIDTEST.com.xshaheen.imla",
         "com.apple.developer.team-identifier": "TEAMIDTEST",
         "com.apple.developer.aps-environment": "production",
         "com.apple.developer.icloud-container-environment": ["Development", "Production"],
@@ -72,7 +72,7 @@ assert run(missing_environment, base_profile).returncode != 0
 
 wrong_profile = {
     "Entitlements": {
-        "com.apple.application-identifier": "TEAMIDTEST.com.muesli.app",
+        "com.apple.application-identifier": "TEAMIDTEST.com.xshaheen.imla",
         "com.apple.developer.team-identifier": "TEAMIDTEST",
         "com.apple.developer.aps-environment": "production",
         "com.apple.developer.icloud-container-environment": "Development",
@@ -131,7 +131,7 @@ assert "git push origin main" not in metadata_section
 assert "verify_update_flow.sh" in metadata_section
 assert "gh release edit" not in metadata_section
 assert "gh release edit" in publication_section
-assert "muesli_require_release_publication_ready" in publication_section
+assert "imla_require_release_publication_ready" in publication_section
 assert "RELEASE_METADATA_PR_URL" in publication_section
 assert "resume_existing_release_publication()" in stable_release
 assert "Existing release metadata branch found" in stable_release
@@ -170,7 +170,7 @@ failed_validation_probe = subprocess.run(
 source "{publication_gate}"
 published=0
 publish() {{ published=1; }}
-if muesli_require_release_publication_ready 0 "https://example.invalid/pr/1"; then
+if imla_require_release_publication_ready 0 "https://example.invalid/pr/1"; then
   publish
 fi
 [[ "$published" == "0" ]]
@@ -183,7 +183,7 @@ fi
 assert failed_validation_probe.returncode == 0, failed_validation_probe.stderr
 
 missing_pr_probe = subprocess.run(
-    ["bash", "-c", f'source "{publication_gate}"; muesli_require_release_publication_ready 1 ""'],
+    ["bash", "-c", f'source "{publication_gate}"; imla_require_release_publication_ready 1 ""'],
     text=True,
     capture_output=True,
     check=False,
@@ -194,7 +194,7 @@ ready_probe = subprocess.run(
     [
         "bash",
         "-c",
-        f'source "{publication_gate}"; muesli_require_release_publication_ready 1 "https://example.invalid/pr/1"',
+        f'source "{publication_gate}"; imla_require_release_publication_ready 1 "https://example.invalid/pr/1"',
     ],
     text=True,
     capture_output=True,

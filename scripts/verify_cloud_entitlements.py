@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the privacy-safe CloudKit contract of a signed Muesli app."""
+"""Validate the privacy-safe CloudKit contract of a signed Imla app."""
 
 from __future__ import annotations
 

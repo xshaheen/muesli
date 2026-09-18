@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/muesli-readme-og.jpg" alt="Muesli - Speech that is free, Speech that is yours" width="900" />
+  <img src="assets/imla-readme-og.jpg" alt="Imla - Speech that is free, Speech that is yours" width="900" />
 </p>
 
-<h1 align="center">Muesli</h1>
+<h1 align="center">Imla</h1>
 
 <p align="center">
   <strong>Local-first dictation & meeting transcription for macOS</strong><br>
@@ -25,19 +25,19 @@
 
 ---
 
-## What is Muesli?
+## What is Imla?
 
-Muesli is a **lightweight native macOS app** that combines **WisprFlow-style dictation** and **Granola-style meeting transcription** in one tool. Speech-to-text runs locally on Apple Silicon and audio is not sent to a transcription service. Optional hosted cleanup and meeting-note providers receive text only when you configure and use them.
+Imla is a **lightweight native macOS app** that combines **WisprFlow-style dictation** and **Granola-style meeting transcription** in one tool. Speech-to-text runs locally on Apple Silicon and audio is not sent to a transcription service. Optional hosted cleanup and meeting-note providers receive text only when you configure and use them.
 
 <p align="center">
-  <img src="assets/muesli-github-ss.png" alt="Muesli interface showing dictations and meeting history" width="900" />
+  <img src="assets/imla-github-ss.png" alt="Imla interface showing dictations and meeting history" width="900" />
 </p>
 
 ### Dictation
 Hold your hotkey (or double-tap for hands-free mode) → speak → release → transcribed text is pasted at your cursor. **~0.13 second latency** via Parakeet TDT on the Apple Neural Engine.
 
 ### Meeting Transcription
-Start a meeting recording → Muesli captures your mic (You) and system audio (Others) simultaneously → VAD-driven chunked transcription happens during the meeting at natural speech boundaries → speaker diarization identifies individual remote speakers (Speaker 1, Speaker 2, etc.) → when you stop, the transcript is ready in seconds, not minutes. Generate structured meeting notes via OpenAI, free OpenRouter models, your ChatGPT Plus/Pro subscription, or local Ollama models.
+Start a meeting recording → Imla captures your mic (You) and system audio (Others) simultaneously → VAD-driven chunked transcription happens during the meeting at natural speech boundaries → speaker diarization identifies individual remote speakers (Speaker 1, Speaker 2, etc.) → when you stop, the transcript is ready in seconds, not minutes. Generate structured meeting notes via OpenAI, free OpenRouter models, your ChatGPT Plus/Pro subscription, or local Ollama models.
 
 Live meeting transcripts have two explicit modes. **Nemotron 3.5** provides a multilingual continuous transcript and defaults to using it as the final raw transcript before diarization and note generation. You can instead select any downloaded meeting model as the authoritative final transcript while keeping Nemotron for live preview. **Parakeet Realtime EOU** is a low-latency English preview paired with a separately selected final model. Settings always shows which model owns the final transcript.
 
@@ -51,22 +51,22 @@ Live transcription is off by default. Download Parakeet Realtime EOU or Nemotron
 - **Multiple ASR providers** — Apple Speech (system-managed on macOS 26+), Parakeet TDT and Nemotron 3.5 (Neural Engine), Cohere Transcribe 2B (mixed precision CoreML), multilingual Whisper Tiny/Small/Large Turbo (CoreML/ANE via WhisperKit), Qwen3 ASR, SenseVoice Small, Indic ASR, and experimental Gemma 4 E2B.
 - **Hold-to-talk & hands-free** — Hold hotkey for quick dictation, or double-tap for sustained recording.
 - **Quill voice rewriting** — Highlight text to rewrite it from a spoken instruction, or generate new text at the cursor with no selection. Quill supports local and hosted models, hands-free activation, and an independent toggle for its activation and release sounds.
-- **Apple Shortcuts & Siri** — Six preconfigured actions out of the box: Start/Stop Dictation (latched hands-free mode, same as double-tapping the hotkey), Start/Stop Meeting Recording, Get Last Dictation, and Get Last Meeting Notes. Trigger them from Spotlight, Siri ("Start a meeting recording in Muesli"), keyboard shortcuts, or Shortcuts automations — e.g. auto-record when a calendar event starts, or pipe your last dictation into Notes, Messages, or Files.
+- **Apple Shortcuts & Siri** — Six preconfigured actions out of the box: Start/Stop Dictation (latched hands-free mode, same as double-tapping the hotkey), Start/Stop Meeting Recording, Get Last Dictation, and Get Last Meeting Notes. Trigger them from Spotlight, Siri ("Start a meeting recording in Imla"), keyboard shortcuts, or Shortcuts automations — e.g. auto-record when a calendar event starts, or pipe your last dictation into Notes, Messages, or Files.
 - **Meeting recording** — Captures mic + system audio (including Bluetooth/AirPods) with a CoreAudio process tap by default and ScreenCaptureKit fallback. System audio from Zoom, Teams, and other call clients stays on the Others side of the transcript.
 - **Live meeting transcript** — Choose Nemotron 3.5 for multilingual live text with either Nemotron or a separate downloaded final model, or Parakeet Realtime EOU for an English live preview.
 - **VAD-driven chunk rotation** — Silero VAD detects natural speech boundaries in real-time, splitting mic audio at pauses instead of fixed intervals. No mid-sentence cuts.
 - **Speaker diarization** — Identifies individual speakers in system audio (Speaker 1, Speaker 2, etc.) using FluidAudio's pyannote-based CoreML diarization model.
 - **Camera-based meeting detection** — Detects when your webcam + mic activate in a recognized meeting app (Zoom, Chrome, Teams, FaceTime, Slack, WhatsApp). Camera alone (e.g. Photo Booth) won't trigger false positives.
 - **Join & Transcribe** — Extracts meeting URLs from calendar events (Zoom, Google Meet, Teams, Webex, Chime, FaceTime). Split-button notification: "Join & Transcribe" opens the meeting + starts transcription, "Join Only" opens without transcribing, "Transcribe Only" starts transcription without joining. Platform icons (Zoom, Meet) in the notification panel.
-- **Google Calendar integration** — Connect your Google Calendar to see upcoming meetings in the Coming Up section and status bar. Choose whether Muesli watches today, two days, or three days of upcoming events. Event-driven notifications via `EKEventStoreChangedNotification` for instant calendar change detection. Pre-meeting countdowns via Marauder's Map easter egg.
+- **Google Calendar integration** — Connect your Google Calendar to see upcoming meetings in the Coming Up section and status bar. Choose whether Imla watches today, two days, or three days of upcoming events. Event-driven notifications via `EKEventStoreChangedNotification` for instant calendar change detection. Pre-meeting countdowns via Marauder's Map easter egg.
 - **Import Audio** — Import m4a, mp4, wav, or mp3 files for offline transcription, speaker diarization, title generation, summaries, and saved meeting history.
 - **Meeting export** — Export meeting notes or transcripts as PDF (paginated US Letter) or Markdown. Format picker in the save panel, auto-opens the exported file.
 - **Meeting templates** — Built-in and custom templates for meeting notes. Choose a template before or after recording — re-summarize any meeting with a different template.
 - **Dismiss calendar events** — Hide irrelevant events from Coming Up, status bar, and menu bar. Dismissed events are pruned automatically.
-- **iCloud Text Sync & iPhone Bridge** — Privately sync dictation text, meeting transcripts, notes, summaries, and manual notes with Muesli for iPhone through iCloud. Audio recordings are never synced.
+- **iCloud Text Sync & iPhone Bridge** — Privately sync dictation text, meeting transcripts, notes, summaries, and manual notes with Imla for iPhone through iCloud. Audio recordings are never synced.
 - **Writing Styles** — Opt in to editable app groups with exact or full-value wildcard bundle-ID and hostname matchers, plus exact target exceptions and a global fallback. Matching is deterministic and local; versioned JSON import/export moves only styles, groups, matchers, exceptions, and the global default. Style rules and local history provenance do not sync to iCloud.
 - **Local or hosted AI cleanup** — Keep cleanup on-device with Qwen/Gemma, or configure a hosted provider. Hosted cleanup receives transcript text plus the selected style instructions; separately enabled App Context is included only when that feature is on.
-- **Optional transcript cleanup** — Refine dictated text locally with **[S1-mini by Superwhisper](https://huggingface.co/superwhisper/s1-mini-GGUF)**, Muesli's GGUF cleanup models, or on-device Gemma 4 E2B; hosted providers are also available when preferred.
+- **Optional transcript cleanup** — Refine dictated text locally with **[S1-mini by Superwhisper](https://huggingface.co/superwhisper/s1-mini-GGUF)**, Imla's GGUF cleanup models, or on-device Gemma 4 E2B; hosted providers are also available when preferred.
 - **Filler word removal** — Automatically strips "uh", "um", "er", "hmm" and verbal disfluencies.
 - **AI meeting notes** — BYOK with OpenAI or OpenRouter, sign in with your ChatGPT Plus/Pro subscription (no API key needed), or use local Ollama models. Auto-generated meeting titles. Re-summarize any meeting.
 - **ChatGPT OAuth** — Sign in with your existing ChatGPT subscription via browser-based OAuth (PKCE). Tokens stored in the app support directory with owner-only file permissions.
@@ -76,7 +76,7 @@ Live transcription is off by default. Download Parakeet Realtime EOU or Nemotron
 - **Model management** — Download, delete, and switch between models from the Models tab. Background downloads that don't block the app.
 - **Configurable hotkeys** — Choose any modifier key (Cmd, Option, Ctrl, Fn, Shift) for dictation.
 - **Onboarding** — First-launch wizard with model selection, real OS permission verification, hotkey configuration, smoother Accessibility handoff, live dictation test to verify the full pipeline works, and optional summary setup for ChatGPT, OpenAI, OpenRouter, or Ollama. Progress saved on every step — survives crashes and manual quits.
-- **Launch at Login** — Start Muesli automatically with macOS login items, with approval-state refresh in Settings.
+- **Launch at Login** — Start Imla automatically with macOS login items, with approval-state refresh in Settings.
 - **Dark & light mode** — Adaptive theme with toggle in sidebar.
 - **SwiftUI dashboard** — Dictation history, meeting notes (Notes-style split view), meeting folders, dictionary, models, shortcuts, settings, about page.
 - **Floating indicator** — Frosted glass pill with dynamic waveform, accent color customization, and click-to-stop for meetings.
@@ -96,7 +96,7 @@ git clone https://github.com/xshaheen/muesli.git
 cd muesli
 
 make build                       # signed with your own identity, installs to /Applications
-MUESLI_SKIP_SIGN=1 make dev      # isolated MuesliDev.app, separate bundle ID and data
+MUESLI_SKIP_SIGN=1 make dev      # isolated ImlaDev.app, separate bundle ID and data
 ```
 
 `make help` lists every target. Builds signed with anything other than a Developer ID
@@ -112,10 +112,10 @@ Gemma 4 support; its ~2.6 GB model weights download only when Gemma is selected.
 
 ## Agent CLI
 
-Muesli bundles an agent-friendly local CLI inside the app bundle:
+Imla bundles an agent-friendly local CLI inside the app bundle:
 
-- Installed path: `/Applications/Muesli.app/Contents/MacOS/muesli-cli`
-- Dev path: `native/MuesliNative/.build/arm64-apple-macosx/debug/muesli-cli`
+- Installed path: `/Applications/Imla.app/Contents/MacOS/imla-cli`
+- Dev path: `native/ImlaNative/.build/arm64-apple-macosx/debug/imla-cli`
 - Future Homebrew alias: `muesli` once the official cask exposes the bundled binary as a command
 
 The CLI is designed for coding agents such as Codex and Claude Code. It exposes meetings, dictations, raw transcripts, stored notes, and local audio-file transcription. Existing data commands return stable JSON so an agent can analyze them with its own model and write notes back without requiring a user-supplied OpenAI or OpenRouter key. `transcribe` prints plain transcript text by default so it works naturally in shell pipelines.
@@ -124,15 +124,15 @@ The CLI is designed for coding agents such as Codex and Claude Code. It exposes 
 
 1. Discover the CLI:
    ```bash
-   command -v muesli-cli || echo "/Applications/Muesli.app/Contents/MacOS/muesli-cli"
+   command -v imla-cli || echo "/Applications/Imla.app/Contents/MacOS/imla-cli"
    ```
 2. Inspect the command contract:
    ```bash
-   /Applications/Muesli.app/Contents/MacOS/muesli-cli spec
+   /Applications/Imla.app/Contents/MacOS/imla-cli spec
    ```
 3. Transcribe a local audio file:
    ```bash
-   /Applications/Muesli.app/Contents/MacOS/muesli-cli transcribe file.mp3
+   /Applications/Imla.app/Contents/MacOS/imla-cli transcribe file.mp3
    ```
    Homebrew users should eventually be able to use:
    ```bash
@@ -140,30 +140,30 @@ The CLI is designed for coding agents such as Codex and Claude Code. It exposes 
    ```
 4. List recent meetings or dictations:
    ```bash
-   /Applications/Muesli.app/Contents/MacOS/muesli-cli meetings list --limit 10
-   /Applications/Muesli.app/Contents/MacOS/muesli-cli dictations list --limit 10
+   /Applications/Imla.app/Contents/MacOS/imla-cli meetings list --limit 10
+   /Applications/Imla.app/Contents/MacOS/imla-cli dictations list --limit 10
    ```
 5. Fetch a full record:
    ```bash
-   /Applications/Muesli.app/Contents/MacOS/muesli-cli meetings get 125
-   /Applications/Muesli.app/Contents/MacOS/muesli-cli dictations get 42
+   /Applications/Imla.app/Contents/MacOS/imla-cli meetings get 125
+   /Applications/Imla.app/Contents/MacOS/imla-cli dictations get 42
    ```
 6. Summarize or analyze locally in the agent.
 7. Write improved meeting notes back:
    ```bash
-   cat notes.md | /Applications/Muesli.app/Contents/MacOS/muesli-cli meetings update-notes 125 --stdin
+   cat notes.md | /Applications/Imla.app/Contents/MacOS/imla-cli meetings update-notes 125 --stdin
    ```
 
 ### Commands
 
-- `muesli-cli spec`
-- `muesli-cli info`
-- `muesli-cli transcribe <file> [--format text|json|markdown] [--model parakeet-v3|parakeet-v2|parakeet-eou-320ms|sensevoice|qwen3-asr|nemotron35|whisper-tiny|whisper-tiny-english|whisper-small|whisper-small-english|whisper-medium-english|whisper-large-turbo] [--dictionary PATH] [--summarize] [--save-meeting] [--title TITLE] [--output PATH]`
-- `muesli-cli meetings list [--limit N] [--folder-id ID]`
-- `muesli-cli meetings get <id>`
-- `muesli-cli meetings update-notes <id> (--stdin | --file <path>)`
-- `muesli-cli dictations list [--limit N]`
-- `muesli-cli dictations get <id>`
+- `imla-cli spec`
+- `imla-cli info`
+- `imla-cli transcribe <file> [--format text|json|markdown] [--model parakeet-v3|parakeet-v2|parakeet-eou-320ms|sensevoice|qwen3-asr|nemotron35|whisper-tiny|whisper-tiny-english|whisper-small|whisper-small-english|whisper-medium-english|whisper-large-turbo] [--dictionary PATH] [--summarize] [--save-meeting] [--title TITLE] [--output PATH]`
+- `imla-cli meetings list [--limit N] [--folder-id ID]`
+- `imla-cli meetings get <id>`
+- `imla-cli meetings update-notes <id> (--stdin | --file <path>)`
+- `imla-cli dictations list [--limit N]`
+- `imla-cli dictations get <id>`
 
 ### Audio transcription
 
@@ -172,19 +172,19 @@ Supported input files: `.mp3`, `.mp4`, `.m4a`, and `.wav`.
 Default output is transcript text only:
 
 ```bash
-muesli-cli transcribe interview.mp3
+imla-cli transcribe interview.mp3
 ```
 
 Agent-friendly JSON output uses the normal CLI envelope:
 
 ```bash
-muesli-cli transcribe interview.m4a --format json
+imla-cli transcribe interview.m4a --format json
 ```
 
 ```json
 {
   "ok": true,
-  "command": "muesli-cli transcribe",
+  "command": "imla-cli transcribe",
   "data": {
     "transcript": "Raw transcript text...",
     "summary": null,
@@ -198,7 +198,7 @@ muesli-cli transcribe interview.m4a --format json
   "meta": {
     "schemaVersion": 1,
     "generatedAt": "2026-07-08T00:00:00Z",
-    "dbPath": "/Users/example/Library/Application Support/Muesli/muesli.db",
+    "dbPath": "/Users/example/Library/Application Support/Imla/imla.db",
     "warnings": []
   }
 }
@@ -207,20 +207,20 @@ muesli-cli transcribe interview.m4a --format json
 Generate markdown notes with the configured API/local summary backend when available:
 
 ```bash
-muesli-cli transcribe interview.mp4 --summarize --format markdown --output notes.md
+imla-cli transcribe interview.mp4 --summarize --format markdown --output notes.md
 ```
 
-`--summarize` uses configured OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM settings. If the configured backend is unavailable in headless CLI mode, Muesli keeps the transcript and reports a warning instead of discarding the transcription.
+`--summarize` uses configured OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM settings. If the configured backend is unavailable in headless CLI mode, Imla keeps the transcript and reports a warning instead of discarding the transcription.
 
-Save the import into Muesli as `source = audio_import`:
+Save the import into Imla as `source = audio_import`:
 
 ```bash
-muesli-cli transcribe interview.wav --save-meeting --title "Customer Interview"
+imla-cli transcribe interview.wav --save-meeting --title "Customer Interview"
 ```
 
 ### Dictionary import and export
 
-The app's **Dictionary** tab supports importing and exporting the personal dictionary as JSON. Import merges entries by match word, updates an existing match when the imported definition differs, and appends new words. Export produces the same portable format accepted by `muesli-cli --dictionary`:
+The app's **Dictionary** tab supports importing and exporting the personal dictionary as JSON. Import merges entries by match word, updates an existing match when the imported definition differs, and appends new words. Export produces the same portable format accepted by `imla-cli --dictionary`:
 
 ```json
 [
@@ -235,7 +235,7 @@ The app's **Dictionary** tab supports importing and exporting the personal dicti
 The CLI also accepts an app `config.json` directly when it contains a `custom_words` array:
 
 ```bash
-muesli-cli transcribe interview.wav --dictionary ~/Library/Application\ Support/Muesli/config.json
+imla-cli transcribe interview.wav --dictionary ~/Library/Application\ Support/Imla/config.json
 ```
 
 `parakeet-eou-320ms` is available for batch file transcription. The CLI chunks the audio internally and returns the completed transcript; it does not expose streaming partials for file transcription.
@@ -243,7 +243,7 @@ muesli-cli transcribe interview.wav --dictionary ~/Library/Application\ Support/
 Direct app-bundle fallback path:
 
 ```bash
-/Applications/Muesli.app/Contents/MacOS/muesli-cli transcribe file.mp3
+/Applications/Imla.app/Contents/MacOS/imla-cli transcribe file.mp3
 ```
 
 ### JSON contract
@@ -255,12 +255,12 @@ Success shape:
 ```json
 {
   "ok": true,
-  "command": "muesli-cli meetings get",
+  "command": "imla-cli meetings get",
   "data": {},
   "meta": {
     "schemaVersion": 1,
     "generatedAt": "2026-03-17T00:00:00Z",
-    "dbPath": "/Users/example/Library/Application Support/Muesli/muesli.db",
+    "dbPath": "/Users/example/Library/Application Support/Imla/imla.db",
     "warnings": []
   }
 }
@@ -271,11 +271,11 @@ Failure shape:
 ```json
 {
   "ok": false,
-  "command": "muesli-cli meetings get 999",
+  "command": "imla-cli meetings get 999",
   "error": {
     "code": "not_found",
     "message": "No meeting exists with id 999.",
-    "fix": "Run `muesli-cli meetings list` to find a valid ID."
+    "fix": "Run `imla-cli meetings list` to find a valid ID."
   },
   "meta": {
     "schemaVersion": 1,
@@ -308,7 +308,7 @@ Important meeting fields:
 - `formattedNotes` is the only write-back surface in v1.
 - `rawTranscript` is read-only and should be treated as source material.
 - If `notesState` is `missing` or `raw_transcript_fallback`, agents should prefer summarizing from `rawTranscript`.
-- Use `--db-path` or `--support-dir` only when the default Muesli data location is wrong.
+- Use `--db-path` or `--support-dir` only when the default Imla data location is wrong.
 - Read the [SQLite database guide](database-schema.md) before adding tables,
   columns, migrations, direct queries, or new sync fields.
 
@@ -318,7 +318,7 @@ Important meeting fields:
 
 | Model | Backend | Runtime | Size | Languages | Latency |
 |-------|---------|---------|------|-----------|---------|
-| **Apple Speech** | SpeechAnalyzer / SpeechTranscriber | System-managed | No Muesli model download | System-supported locales | macOS 26+, system dependent |
+| **Apple Speech** | SpeechAnalyzer / SpeechTranscriber | System-managed | No Imla model download | System-supported locales | macOS 26+, system dependent |
 | **Parakeet v3** (recommended) | FluidAudio | CoreML / Neural Engine | ~450 MB | 25 languages | ~0.13s |
 | Parakeet v2 | FluidAudio | CoreML / Neural Engine | ~450 MB | English only | ~0.13s |
 | Parakeet Realtime EOU | FluidAudio | CoreML / Neural Engine | ~430 MB | English only | Live preview |
@@ -337,8 +337,8 @@ Important meeting fields:
 
 Apple Speech uses the system `SpeechAnalyzer` and `SpeechTranscriber` APIs on
 macOS 26 and compatible Apple hardware. Its language assets are managed by the
-operating system rather than downloaded into Muesli's model cache; older macOS
-versions continue to use Muesli's downloadable local ASR backends.
+operating system rather than downloaded into Imla's model cache; older macOS
+versions continue to use Imla's downloadable local ASR backends.
 
 Whisper's Tiny and Small sizes are available as either multilingual or
 English-only downloads. The multilingual variants auto-detect the spoken
@@ -349,8 +349,8 @@ while Large Turbo is the strongest multilingual choice for accents, background
 noise, and mixed-language audio. Every variant can be downloaded, deleted, and
 downloaded again from the Models tab.
 
-The app and `muesli-cli` share Nemotron 3.5's model cache at
-`~/.cache/muesli/models/nemotron35-multilingual-2240ms`; downloading it in one
+The app and `imla-cli` share Nemotron 3.5's model cache at
+`~/.cache/imla/models/nemotron35-multilingual-2240ms`; downloading it in one
 surface makes it available to the other without a second copy.
 
 Cohere Transcribe is a 2B parameter model (#1 on Open ASR Leaderboard) running in mixed precision — FP16 FastConformer encoder on the Neural Engine with INT8 quantized decoders. Includes VAD-gated silence detection to prevent hallucination. Best for high-accuracy multilingual dictation.
@@ -365,7 +365,7 @@ cannot load.
 
 Source/dev builds need the LocalVQE runtime built once with
 `./scripts/build_localvqe.sh` (the model is committed; the dylibs under
-`native/MuesliNative/LocalVQE/lib/` are not). Without that step, packaging
+`native/ImlaNative/LocalVQE/lib/` are not). Without that step, packaging
 warns and the app falls back to DTLN. See `CONTRIBUTING.md`.
 
 Models download on demand from HuggingFace. Manage them from the **Models** tab in the dashboard.
@@ -374,7 +374,7 @@ Models download on demand from HuggingFace. Manage them from the **Models** tab 
 
 ## Permissions
 
-Muesli needs these macOS permissions (guided during onboarding):
+Imla needs these macOS permissions (guided during onboarding):
 
 | Permission | Why |
 |---|---|
@@ -424,8 +424,8 @@ Contributions welcome! To get started:
 ```bash
 git clone https://github.com/xshaheen/muesli.git
 cd muesli
-swift build --package-path native/MuesliNative -c release
-swift test --package-path native/MuesliNative
+swift build --package-path native/ImlaNative -c release
+swift test --package-path native/ImlaNative
 ./scripts/test_packaged_cli.sh
 ```
 
@@ -434,8 +434,8 @@ The suite covers model configuration, custom word and phrase matching, filler re
 Current test scope:
 
 - Covered by tests: CLI command contract generation, CLI path-resolution logic, SQLite read/write behavior, note-state classification, meeting/dictation retrieval/update flows, update-flow policy, CoreAudio cleanup, paste/clipboard safety, launch at login, Ollama summary routing, and Computer Use planner foundations.
-- Not covered by Swift unit tests: app-bundle packaging and copying `muesli-cli` into `/Applications/Muesli.app/Contents/MacOS`.
-- Packaging is verified by `scripts/test_packaged_cli.sh`, which builds an isolated app bundle, checks that `Contents/MacOS/muesli-cli` exists and is executable, and runs `muesli-cli spec` from the packaged path.
+- Not covered by Swift unit tests: app-bundle packaging and copying `imla-cli` into `/Applications/Imla.app/Contents/MacOS`.
+- Packaging is verified by `scripts/test_packaged_cli.sh`, which builds an isolated app bundle, checks that `Contents/MacOS/imla-cli` exists and is executable, and runs `imla-cli spec` from the packaged path.
 
 Please open an issue before submitting large PRs.
 
@@ -443,7 +443,7 @@ Please open an issue before submitting large PRs.
 
 ## Acknowledgements
 
-Muesli is built on this work:
+Imla is built on this work:
 
 - [FluidAudio](https://github.com/FluidInference/FluidAudio) — CoreML speech models for Apple devices (Parakeet TDT, Qwen3 ASR, Silero VAD, speaker diarization)
 - [localai-org/LocalVQE](https://github.com/localai-org/LocalVQE) — on-device acoustic echo cancellation for meeting transcription
