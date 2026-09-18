@@ -85,7 +85,7 @@ struct LanguageSelectionPresentationTests {
         #expect(cohereAutomatic.explanation.contains("dominant language"))
 
         let indicAutomatic = SpokenLanguageProfile.automatic.presentation(
-            for: .indicASR,
+            for: .bodhanFlex,
             isAvailable: true
         )
         #expect(indicAutomatic.state == .degraded)

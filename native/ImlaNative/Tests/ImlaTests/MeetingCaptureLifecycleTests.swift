@@ -150,6 +150,9 @@ private final class LifetimeMicrophone: MeetingMicRecording {
 
 private final class LifetimeSystemAudio: SystemAudioCapturing {
     var onPCMSamples: (([Int16]) -> Void)?
+    var onSystemAudioInterruption: (() -> Void)?
+    var onSystemAudioFailure: ((Error) -> Void)?
+    var onSystemAudioRecovery: (() -> Void)?
     let isRecording = false
     let isPaused = false
     var startAction: () -> Void = {}
@@ -164,9 +167,17 @@ private final class LifetimeSystemAudio: SystemAudioCapturing {
             if let startError { throw startError }
         }
     }
-    func stop() -> URL? { stopCount += 1; stopAction(); return nil }
+    func stop() async -> URL? {
+        try? await MeetingCaptureLifecycle.onDriverQueue { [self] in
+            stopCount += 1
+            stopAction()
+        }
+        return nil
+    }
     private(set) var pauseCount = 0
     private(set) var resumeCount = 0
     func pause() { pauseCount += 1 }
     func resume() { resumeCount += 1 }
+    @discardableResult
+    func rebuildForHealthRecovery(reason: String) -> Bool { false }
 }

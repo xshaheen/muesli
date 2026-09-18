@@ -30,7 +30,7 @@ struct OpenRouterAuthTests {
         let second = auth.generateCallbackPath()
 
         #expect(first.hasPrefix("/imla/openrouter/oauth/"))
-        #expect(first.count >= 68)
+        #expect(first.count >= "/imla/openrouter/oauth/".count + 43)
         #expect(first != second)
     }
 

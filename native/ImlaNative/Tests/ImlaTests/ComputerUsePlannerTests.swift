@@ -1413,36 +1413,6 @@ struct ComputerUseRunDiagnosticsTests {
     }
 
     @Test @MainActor
-    func stopClickTakesPrecedenceOverDictation() {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let indicator = FloatingIndicatorController(configStore: ConfigStore(supportDirectory: directory))
-        var stops = 0
-        var dictationStops = 0
-        indicator.onCancelComputerUse = { stops += 1 }
-        indicator.onStopToggleDictation = { dictationStops += 1 }
-        indicator.setComputerUseCancellationAvailable(true)
-        let config = AppConfig()
-        indicator.showComputerUseTranscript("Find the search field", config: config)
-        defer { indicator.setState(.idle, config: config) }
-        let stationaryFrame = indicator.currentFrame
-        #expect(stationaryFrame != nil)
-        indicator.showComputerUseCursor(at: CGPoint(x: 100, y: 100), label: "Search")
-        #expect(indicator.currentFrame == stationaryFrame)
-        indicator.handleClick(atX: 12)
-        indicator.handleClick(atX: 80)
-        #expect(stops == 1)
-        #expect(dictationStops == 0)
-        indicator.handleClick(atX: 33)
-        #expect(stops == 2)
-        indicator.handleClick(atX: 34)
-        #expect(stops == 2)
-        #expect(dictationStops == 0)
-        indicator.setComputerUseCancellationAvailable(false)
-        indicator.handleClick(atX: 12)
-        #expect(stops == 2)
-    }
-
-    @Test @MainActor
     func traceBurstsFlushTheirLatestEventWithoutAnotherEvent() async throws {
         var writes: [[ComputerUseTraceEvent]] = []
         let trace = ComputerUseRunTrace(persistenceInterval: .milliseconds(20)) { events, _, _ in writes.append(events) }

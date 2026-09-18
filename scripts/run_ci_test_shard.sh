@@ -249,7 +249,11 @@ if [[ "${list_filters}" == true ]]; then
   exit 0
 fi
 
-args=(--package-path native/ImlaNative)
+# The default swiftbuild engine flattens binary-target headers into one
+# Products/<cfg>/include/, where CLiteRTLM_mac and FluidAudio's
+# NemoTextProcessing module maps collide; build_native_app.sh pins the legacy
+# engine for the same reason.
+args=(--package-path native/ImlaNative --build-system native)
 if [[ "${shard}" == meetings ]]; then
   # Concurrent suites can starve the utility-priority caption tasks on small
   # runners. Serialize test cases, preserving concurrency exercised inside each

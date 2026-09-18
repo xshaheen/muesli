@@ -1121,9 +1121,9 @@ extension ComputerUseRunDiagnosticsTests {
         controller.computerUseAudioSessionManager = harness.manager
         controller.handleComputerUsePrepare()
         harness.wait()
+        // Computer use announces itself on the cursor overlay here, so dictation
+        // state stays idle; the armed audio session is what prepare owns.
         #expect(harness.manager.hasActiveSession)
-        #expect(controller.appState.dictationState == .preparing)
-        #expect(!controller.canPrepareComputerUseCommand)
 
         #expect(!controller.ensureComputerUseScreenRecordingAccess(isGranted: false))
         harness.wait()

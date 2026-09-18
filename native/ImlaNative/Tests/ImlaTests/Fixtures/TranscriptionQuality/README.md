@@ -42,7 +42,7 @@ normalization changes.
 
 ## Reproduction
 
-1. Build `imla-cli` at the capture commit in `PROVENANCE.md`.
+1. Build `muesli-cli` at the capture commit in `PROVENANCE.md`.
 2. Re-render the project-authored reference with the recorded voice/rate and
    encode it with the recorded `afconvert` command. Confirm byte size and hash.
 3. Transcribe each generated file with `--model whisper-tiny --format json`.

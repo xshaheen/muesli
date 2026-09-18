@@ -46,7 +46,7 @@ struct ConfigStoreTests {
         #expect(loaded.openAIModel == "gpt-5.4-pro")
         #expect(loaded.openRouterAPIKey.isEmpty)
         #expect(
-            try OpenRouterCredentialStore(supportDirectory: supportDirectory).load()?.apiKey ==
+            try OpenRouterCredentialStore(supportDirectory: store.supportDirectory()).load()?.apiKey ==
                 "sk-or-test-roundtrip"
         )
         #expect(loaded.openRouterModel == "nvidia/nemotron-3-super-120b-a12b:free")

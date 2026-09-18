@@ -3681,8 +3681,15 @@ struct AppConfig: Codable {
         DictationProvider.resolved(dictationProvider)
     }
 
+    /// The profile is the language authority, but it can only express languages
+    /// the shared catalogue knows. Bodhan's own languages — Chhattisgarhi and
+    /// Haryanvi among them — have no catalogue entry, so a pin the user already
+    /// saved survives instead of silently resetting to the default.
     var resolvedBodhanLanguage: BodhanLanguage {
-        languageProfile.resolvedBodhanLanguage
+        if languageProfile.authoritativeLanguage != nil {
+            return languageProfile.resolvedBodhanLanguage
+        }
+        return BodhanLanguage(rawValue: bodhanLanguage) ?? languageProfile.resolvedBodhanLanguage
     }
 
     var resolvedNemotron35Language: Nemotron35Language {

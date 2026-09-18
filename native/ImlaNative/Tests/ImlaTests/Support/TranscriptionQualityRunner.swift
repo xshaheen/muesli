@@ -102,7 +102,7 @@ enum TranscriptionQualityEligibility {
     /// and throws on anything older. Read off those checks directly rather than inferred from the
     /// model catalogue, because the throw is what the sweep would otherwise record as a failure.
     static let macOS15Backends: Set<String> = [
-        "cohere", "indicasr", "gemma4-litert", "nemotron35",
+        "cohere", "bodhan", "gemma4-litert", "nemotron35",
     ]
 
     static func minimumMacOSMajorVersion(for backend: BackendOption) -> Int? {
@@ -156,7 +156,7 @@ enum TranscriptionQualityEligibility {
     static func languageConfiguration(for backend: BackendOption) -> String {
         switch backend.backend {
         case "cohere": return "pinned:\(CohereTranscribeLanguage.defaultLanguage.rawValue)"
-        case "indicasr": return "pinned:\(BodhanLanguage.defaultLanguage.rawValue)"
+        case "bodhan": return "pinned:\(BodhanLanguage.defaultLanguage.rawValue)"
         case "apple-speech": return "pinned:\(hostSpeechLanguageCode)"
         default:
             // `nemotron35`, `sensevoice` and `gemma4-litert` all detect the language
@@ -201,7 +201,7 @@ enum TranscriptionQualityScratchSupportDirectory {
     /// Pure, so the layout is assertable without touching the file system.
     static func url(root: URL, runID: String) -> URL {
         root
-            .appendingPathComponent("imla-asr-harness", isDirectory: true)
+            .appendingPathComponent("muesli-asr-harness", isDirectory: true)
             .appendingPathComponent(runID, isDirectory: true)
     }
 

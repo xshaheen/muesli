@@ -1,7 +1,7 @@
 # Transcription quality run receipts (schema v2)
 
 Run receipts produced by the transcription quality harness, in the v2 schema defined by
-`Sources/ImlaCore/TranscriptionQualityReceipt.swift`.
+`Sources/MuesliCore/TranscriptionQualityReceipt.swift`.
 
 ## Why this is a separate directory
 

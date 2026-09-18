@@ -940,6 +940,7 @@ final class MeetingSession {
             systemArrivalSampleCount = 0
             // A new meeting is the only other place suppressed intervals go (KTD7).
             reverseLeakSuppressor.discard()
+            isRecording = true
             setPausedStateOnQueue(false)
             try prepareRealtimeAudioPipeline(vadManager: vadManager)
             setupRetainedRecordingWriterIfNeeded()
@@ -970,6 +971,7 @@ final class MeetingSession {
             systemChunkRecorder?.cancel()
             systemChunkRecorder = nil
             chunkRotationQueue.sync {
+                isRecording = false
                 setPausedStateOnQueue(false)
                 startTime = nil
                 captureRequestedStartTime = nil
@@ -982,7 +984,6 @@ final class MeetingSession {
             systemChunkCollector.cancelAll()
             throw error
         }
-        try await captureLifecycle.start()
         try Task.checkCancellation()
         guard !captureLifecycle.isEnding else { throw CancellationError() }
         if vadController != nil {

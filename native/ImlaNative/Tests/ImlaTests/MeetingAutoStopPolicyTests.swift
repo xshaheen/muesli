@@ -370,4 +370,34 @@ struct MeetingAutoStopPolicyTests {
         let shouldStop10 = tracker.observe(candidate: nil, now: now.addingTimeInterval(31), gracePeriod: 20)
         #expect(shouldStop10)
     }
+
+    private func googleMeetCandidate() -> MeetingCandidate {
+        MeetingCandidate(
+            id: "googleMeet:meet.google.com/aaa-bbbb-ccc",
+            platform: .googleMeet,
+            appName: "Chrome",
+            url: "meet.google.com/aaa-bbbb-ccc",
+            evidence: [.browserURL, .audioInputProcess],
+            startedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            meetingTitle: nil,
+            sourceBundleID: "com.google.Chrome",
+            sourcePID: 1234,
+            suppressionID: "browser:com.google.Chrome:session:1800000000"
+        )
+    }
+
+    private func teamsCandidate() -> MeetingCandidate {
+        MeetingCandidate(
+            id: "app:com.microsoft.teams2:session:1800000000",
+            platform: .teams,
+            appName: "Teams",
+            url: nil,
+            evidence: [.audioInputProcess, .dedicatedApp],
+            startedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            meetingTitle: nil,
+            sourceBundleID: "com.microsoft.teams2",
+            sourcePID: 4321,
+            suppressionID: "app:com.microsoft.teams2:session:1800000000"
+        )
+    }
 }

@@ -29,7 +29,10 @@ struct DictationAudioRouteControllerTests {
         release.signal()
         routeQueue.sync {}
         inspector.onOutputInspection = nil
-        #expect(controller.preferredInputDeviceIDForDictation() == 82)
+        // Auto follows the system default input here, so an unblocked inspection
+        // resolves the route rather than pinning the built-in microphone.
+        #expect(controller.currentOutputRouteKindForDebug() == .headphoneLike)
+        #expect(controller.preferredInputDeviceIDForDictation() == nil)
     }
 
     @Test("dictation follows the system default input for headphone output")

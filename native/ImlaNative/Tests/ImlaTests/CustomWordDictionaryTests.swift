@@ -52,7 +52,7 @@ struct CustomWordDictionaryTests {
         let existingID = UUID()
         let existing = CustomWord(
             id: existingID,
-            word: "Imla",
+            word: "muesli",
             replacement: "Imla",
             matchingThreshold: 0.85
         )
@@ -79,7 +79,7 @@ struct CustomWordDictionaryTests {
         let firstID = UUID()
         let secondID = UUID()
         let existing = [
-            CustomWord(id: firstID, word: "Imla", replacement: "first"),
+            CustomWord(id: firstID, word: "muesli", replacement: "first"),
             CustomWord(id: secondID, word: " muesli ", replacement: "second"),
         ]
         let imported = [

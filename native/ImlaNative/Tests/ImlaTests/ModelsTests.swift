@@ -599,7 +599,7 @@ struct LanguageProfileTests {
         #expect(mixed.resolvedWhisperLanguage == .auto)
         #expect(mixed.resolvedNemotron35Language == .auto)
         #expect(mixed.effectiveBehavior(for: .cohereTranscribe).kind == .providerFallback)
-        #expect(mixed.effectiveBehavior(for: .indicASR).kind == .providerFallback)
+        #expect(mixed.effectiveBehavior(for: .bodhanFlex).kind == .providerFallback)
 
         let arabicDominant = try LanguageProfile(
             selectedLanguages: [.english, .arabic],

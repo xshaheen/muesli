@@ -1270,40 +1270,42 @@ struct ModelDownloadCoordinatorTests {
         #expect(plan.selections[0].remoteDirectory == "320ms")
         #expect(plan.selections[0].includedPaths.contains("vocab.json"))
 
+        // This fork configures no mirror: downloads go straight to Hugging Face
+        // rather than through the upstream project's bucket.
         let parakeet = ManagedASRModelPlans.parakeetV2(modelsRoot: root)
-        #expect(parakeet.mirror?.manifestURL.absoluteString == "https://assets.imla.works/models/fluidaudio/parakeet-tdt-0.6b-v2/legacy-local-v1/manifest.json")
+        #expect(parakeet.mirror == nil)
 
         let parakeetV3 = ManagedASRModelPlans.parakeetV3(modelsRoot: root)
-        #expect(parakeetV3.mirror?.manifestURL.absoluteString == "https://assets.imla.works/models/fluidaudio/parakeet-tdt-0.6b-v3/legacy-local-v1/manifest.json")
+        #expect(parakeetV3.mirror == nil)
 
         let unified = ManagedASRModelPlans.parakeetUnified(modelsRoot: root)
-        #expect(unified.mirror?.manifestURL.absoluteString == "https://assets.imla.works/models/fluidaudio/parakeet-unified-en-0.6b/legacy-local-v1/manifest.json")
+        #expect(unified.mirror == nil)
 
         let whisper = ManagedASRModelPlans.whisperKit(modelName: "tiny", downloadRoot: root)
         #expect(whisper.selections[0].includedPaths.contains("AudioEncoder.mlmodelc"))
         #expect(whisper.selections[0].includedPaths.contains("config.json"))
         #expect(whisper.selections[0].includedPaths.contains("generation_config.json"))
         #expect(!whisper.selections[0].includedPaths.contains("AudioEncoder.mlpackage"))
-        #expect(whisper.mirror?.manifestURL.absoluteString == "https://assets.imla.works/models/whisperkit/openai_whisper-tiny/legacy-local-v1/manifest.json")
+        #expect(whisper.mirror == nil)
     }
 
-    @Test("supported WhisperKit variants have immutable Imla mirrors")
-    func mirroredWhisperKitVariants() {
-        let expectedPaths = [
-            "tiny": "openai_whisper-tiny",
-            "tiny.en": "openai_whisper-tiny.en",
-            "small": "openai_whisper-small",
-            "small.en": "openai_whisper-small.en",
-            "medium.en": "openai_whisper-medium.en",
-            "large-v3-v20240930_626MB": "openai_whisper-large-v3-v20240930_626MB",
+    /// The mirror transport stays tested elsewhere; what this asserts is that no
+    /// catalogue entry routes a user's download through a mirror they never chose.
+    @Test("no WhisperKit variant is mirrored")
+    func whisperKitVariantsAreNotMirrored() {
+        let modelNames = [
+            "tiny",
+            "tiny.en",
+            "small",
+            "small.en",
+            "medium.en",
+            "large-v3-v20240930_626MB",
+            "distil-large-v3",
         ]
 
-        for (modelName, remoteDirectory) in expectedPaths {
-            let plan = ManagedASRModelPlans.whisperKit(modelName: modelName)
-            #expect(plan.mirror?.manifestURL.absoluteString == "https://assets.imla.works/models/whisperkit/\(remoteDirectory)/legacy-local-v1/manifest.json")
+        for modelName in modelNames {
+            #expect(ManagedASRModelPlans.whisperKit(modelName: modelName).mirror == nil)
         }
-
-        #expect(ManagedASRModelPlans.whisperKit(modelName: "distil-large-v3").mirror == nil)
     }
 
     @Test("English-only Whisper checkpoints use their exact downloadable cache identities")
