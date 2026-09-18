@@ -1,4 +1,4 @@
-# Muesli Release Checklist
+# Imla Release Checklist
 
 Run `./scripts/release.sh [version]` — it automates steps 1-9 and is the only official release path.
 
@@ -13,7 +13,7 @@ This checklist is for **verification** after the script runs, and for manual rec
 ## Pre-release
 
 - [ ] All changes merged to `main`
-- [ ] `swift test --package-path native/MuesliNative` — all tests pass
+- [ ] `swift test --package-path native/ImlaNative` — all tests pass
 - [ ] Version bumped in `scripts/build_native_app.sh` (CFBundleVersion + CFBundleShortVersionString)
 - [ ] No uncommitted changes (`git status` clean)
 - [ ] Homebrew installed and updated enough to run post-release `brew livecheck --cask muesli`
@@ -27,26 +27,26 @@ This checklist is for **verification** after the script runs, and for manual rec
 > the `iCloud.com.mueslihq.muesli` container is inherited from upstream and is not reachable
 > until this fork has its own Apple Developer team and app identity.
 
-Muesli's default entitlements include CloudKit (`iCloud.com.mueslihq.muesli`). Any cloud-entitled build must be signed with a provisioning profile whose app identifier matches the bundle ID and whose certificate matches the signing identity.
+Imla's default entitlements include CloudKit (`iCloud.com.mueslihq.muesli`). Any cloud-entitled build must be signed with a provisioning profile whose app identifier matches the bundle ID and whose certificate matches the signing identity.
 
-- [ ] Dev lane `MuesliDev` / `com.muesli.dev`
+- [ ] Dev lane `ImlaDev` / `com.xshaheen.imla.dev`
   - Use profile: `../muesli-ios/secrets/mueslimacosdevcloudkitcommueslidev.provisionprofile`
   - Use identity: `Apple Development: mxshaheen@icloud.com (AMM3J847CY)`
   - Use `MUESLI_CODESIGN_TIMESTAMP=none`
   - `scripts/dev-test.sh --cloud-entitlements` auto-selects these values when that local profile exists
 
-- [ ] Named dev lanes `com.muesli.dev.a/b/c`
+- [ ] Named dev lanes `com.xshaheen.imla.dev.a/b/c`
   - Default to local-only entitlements and do not need a CloudKit profile
   - If running with `--cloud-entitlements`, provide a lane-specific profile and matching Apple Development identity
 
-- [ ] Preprod `MuesliPreprod` / `com.muesli.preprod`
-  - Export `MUESLI_PROVISIONING_PROFILE=/path/to/com.muesli.preprod.profile`
+- [ ] Preprod `ImlaPreprod` / `com.xshaheen.imla.preprod`
+  - Export `MUESLI_PROVISIONING_PROFILE=/path/to/com.xshaheen.imla.preprod.profile`
   - Maintainer local profile: `../muesli-ios/secrets/mueslimacospreproddeveloperidcloudkit.provisionprofile`
   - Use the Developer ID release identity unless intentionally overriding `MUESLI_SIGN_IDENTITY`
   - Verify the embedded profile carries `iCloud.com.mueslihq.muesli`
 
-- [ ] Stable `Muesli` / `com.muesli.app`
-  - Export `MUESLI_PROVISIONING_PROFILE=/path/to/com.muesli.app.profile`
+- [ ] Stable `Imla` / `com.xshaheen.imla`
+  - Export `MUESLI_PROVISIONING_PROFILE=/path/to/com.xshaheen.imla.profile`
   - Maintainer local profile: `../muesli-ios/secrets/mueslimacosproductiondeveloperidcloudkit.provisionprofile`
   - Use `Developer ID Application: <not yet available to this fork>`
   - Final app and DMG must be notarized, stapled, and accepted by Gatekeeper
@@ -56,27 +56,27 @@ If launch fails with `No matching profile found`, the embedded profile, bundle I
 ## Build & Sign
 
 - [ ] `scripts/build_native_app.sh` completes without error
-- [ ] App installed to `/Applications/Muesli.app`
-- [ ] Verify signature: `codesign -dvvv /Applications/Muesli.app 2>&1 | grep "Authority"`
+- [ ] App installed to `/Applications/Imla.app`
+- [ ] Verify signature: `codesign -dvvv /Applications/Imla.app 2>&1 | grep "Authority"`
   - Must show `Developer ID Application: <not yet available to this fork>`
 - [ ] Verify effective entitlements:
   ```bash
-  codesign -d --entitlements :- /Applications/Muesli.app | plutil -p -
+  codesign -d --entitlements :- /Applications/Imla.app | plutil -p -
   ```
   - Must show CloudKit container `iCloud.com.mueslihq.muesli`
   - Must show CloudKit environment `Production`
   - Must show APNs environment `production` when using the production Developer ID CloudKit profile
 - [ ] Verify the built app:
   ```bash
-  scripts/verify_signed_cloud_entitlements.sh /Applications/Muesli.app Production com.muesli.app iCloud.com.mueslihq.muesli production
+  scripts/verify_signed_cloud_entitlements.sh /Applications/Imla.app Production com.xshaheen.imla iCloud.com.mueslihq.muesli production
   ```
 - [ ] Mount the local DMG, then verify its app:
   ```bash
-  scripts/verify_signed_cloud_entitlements.sh /Volumes/Muesli/Muesli.app Production com.muesli.app iCloud.com.mueslihq.muesli production
+  scripts/verify_signed_cloud_entitlements.sh /Volumes/Imla/Imla.app Production com.xshaheen.imla iCloud.com.mueslihq.muesli production
   ```
 - [ ] Re-download and mount the GitHub release DMG, then verify its app with the same command:
   ```bash
-  scripts/verify_signed_cloud_entitlements.sh /Volumes/Muesli/Muesli.app Production com.muesli.app iCloud.com.mueslihq.muesli production
+  scripts/verify_signed_cloud_entitlements.sh /Volumes/Imla/Imla.app Production com.xshaheen.imla iCloud.com.mueslihq.muesli production
   ```
 - [ ] Stable and pre-production builds explicitly set `MUESLI_ICLOUD_CONTAINER_ENVIRONMENT=Production`; omission must fail closed.
 - [ ] The stable release creates a dedicated `codex/release-<version>-appcast` PR for `docs/appcast.xml`, `docs/index.html`, and `docs/llms.txt`; it must not push those files directly to `main`.
@@ -88,53 +88,53 @@ If launch fails with `No matching profile found`, the embedded profile, bundle I
 
 - [ ] **Step 1: Notarize the app bundle**
   ```bash
-  ditto -c -k --keepParent /Applications/Muesli.app Muesli-app.zip
-  xcrun notarytool submit Muesli-app.zip --keychain-profile MuesliNotary --wait
+  ditto -c -k --keepParent /Applications/Imla.app Imla-app.zip
+  xcrun notarytool submit Imla-app.zip --keychain-profile ImlaNotary --wait
   ```
   - Must show `status: Accepted`
 
 - [ ] **Step 2: Staple the app bundle**
   ```bash
-  xcrun stapler staple /Applications/Muesli.app
+  xcrun stapler staple /Applications/Imla.app
   ```
   - Must show `The staple and validate action worked!`
 
 - [ ] **Step 3: Create DMG from the STAPLED app**
   ```bash
-  ./scripts/create_dmg.sh /Applications/Muesli.app dist-release
+  ./scripts/create_dmg.sh /Applications/Imla.app dist-release
   ```
 
 - [ ] **Step 4: Notarize the DMG**
   ```bash
-  xcrun notarytool submit dist-release/Muesli-X.Y.Z.dmg --keychain-profile MuesliNotary --wait
+  xcrun notarytool submit dist-release/Imla-X.Y.Z.dmg --keychain-profile ImlaNotary --wait
   ```
   - Must show `status: Accepted`
 
 - [ ] **Step 5: Staple the DMG**
   ```bash
-  xcrun stapler staple dist-release/Muesli-X.Y.Z.dmg
+  xcrun stapler staple dist-release/Imla-X.Y.Z.dmg
   ```
 
 ## Verify (DO NOT SKIP)
 
 - [ ] **Mount the DMG and test the app inside it:**
   ```bash
-  hdiutil attach dist-release/Muesli-X.Y.Z.dmg
-  spctl -a -vv "/Volumes/Muesli/Muesli.app"
+  hdiutil attach dist-release/Imla-X.Y.Z.dmg
+  spctl -a -vv "/Volumes/Imla/Imla.app"
   ```
   - Must show `accepted` and `source=Notarized Developer ID`
   - If it shows `rejected` — the app wasn't stapled before DMG creation. Go back to step 2.
 
 - [ ] **Verify DMG has hardened runtime:**
   ```bash
-  codesign -dvvv dist-release/Muesli-X.Y.Z.dmg 2>&1 | grep "flags"
+  codesign -dvvv dist-release/Imla-X.Y.Z.dmg 2>&1 | grep "flags"
   ```
   - Must show `flags=0x10000(runtime)` — if missing, `create_dmg.sh` is broken
 
 - [ ] **Install and launch:**
   ```bash
-  cp -R "/Volumes/Muesli/Muesli.app" /Applications/Muesli.app
-  open /Applications/Muesli.app
+  cp -R "/Volumes/Imla/Imla.app" /Applications/Imla.app
+  open /Applications/Imla.app
   ```
   - No Gatekeeper warnings
   - App launches normally
@@ -142,7 +142,7 @@ If launch fails with `No matching profile found`, the embedded profile, bundle I
 
 - [ ] **Verify version:**
   ```bash
-  defaults read /Applications/Muesli.app/Contents/Info.plist CFBundleShortVersionString
+  defaults read /Applications/Imla.app/Contents/Info.plist CFBundleShortVersionString
   ```
 
 ## Release Staging
@@ -150,10 +150,10 @@ If launch fails with `No matching profile found`, the embedded profile, bundle I
 - [ ] **Create a draft GitHub Release and upload the DMG**
 - [ ] **Re-download the hosted draft DMG and verify it matches the local artifact**
   ```bash
-  gh release download vX.Y.Z -p "Muesli-X.Y.Z.dmg" -D /tmp/muesli-release-verify --clobber
-  shasum -a 256 dist-release/Muesli-X.Y.Z.dmg /tmp/muesli-release-verify/Muesli-X.Y.Z.dmg
-  spctl -a -vv -t open --context context:primary-signature /tmp/muesli-release-verify/Muesli-X.Y.Z.dmg
-  xcrun stapler validate /tmp/muesli-release-verify/Muesli-X.Y.Z.dmg
+  gh release download vX.Y.Z -p "Imla-X.Y.Z.dmg" -D /tmp/imla-release-verify --clobber
+  shasum -a 256 dist-release/Imla-X.Y.Z.dmg /tmp/imla-release-verify/Imla-X.Y.Z.dmg
+  spctl -a -vv -t open --context context:primary-signature /tmp/imla-release-verify/Imla-X.Y.Z.dmg
+  xcrun stapler validate /tmp/imla-release-verify/Imla-X.Y.Z.dmg
   ```
   - The local and hosted SHA256 hashes must match exactly
   - Must show `accepted` and `The validate action worked!`
@@ -163,7 +163,7 @@ If launch fails with `No matching profile found`, the embedded profile, bundle I
 - [ ] **Generate the new release item without replacing appcast history:**
   ```bash
   generated_appcast="$(mktemp)"
-  native/MuesliNative/.build/artifacts/sparkle/Sparkle/bin/generate_appcast \
+  native/ImlaNative/.build/artifacts/sparkle/Sparkle/bin/generate_appcast \
     dist-release/ -o "$generated_appcast"
   python3 scripts/update_appcast_release_notes.py \
     "$generated_appcast" \
@@ -186,7 +186,7 @@ If launch fails with `No matching profile found`, the embedded profile, bundle I
 
 - [ ] **Verify Sparkle update flow metadata and artifact:**
   ```bash
-  scripts/verify_update_flow.sh --version X.Y.Z --dmg dist-release/Muesli-X.Y.Z.dmg --require-notarized
+  scripts/verify_update_flow.sh --version X.Y.Z --dmg dist-release/Imla-X.Y.Z.dmg --require-notarized
   ```
 
 - [ ] **Push the appcast + download-link metadata branch:**

@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Builds and launches an isolated dev app for end-to-end testing.
 #
-# - Separate bundle ID (com.muesli.dev*) — won't interfere with production Muesli
-# - Separate data directory (~/Library/Application Support/MuesliDev*/)
+# - Separate bundle ID (com.xshaheen.imla.dev*) — won't interfere with production Imla
+# - Separate data directory (~/Library/Application Support/ImlaDev*/)
 # - Preserves existing dev config and database by default
 # - Dev builds default to local-only entitlements to preserve existing TCC
 #   permissions and avoid requiring Apple Developer profiles
@@ -13,11 +13,11 @@ set -euo pipefail
 #   maintainer signing certificate
 # - Uses a shared, worktree-isolated SwiftPM scratch path by default; set
 #   MUESLI_DISABLE_SWIFTPM_SCRATCH_PATH=1 to use package-local .build instead
-# - Installs to /Applications/MuesliDev*.app
+# - Installs to /Applications/ImlaDev*.app
 #
 # Usage:
-#   ./scripts/dev-test.sh                         # Build and launch MuesliDev
-#   ./scripts/dev-test.sh --lane A                # Build and launch MuesliDevA
+#   ./scripts/dev-test.sh                         # Build and launch ImlaDev
+#   ./scripts/dev-test.sh --lane A                # Build and launch ImlaDevA
 #   ./scripts/dev-test.sh --lane A --local-only   # Omit iCloud/APNs entitlements
 #   ./scripts/dev-test.sh --reset                 # Reset onboarding only (keeps data)
 #   MUESLI_PROVISIONING_PROFILE=/path/to/profile.provisionprofile \
@@ -25,14 +25,14 @@ set -euo pipefail
 #   MUESLI_CODESIGN_TIMESTAMP=none ./scripts/dev-test.sh --cloud-entitlements
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$ROOT/scripts/muesli_telemetry_channels.sh"
+source "$ROOT/scripts/imla_telemetry_channels.sh"
 
 usage() {
   cat <<'EOF'
-Build and launch a local Muesli dev app.
+Build and launch a local Imla dev app.
 
 Options:
-  --lane A|B|C            Build a fixed reusable dev lane: MuesliDevA/B/C.
+  --lane A|B|C            Build a fixed reusable dev lane: ImlaDevA/B/C.
   --local-only            Sign without iCloud/APNs entitlements.
                           Alias: --without-cloud-entitlements.
   --cloud-entitlements    Sign with the default cloud entitlements file.
@@ -40,17 +40,17 @@ Options:
   --reset                 Reset onboarding only for the selected lane.
   --help                  Show this help text.
 
-Default behavior without --lane is unchanged for the app identity: MuesliDev,
-com.muesli.dev, ~/Library/Application Support/MuesliDev, and
-/Applications/MuesliDev.app. Dev builds use local-only entitlements unless
+Default behavior without --lane is unchanged for the app identity: ImlaDev,
+com.xshaheen.imla.dev, ~/Library/Application Support/ImlaDev, and
+/Applications/ImlaDev.app. Dev builds use local-only entitlements unless
 --cloud-entitlements is provided.
 
 Cloud-entitled dev builds require a provisioning profile whose app identifier
 matches the selected bundle ID and a signing identity included by that profile.
-Cloud-entitled MuesliDev builds always use the CloudKit Development environment;
+Cloud-entitled ImlaDev builds always use the CloudKit Development environment;
 only production/preproduction release builds may use CloudKit Production.
-For the maintainer's plain MuesliDev lane, this script auto-selects the local
-com.muesli.dev CloudKit profile from ../muesli-ios/secrets when
+For the maintainer's plain ImlaDev lane, this script auto-selects the local
+com.xshaheen.imla.dev CloudKit profile from ../muesli-ios/secrets when
 --cloud-entitlements is provided and the profile exists.
 EOF
 }
@@ -63,7 +63,7 @@ ENTITLEMENTS_MODE_EXPLICIT=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --clean)
-      echo "Error: --clean has been removed because it deletes MuesliDev data." >&2
+      echo "Error: --clean has been removed because it deletes ImlaDev data." >&2
       echo "To test a fresh profile, create a named backup first and use a separate support directory." >&2
       exit 2
       ;;
@@ -104,14 +104,14 @@ done
 
 case "$LANE" in
   "")
-    DEV_APP_NAME="MuesliDev"
-    DEV_BUNDLE_ID="com.muesli.dev"
+    DEV_APP_NAME="ImlaDev"
+    DEV_BUNDLE_ID="com.xshaheen.imla.dev"
     ;;
   A|a|B|b|C|c)
     LANE_UPPER="$(printf '%s' "$LANE" | tr '[:lower:]' '[:upper:]')"
     LANE_LOWER="$(printf '%s' "$LANE" | tr '[:upper:]' '[:lower:]')"
-    DEV_APP_NAME="MuesliDev${LANE_UPPER}"
-    DEV_BUNDLE_ID="com.muesli.dev.${LANE_LOWER}"
+    DEV_APP_NAME="ImlaDev${LANE_UPPER}"
+    DEV_BUNDLE_ID="com.xshaheen.imla.dev.${LANE_LOWER}"
     ;;
   *)
     echo "Error: unsupported lane '$LANE'. Allowed lanes: A, B, C." >&2
@@ -131,7 +131,7 @@ DEFAULT_DEV_CLOUD_SIGN_IDENTITY="Apple Development: mxshaheen@icloud.com (AMM3J8
 RESOLVED_PROVISIONING_PROFILE="${MUESLI_PROVISIONING_PROFILE:-}"
 RESOLVED_SIGN_IDENTITY="${MUESLI_SIGN_IDENTITY:-}"
 RESOLVED_CODESIGN_TIMESTAMP="${MUESLI_CODESIGN_TIMESTAMP:-}"
-# Build the app via xcodebuild (native/MuesliXcode) by default so App Intents
+# Build the app via xcodebuild (native/ImlaXcode) by default so App Intents
 # metadata is generated and Shortcuts/Siri actions are actually discoverable
 # in dev builds. Requires xcodegen (brew install xcodegen). Set
 # MUESLI_USE_XCODE_BUILD=0 to fall back to the plain `swift build` path if
@@ -157,7 +157,7 @@ use_local_only_entitlements() {
   RESOLVED_SIGN_IDENTITY=""
   RESOLVED_CODESIGN_TIMESTAMP=""
   BUILD_ENV+=(
-    MUESLI_ENTITLEMENTS="$ROOT/scripts/MuesliLocalOnly.entitlements"
+    MUESLI_ENTITLEMENTS="$ROOT/scripts/ImlaLocalOnly.entitlements"
     MUESLI_PROVISIONING_PROFILE=""
     MUESLI_APS_ENVIRONMENT=""
   )
@@ -170,12 +170,12 @@ case "$ENTITLEMENTS_MODE" in
   cloud)
     REQUESTED_CLOUDKIT_ENVIRONMENT="${MUESLI_ICLOUD_CONTAINER_ENVIRONMENT:-Development}"
     if [[ "$(printf '%s' "$REQUESTED_CLOUDKIT_ENVIRONMENT" | tr '[:upper:]' '[:lower:]')" != "development" ]]; then
-      echo "Error: MuesliDev builds must use the CloudKit Development environment." >&2
-      echo "Use the production Muesli release workflow for CloudKit Production." >&2
+      echo "Error: ImlaDev builds must use the CloudKit Development environment." >&2
+      echo "Use the production Imla release workflow for CloudKit Production." >&2
       exit 2
     fi
     BUILD_ENV+=(MUESLI_ICLOUD_CONTAINER_ENVIRONMENT="Development")
-    if [[ -z "$RESOLVED_PROVISIONING_PROFILE" && "$DEV_BUNDLE_ID" == "com.muesli.dev" && -f "$DEFAULT_DEV_CLOUD_PROFILE" ]]; then
+    if [[ -z "$RESOLVED_PROVISIONING_PROFILE" && "$DEV_BUNDLE_ID" == "com.xshaheen.imla.dev" && -f "$DEFAULT_DEV_CLOUD_PROFILE" ]]; then
       RESOLVED_PROVISIONING_PROFILE="$DEFAULT_DEV_CLOUD_PROFILE"
       if [[ -z "$RESOLVED_SIGN_IDENTITY" ]]; then
         RESOLVED_SIGN_IDENTITY="$DEFAULT_DEV_CLOUD_SIGN_IDENTITY"
@@ -259,7 +259,7 @@ echo ""
 echo "=== Dev Test Ready ==="
 echo "  App: $DEV_APP"
 echo "  Data: $DEV_SUPPORT_DIR"
-echo "  DB: $DEV_SUPPORT_DIR/muesli.db"
+echo "  DB: $DEV_SUPPORT_DIR/imla.db"
 echo ""
 echo "Tips:"
 if [[ -n "$LANE" ]]; then

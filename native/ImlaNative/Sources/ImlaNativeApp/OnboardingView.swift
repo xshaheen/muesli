@@ -1,0 +1,2632 @@
+import AVFoundation
+import ApplicationServices
+import SwiftUI
+import ImlaCore
+
+struct OnboardingView: View {
+    let controller: ImlaController
+    let appState: AppState
+
+    @State private var currentStep: Int
+    @State private var userName: String
+    @State private var selectedUseCase: OnboardingUseCase
+    @State private var selectedBackend: BackendOption
+    @State private var selectedCohereLanguage: CohereTranscribeLanguage
+    @State private var summaryBackend: MeetingSummaryBackendOption = .chatGPT
+    @State private var apiKey = ""
+    @State private var isSigningInChatGPT = false
+    @State private var chatGPTSignInDone = false
+    @State private var chatGPTSignInError: String?
+    @State private var isSigningInOpenRouter = false
+    @State private var openRouterSignInDone = false
+    @State private var openRouterSignInError: String?
+    @State private var isEnteringOpenRouterAPIKey = false
+
+    // Permission states — polled from OS every second
+    @State private var micGranted = false
+    @State private var accessibilityGranted = false
+    @State private var inputMonitoringGranted = false
+    @State private var screenRecordingGranted = false
+    @State private var systemAudioGranted = false
+    @State private var permissionPollTimer: Timer?
+    @State private var grantingPermissionName: String?
+    @State private var nativePermissionPromptName: String?
+    @State private var recentlyGrantedPermissionName: String?
+    @State private var permissionAdvanceTask: Task<Void, Never>?
+    @State private var permissionAdvanceGeneration: UUID?
+    @State private var hasCompletedPermissionsStep: Bool
+    @State private var selectionBeforeEverything: OnboardingUseCase?
+
+    // Hotkey recorder
+    @State private var selectedHotkey: HotkeyConfig
+    @State private var isRecordingHotkey = false
+    @State private var hotkeyEventMonitor: Any?
+
+    // Model selection
+    @State private var showMoreModels = false
+
+    // Dictation test
+    @State private var isDictationTesting = false
+    @State private var isDictationTestMonitorActive = false
+    @State private var dictationTestResult: String?
+    @State private var dictationTestError: String?
+    @State private var isModelStillDownloading = false
+    @State private var modelReadyBackend: BackendOption?
+    @State private var modelDownloadBackend: BackendOption?
+    @State private var modelDownloadTask: Task<Void, Never>?
+    @State private var modelDownloadGeneration = UUID()
+    @State private var modelDownloadProgress: Double?
+    @State private var modelDownloadSnapshot: ModelDownloadProgress?
+    @State private var isModelPreparingAfterDownload = false
+    @State private var modelDownloadStatus: String?
+    @State private var modelDownloadError: String?
+    @State private var modelReadyIndicatorBackend: BackendOption?
+    @State private var modelReadyIndicatorTask: Task<Void, Never>?
+
+    @State private var hasFinishedOnboarding = false
+
+    static let permissionsStep = OnboardingFlow.Step.permissions.rawValue
+    static let dictationTestStep = OnboardingFlow.dictationTestStep
+    private static let bundledImlaLogo: NSImage = {
+        if let url = Bundle.main.url(forResource: "imla_app_icon", withExtension: "png"),
+           let image = NSImage(contentsOf: url) {
+            return image
+        }
+        return NSApplication.shared.applicationIconImage
+    }()
+
+    private var orderedSteps: [Int] {
+        OnboardingFlow.orderedSteps(for: selectedUseCase)
+    }
+
+    private var currentStepIndex: Int {
+        OnboardingFlow.stepIndex(currentStep, for: selectedUseCase)
+    }
+
+    private var totalSteps: Int {
+        orderedSteps.count
+    }
+
+    private var onboardingAlternativeModels: [BackendOption] {
+        var options = BackendOption.onboarding.filter { $0 != BackendOption.onboardingDefault }
+        if BackendOption.onboarding.contains(selectedBackend),
+           selectedBackend != BackendOption.onboardingDefault,
+           !options.contains(selectedBackend) {
+            options.insert(selectedBackend, at: 0)
+        }
+        return options
+    }
+
+    private var onboardingModelDescription: String {
+        "Start with a fast local model. Larger models can download while you continue setup."
+    }
+
+    init(
+        controller: ImlaController,
+        appState: AppState,
+        initialStep: Int = 0,
+        initialUserName: String = "",
+        initialBackend: BackendOption = BackendOption.onboardingDefault,
+        initialCohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
+        initialHotkey: HotkeyConfig = .default,
+        initialSystemAudioRequested: Bool = false,
+        initialUseCase: OnboardingUseCase = .dictation,
+        initialSummaryBackend: MeetingSummaryBackendOption = .chatGPT,
+        initialModelDownloadProgress: Double? = nil,
+        initialModelDownloadStatus: String? = nil
+    ) {
+        self.controller = controller
+        self.appState = appState
+        // Pre-populate permission states so resumed onboarding reflects grants
+        // that happened before the deliberate restart.
+        let initialMicGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        let initialAccessibilityGranted = AXIsProcessTrusted()
+        let initialInputMonitoringGranted = CGPreflightListenEventAccess()
+        let initialScreenRecordingGranted = CGPreflightScreenCaptureAccess()
+        let initialSystemAudioGranted = initialSystemAudioRequested
+        let initialPermissions = OnboardingPermissionSnapshot(
+            microphone: initialMicGranted,
+            accessibility: initialAccessibilityGranted,
+            inputMonitoring: initialInputMonitoringGranted,
+            systemAudio: initialSystemAudioGranted,
+            screenRecording: initialScreenRecordingGranted
+        )
+        let permissionGatedInitialStep = OnboardingPermissionGate.resumeStep(
+            requestedStep: initialStep,
+            permissions: initialPermissions,
+            useCase: initialUseCase,
+            permissionsStep: Self.permissionsStep,
+            dictationTestStep: Self.dictationTestStep,
+            useCoreAudioTap: appState.config.useCoreAudioTap
+        )
+        let sanitizedInitialBackend = BackendOption.resolvedOnboardingBackend(initialBackend)
+        let modelGatedInitialStep = OnboardingFlow.modelGatedResumeStep(
+            requestedStep: permissionGatedInitialStep,
+            initialBackend: initialBackend,
+            resolvedBackend: sanitizedInitialBackend
+        )
+        let effectiveInitialStep = OnboardingFlow.normalizedStep(modelGatedInitialStep, for: initialUseCase)
+
+        _currentStep = State(initialValue: effectiveInitialStep)
+        _hasCompletedPermissionsStep = State(initialValue: OnboardingFlow.hasCompletedPermissionsStep(
+            resumingAt: effectiveInitialStep
+        ))
+        _userName = State(initialValue: initialUserName)
+        _selectedUseCase = State(initialValue: initialUseCase)
+        _selectedBackend = State(initialValue: sanitizedInitialBackend)
+        _selectedCohereLanguage = State(initialValue: initialCohereLanguage)
+        _selectedHotkey = State(initialValue: initialHotkey)
+        _summaryBackend = State(initialValue: initialSummaryBackend)
+        _modelDownloadProgress = State(initialValue: sanitizedInitialBackend == initialBackend ? initialModelDownloadProgress : nil)
+        _modelDownloadStatus = State(initialValue: sanitizedInitialBackend == initialBackend ? initialModelDownloadStatus : nil)
+        _micGranted = State(initialValue: initialMicGranted)
+        _accessibilityGranted = State(initialValue: initialAccessibilityGranted)
+        _inputMonitoringGranted = State(initialValue: initialInputMonitoringGranted)
+        _screenRecordingGranted = State(initialValue: initialScreenRecordingGranted)
+        _systemAudioGranted = State(initialValue: initialSystemAudioGranted)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Group {
+                switch currentStep {
+                case 0: welcomeStep
+                case 1: modelStep
+                case 2: hotkeyStep
+                case 3: permissionsStep
+                case 4: dictationTestStep
+                case 5: meetingSummaryStep
+                case 6: calendarAccessStep
+                default: EmptyView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Divider().background(ImlaTheme.surfaceBorder)
+
+            // Bottom bar
+            HStack {
+                HStack(spacing: 6) {
+                    ForEach(Array(orderedSteps.enumerated()), id: \.offset) { _, step in
+                        Circle()
+                            .fill(step == currentStep ? ImlaTheme.accent : ImlaTheme.textTertiary)
+                            .frame(width: 7, height: 7)
+                    }
+                }
+
+                Spacer()
+
+                HStack(spacing: ImlaTheme.spacing12) {
+                    if canGoBack {
+                        Button("Back") {
+                            goToPreviousStep()
+                        }
+                        .buttonStyle(.plain)
+                        .font(ImlaTheme.body())
+                        .foregroundStyle(ImlaTheme.textSecondary)
+                        .padding(.horizontal, ImlaTheme.spacing16)
+                        .padding(.vertical, ImlaTheme.spacing8)
+                        .background(ImlaTheme.surfacePrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                                .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+                        )
+                    }
+
+                    primaryButton
+                }
+            }
+            .padding(.horizontal, ImlaTheme.spacing32)
+            .padding(.vertical, ImlaTheme.spacing16)
+        }
+        .background(ImlaTheme.backgroundBase)
+        .preferredColorScheme(.dark)
+        .onAppear {
+            saveProgress(atStep: currentStep)
+        }
+        .onChange(of: currentStep) { _, step in
+            saveProgress(atStep: step)
+        }
+        .onChange(of: userName) { _, _ in
+            saveProgress(atStep: currentStep)
+        }
+        .onChange(of: selectedUseCase) { previousUseCase, newUseCase in
+            if previousUseCase != newUseCase {
+                hasCompletedPermissionsStep = false
+            }
+            if !orderedSteps.contains(currentStep) {
+                currentStep = OnboardingFlow.normalizedStep(currentStep, for: selectedUseCase)
+            }
+            resetModelDownloadForBackendChange()
+            saveProgress(atStep: currentStep)
+        }
+        .onChange(of: selectedBackend) { _, _ in
+            resetModelDownloadForBackendChange()
+            saveProgress(atStep: currentStep)
+        }
+        .onChange(of: selectedCohereLanguage) { _, _ in
+            saveProgress(atStep: currentStep)
+        }
+        .onChange(of: modelReadyBackend) { _, _ in
+            startDictationTestMonitorIfReady()
+        }
+        .onChange(of: isModelStillDownloading) { _, _ in
+            startDictationTestMonitorIfReady()
+        }
+        .overlay(alignment: .topTrailing) {
+            if shouldShowModelDownloadIndicator {
+                modelDownloadIndicator
+                    .padding(.top, ImlaTheme.spacing16)
+                    .padding(.trailing, ImlaTheme.spacing16)
+            }
+        }
+    }
+
+    // MARK: - Primary Button
+
+    @ViewBuilder
+    private var primaryButton: some View {
+        switch currentStep {
+        case 0:
+            onboardingButton("Continue", enabled: !userName.trimmingCharacters(in: .whitespaces).isEmpty) {
+                goToNextStep()
+            }
+        case 1:
+            onboardingButton(selectedBackend.isDownloaded ? "Continue" : "Download & Continue", enabled: selectedBackend.isCompatible()) {
+                startDownload()
+            }
+        case 2:
+            onboardingButton("Continue", enabled: true) {
+                goToNextStep()
+            }
+        case 3:
+            onboardingButton(currentStepIndex == orderedSteps.count - 1 ? "Finish" : "Continue", enabled: requiredPermissionsGranted) {
+                advancePastPermissions()
+            }
+        case 4:
+            if dictationTestResult != nil {
+                onboardingButton(selectedUseCase.includesMeetings ? "Continue" : "Finish", enabled: true) {
+                    if selectedUseCase.includesMeetings {
+                        goToNextStep()
+                    } else {
+                        finishOnboarding(withKey: false)
+                    }
+                }
+            } else {
+                HStack(spacing: ImlaTheme.spacing12) {
+                    skipButton {
+                        if selectedUseCase.includesMeetings {
+                            goToNextStep()
+                        } else {
+                            finishOnboarding(withKey: false)
+                        }
+                    }
+                    onboardingButton(selectedUseCase.includesMeetings ? "Continue" : "Finish", enabled: false) {
+                        if selectedUseCase.includesMeetings {
+                            goToNextStep()
+                        } else {
+                            finishOnboarding(withKey: false)
+                        }
+                    }
+                }
+            }
+        case 5:
+            HStack(spacing: ImlaTheme.spacing12) {
+                skipButton { goToNextStep() }
+                onboardingButton("Continue", enabled: true) { goToNextStep() }
+            }
+        case 6:
+            HStack(spacing: ImlaTheme.spacing12) {
+                skipButton("Not now") { finishOnboarding(withKey: true) }
+                onboardingButton("Finish", enabled: true) {
+                    finishOnboarding(withKey: true)
+                }
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private func goToNextStep() {
+        guard currentStepIndex < orderedSteps.count - 1 else { return }
+        withAnimation(ImlaTheme.Motion.eased(0.2)) {
+            currentStep = orderedSteps[currentStepIndex + 1]
+        }
+    }
+
+    private func goToPreviousStep() {
+        guard currentStepIndex > 0 else { return }
+        withAnimation(ImlaTheme.Motion.eased(0.2)) {
+            currentStep = orderedSteps[currentStepIndex - 1]
+        }
+    }
+
+    @ViewBuilder
+    private func onboardingButton(_ title: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(ImlaTheme.font(size: 14, weight: .medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, ImlaTheme.spacing20)
+                .padding(.vertical, ImlaTheme.spacing8)
+                .background(enabled ? ImlaTheme.accent : ImlaTheme.accent.opacity(0.4))
+                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
+    @ViewBuilder
+    private func skipButton(_ title: String = "Skip", action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(ImlaTheme.body())
+            .foregroundStyle(ImlaTheme.textSecondary)
+            .padding(.horizontal, ImlaTheme.spacing16)
+            .padding(.vertical, ImlaTheme.spacing8)
+            .background(ImlaTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                    .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+            )
+    }
+
+    private var shouldShowModelDownloadIndicator: Bool {
+        isModelStillDownloading || modelDownloadError != nil || isShowingModelReadyIndicator
+    }
+
+    private var isShowingModelReadyIndicator: Bool {
+        modelReadyIndicatorBackend == selectedBackend && !isModelStillDownloading && modelDownloadError == nil
+    }
+
+    private var isSelectedModelReadyForDictationTest: Bool {
+        modelReadyBackend == selectedBackend && !isModelStillDownloading && modelDownloadError == nil
+    }
+
+    private var canGoBack: Bool {
+        OnboardingFlow.canGoBack(
+            from: currentStep,
+            useCase: selectedUseCase,
+            dictationTestSucceeded: dictationTestResult != nil
+        )
+    }
+
+    private var modelDownloadIndicator: some View {
+        let progress = modelDownloadProgress.map { min(max($0, 0), 1) }
+        return HStack(spacing: 8) {
+            ZStack {
+                Circle()
+                    .fill(ImlaTheme.surfaceBorder)
+                    .frame(width: 24, height: 24)
+
+                if isModelPreparingAfterDownload {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .frame(width: 24, height: 24)
+                } else if let progress {
+                    ModelDownloadProgressShape(progress: progress)
+                        .fill(ImlaTheme.accent)
+                        .frame(width: 24, height: 24)
+
+                    Circle()
+                        .stroke(ImlaTheme.accent.opacity(0.7), lineWidth: 1)
+                        .frame(width: 24, height: 24)
+                } else {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .frame(width: 24, height: 24)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(modelDownloadIndicatorTitle)
+                    .font(ImlaTheme.font(size: 11, weight: .semibold))
+                    .foregroundStyle(modelDownloadError == nil ? ImlaTheme.textSecondary : ImlaTheme.danger)
+                    .lineLimit(1)
+                Text(modelDownloadIndicatorDetail(progress: progress))
+                    .font(ImlaTheme.font(size: 10, weight: .medium))
+                    .foregroundStyle(ImlaTheme.textTertiary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(ImlaTheme.backgroundRaised.opacity(0.94))
+        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.28), radius: 12, x: 0, y: 6)
+        .frame(width: 260, alignment: .leading)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+        .animation(ImlaTheme.Motion.eased(0.2), value: shouldShowModelDownloadIndicator)
+    }
+
+    private var modelDownloadIndicatorTitle: String {
+        if let snapshot = modelDownloadSnapshot {
+            switch snapshot.phase {
+            case .downloading: return "Downloading \(selectedBackend.label)"
+            case .preparing: return "Preparing \(selectedBackend.label)"
+            case .ready: return "\(selectedBackend.label) ready"
+            case .paused: return "Download paused"
+            case .failed: return "Download failed"
+            }
+        }
+        if modelDownloadError != nil {
+            return "Download failed"
+        }
+        if isShowingModelReadyIndicator {
+            return "\(selectedBackend.label) ready"
+        }
+        return "Preparing \(selectedBackend.label)"
+    }
+
+    private func modelDownloadIndicatorDetail(progress: Double?) -> String {
+        if let modelDownloadError {
+            return modelDownloadError
+        }
+        if isShowingModelReadyIndicator {
+            return "Ready to test"
+        }
+        if let snapshot = modelDownloadSnapshot {
+            return modelDownloadSnapshotDetail(snapshot)
+        }
+        if let modelDownloadStatus {
+            return modelDownloadStatus
+        }
+        if let progress {
+            return "\(Int((progress * 100).rounded()))% complete"
+        }
+        return "Downloading..."
+    }
+
+    private func modelDownloadSnapshotDetail(_ snapshot: ModelDownloadProgress) -> String {
+        var details: [String] = []
+        if let currentFile = snapshot.currentFile?.split(separator: "/").last.map(String.init), !currentFile.isEmpty {
+            details.append(currentFile)
+        }
+        if snapshot.totalFileCount > 0 {
+            let completed = min(max(snapshot.completedFileCount, 0), snapshot.totalFileCount)
+            let remaining = snapshot.totalFileCount - completed
+            details.append("\(completed) of \(snapshot.totalFileCount) files")
+            if remaining > 0 {
+                details.append("\(remaining) left")
+            }
+        }
+        if let total = snapshot.totalBytes, total > 0 {
+            details.append("\(ModelDownloadDisplayFormatting.bytes(snapshot.completedBytes)) / \(ModelDownloadDisplayFormatting.bytes(total))")
+            if snapshot.completedBytes < total {
+                details.append("\(ModelDownloadDisplayFormatting.bytes(total - snapshot.completedBytes)) left")
+            }
+        } else if let currentTotal = snapshot.currentFileTotalBytes, currentTotal > 0 {
+            details.append("\(ModelDownloadDisplayFormatting.bytes(snapshot.currentFileCompletedBytes)) / \(ModelDownloadDisplayFormatting.bytes(currentTotal))")
+            if snapshot.currentFileCompletedBytes < currentTotal {
+                details.append("\(ModelDownloadDisplayFormatting.bytes(currentTotal - snapshot.currentFileCompletedBytes)) left")
+            }
+        }
+        if snapshot.phase == .downloading {
+            if snapshot.bytesPerSecond > 0 {
+                details.append(ModelDownloadDisplayFormatting.rate(snapshot.bytesPerSecond))
+            }
+            if let eta = snapshot.estimatedSecondsRemaining,
+               let formattedETA = ModelDownloadDisplayFormatting.eta(eta) {
+                details.append("\(formattedETA) left")
+            }
+            if snapshot.retryCount > 0 {
+                details.append("retry \(snapshot.retryCount)/3")
+            }
+        } else if let message = snapshot.message, !message.isEmpty {
+            details.append(message)
+        }
+        return details.isEmpty ? (snapshot.message ?? "Downloading...") : details.joined(separator: " · ")
+    }
+
+    private var dictationTestSubtitle: AttributedString {
+        let markdown: String
+        if isSelectedModelReadyForDictationTest {
+            markdown = selectedUseCase.includesVoiceNotes && !selectedUseCase.includesDictation
+                ? "Hold **\(selectedHotkey.label)** to record a voice note, then release.\nYour words should appear below."
+                : "Hold **\(selectedHotkey.label)** and say something, then release.\nYour words should appear below."
+        } else {
+            markdown = dictationTestPreparationSubtitleMarkdown
+        }
+        return (try? AttributedString(markdown: markdown)) ?? AttributedString(markdown.replacingOccurrences(of: "**", with: ""))
+    }
+
+    private var dictationTestPreparationSubtitleMarkdown: String {
+        let unlockCopy = selectedUseCase.includesVoiceNotes && !selectedUseCase.includesDictation
+            ? "Voice note test"
+            : "Dictation"
+        if isModelPreparingAfterDownload {
+            return "Optimizing **\(selectedBackend.label)** for this Mac.\n\(unlockCopy) will unlock when it is ready."
+        }
+        return "Preparing **\(selectedBackend.label)** for your first test.\n\(unlockCopy) will unlock when the model is ready."
+    }
+
+    private var modelPreparationHints: [String] {
+        if selectedBackend.backend == "whisper" {
+            return [
+                "Compiling CoreML files for the Neural Engine",
+                "Preparing the first dictation test",
+                "Future launches will skip most of this",
+                "We'll bring Imla forward when ready",
+            ]
+        }
+        return [
+            "Preparing the first dictation test",
+            "Future launches will skip most of this",
+            "We'll bring Imla forward when ready",
+        ]
+    }
+
+    // MARK: - Step 1: Welcome
+
+    private var welcomeStep: some View {
+        VStack(spacing: ImlaTheme.spacing16) {
+            Spacer()
+
+            Image(nsImage: Self.bundledImlaLogo)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 64, height: 64)
+                .accessibilityLabel("Imla")
+
+            VStack(spacing: ImlaTheme.spacing8) {
+                Text("Welcome to Imla")
+                    .font(ImlaTheme.title1())
+                    .foregroundStyle(ImlaTheme.textPrimary)
+
+                Text("Local-first dictation and meeting transcription for macOS.")
+                    .font(ImlaTheme.body())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+            }
+
+            VStack(alignment: .leading, spacing: ImlaTheme.spacing8) {
+                Text("Your name")
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textTertiary)
+
+                OnboardingTextField(text: $userName, placeholder: "Enter your name", onSubmit: {
+                    if !userName.trimmingCharacters(in: .whitespaces).isEmpty {
+                        goToNextStep()
+                    }
+                })
+                    .frame(width: 280, height: 32)
+            }
+
+            VStack(spacing: ImlaTheme.spacing8) {
+                Text("What will you use Imla for?")
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textTertiary)
+
+                LazyVGrid(
+                    columns: [
+                        GridItem(.fixed(132), spacing: ImlaTheme.spacing8),
+                        GridItem(.fixed(132), spacing: ImlaTheme.spacing8),
+                    ],
+                    spacing: ImlaTheme.spacing8
+                ) {
+                    useCaseCard(
+                        icon: "waveform",
+                        title: "Voice Notes",
+                        subtitle: "Record in Imla",
+                        selected: selectedUseCase.includesVoiceNotes
+                    ) {
+                        toggleCapability(.voiceNotes)
+                    }
+
+                    useCaseCard(
+                        icon: "keyboard.fill",
+                        title: "Dictation",
+                        subtitle: "Paste into apps",
+                        selected: selectedUseCase.includesDictation
+                    ) {
+                        toggleCapability(.dictation)
+                    }
+
+                    useCaseCard(
+                        icon: "person.2.fill",
+                        title: "Meetings",
+                        subtitle: "Notes and summaries",
+                        selected: selectedUseCase.includesMeetings
+                    ) {
+                        toggleCapability(.meetings)
+                    }
+
+                    useCaseCard(
+                        icon: "rectangle.3.group.fill",
+                        title: "Everything",
+                        subtitle: "All workflows",
+                        selected: selectedUseCase == .everything
+                    ) {
+                        toggleEverything()
+                    }
+                }
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func useCaseCard(
+        icon: String,
+        title: String,
+        subtitle: String,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .medium))
+                Text(title)
+                    .font(ImlaTheme.font(size: 12, weight: .semibold))
+                Text(subtitle)
+                    .font(ImlaTheme.font(size: 10))
+                    .foregroundStyle(selected ? .white.opacity(0.72) : ImlaTheme.textTertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .foregroundStyle(selected ? .white : ImlaTheme.textSecondary)
+            .frame(width: 132, height: 74)
+            .background(selected ? ImlaTheme.accent : ImlaTheme.backgroundRaised)
+            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                    .strokeBorder(selected ? ImlaTheme.accent : ImlaTheme.surfaceBorder, lineWidth: 1)
+            )
+            .overlay(alignment: .topLeading) {
+                if selected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(7)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.18), value: selected)
+    }
+
+    // MARK: - Step 2: Model Selection
+
+    private var modelStep: some View {
+        VStack(spacing: ImlaTheme.spacing16) {
+            VStack(spacing: ImlaTheme.spacing8) {
+                Text("Choose your transcription model")
+                    .font(ImlaTheme.title1())
+                    .foregroundStyle(ImlaTheme.textPrimary)
+
+                Text(onboardingModelDescription)
+                    .font(ImlaTheme.body())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.top, ImlaTheme.spacing24)
+
+            ScrollView {
+                VStack(spacing: ImlaTheme.spacing8) {
+                    modelCard(option: BackendOption.onboardingDefault)
+
+                    Button {
+                        withAnimation(ImlaTheme.Motion.eased(0.2)) {
+                            showMoreModels.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("Other models")
+                                .font(ImlaTheme.caption())
+                            Image(systemName: showMoreModels ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, ImlaTheme.spacing4)
+
+                    if showMoreModels {
+                        ForEach(onboardingAlternativeModels, id: \.model) { option in
+                            modelCard(option: option)
+                        }
+
+                        Text("More models are available after onboarding.")
+                            .font(ImlaTheme.font(size: 11, weight: .medium))
+                            .foregroundStyle(ImlaTheme.textTertiary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, ImlaTheme.spacing4)
+                    }
+
+                    if selectedBackend.backend == BackendOption.cohereTranscribe.backend {
+                        cohereLanguageCard
+                    }
+                }
+                .padding(.horizontal, ImlaTheme.spacing32)
+            }
+
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var cohereLanguageCard: some View {
+        VStack(alignment: .leading, spacing: ImlaTheme.spacing8) {
+            Text("Cohere language")
+                .font(ImlaTheme.headline())
+                .foregroundStyle(ImlaTheme.textPrimary)
+
+            Text("Cohere does not auto-detect language, so pick the language you want it to transcribe.")
+                .font(ImlaTheme.caption())
+                .foregroundStyle(ImlaTheme.textSecondary)
+
+            FixedWidthPopUp(
+                selection: selectedCohereLanguage.label,
+                options: CohereTranscribeLanguage.allCases.map(\.label)
+            ) { label in
+                guard let language = CohereTranscribeLanguage.allCases.first(where: { $0.label == label }) else { return }
+                selectedCohereLanguage = language
+            }
+            .frame(height: 24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(ImlaTheme.spacing12)
+        .background(ImlaTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerMedium, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: ImlaTheme.cornerMedium, style: .continuous)
+                .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+        )
+        .padding(.top, ImlaTheme.spacing8)
+    }
+
+    private func modelCard(option: BackendOption) -> some View {
+        let isSelected = selectedBackend == option
+        let incompatibilityReason = option.incompatibilityReason()
+        return Button {
+            guard option.isCompatible() else { return }
+            selectedBackend = option
+        } label: {
+            HStack(spacing: ImlaTheme.spacing12) {
+                Circle()
+                    .fill(isSelected ? ImlaTheme.accent : Color.clear)
+                    .frame(width: 16, height: 16)
+                    .overlay(
+                        Circle()
+                            .strokeBorder(isSelected ? ImlaTheme.accent : ImlaTheme.textTertiary, lineWidth: 1.5)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(option.label)
+                            .font(ImlaTheme.headline())
+                            .foregroundStyle(incompatibilityReason == nil ? ImlaTheme.textPrimary : ImlaTheme.textTertiary)
+                        if option == BackendOption.onboardingDefault {
+                            Text("Recommended")
+                                .font(ImlaTheme.font(size: 9, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(ImlaTheme.accent)
+                                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                        }
+                        Text(option.sizeLabel)
+                            .font(ImlaTheme.caption())
+                            .foregroundStyle(ImlaTheme.textTertiary)
+                    }
+                    Text(option.description)
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(incompatibilityReason == nil ? ImlaTheme.textSecondary : ImlaTheme.textTertiary)
+                    if let incompatibilityReason {
+                        Label(incompatibilityReason, systemImage: "exclamationmark.triangle")
+                            .font(ImlaTheme.caption())
+                            .foregroundStyle(ImlaTheme.textTertiary)
+                    }
+                }
+
+                Spacer()
+            }
+            .padding(ImlaTheme.spacing12)
+            .background(ImlaTheme.backgroundRaised)
+            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerMedium, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: ImlaTheme.cornerMedium, style: .continuous)
+                    .strokeBorder(isSelected ? ImlaTheme.accent : ImlaTheme.surfaceBorder, lineWidth: isSelected ? 1.5 : 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(incompatibilityReason != nil)
+        .help(incompatibilityReason ?? option.label)
+    }
+
+    // MARK: - Step 3: Permissions (sequential, one at a time)
+
+    /// The ordered list of permissions to grant during onboarding.
+    /// Request the permission union for the capabilities selected during setup.
+    /// Screen Recording remains optional because it enriches meeting context but
+    /// is not required to capture the meeting's audio.
+    private var permissionSteps: [(icon: String, name: String, description: String, granted: Bool, action: () -> Void)] {
+        var steps: [(String, String, String, Bool, () -> Void)] = [
+            ("mic.fill", "Microphone", "Record audio for voice notes, dictation, and meetings", micGranted, {
+                AVCaptureDevice.requestAccess(for: .audio) { _ in }
+            })
+        ]
+        if selectedUseCase.includesPushToTalk {
+            if selectedUseCase.includesDictation {
+                steps += [
+                    ("hand.raised.fill", "Accessibility", "Paste transcribed text into other apps", accessibilityGranted, requestAccessibilityPermission),
+                ]
+            }
+            steps += [
+            ("keyboard.fill", "Input Monitoring", "Detect hotkey for push-to-talk recording", inputMonitoringGranted, {
+                self.controller.beginSystemPermissionGuide(for: .inputMonitoring)
+                if !CGRequestListenEventAccess() {
+                    self.openSystemSettings(
+                        "Privacy_ListenEvent",
+                        yieldBehavior: OnboardingSystemSettingsYieldPolicy.behavior(for: .inputMonitoring)
+                    )
+                }
+            }),
+            ]
+        }
+        if selectedUseCase.includesMeetings {
+            if appState.config.useCoreAudioTap {
+                steps.append((
+                    "speaker.wave.2.fill",
+                    "System Audio",
+                    "Capture meeting audio from other participants",
+                    systemAudioGranted,
+                    {
+                        Task {
+                            let granted = await CoreAudioSystemRecorder.requestSystemAudioAccess()
+                            await MainActor.run {
+                                self.systemAudioGranted = granted
+                                if granted {
+                                    self.notePermissionGranted("System Audio")
+                                } else {
+                                    self.saveProgress(atStep: self.currentStep)
+                                }
+                            }
+                        }
+                    }
+                ))
+            } else {
+                steps.append((
+                    "rectangle.dashed.badge.record",
+                    "Screen & System Audio",
+                    "Capture meeting audio from other participants",
+                    screenRecordingGranted,
+                    { CGRequestScreenCaptureAccess() }
+                ))
+            }
+        }
+        return steps
+    }
+
+    /// Index of the current permission being requested.
+    private var currentPermissionIndex: Int {
+        for (i, step) in permissionSteps.enumerated() {
+            if !step.granted { return i }
+        }
+        return permissionSteps.count
+    }
+
+    private var permissionsStep: some View {
+        let steps = permissionSteps
+        let idx = currentPermissionIndex
+        let total = steps.count
+        let confirmationIndex = recentlyGrantedPermissionName.flatMap { grantedName in
+            steps.firstIndex { $0.name == grantedName }
+        }
+        let displayIndex = confirmationIndex ?? idx
+
+        return VStack(spacing: ImlaTheme.spacing24) {
+            Spacer()
+
+            if displayIndex < total {
+                let step = steps[displayIndex]
+                let isConfirmingGrant = recentlyGrantedPermissionName == step.name
+
+                VStack(spacing: ImlaTheme.spacing8) {
+                    Text("Permission \(displayIndex + 1) of \(total)")
+                        .font(ImlaTheme.font(size: 11, weight: .semibold))
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                        .textCase(.uppercase)
+
+                    Text(step.name)
+                        .font(ImlaTheme.title1())
+                        .foregroundStyle(ImlaTheme.textPrimary)
+
+                    Text(step.description)
+                        .font(ImlaTheme.body())
+                        .foregroundStyle(ImlaTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                Image(systemName: step.icon)
+                    .font(.system(size: 48, weight: .light))
+                    .foregroundStyle(isConfirmingGrant ? ImlaTheme.success : ImlaTheme.accent)
+                    .frame(height: 64)
+
+                Button {
+                    if grantingPermissionName == step.name && !isConfirmingGrant {
+                        guard !isWaitingForNativePermissionPrompt(step.name) else { return }
+                        openSystemSettingsForPermission(at: displayIndex)
+                    } else {
+                        grantingPermissionName = step.name
+                        recentlyGrantedPermissionName = nil
+                        saveProgress(atStep: currentStep)
+                        step.action()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if isConfirmingGrant {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 12, weight: .bold))
+                        }
+                        Text(permissionButtonTitle(for: step.name, isConfirmingGrant: isConfirmingGrant))
+                            .font(ImlaTheme.font(size: 14, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, ImlaTheme.spacing24)
+                    .padding(.vertical, ImlaTheme.spacing12)
+                    .background(isConfirmingGrant ? ImlaTheme.success : ImlaTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(isConfirmingGrant || isWaitingForNativePermissionPrompt(step.name))
+                .animation(ImlaTheme.Motion.eased(0.2), value: isConfirmingGrant)
+
+                // Progress dots
+                HStack(spacing: 6) {
+                    ForEach(0..<total, id: \.self) { i in
+                        Circle()
+                            .fill(progressDotColor(
+                                index: i,
+                                currentIndex: displayIndex,
+                                isConfirmingGrant: isConfirmingGrant
+                            ))
+                            .frame(width: 8, height: 8)
+                    }
+                }
+
+                if isWaitingForNativePermissionPrompt(step.name) {
+                    Text("Respond to the macOS permission prompt")
+                        .font(ImlaTheme.font(size: 11))
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                } else {
+                    Button {
+                        openSystemSettingsForPermission(at: displayIndex)
+                    } label: {
+                        Text("Not seeing a prompt? Open System Settings")
+                            .font(ImlaTheme.font(size: 11))
+                            .foregroundStyle(ImlaTheme.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if step.name == "Input Monitoring", grantingPermissionName == step.name {
+                    Button {
+                        openApplicationsFolder()
+                    } label: {
+                        Text("Need to add Imla manually? Open Applications")
+                            .font(ImlaTheme.font(size: 11))
+                            .foregroundStyle(ImlaTheme.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if selectedUseCase.canSwitchToVoiceNotesOnly && step.name == "Accessibility" {
+                    Button {
+                        switchToVoiceNotesOnly()
+                    } label: {
+                        VStack(spacing: 2) {
+                            Text("Use Voice Notes instead")
+                                .font(ImlaTheme.font(size: 12, weight: .semibold))
+                            Text("Keeps the hotkey, skips paste permission")
+                                .font(ImlaTheme.font(size: 10, weight: .medium))
+                                .foregroundStyle(ImlaTheme.textTertiary)
+                        }
+                        .foregroundStyle(ImlaTheme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 2)
+                }
+            } else {
+                // All granted
+                VStack(spacing: ImlaTheme.spacing8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(ImlaTheme.success)
+
+                    Text("All permissions granted")
+                        .font(ImlaTheme.title1())
+                        .foregroundStyle(ImlaTheme.textPrimary)
+                }
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .onAppear {
+            startPermissionPolling()
+            schedulePermissionAdvanceIfReady()
+        }
+        .onChange(of: requiredPermissionsGranted) { _, granted in
+            if granted {
+                schedulePermissionAdvanceIfReady()
+            } else {
+                cancelScheduledPermissionAdvance()
+            }
+        }
+        .onDisappear {
+            cancelScheduledPermissionAdvance()
+            stopPermissionPolling()
+            controller.dismissSystemPermissionGuide()
+        }
+    }
+
+    private func permissionButtonTitle(for permissionName: String, isConfirmingGrant: Bool) -> String {
+        if isConfirmingGrant { return "Granted" }
+        if isWaitingForNativePermissionPrompt(permissionName) { return "Waiting for macOS..." }
+        if grantingPermissionName == permissionName { return "Open Settings" }
+        return "Grant Permission"
+    }
+
+    private func isWaitingForNativePermissionPrompt(_ permissionName: String) -> Bool {
+        nativePermissionPromptName == permissionName
+    }
+
+    private func requestAccessibilityPermission() {
+        nativePermissionPromptName = "Accessibility"
+        controller.beginSystemPermissionGuide(for: .accessibility)
+        controller.prepareOnboardingForNativePermissionPrompt()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
+            AXIsProcessTrustedWithOptions(opts)
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(6))
+            if nativePermissionPromptName == "Accessibility", !accessibilityGranted {
+                nativePermissionPromptName = nil
+            }
+        }
+    }
+
+    private func switchToVoiceNotesOnly() {
+        grantingPermissionName = nil
+        nativePermissionPromptName = nil
+        recentlyGrantedPermissionName = nil
+        controller.dismissSystemPermissionGuide()
+        selectedUseCase = selectedUseCase.replacingDictationWithVoiceNotes
+        currentStep = OnboardingFlow.normalizedStep(currentStep, for: selectedUseCase)
+        saveProgress(atStep: currentStep)
+    }
+
+    private func systemSettingsPane(for permissionIndex: Int) -> String {
+        let steps = permissionSteps
+        guard permissionIndex < steps.count else { return "Privacy_Microphone" }
+        switch steps[permissionIndex].name {
+        case "Microphone": return "Privacy_Microphone"
+        case "Accessibility": return "Privacy_Accessibility"
+        case "Input Monitoring": return "Privacy_ListenEvent"
+        case "System Audio", "Screen & System Audio": return "Privacy_ScreenCapture"
+        default: return "Privacy_Microphone"
+        }
+    }
+
+    private func progressDotColor(index: Int, currentIndex: Int, isConfirmingGrant: Bool) -> Color {
+        if index < currentIndex || (isConfirmingGrant && index == currentIndex) {
+            return ImlaTheme.success
+        }
+        if index == currentIndex {
+            return ImlaTheme.accent
+        }
+        return ImlaTheme.surfaceBorder
+    }
+
+    private func permissionRow(icon: String, name: String, description: String, granted: Bool, action: @escaping () -> Void) -> some View {
+        HStack(spacing: ImlaTheme.spacing12) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(ImlaTheme.accent)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(name)
+                    .font(ImlaTheme.headline())
+                    .foregroundStyle(ImlaTheme.textPrimary)
+                Text(description)
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+            }
+
+            Spacer()
+
+            if granted {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(ImlaTheme.success)
+                    .transition(.scale.combined(with: .opacity))
+            } else {
+                Button("Grant") {
+                    action()
+                }
+                .buttonStyle(.plain)
+                .font(ImlaTheme.font(size: 12, weight: .medium))
+                .foregroundStyle(ImlaTheme.accent)
+                .padding(.horizontal, ImlaTheme.spacing12)
+                .padding(.vertical, 4)
+                .background(ImlaTheme.accentSubtle)
+                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            }
+        }
+        .padding(.horizontal, ImlaTheme.spacing16)
+        .padding(.vertical, ImlaTheme.spacing12)
+        .animation(ImlaTheme.Motion.eased(0.25), value: granted)
+    }
+
+    private var requiredPermissionsGranted: Bool {
+        OnboardingPermissionGate.hasRequiredPermissions(
+            OnboardingPermissionSnapshot(
+                microphone: micGranted,
+                accessibility: accessibilityGranted,
+                inputMonitoring: inputMonitoringGranted,
+                systemAudio: systemAudioGranted,
+                screenRecording: screenRecordingGranted
+            ),
+            for: selectedUseCase,
+            useCoreAudioTap: appState.config.useCoreAudioTap
+        )
+    }
+
+    private func startPermissionPolling() {
+        refreshPermissions()
+        permissionPollTimer?.invalidate()
+        let timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            withAnimation { refreshPermissions() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        permissionPollTimer = timer
+    }
+
+    private func stopPermissionPolling() {
+        permissionPollTimer?.invalidate()
+        permissionPollTimer = nil
+    }
+
+    private func schedulePermissionAdvanceIfReady() {
+        guard OnboardingFlow.shouldSchedulePermissionAdvance(
+            currentStep: currentStep,
+            requiredPermissionsGranted: requiredPermissionsGranted,
+            hasCompletedPermissionsStep: hasCompletedPermissionsStep,
+            hasScheduledTask: permissionAdvanceTask != nil
+        ) else { return }
+
+        let generation = UUID()
+        permissionAdvanceGeneration = generation
+        permissionAdvanceTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard permissionAdvanceGeneration == generation, !Task.isCancelled else { return }
+            guard currentStep == Self.permissionsStep, requiredPermissionsGranted else {
+                permissionAdvanceGeneration = nil
+                permissionAdvanceTask = nil
+                return
+            }
+
+            permissionAdvanceGeneration = nil
+            permissionAdvanceTask = nil
+            advancePastPermissions()
+        }
+    }
+
+    private func cancelScheduledPermissionAdvance() {
+        permissionAdvanceGeneration = nil
+        permissionAdvanceTask?.cancel()
+        permissionAdvanceTask = nil
+    }
+
+    private func advancePastPermissions() {
+        cancelScheduledPermissionAdvance()
+        controller.dismissSystemPermissionGuide()
+        let action = OnboardingFlow.permissionAdvanceAction(
+            for: selectedUseCase,
+            currentStepIndex: currentStepIndex,
+            orderedStepCount: orderedSteps.count,
+            hasCompletedPermissionsStep: hasCompletedPermissionsStep
+        )
+        hasCompletedPermissionsStep = true
+        switch action {
+        case .restartForDictationTest:
+            saveProgressAndRestart()
+        case .finish:
+            finishOnboarding(withKey: false)
+        case .next:
+            goToNextStep()
+        }
+    }
+
+    private func toggleCapability(_ capability: OnboardingCapability) {
+        applyUseCaseSelection(OnboardingFlow.toggling(
+            capability,
+            in: OnboardingFlow.UseCaseSelectionState(
+                selectedUseCase: selectedUseCase,
+                selectionBeforeEverything: selectionBeforeEverything
+            )
+        ))
+    }
+
+    private func toggleEverything() {
+        applyUseCaseSelection(OnboardingFlow.togglingEverything(
+            in: OnboardingFlow.UseCaseSelectionState(
+                selectedUseCase: selectedUseCase,
+                selectionBeforeEverything: selectionBeforeEverything
+            )
+        ))
+    }
+
+    private func applyUseCaseSelection(_ state: OnboardingFlow.UseCaseSelectionState) {
+        selectedUseCase = state.selectedUseCase
+        selectionBeforeEverything = state.selectionBeforeEverything
+    }
+
+    private func refreshPermissions() {
+        micGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        accessibilityGranted = AXIsProcessTrusted()
+        inputMonitoringGranted = CGPreflightListenEventAccess()
+        screenRecordingGranted = CGPreflightScreenCaptureAccess()
+
+        if let grantingPermissionName, isPermissionGranted(named: grantingPermissionName) {
+            notePermissionGranted(grantingPermissionName)
+        }
+    }
+
+    private func isPermissionGranted(named permissionName: String) -> Bool {
+        switch permissionName {
+        case "Microphone":
+            return micGranted
+        case "Accessibility":
+            return accessibilityGranted
+        case "Input Monitoring":
+            return inputMonitoringGranted
+        case "System Audio":
+            return systemAudioGranted
+        case "Screen & System Audio":
+            return screenRecordingGranted
+        default:
+            return false
+        }
+    }
+
+    @MainActor
+    private func notePermissionGranted(_ permissionName: String) {
+        guard recentlyGrantedPermissionName != permissionName else { return }
+        if PermissionDragGuidePermission(permissionName: permissionName) != nil {
+            controller.dismissSystemPermissionGuide()
+        }
+        grantingPermissionName = nil
+        nativePermissionPromptName = nil
+        recentlyGrantedPermissionName = permissionName
+        saveProgress(atStep: currentStep)
+        controller.bringOnboardingToFront()
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(850))
+            if recentlyGrantedPermissionName == permissionName {
+                withAnimation(ImlaTheme.Motion.eased(0.2)) {
+                    recentlyGrantedPermissionName = nil
+                }
+            }
+        }
+    }
+
+    private func saveProgress(atStep step: Int? = nil) {
+        guard !hasFinishedOnboarding else { return }
+        let progress = OnboardingProgress(
+            currentStep: step ?? currentStep,
+            userName: userName,
+            selectedBackendKey: selectedBackend.backend,
+            selectedModelKey: selectedBackend.model,
+            selectedCohereLanguageCode: selectedCohereLanguage.rawValue,
+            hotkeyKeyCode: selectedHotkey.keyCode,
+            hotkeyLabel: selectedHotkey.label,
+            systemAudioRequested: systemAudioGranted,
+            onboardingUseCaseRawValue: selectedUseCase.rawValue,
+            modelDownloadProgress: modelDownloadProgress,
+            modelDownloadStatus: modelDownloadStatus
+        )
+        OnboardingProgress.save(progress)
+    }
+
+    private func saveProgressAndRestart() {
+        saveProgress(atStep: Self.dictationTestStep)
+        controller.relaunchApp()
+    }
+
+    private func openSystemSettingsForPermission(at permissionIndex: Int) {
+        let steps = permissionSteps
+        var guidePermission: PermissionDragGuidePermission?
+        if permissionIndex < steps.count {
+            let permissionName = steps[permissionIndex].name
+            grantingPermissionName = permissionName
+            nativePermissionPromptName = nil
+            recentlyGrantedPermissionName = nil
+            saveProgress(atStep: currentStep)
+            guidePermission = PermissionDragGuidePermission(permissionName: permissionName)
+            if let guidePermission {
+                controller.beginSystemPermissionGuide(for: guidePermission)
+            }
+        }
+        openSystemSettings(
+            systemSettingsPane(for: permissionIndex),
+            yieldBehavior: OnboardingSystemSettingsYieldPolicy.behavior(for: guidePermission)
+        )
+    }
+
+    private func openSystemSettings(
+        _ pane: String,
+        yieldBehavior: OnboardingSystemSettingsYieldBehavior
+    ) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
+            if NSWorkspace.shared.open(url) {
+                controller.yieldOnboardingFocusToSystemSettings(using: yieldBehavior)
+            }
+        }
+    }
+
+    private func openApplicationsFolder() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications", isDirectory: true))
+    }
+
+    // MARK: - Step 4: Hotkey Configuration
+
+    private var hotkeyStep: some View {
+        VStack(spacing: ImlaTheme.spacing24) {
+            Spacer()
+
+            VStack(spacing: ImlaTheme.spacing8) {
+                Text("Dictation Shortcut")
+                    .font(ImlaTheme.title1())
+                    .foregroundStyle(ImlaTheme.textPrimary)
+
+                Text("Choose the key you'll hold to dictate. Press and hold the key to record, release to transcribe.")
+                    .font(ImlaTheme.body())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            VStack(spacing: ImlaTheme.spacing16) {
+                // Current hotkey display
+                Text(selectedHotkey.label)
+                    .font(ImlaTheme.font(size: 24, weight: .semibold))
+                    .foregroundStyle(ImlaTheme.textPrimary)
+                    .padding(.horizontal, ImlaTheme.spacing32)
+                    .padding(.vertical, ImlaTheme.spacing16)
+                    .background(ImlaTheme.backgroundRaised)
+                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerMedium, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: ImlaTheme.cornerMedium, style: .continuous)
+                            .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+                    )
+
+                // Change button
+                Button {
+                    if isRecordingHotkey {
+                        stopRecordingHotkey()
+                    } else {
+                        startRecordingHotkey()
+                    }
+                } label: {
+                    Text(isRecordingHotkey ? "Press a modifier key..." : "Change Shortcut")
+                        .font(ImlaTheme.body())
+                        .foregroundStyle(isRecordingHotkey ? ImlaTheme.accent : ImlaTheme.textPrimary)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, ImlaTheme.spacing16)
+                .padding(.vertical, ImlaTheme.spacing8)
+                .background(isRecordingHotkey ? ImlaTheme.accentSubtle : ImlaTheme.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                        .strokeBorder(isRecordingHotkey ? ImlaTheme.accent.opacity(0.3) : ImlaTheme.surfaceBorder, lineWidth: 1)
+                )
+            }
+
+            Text("Supported: Left Cmd, Right Cmd, Fn, Ctrl, Option, Shift")
+                .font(ImlaTheme.caption())
+                .foregroundStyle(ImlaTheme.textTertiary)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .onDisappear { stopRecordingHotkey() }
+    }
+
+    private func startRecordingHotkey() {
+        isRecordingHotkey = true
+        hotkeyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            let keyCode = event.keyCode
+            if let label = HotkeyConfig.label(for: keyCode) {
+                selectedHotkey = HotkeyConfig(keyCode: keyCode, label: label)
+                stopRecordingHotkey()
+            }
+            return event
+        }
+    }
+
+    private func stopRecordingHotkey() {
+        isRecordingHotkey = false
+        if let monitor = hotkeyEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            hotkeyEventMonitor = nil
+        }
+    }
+
+    // MARK: - Step 5: Dictation Test
+
+    private var dictationTestStep: some View {
+        VStack(spacing: ImlaTheme.spacing24) {
+            Spacer()
+
+            VStack(spacing: ImlaTheme.spacing8) {
+                Text(selectedUseCase.includesVoiceNotes && !selectedUseCase.includesDictation ? "Test Voice Note" : "Test Dictation")
+                    .font(ImlaTheme.title1())
+                    .foregroundStyle(ImlaTheme.textPrimary)
+
+                Text(dictationTestSubtitle)
+                    .font(ImlaTheme.body())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+
+                if isSelectedModelReadyForDictationTest {
+                    Text("Try saying: \"testing this one out\"")
+                        .font(ImlaTheme.font(size: 13, weight: .medium))
+                        .foregroundStyle(ImlaTheme.accent)
+                        .padding(.top, 2)
+                }
+            }
+
+            if !isSelectedModelReadyForDictationTest {
+                VStack(spacing: ImlaTheme.spacing8) {
+                    if isModelPreparingAfterDownload {
+                        IndeterminatePreparationBar()
+                            .frame(width: 260, height: 7)
+                        Text(modelDownloadStatus ?? "Preparing \(selectedBackend.label)...")
+                            .font(ImlaTheme.font(size: 11, weight: .medium))
+                            .foregroundStyle(ImlaTheme.textTertiary)
+                        Text("This usually takes 20-60 seconds the first time.")
+                            .font(ImlaTheme.font(size: 10, weight: .medium))
+                            .foregroundStyle(ImlaTheme.textTertiary)
+                        RotatingPreparationHint(messages: modelPreparationHints)
+                            .padding(.top, 2)
+                    } else if let modelDownloadProgress {
+                        ProgressView(value: modelDownloadProgress, total: 1.0)
+                            .frame(width: 260)
+                        Text(modelDownloadStatus ?? "\(Int((modelDownloadProgress * 100).rounded()))% complete")
+                            .font(ImlaTheme.font(size: 11, weight: .medium))
+                            .foregroundStyle(ImlaTheme.textTertiary)
+                    } else {
+                        ProgressView()
+                            .controlSize(.regular)
+                        Text(modelDownloadStatus ?? "Preparing \(selectedBackend.label)...")
+                            .font(ImlaTheme.font(size: 11, weight: .medium))
+                            .foregroundStyle(ImlaTheme.textTertiary)
+                    }
+                    Text("The dictation test is disabled until download and warmup complete.")
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                        .multilineTextAlignment(.center)
+
+                    if let modelDownloadError {
+                        Text(modelDownloadError)
+                            .font(ImlaTheme.font(size: 11))
+                            .foregroundStyle(ImlaTheme.danger)
+                            .lineLimit(2)
+
+                        Button("Retry Download") {
+                            self.modelDownloadError = nil
+                            self.modelDownloadSnapshot = nil
+                            ensureModelDownloadStarted()
+                        }
+                        .buttonStyle(.plain)
+                        .font(ImlaTheme.font(size: 12, weight: .medium))
+                        .foregroundStyle(ImlaTheme.accent)
+                    }
+                }
+            } else {
+                VStack(spacing: ImlaTheme.spacing16) {
+                    Text(dictationTestResult ?? "Your transcription will appear here...")
+                        .font(dictationTestResult != nil ? ImlaTheme.mono(size: 14) : ImlaTheme.font(size: 13))
+                        .foregroundStyle(dictationTestResult != nil ? ImlaTheme.textPrimary : ImlaTheme.textTertiary)
+                        .italic(dictationTestResult == nil)
+                        .frame(maxWidth: 400, minHeight: 60, alignment: .topLeading)
+                        .padding(ImlaTheme.spacing16)
+                        .background(ImlaTheme.backgroundRaised)
+                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerMedium, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: ImlaTheme.cornerMedium, style: .continuous)
+                                .strokeBorder(dictationTestResult != nil ? ImlaTheme.success.opacity(0.5) : ImlaTheme.surfaceBorder, lineWidth: 1)
+                        )
+
+                    if isDictationTesting {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Listening... release \(selectedHotkey.label) when done")
+                                .font(ImlaTheme.caption())
+                                .foregroundStyle(ImlaTheme.textSecondary)
+                        }
+                    } else if dictationTestResult == nil {
+                        HStack(spacing: 6) {
+                            Image(systemName: "keyboard")
+                                .font(.system(size: 14))
+                            Text("Hold \(selectedHotkey.label) to start")
+                                .font(ImlaTheme.body())
+                        }
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                    }
+
+                    if let dictationTestError {
+                        Text(dictationTestError)
+                            .font(ImlaTheme.font(size: 11))
+                            .foregroundStyle(ImlaTheme.danger)
+                            .lineLimit(2)
+                    }
+
+                    if dictationTestResult != nil {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(ImlaTheme.success)
+                            Text("Dictation is working!")
+                                .font(ImlaTheme.body())
+                                .foregroundStyle(ImlaTheme.success)
+                        }
+                    }
+                }
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .onAppear {
+            ensureModelDownloadStarted()
+            controller.dictationTestBackend = selectedBackend
+            controller.dictationTestCohereLanguage = selectedCohereLanguage
+            controller.dictationTestRecordingStarted = {
+                withAnimation { isDictationTesting = true }
+                dictationTestError = nil
+            }
+            controller.dictationTestRecordingStopped = {
+                withAnimation { isDictationTesting = false }
+            }
+            controller.dictationTestCallback = { text in
+                if text.isEmpty {
+                    dictationTestError = "No speech detected. Try again."
+                } else {
+                    withAnimation { dictationTestResult = text }
+                    advanceAfterSuccessfulDictationTest(text: text)
+                }
+                isDictationTesting = false
+            }
+            controller.dictationTestFailureCallback = { message in
+                dictationTestError = message
+                isDictationTesting = false
+            }
+            startDictationTestMonitorIfReady()
+        }
+        .onDisappear {
+            // Cancel any in-flight recording before clearing callbacks to prevent
+            // the transcription Task from falling through to the production paste path
+            Task { await controller.cancelTestDictation() }
+            controller.clearDictationTestLifecycle()
+            // Stop the test monitor while moving through onboarding, but leave the
+            // production monitor running when finishing from the dictation test.
+            if !hasFinishedOnboarding {
+                controller.stopHotkeyMonitor()
+            }
+            isDictationTestMonitorActive = false
+        }
+    }
+
+    // MARK: - Step 6: Meeting Summaries
+
+    private var meetingSummaryStep: some View {
+        VStack(spacing: ImlaTheme.spacing24) {
+            Spacer()
+
+            VStack(spacing: ImlaTheme.spacing8) {
+                Text("Meeting Summaries")
+                    .font(ImlaTheme.title1())
+                    .foregroundStyle(ImlaTheme.textPrimary)
+
+                Text(
+                    "Connect an LLM provider for AI-powered meeting notes.\n"
+                        + "Remote summaries may send transcripts, notes, screen context, and participant names off-device."
+                )
+                    .font(ImlaTheme.body())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            HStack(spacing: 0) {
+                providerTab("ChatGPT", selected: summaryBackend == .chatGPT) {
+                    summaryBackend = .chatGPT
+                    apiKey = ""
+                }
+                providerTab("OpenAI", selected: summaryBackend == .openAI) {
+                    summaryBackend = .openAI
+                    apiKey = ""
+                }
+                providerTab("OpenRouter", selected: summaryBackend == .openRouter) {
+                    summaryBackend = .openRouter
+                    apiKey = ""
+                }
+                providerTab("Ollama", selected: summaryBackend == .ollama) {
+                    summaryBackend = .ollama
+                    apiKey = ""
+                }
+            }
+            .background(ImlaTheme.backgroundRaised)
+            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                    .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+            )
+            .frame(width: 320)
+
+            if summaryBackend == .chatGPT {
+                Text("Use your ChatGPT Plus or Pro subscription.")
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+
+                if appState.isChatGPTAuthenticated || chatGPTSignInDone {
+                    HStack(spacing: 6) {
+                        OpenAILogoShape()
+                            .fill(.white)
+                            .frame(width: 14, height: 14)
+                        Text("Signed in with ChatGPT")
+                            .font(ImlaTheme.font(size: 13, weight: .medium))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(ImlaTheme.success)
+                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                } else if isSigningInChatGPT {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Signing in...")
+                            .font(ImlaTheme.font(size: 12))
+                            .foregroundStyle(ImlaTheme.textSecondary)
+                    }
+                } else {
+                    Button {
+                        isSigningInChatGPT = true
+                        chatGPTSignInError = nil
+                        Task {
+                            let error = await controller.signInWithChatGPT()
+                            isSigningInChatGPT = false
+                            chatGPTSignInDone = ChatGPTAuthManager.shared.isAuthenticated
+                            chatGPTSignInError = error
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            OpenAILogoShape()
+                                .fill(.white)
+                                .frame(width: 14, height: 14)
+                            Text("Sign in with ChatGPT")
+                                .font(ImlaTheme.font(size: 13, weight: .medium))
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(ImlaTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
+                    if let chatGPTSignInError {
+                        Text(chatGPTSignInError)
+                            .font(ImlaTheme.font(size: 11))
+                            .foregroundStyle(ImlaTheme.danger)
+                            .lineLimit(2)
+                    }
+                }
+            } else if summaryBackend == .ollama {
+                Text("Run AI models locally on your device with Ollama.\nNo API key needed — just install Ollama and pull a model.")
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+
+                VStack(alignment: .leading, spacing: ImlaTheme.spacing8) {
+                    Text("Ollama is served by default at http://localhost:11434")
+                        .font(ImlaTheme.font(size: 11))
+                        .foregroundStyle(ImlaTheme.textTertiary)
+
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(ImlaTheme.success)
+                            .frame(width: 6, height: 6)
+                        Text("No authentication required")
+                            .font(ImlaTheme.font(size: 11))
+                            .foregroundStyle(ImlaTheme.success)
+                    }
+                }
+            } else if summaryBackend == .openRouter {
+                Text("Connect OpenRouter in your browser. Imla receives a dedicated API key after you approve access.")
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+
+                if appState.isOpenRouterAuthenticated || openRouterSignInDone {
+                    HStack(spacing: 6) {
+                        Image(systemName: "network")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("OpenRouter connected")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(ImlaTheme.success)
+                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall))
+                } else if isSigningInOpenRouter {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Connecting...")
+                            .font(.system(size: 12))
+                            .foregroundStyle(ImlaTheme.textSecondary)
+                    }
+                } else {
+                    Button {
+                        isSigningInOpenRouter = true
+                        openRouterSignInError = nil
+                        apiKey = ""
+                        isEnteringOpenRouterAPIKey = false
+                        Task {
+                            let error = await controller.signInWithOpenRouter()
+                            isSigningInOpenRouter = false
+                            openRouterSignInDone = OpenRouterAuthManager.shared.isAuthenticated
+                            openRouterSignInError = error
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "network")
+                                .font(.system(size: 13, weight: .semibold))
+                            Text("Connect OpenRouter")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(ImlaTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(isEnteringOpenRouterAPIKey ? "Cancel manual key" : "Enter API key manually") {
+                        isEnteringOpenRouterAPIKey.toggle()
+                        apiKey = ""
+                        openRouterSignInError = nil
+                    }
+                    .buttonStyle(.link)
+                    .font(.system(size: 11))
+
+                    if isEnteringOpenRouterAPIKey {
+                        PastableSecureField(
+                            text: apiKey,
+                            placeholder: "sk-or-...",
+                            onChange: { apiKey = $0 }
+                        )
+                        .frame(width: 320, height: 28)
+                    }
+
+                    if let openRouterSignInError {
+                        Text(openRouterSignInError)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.red)
+                            .lineLimit(2)
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: ImlaTheme.spacing8) {
+                    Text("API Key")
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(ImlaTheme.textTertiary)
+
+                    PastableSecureField(
+                        text: apiKey,
+                        placeholder: "sk-...",
+                        onChange: { apiKey = $0 }
+                    )
+                    .frame(width: 320, height: 28)
+
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(apiKey.isEmpty ? ImlaTheme.textTertiary : ImlaTheme.success)
+                            .frame(width: 6, height: 6)
+                        Text(apiKey.isEmpty ? "No API key" : "Key entered")
+                            .font(ImlaTheme.font(size: 11))
+                            .foregroundStyle(apiKey.isEmpty ? ImlaTheme.textTertiary : ImlaTheme.success)
+                    }
+                }
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func providerTab(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(ImlaTheme.font(size: 12, weight: selected ? .semibold : .regular))
+                .foregroundStyle(selected ? ImlaTheme.textPrimary : ImlaTheme.textSecondary)
+                .frame(width: 80)
+                .padding(.vertical, ImlaTheme.spacing8)
+                .background(selected ? ImlaTheme.surfacePrimary : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Actions
+
+    private func startDownload() {
+        guard selectedBackend.isCompatible() else { return }
+        ensureModelDownloadStarted()
+        goToNextStep()
+    }
+
+    private func startDictationTestMonitorIfReady() {
+        let action = OnboardingFlow.dictationTestMonitorAction(
+            currentStep: currentStep,
+            dictationTestStep: Self.dictationTestStep,
+            modelReady: isSelectedModelReadyForDictationTest,
+            monitorActive: isDictationTestMonitorActive,
+            dictationTesting: isDictationTesting
+        )
+
+        switch action {
+        case .none:
+            return
+        case .stop(let cancelTestDictation):
+            if cancelTestDictation {
+                Task { await controller.cancelTestDictation() }
+                isDictationTesting = false
+            }
+            controller.stopHotkeyMonitor()
+            isDictationTestMonitorActive = false
+            return
+        case .start:
+            dictationTestError = nil
+            controller.dictationTestBackend = selectedBackend
+            controller.dictationTestCohereLanguage = selectedCohereLanguage
+            controller.startHotkeyMonitor(keyCode: selectedHotkey.keyCode)
+            isDictationTestMonitorActive = true
+        }
+    }
+
+    private func advanceAfterSuccessfulDictationTest(text: String) {
+        guard selectedUseCase.includesMeetings else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard currentStep == Self.dictationTestStep, dictationTestResult == text else { return }
+            goToNextStep()
+        }
+    }
+
+    private func ensureModelDownloadStarted() {
+        if let reason = selectedBackend.incompatibilityReason() {
+            modelDownloadError = reason
+            return
+        }
+        if modelReadyBackend == selectedBackend {
+            isModelStillDownloading = false
+            modelDownloadProgress = 1.0
+            isModelPreparingAfterDownload = false
+            modelDownloadStatus = "\(selectedBackend.label) ready"
+            modelDownloadError = nil
+            publishModelPreparationStatus(
+                title: "\(selectedBackend.label) ready",
+                detail: "Ready for transcription",
+                progress: 1.0,
+                isPreparing: false,
+                isComplete: true
+            )
+            return
+        }
+
+        if modelDownloadTask != nil {
+            guard modelDownloadBackend != selectedBackend else {
+                isModelStillDownloading = true
+                return
+            }
+            cancelModelDownload(for: modelDownloadBackend)
+            modelDownloadGeneration = UUID()
+            modelDownloadTask?.cancel()
+            modelDownloadTask = nil
+            modelDownloadBackend = nil
+        }
+
+        let backend = selectedBackend
+        let useCase = selectedUseCase
+        let generation = UUID()
+        let alreadyDownloaded = backend.isDownloaded
+        modelDownloadGeneration = generation
+        modelDownloadBackend = backend
+        isModelStillDownloading = true
+        modelDownloadProgress = alreadyDownloaded ? nil : (modelDownloadProgress ?? 0.02)
+        isModelPreparingAfterDownload = alreadyDownloaded
+        modelDownloadStatus = alreadyDownloaded
+            ? "Warming up \(backend.label)..."
+            : (modelDownloadStatus ?? initialDownloadStatus(for: backend))
+        modelDownloadError = nil
+        modelDownloadSnapshot = nil
+        publishModelPreparationStatus(
+            title: "Preparing \(backend.label)",
+            detail: modelDownloadStatus,
+            progress: modelDownloadProgress,
+            isPreparing: isModelPreparingAfterDownload,
+            isComplete: false
+        )
+
+        modelDownloadTask = Task {
+            defer {
+                Task { @MainActor in
+                    if modelDownloadGeneration == generation, modelDownloadBackend == backend {
+                        modelDownloadTask = nil
+                        modelDownloadBackend = nil
+                    }
+                }
+            }
+            do {
+                try await controller.downloadModelForOnboarding(backend, onboardingUseCase: useCase) { progress, status in
+                    Task { @MainActor in
+                        guard modelDownloadGeneration == generation,
+                              modelDownloadBackend == backend,
+                              selectedBackend == backend else { return }
+                        applyModelPreparationProgress(progress, status: status, backend: backend, generation: generation)
+                    }
+                } progressSnapshot: { snapshot in
+                    Task { @MainActor in
+                        guard modelDownloadGeneration == generation,
+                              modelDownloadBackend == backend,
+                              selectedBackend == backend else { return }
+                        applyModelDownloadSnapshot(snapshot, backend: backend, generation: generation)
+                    }
+                }
+                await MainActor.run {
+                    guard modelDownloadGeneration == generation,
+                          modelDownloadBackend == backend,
+                          selectedBackend == backend else { return }
+                    modelReadyBackend = backend
+                    modelDownloadProgress = 1.0
+                    modelDownloadSnapshot = nil
+                    isModelPreparingAfterDownload = false
+                    modelDownloadStatus = "\(backend.label) ready"
+                    modelDownloadError = nil
+                    withAnimation { isModelStillDownloading = false }
+                    publishModelPreparationStatus(
+                        title: "\(backend.label) ready",
+                        detail: "Ready for transcription",
+                        progress: 1.0,
+                        isPreparing: false,
+                        isComplete: true
+                    )
+                    showModelReadyIndicator(for: backend)
+                    controller.notifyOnboardingModelReady()
+                    saveProgress(atStep: currentStep)
+                }
+            } catch is CancellationError {
+                // Backend changes cancel the old task; the new selection owns the download UI.
+            } catch {
+                await MainActor.run {
+                    guard modelDownloadGeneration == generation,
+                          modelDownloadBackend == backend,
+                          selectedBackend == backend else { return }
+                    modelDownloadError = modelPreparationFailureMessage(for: backend)
+                    modelDownloadStatus = backend.isDownloaded ? "Model setup paused" : "Download paused"
+                    modelDownloadProgress = nil
+                    if let snapshot = modelDownloadSnapshot {
+                        modelDownloadSnapshot = snapshot.replacing(
+                            phase: .failed,
+                            message: modelDownloadError
+                        )
+                    }
+                    isModelPreparingAfterDownload = false
+                    isModelStillDownloading = false
+                    publishModelPreparationStatus(
+                        title: backend.isDownloaded ? "Model setup paused" : "Download paused",
+                        detail: modelDownloadError,
+                        progress: nil,
+                        isPreparing: false,
+                        isComplete: false
+                    )
+                }
+                fputs("[imla-native] onboarding model download failed: \(error)\n", stderr)
+            }
+        }
+    }
+
+    private func applyModelDownloadSnapshot(
+        _ snapshot: ModelDownloadProgress,
+        backend: BackendOption,
+        generation: UUID
+    ) {
+        guard modelDownloadGeneration == generation,
+              modelDownloadBackend == backend,
+              selectedBackend == backend else { return }
+        modelDownloadSnapshot = snapshot
+        modelDownloadError = nil
+
+        switch snapshot.phase {
+        case .downloading:
+            isModelStillDownloading = true
+            isModelPreparingAfterDownload = false
+            if let fraction = snapshot.fractionCompleted {
+                modelDownloadProgress = max(modelDownloadProgress ?? 0.02, fraction)
+            }
+            modelDownloadStatus = modelDownloadSnapshotDetail(snapshot)
+        case .preparing:
+            isModelStillDownloading = true
+            isModelPreparingAfterDownload = true
+            modelDownloadProgress = nil
+            modelDownloadStatus = snapshot.message ?? "Preparing \(backend.label)..."
+        case .ready:
+            modelDownloadStatus = snapshot.message ?? "\(backend.label) ready"
+        case .paused:
+            isModelStillDownloading = false
+            isModelPreparingAfterDownload = false
+            modelDownloadStatus = snapshot.message ?? "Download paused"
+        case .failed:
+            isModelStillDownloading = false
+            isModelPreparingAfterDownload = false
+            modelDownloadError = snapshot.message
+            modelDownloadStatus = snapshot.message ?? "Download failed"
+        }
+
+        publishModelPreparationStatus(
+            title: modelDownloadIndicatorTitle,
+            detail: modelDownloadStatus,
+            progress: modelDownloadProgress,
+            isPreparing: isModelPreparingAfterDownload,
+            isComplete: snapshot.phase == .ready
+        )
+    }
+
+    private func applyModelPreparationProgress(
+        _ progress: Double,
+        status: String?,
+        backend: BackendOption,
+        generation: UUID
+    ) {
+        guard modelDownloadGeneration == generation,
+              modelDownloadBackend == backend,
+              selectedBackend == backend else { return }
+        let detail = status ?? "Preparing \(backend.label)..."
+        let lowercasedDetail = detail.lowercased()
+        let isPreparing = lowercasedDetail.contains("compiling")
+            || lowercasedDetail.contains("warming")
+            || lowercasedDetail.contains("readying")
+
+        modelDownloadError = nil
+        isModelStillDownloading = true
+
+        if isPreparing {
+            isModelPreparingAfterDownload = true
+            modelDownloadStatus = "Optimizing \(backend.label) for this Mac..."
+            publishModelPreparationStatus(
+                title: "Preparing \(backend.label)",
+                detail: modelDownloadStatus,
+                progress: nil,
+                isPreparing: true,
+                isComplete: false
+            )
+            saveProgress(atStep: currentStep)
+            return
+        }
+
+        isModelPreparingAfterDownload = false
+        let clampedProgress = min(max(progress, 0), 1)
+        let currentProgress = modelDownloadProgress ?? 0
+        let isZeroReset = clampedProgress <= 0.001 && currentProgress > 0.03
+
+        guard !isZeroReset else { return }
+        modelDownloadProgress = max(currentProgress, max(clampedProgress, 0.02))
+        modelDownloadStatus = detail
+        publishModelPreparationStatus(
+            title: "Preparing \(backend.label)",
+            detail: detail,
+            progress: modelDownloadProgress,
+            isPreparing: false,
+            isComplete: false
+        )
+        saveProgress(atStep: currentStep)
+    }
+
+    private func resetModelDownloadForBackendChange() {
+        cancelModelDownload(for: modelDownloadBackend)
+        modelDownloadGeneration = UUID()
+        modelDownloadTask?.cancel()
+        modelDownloadTask = nil
+        modelReadyIndicatorTask?.cancel()
+        modelReadyIndicatorTask = nil
+        modelReadyBackend = nil
+        modelReadyIndicatorBackend = nil
+        modelDownloadBackend = nil
+        modelDownloadProgress = nil
+        modelDownloadSnapshot = nil
+        isModelPreparingAfterDownload = false
+        modelDownloadStatus = nil
+        modelDownloadError = nil
+        isModelStillDownloading = false
+    }
+
+    private func cancelModelDownload(for backend: BackendOption?) {
+        guard let backend else { return }
+        Task {
+            await ManagedASRModelDownloader.cancel(modelID: backend.model)
+        }
+    }
+
+    private func initialDownloadStatus(for backend: BackendOption) -> String {
+        let size = backend.sizeLabel
+            .replacingOccurrences(of: "~", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !size.isEmpty {
+            return "0 MB of \(size)"
+        }
+        return "Starting \(backend.label) download..."
+    }
+
+    private func modelPreparationFailureMessage(for backend: BackendOption) -> String {
+        backend.isDownloaded
+            ? "Model setup failed. Restart Imla or retry from Models."
+            : "Download failed. Check your connection and retry."
+    }
+
+    private func publishModelPreparationStatus(
+        title: String,
+        detail: String?,
+        progress: Double?,
+        isPreparing: Bool,
+        isComplete: Bool
+    ) {
+        appState.modelPreparationTitle = title
+        appState.modelPreparationDetail = detail
+        appState.modelPreparationProgress = progress.map { min(max($0, 0), 1) }
+        appState.isModelPreparingAfterDownload = isPreparing
+        appState.modelPreparationIsComplete = isComplete
+        if isComplete {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(5))
+                guard appState.modelPreparationTitle == title,
+                      appState.modelPreparationIsComplete else { return }
+                appState.modelPreparationTitle = nil
+                appState.modelPreparationDetail = nil
+                appState.modelPreparationProgress = nil
+                appState.isModelPreparingAfterDownload = false
+                appState.modelPreparationIsComplete = false
+            }
+        } else if !isPreparing && progress == nil {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(12))
+                guard appState.modelPreparationTitle == title,
+                      appState.modelPreparationProgress == nil,
+                      !appState.isModelPreparingAfterDownload,
+                      !appState.modelPreparationIsComplete else { return }
+                appState.modelPreparationTitle = nil
+                appState.modelPreparationDetail = nil
+            }
+        }
+    }
+
+    private func showModelReadyIndicator(for backend: BackendOption) {
+        modelReadyIndicatorTask?.cancel()
+        modelReadyIndicatorBackend = backend
+        modelReadyIndicatorTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(6))
+            guard modelReadyIndicatorBackend == backend else { return }
+            withAnimation(ImlaTheme.Motion.eased(0.2)) {
+                modelReadyIndicatorBackend = nil
+            }
+            modelReadyIndicatorTask = nil
+        }
+    }
+
+    private var calendarAccessStep: some View {
+        VStack(spacing: ImlaTheme.spacing24) {
+            Spacer()
+            Image(nsImage: CalendarIntegration.calendarIcon)
+                .resizable()
+                .frame(width: 80, height: 80)
+                .accessibilityHidden(true)
+            Text("Bring your meetings into Imla")
+                .font(ImlaTheme.title1())
+                .foregroundStyle(ImlaTheme.textPrimary)
+            Text("Allow access to macOS Calendar to see upcoming meetings and get reminders.")
+                .font(ImlaTheme.body())
+                .foregroundStyle(ImlaTheme.textSecondary)
+            CalendarAccessControl {
+                await controller.calendarAccessDidChange()
+            }
+
+            VStack(spacing: ImlaTheme.spacing12) {
+                if googleCalSignInDone {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(ImlaTheme.success)
+                        Text("Google Calendar connected")
+                            .font(ImlaTheme.body())
+                            .foregroundStyle(ImlaTheme.textPrimary)
+                    }
+                } else if isSigningInGoogleCal {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Connecting...")
+                            .font(ImlaTheme.body())
+                            .foregroundStyle(ImlaTheme.textSecondary)
+                    }
+                } else if appState.isGoogleCalendarAvailable && !appState.isGoogleCalendarVerified {
+                    VStack(spacing: 6) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "calendar.badge.plus")
+                                .font(.system(size: 14))
+                            Text("Connect Google Calendar")
+                                .font(ImlaTheme.font(size: 14, weight: .medium))
+                        }
+                        .foregroundStyle(.white.opacity(0.4))
+                        .padding(.horizontal, ImlaTheme.spacing16)
+                        .padding(.vertical, ImlaTheme.spacing8)
+                        .background(ImlaTheme.textTertiary.opacity(0.3))
+                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+
+                        Text("Google OAuth verification pending")
+                            .font(ImlaTheme.caption())
+                            .foregroundStyle(ImlaTheme.textTertiary)
+                    }
+                } else if appState.isGoogleCalendarAvailable {
+                    Button {
+                        isSigningInGoogleCal = true
+                        googleCalSignInError = nil
+                        Task {
+                            let error = await controller.signInWithGoogleCalendar()
+                            isSigningInGoogleCal = false
+                            if let error {
+                                googleCalSignInError = error
+                            } else {
+                                googleCalSignInDone = true
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "calendar.badge.plus")
+                                .font(.system(size: 14))
+                            Text("Connect Google Calendar")
+                                .font(ImlaTheme.font(size: 14, weight: .medium))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, ImlaTheme.spacing16)
+                        .padding(.vertical, ImlaTheme.spacing8)
+                        .background(ImlaTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
+                    if let googleCalSignInError {
+                        Text(googleCalSignInError)
+                            .font(ImlaTheme.font(size: 11))
+                            .foregroundStyle(ImlaTheme.danger)
+                            .multilineTextAlignment(.center)
+                    }
+                } else {
+                    Text("Google Calendar credentials not configured.")
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                }
+            }
+
+            Button("Set up calendar accounts…", action: CalendarIntegration.openAccounts)
+                .buttonStyle(.link)
+            Divider().background(ImlaTheme.surfaceBorder)
+            Text("Already use Google or Exchange? Add the account in macOS Internet Accounts and turn on Calendars.")
+                .font(ImlaTheme.caption())
+                .foregroundStyle(ImlaTheme.textSecondary)
+            Spacer()
+        }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, ImlaTheme.spacing32)
+    }
+
+    private func finishOnboarding(withKey: Bool) {
+        hasFinishedOnboarding = true
+        OnboardingProgress.clear()
+        let shouldContinueModelPreparation = modelDownloadTask != nil && modelReadyBackend != selectedBackend
+        if shouldContinueModelPreparation {
+            modelDownloadGeneration = UUID()
+            modelDownloadTask?.cancel()
+            modelDownloadTask = nil
+            modelDownloadBackend = nil
+            controller.continueModelPreparationAfterOnboarding(
+                selectedBackend,
+                onboardingUseCase: selectedUseCase,
+                initialProgress: modelDownloadProgress,
+                initialStatus: modelDownloadStatus,
+                isPreparing: isModelPreparingAfterDownload
+            )
+        } else if isModelStillDownloading || modelReadyBackend == selectedBackend {
+            publishModelPreparationStatus(
+                title: modelReadyBackend == selectedBackend ? "\(selectedBackend.label) ready" : "Preparing \(selectedBackend.label)",
+                detail: modelReadyBackend == selectedBackend ? "Ready for transcription" : modelDownloadStatus,
+                progress: modelReadyBackend == selectedBackend ? 1.0 : modelDownloadProgress,
+                isPreparing: isModelPreparingAfterDownload,
+                isComplete: modelReadyBackend == selectedBackend
+            )
+        }
+        controller.completeOnboarding(
+            userName: userName.trimmingCharacters(in: .whitespaces),
+            backend: selectedBackend,
+            cohereLanguage: selectedCohereLanguage,
+            hotkey: selectedHotkey,
+            onboardingUseCase: selectedUseCase,
+            summaryBackend: summaryBackend,
+            apiKey: withKey ? apiKey : nil
+        )
+    }
+}
+
+private struct ModelDownloadProgressShape: Shape {
+    var progress: Double
+
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let clampedProgress = min(max(progress, 0), 1)
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let radius = min(rect.width, rect.height) / 2
+        var path = Path()
+
+        guard clampedProgress > 0 else { return path }
+        path.move(to: center)
+        path.addArc(
+            center: center,
+            radius: radius,
+            startAngle: .degrees(-90),
+            endAngle: .degrees(-90 + (360 * clampedProgress)),
+            clockwise: false
+        )
+        path.closeSubpath()
+        return path
+    }
+}
+
+private struct IndeterminatePreparationBar: View {
+    @State private var isAnimating = false
+
+    var body: some View {
+        GeometryReader { geometry in
+            let trackWidth = geometry.size.width
+            let segmentWidth = max(trackWidth * 0.32, 64)
+            let travel = max(trackWidth - segmentWidth, 0)
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(ImlaTheme.surfaceBorder)
+
+                Capsule()
+                    .fill(ImlaTheme.textSecondary.opacity(0.9))
+                    .frame(width: segmentWidth)
+                    .offset(x: isAnimating ? travel : 0)
+            }
+        }
+        .onAppear {
+            withAnimation(ImlaTheme.Motion.pulsing(1.05)) {
+                isAnimating = true
+            }
+        }
+    }
+}
+
+private struct RotatingPreparationHint: View {
+    let messages: [String]
+    @State private var index = 0
+    private let timer = Timer.publish(every: 6, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Text(messages.isEmpty ? "" : messages[index % messages.count])
+            .font(ImlaTheme.font(size: 10, weight: .medium))
+            .foregroundStyle(ImlaTheme.textTertiary)
+            .multilineTextAlignment(.center)
+            .lineLimit(1)
+            .id(index)
+            .transition(.opacity)
+            .onReceive(timer) { _ in
+                guard messages.count > 1 else { return }
+                withAnimation(ImlaTheme.Motion.eased(0.2)) {
+                    index = (index + 1) % messages.count
+                }
+            }
+            .onChange(of: messages) { _, _ in
+                index = 0
+            }
+    }
+}
+
+// MARK: - Text Field
+
+/// NSTextField subclass that handles Cmd+V/C/X/A without needing a standard Edit menu.
+class EditableNSTextField: NSTextField {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command) {
+            switch event.charactersIgnoringModifiers {
+            case "v":
+                if NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self) { return true }
+            case "c":
+                if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: self) { return true }
+            case "x":
+                if NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: self) { return true }
+            case "a":
+                if NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: self) { return true }
+            default:
+                break
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
+struct OnboardingTextField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    var onSubmit: (() -> Void)?
+
+    func makeNSView(context: Context) -> EditableNSTextField {
+        let field = EditableNSTextField()
+        field.placeholderString = placeholder
+        field.font = .systemFont(ofSize: 14)
+        field.isBordered = true
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.delegate = context.coordinator
+        field.stringValue = text
+        return field
+    }
+
+    func updateNSView(_ nsView: EditableNSTextField, context: Context) {
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onSubmit: onSubmit)
+    }
+
+    class Coordinator: NSObject, NSTextFieldDelegate {
+        @Binding var text: String
+        let onSubmit: (() -> Void)?
+
+        init(text: Binding<String>, onSubmit: (() -> Void)?) {
+            _text = text
+            self.onSubmit = onSubmit
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            text = field.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                onSubmit?()
+                return true
+            }
+            return false
+        }
+    }
+}
+
+// MARK: - OpenAI Logo
+
+struct OpenAILogoShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24
+        let sy = rect.height / 24
+        var p = Path()
+        p.move(to: CGPoint(x: 22.2819 * sx, y: 9.8211 * sy))
+        p.addCurve(to: CGPoint(x: 21.7662 * sx, y: 4.9103 * sy), control1: CGPoint(x: 22.8248 * sx, y: 8.1862 * sy), control2: CGPoint(x: 22.6369 * sx, y: 6.3967 * sy))
+        p.addCurve(to: CGPoint(x: 15.2564 * sx, y: 2.0103 * sy), control1: CGPoint(x: 20.4571 * sx, y: 2.6316 * sy), control2: CGPoint(x: 17.8260 * sx, y: 1.4595 * sy))
+        p.addCurve(to: CGPoint(x: 4.9807 * sx, y: 4.1818 * sy), control1: CGPoint(x: 12.1364 * sx, y: -1.4602 * sy), control2: CGPoint(x: 6.4298 * sx, y: -0.2543 * sy))
+        p.addCurve(to: CGPoint(x: 0.9830 * sx, y: 7.0818 * sy), control1: CGPoint(x: 3.2928 * sx, y: 4.5279 * sy), control2: CGPoint(x: 1.8360 * sx, y: 5.5847 * sy))
+        p.addCurve(to: CGPoint(x: 1.7257 * sx, y: 14.1784 * sy), control1: CGPoint(x: -0.3404 * sx, y: 9.3568 * sy), control2: CGPoint(x: -0.0401 * sx, y: 12.2267 * sy))
+        p.addCurve(to: CGPoint(x: 2.2367 * sx, y: 19.0891 * sy), control1: CGPoint(x: 1.1808 * sx, y: 15.8125 * sy), control2: CGPoint(x: 1.3670 * sx, y: 17.6022 * sy))
+        p.addCurve(to: CGPoint(x: 8.7513 * sx, y: 21.9892 * sy), control1: CGPoint(x: 3.5475 * sx, y: 21.3686 * sy), control2: CGPoint(x: 6.1803 * sx, y: 22.5406 * sy))
+        p.addCurve(to: CGPoint(x: 13.2599 * sx, y: 24.0000 * sy), control1: CGPoint(x: 9.8948 * sx, y: 23.2770 * sy), control2: CGPoint(x: 11.5377 * sx, y: 24.0097 * sy))
+        p.addCurve(to: CGPoint(x: 19.0317 * sx, y: 19.7942 * sy), control1: CGPoint(x: 15.8937 * sx, y: 24.0024 * sy), control2: CGPoint(x: 18.2271 * sx, y: 22.3021 * sy))
+        p.addCurve(to: CGPoint(x: 23.0294 * sx, y: 16.8941 * sy), control1: CGPoint(x: 20.7194 * sx, y: 19.4475 * sy), control2: CGPoint(x: 22.1760 * sx, y: 18.3908 * sy))
+        p.addCurve(to: CGPoint(x: 22.2819 * sx, y: 9.8212 * sy), control1: CGPoint(x: 24.3368 * sx, y: 14.6231 * sy), control2: CGPoint(x: 24.0351 * sx, y: 11.7688 * sy))
+        p.closeSubpath()
+        p.move(to: CGPoint(x: 13.2599 * sx, y: 22.4292 * sy))
+        p.addCurve(to: CGPoint(x: 10.3835 * sx, y: 21.3884 * sy), control1: CGPoint(x: 12.2086 * sx, y: 22.4309 * sy), control2: CGPoint(x: 11.1903 * sx, y: 22.0624 * sy))
+        p.addLine(to: CGPoint(x: 10.5254 * sx, y: 21.3080 * sy))
+        p.addLine(to: CGPoint(x: 15.3037 * sx, y: 18.5498 * sy))
+        p.addCurve(to: CGPoint(x: 15.6964 * sx, y: 17.8685 * sy), control1: CGPoint(x: 15.5456 * sx, y: 18.4079 * sy), control2: CGPoint(x: 15.6949 * sx, y: 18.1490 * sy))
+        p.addLine(to: CGPoint(x: 15.6964 * sx, y: 11.1316 * sy))
+        p.addLine(to: CGPoint(x: 17.7164 * sx, y: 12.3002 * sy))
+        p.addCurve(to: CGPoint(x: 17.7544 * sx, y: 12.3522 * sy), control1: CGPoint(x: 17.7367 * sx, y: 12.3105 * sy), control2: CGPoint(x: 17.7508 * sx, y: 12.3298 * sy))
+        p.addLine(to: CGPoint(x: 17.7544 * sx, y: 17.9348 * sy))
+        p.addCurve(to: CGPoint(x: 13.2599 * sx, y: 22.4292 * sy), control1: CGPoint(x: 17.7491 * sx, y: 20.4148 * sy), control2: CGPoint(x: 15.7399 * sx, y: 22.4240 * sy))
+        p.closeSubpath()
+        p.move(to: CGPoint(x: 3.5992 * sx, y: 18.3038 * sy))
+        p.addCurve(to: CGPoint(x: 3.0646 * sx, y: 15.2901 * sy), control1: CGPoint(x: 3.0720 * sx, y: 17.3934 * sy), control2: CGPoint(x: 2.8827 * sx, y: 16.3263 * sy))
+        p.addLine(to: CGPoint(x: 3.2066 * sx, y: 15.3753 * sy))
+        p.addLine(to: CGPoint(x: 7.9896 * sx, y: 18.1335 * sy))
+        p.addCurve(to: CGPoint(x: 8.7702 * sx, y: 18.1335 * sy), control1: CGPoint(x: 8.2306 * sx, y: 18.2749 * sy), control2: CGPoint(x: 8.5292 * sx, y: 18.2749 * sy))
+        p.addLine(to: CGPoint(x: 14.6130 * sx, y: 14.7650 * sy))
+        p.addLine(to: CGPoint(x: 14.6130 * sx, y: 17.0974 * sy))
+        p.addCurve(to: CGPoint(x: 14.5798 * sx, y: 17.1589 * sy), control1: CGPoint(x: 14.6119 * sx, y: 17.1219 * sy), control2: CGPoint(x: 14.5997 * sx, y: 17.1445 * sy))
+        p.addLine(to: CGPoint(x: 9.7400 * sx, y: 19.9502 * sy))
+        p.addCurve(to: CGPoint(x: 3.5992 * sx, y: 18.3038 * sy), control1: CGPoint(x: 7.5893 * sx, y: 21.1891 * sy), control2: CGPoint(x: 4.8416 * sx, y: 20.4525 * sy))
+        p.closeSubpath()
+        p.move(to: CGPoint(x: 2.3408 * sx, y: 7.8956 * sy))
+        p.addCurve(to: CGPoint(x: 4.7063 * sx, y: 5.9228 * sy), control1: CGPoint(x: 2.8717 * sx, y: 6.9794 * sy), control2: CGPoint(x: 3.7096 * sx, y: 6.2805 * sy))
+        p.addLine(to: CGPoint(x: 4.7063 * sx, y: 11.6000 * sy))
+        p.addCurve(to: CGPoint(x: 5.0942 * sx, y: 12.2765 * sy), control1: CGPoint(x: 4.7026 * sx, y: 11.8793 * sy), control2: CGPoint(x: 4.8513 * sx, y: 12.1386 * sy))
+        p.addLine(to: CGPoint(x: 10.9086 * sx, y: 15.6308 * sy))
+        p.addLine(to: CGPoint(x: 8.8885 * sx, y: 16.7993 * sy))
+        p.addCurve(to: CGPoint(x: 8.8175 * sx, y: 16.7993 * sy), control1: CGPoint(x: 8.8663 * sx, y: 16.8111 * sy), control2: CGPoint(x: 8.8397 * sx, y: 16.8111 * sy))
+        p.addLine(to: CGPoint(x: 3.9872 * sx, y: 14.0128 * sy))
+        p.addCurve(to: CGPoint(x: 2.3408 * sx, y: 7.8720 * sy), control1: CGPoint(x: 1.8408 * sx, y: 12.7686 * sy), control2: CGPoint(x: 1.1047 * sx, y: 10.0230 * sy))
+        p.closeSubpath()
+        p.move(to: CGPoint(x: 18.9371 * sx, y: 11.7514 * sy))
+        p.addLine(to: CGPoint(x: 13.1038 * sx, y: 8.3640 * sy))
+        p.addLine(to: CGPoint(x: 15.1192 * sx, y: 7.2000 * sy))
+        p.addCurve(to: CGPoint(x: 15.1902 * sx, y: 7.2000 * sy), control1: CGPoint(x: 15.1414 * sx, y: 7.1882 * sy), control2: CGPoint(x: 15.1680 * sx, y: 7.1882 * sy))
+        p.addLine(to: CGPoint(x: 20.0205 * sx, y: 9.9913 * sy))
+        p.addCurve(to: CGPoint(x: 19.3440 * sx, y: 18.0955 * sy), control1: CGPoint(x: 23.3136 * sx, y: 11.8915 * sy), control2: CGPoint(x: 22.9065 * sx, y: 16.7676 * sy))
+        p.addLine(to: CGPoint(x: 19.3440 * sx, y: 12.4183 * sy))
+        p.addCurve(to: CGPoint(x: 18.9370 * sx, y: 11.7513 * sy), control1: CGPoint(x: 19.3355 * sx, y: 12.1397 * sy), control2: CGPoint(x: 19.1808 * sx, y: 11.8863 * sy))
+        p.closeSubpath()
+        p.move(to: CGPoint(x: 20.9478 * sx, y: 8.7283 * sy))
+        p.addLine(to: CGPoint(x: 20.8058 * sx, y: 8.6431 * sy))
+        p.addLine(to: CGPoint(x: 16.0323 * sx, y: 5.8613 * sy))
+        p.addCurve(to: CGPoint(x: 15.2469 * sx, y: 5.8613 * sy), control1: CGPoint(x: 15.7898 * sx, y: 5.7190 * sy), control2: CGPoint(x: 15.4894 * sx, y: 5.7190 * sy))
+        p.addLine(to: CGPoint(x: 9.4090 * sx, y: 9.2297 * sy))
+        p.addLine(to: CGPoint(x: 9.4090 * sx, y: 6.8974 * sy))
+        p.addCurve(to: CGPoint(x: 9.4374 * sx, y: 6.8359 * sy), control1: CGPoint(x: 9.4065 * sx, y: 6.8732 * sy), control2: CGPoint(x: 9.4174 * sx, y: 6.8496 * sy))
+        p.addLine(to: CGPoint(x: 14.2677 * sx, y: 4.0493 * sy))
+        p.addCurve(to: CGPoint(x: 20.9479 * sx, y: 8.7093 * sy), control1: CGPoint(x: 17.5693 * sx, y: 2.1473 * sy), control2: CGPoint(x: 21.5928 * sx, y: 4.9539 * sy))
+        p.closeSubpath()
+        p.move(to: CGPoint(x: 8.3065 * sx, y: 12.8630 * sy))
+        p.addLine(to: CGPoint(x: 6.2865 * sx, y: 11.6992 * sy))
+        p.addCurve(to: CGPoint(x: 6.2485 * sx, y: 11.6425 * sy), control1: CGPoint(x: 6.2660 * sx, y: 11.6869 * sy), control2: CGPoint(x: 6.2521 * sx, y: 11.6661 * sy))
+        p.addLine(to: CGPoint(x: 6.2485 * sx, y: 6.0742 * sy))
+        p.addCurve(to: CGPoint(x: 13.6242 * sx, y: 2.6205 * sy), control1: CGPoint(x: 6.2535 * sx, y: 2.2647 * sy), control2: CGPoint(x: 10.6950 * sx, y: 0.1849 * sy))
+        p.addLine(to: CGPoint(x: 13.4822 * sx, y: 2.7010 * sy))
+        p.addLine(to: CGPoint(x: 8.7040 * sx, y: 5.4590 * sy))
+        p.addCurve(to: CGPoint(x: 8.3113 * sx, y: 6.1403 * sy), control1: CGPoint(x: 8.4621 * sx, y: 5.6009 * sy), control2: CGPoint(x: 8.3128 * sx, y: 5.8598 * sy))
+        p.closeSubpath()
+        // Inner hexagon
+        p.move(to: CGPoint(x: 9.4041 * sx, y: 10.4976 * sy))
+        p.addLine(to: CGPoint(x: 12.0061 * sx, y: 8.9978 * sy))
+        p.addLine(to: CGPoint(x: 14.6130 * sx, y: 10.4976 * sy))
+        p.addLine(to: CGPoint(x: 14.6130 * sx, y: 13.4970 * sy))
+        p.addLine(to: CGPoint(x: 12.0156 * sx, y: 14.9967 * sy))
+        p.addLine(to: CGPoint(x: 9.4089 * sx, y: 13.4970 * sy))
+        p.closeSubpath()
+        return p
+    }
+}

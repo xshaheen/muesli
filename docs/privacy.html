@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Privacy Policy &middot; Muesli</title>
-  <meta name="description" content="Privacy policy for Muesli, a local-first AI dictation and meeting transcription app for macOS.">
+  <title>Privacy Policy &middot; Imla</title>
+  <meta name="description" content="Privacy policy for Imla, a local-first AI dictation and meeting transcription app for macOS.">
   <meta name="theme-color" content="#111214">
   <link rel="icon" type="image/png" href="./favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -119,11 +119,11 @@
   <p class="updated">Last updated: September 18, 2026</p>
 
   <div class="highlight">
-    <p><strong>Muesli is local-first.</strong> By default, speech-to-text processing runs on your Mac and audio is not sent to a transcription service. If you explicitly select an optional hosted dictation provider, Muesli sends that dictation audio to OpenAI or through OpenRouter to your selected upstream model for transcription. Optional hosted cleanup, meeting-note, calendar, update, telemetry, and private iCloud features exchange only the data described below.</p>
+    <p><strong>Imla is local-first.</strong> By default, speech-to-text processing runs on your Mac and audio is not sent to a transcription service. If you explicitly select an optional hosted dictation provider, Imla sends that dictation audio to OpenAI or through OpenRouter to your selected upstream model for transcription. Optional hosted cleanup, meeting-note, calendar, update, telemetry, and private iCloud features exchange only the data described below.</p>
   </div>
 
-  <h2>What Muesli Does</h2>
-  <p>Muesli is a macOS application for dictation and meeting transcription. It uses on-device machine learning models (CoreML / Apple Neural Engine) to convert speech to text entirely on your Mac by default. Optional OpenAI and OpenRouter dictation providers are available only when you choose and configure them.</p>
+  <h2>What Imla Does</h2>
+  <p>Imla is a macOS application for dictation and meeting transcription. It uses on-device machine learning models (CoreML / Apple Neural Engine) to convert speech to text entirely on your Mac by default. Optional OpenAI and OpenRouter dictation providers are available only when you choose and configure them.</p>
 
   <h2>Data That Stays on Your Device</h2>
   <p>The following data is created and stored locally on your Mac. It is not transmitted to any external server unless you explicitly enable an optional cloud service described below:</p>
@@ -133,12 +133,12 @@
     <li><strong>Configuration and preferences</strong> &mdash; stored in a local JSON file. Mode definitions &mdash; their names, instructions, activation apps, activation websites and send keys &mdash; and history provenance stay in that local file and are not synced to iCloud.</li>
     <li><strong>Speech-to-text models</strong> &mdash; downloaded once from public model repositories (HuggingFace) and cached locally</li>
   </ul>
-  <p>Muesli keeps a one-time copy of your previous configuration as <code>config.pre-modes.json</code> when it converts Writing Styles into Modes, so you can roll back. That file is a copy of your old configuration and therefore contains the same provider API keys; delete it once the upgrade is working.</p>
+  <p>Imla keeps a one-time copy of your previous configuration as <code>config.pre-modes.json</code> when it converts Writing Styles into Modes, so you can roll back. That file is a copy of your old configuration and therefore contains the same provider API keys; delete it once the upgrade is working.</p>
 
   <h2>Optional Cloud Services</h2>
-  <p>Muesli offers optional integrations that connect to external services. These are opt-in and require explicit user action:</p>
+  <p>Imla offers optional integrations that connect to external services. These are opt-in and require explicit user action:</p>
   <ul>
-    <li><strong>Hosted dictation cleanup</strong> &mdash; if you select ChatGPT, OpenAI, OpenRouter, or another configured hosted provider, Muesli sends the transcript and the locally selected style instructions to that provider. Separately enabled App Context is included only when that setting is on. Mode names, activation apps, and activation websites are not sent merely to select a mode and are not added to telemetry.</li>
+    <li><strong>Hosted dictation cleanup</strong> &mdash; if you select ChatGPT, OpenAI, OpenRouter, or another configured hosted provider, Imla sends the transcript and the locally selected style instructions to that provider. Separately enabled App Context is included only when that setting is on. Mode names, activation apps, and activation websites are not sent merely to select a mode and are not added to telemetry.</li>
     <li><strong>OpenAI dictation (OpenAI API)</strong> &mdash; if you select OpenAI as your dictation provider and add your own API key, microphone audio is streamed directly to OpenAI's Realtime transcription API. OpenAI's API data controls explain how API data is used, retained, and excluded from model training by default; see <a href="https://platform.openai.com/docs/models/default-usage-policies-by-endpoint">OpenAI's API data-controls documentation</a> for the current retention and data-sharing settings.</li>
     <li><strong>OpenRouter dictation</strong> &mdash; if you select OpenRouter as your dictation provider, connect an account or key, and choose a transcription model, the completed dictation recording is sent through OpenRouter to that selected upstream model. Processing is governed by OpenRouter's and the selected model provider's policies.</li>
     <li><strong>Meeting summarization (OpenAI API / OpenRouter)</strong> &mdash; if configured, meeting transcripts are sent to the selected API provider to generate summaries. This is governed by the respective provider's privacy policy.</li>
@@ -147,12 +147,12 @@
   </ul>
 
   <h2>Private iCloud Text Sync</h2>
-  <p>When enabled, Muesli syncs dictation text, meeting transcripts, notes, summaries, and manual notes through your CloudKit private database. Audio, Writing Style definitions and rules, and local style-selection or cleanup-outcome provenance are excluded from sync.</p>
+  <p>When enabled, Imla syncs dictation text, meeting transcripts, notes, summaries, and manual notes through your CloudKit private database. Audio, Writing Style definitions and rules, and local style-selection or cleanup-outcome provenance are excluded from sync.</p>
 
   <h2>Google Calendar Integration</h2>
-  <p>Muesli can optionally connect to your Google Calendar to display upcoming meetings in the status bar and auto-detect meeting start times. When you connect Google Calendar:</p>
+  <p>Imla can optionally connect to your Google Calendar to display upcoming meetings in the status bar and auto-detect meeting start times. When you connect Google Calendar:</p>
   <ul>
-    <li>Muesli requests <strong>read-only access</strong> to your calendar events (event titles, times, and durations)</li>
+    <li>Imla requests <strong>read-only access</strong> to your calendar events (event titles, times, and durations)</li>
     <li>Calendar data is fetched directly from Google's API to your Mac &mdash; it does not pass through any intermediary server</li>
     <li>Calendar data is used only for displaying upcoming meetings and is not stored persistently</li>
     <li>OAuth tokens are stored in your macOS Keychain, protected by the operating system</li>
@@ -160,7 +160,7 @@
   </ul>
 
   <h2>macOS Permissions</h2>
-  <p>Muesli requests the following macOS permissions, each for a specific purpose:</p>
+  <p>Imla requests the following macOS permissions, each for a specific purpose:</p>
   <ul>
     <li><strong>Microphone</strong> &mdash; to capture your voice for dictation and meeting transcription</li>
     <li><strong>Screen Recording</strong> &mdash; to capture system audio during meetings (via ScreenCaptureKit) and, only when separately enabled, OCR screen text for dictation App Context. Modes never trigger or use OCR.</li>
@@ -170,28 +170,28 @@
   </ul>
 
   <h2>Anonymous Usage Analytics</h2>
-  <p>Muesli uses <a href="https://telemetrydeck.com">TelemetryDeck</a> to collect minimal, anonymized usage signals (e.g., which features are used and app launch counts). Dictation completion reports only coarse enum values for transcription backend, paste method, mode-selection source, whether a mode applied, cleanup outcome, and cleanup backend. It never sends bundle IDs, hostnames, app or mode names, mode IDs, prompts, transcripts, URLs, selected text, OCR text, or App Context. Hard-failure diagnostics use a separate allowlist and never include raw error messages, audio, transcripts, meeting or calendar titles, clipboard or screen contents, API keys, auth tokens, local file paths, raw logs, or database contents. TelemetryDeck does not store IP addresses, and identifiers used for anonymous user and session counts cannot be traced back to a person. You can learn more about TelemetryDeck's privacy practices on their <a href="https://telemetrydeck.com/privacy">privacy page</a>.</p>
+  <p>Imla uses <a href="https://telemetrydeck.com">TelemetryDeck</a> to collect minimal, anonymized usage signals (e.g., which features are used and app launch counts). Dictation completion reports only coarse enum values for transcription backend, paste method, mode-selection source, whether a mode applied, cleanup outcome, and cleanup backend. It never sends bundle IDs, hostnames, app or mode names, mode IDs, prompts, transcripts, URLs, selected text, OCR text, or App Context. Hard-failure diagnostics use a separate allowlist and never include raw error messages, audio, transcripts, meeting or calendar titles, clipboard or screen contents, API keys, auth tokens, local file paths, raw logs, or database contents. TelemetryDeck does not store IP addresses, and identifiers used for anonymous user and session counts cannot be traced back to a person. You can learn more about TelemetryDeck's privacy practices on their <a href="https://telemetrydeck.com/privacy">privacy page</a>.</p>
 
   <h2>Optional Local Debug Logs</h2>
-  <p>Transcript-cleanup debug JSONL is off by default and can be enabled only through Muesli's developer environment flags. It is written locally in the app support directory and may contain bounded transcript, cleanup output, App Context, error text, and the selected mode ID and selection source. The file rotates when it exceeds 5 MB. These debug entries are not sent to TelemetryDeck.</p>
+  <p>Transcript-cleanup debug JSONL is off by default and can be enabled only through Imla's developer environment flags. It is written locally in the app support directory and may contain bounded transcript, cleanup output, App Context, error text, and the selected mode ID and selection source. The file rotates when it exceeds 5 MB. These debug entries are not sent to TelemetryDeck.</p>
 
   <h2>No Personal Data Collection</h2>
-  <p><strong>Muesli does not operate a server that stores your transcripts or audio.</strong> Data is transmitted only when you enable or use the optional hosted dictation, hosted cleanup, meeting-note, private iCloud text-sync, calendar, update-check, or anonymous telemetry features described above. Local transcription, local cleanup, and local style matching work without sending their content to Muesli.</p>
+  <p><strong>Imla does not operate a server that stores your transcripts or audio.</strong> Data is transmitted only when you enable or use the optional hosted dictation, hosted cleanup, meeting-note, private iCloud text-sync, calendar, update-check, or anonymous telemetry features described above. Local transcription, local cleanup, and local style matching work without sending their content to Imla.</p>
 
   <h2>Open Source</h2>
-  <p>Muesli's source code is publicly available on <a href="https://github.com/xshaheen/muesli">GitHub</a> under the MIT license. You can inspect exactly what the application does with your data.</p>
+  <p>Imla's source code is publicly available on <a href="https://github.com/xshaheen/muesli">GitHub</a> under the MIT license. You can inspect exactly what the application does with your data.</p>
 
   <h2>Children's Privacy</h2>
-  <p>Muesli is not directed at children under 13. We do not knowingly collect data from children.</p>
+  <p>Imla is not directed at children under 13. We do not knowingly collect data from children.</p>
 
   <h2>Changes to This Policy</h2>
-  <p>If this policy changes, the updated version will be posted here with a revised date. Muesli does not have a mechanism to notify users of policy changes since we do not collect contact information.</p>
+  <p>If this policy changes, the updated version will be posted here with a revised date. Imla does not have a mechanism to notify users of policy changes since we do not collect contact information.</p>
 
   <h2>Contact</h2>
   <p>For questions about this privacy policy, open an issue on <a href="https://github.com/xshaheen/muesli/issues">GitHub</a> or reach out to the maintainer via the repository.</p>
 </div>
 
-<footer>muesli &middot; local-first &middot; open source</footer>
+<footer>imla &middot; local-first &middot; open source</footer>
 
 </body>
 </html>

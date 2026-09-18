@@ -1,10 +1,10 @@
-# Contributing to Muesli
+# Contributing to Imla
 
-Thanks for helping improve Muesli. This project is a native macOS app built
+Thanks for helping improve Imla. This project is a native macOS app built
 with SwiftPM, AppKit, SwiftUI, and a small set of shell scripts around local
 builds and CI shards.
 
-This repository is a fork of [`Muesli-HQ/muesli`](https://github.com/Muesli-HQ/muesli)
+This repository is a fork of [`Muesli-HQ/imla`](https://github.com/Muesli-HQ/imla)
 maintained by Shaheen at [`xshaheen/muesli`](https://github.com/xshaheen/muesli). Send
 pull requests here; for the upstream project, contribute upstream.
 
@@ -27,8 +27,8 @@ MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh
 ### Meeting echo cancellation (LocalVQE)
 
 Meeting AEC defaults to LocalVQE. The GGUF model is committed under
-`native/MuesliNative/LocalVQE/models/`, but the shared libraries under
-`native/MuesliNative/LocalVQE/lib/` are gitignored. Build them once before
+`native/ImlaNative/LocalVQE/models/`, but the shared libraries under
+`native/ImlaNative/LocalVQE/lib/` are gitignored. Build them once before
 packaging if you need the default AEC path (otherwise the app falls back to
 DTLN):
 
@@ -56,9 +56,9 @@ MUESLI_AEC_PROCESSOR=localvqe-strict MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh
 
 `localvqe-strict` does not fall back to DTLN when LocalVQE fails to load.
 
-That installs `/Applications/MuesliDev.app` with bundle ID `com.muesli.dev`
-and stores data under `~/Library/Application Support/MuesliDev/`, so it does
-not touch your production Muesli install or data.
+That installs `/Applications/ImlaDev.app` with bundle ID `com.xshaheen.imla.dev`
+and stores data under `~/Library/Application Support/ImlaDev/`, so it does
+not touch your production Imla install or data.
 
 By default, `scripts/dev-test.sh` uses local-only entitlements. Maintainer
 machines keep CloudKit profiles outside this repository under a sibling
@@ -69,10 +69,10 @@ Developer account access for ordinary local development.
 Useful dev commands:
 
 ```bash
-MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh                # Build and launch MuesliDev
+MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh                # Build and launch ImlaDev
 MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh --reset        # Re-run onboarding, keep data
 MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh --local-only   # Force local-only entitlements
-./scripts/dev-reset-permissions.sh                      # Reset macOS privacy permissions for MuesliDev
+./scripts/dev-reset-permissions.sh                      # Reset macOS privacy permissions for ImlaDev
 ```
 
 If you do have your own signing certificate, you can override the identity:
@@ -102,8 +102,8 @@ requirement.
 ## Telemetry in Development
 
 Use `scripts/dev-test.sh` for local app testing. It routes anonymous telemetry
-to the dedicated `MuesliDev` TelemetryDeck app and labels every signal with
-`muesli.channel=dev`; named lanes A, B, and C use the same dev destination with
+to the dedicated `ImlaDev` TelemetryDeck app and labels every signal with
+`imla.channel=dev`; named lanes A, B, and C use the same dev destination with
 their own bundle IDs. This keeps contributor and maintainer test traffic out of
 the production and preprod TelemetryDeck apps.
 
@@ -111,7 +111,7 @@ Direct SwiftPM or otherwise unconfigured source builds leave telemetry
 disabled. Do not enable production or preprod telemetry for local testing, and
 do not hardcode TelemetryDeck app IDs in application code or new scripts. Build
 scripts that need telemetry routing must use the centralized public identifiers
-in `scripts/muesli_telemetry_channels.sh` and select the appropriate non-production
+in `scripts/imla_telemetry_channels.sh` and select the appropriate non-production
 channel explicitly.
 
 New telemetry events must remain anonymous and must not include audio,
@@ -141,12 +141,12 @@ packaging.
 
 ## SwiftPM Build Cache
 
-SwiftPM writes build artifacts to `native/MuesliNative/.build` by default,
+SwiftPM writes build artifacts to `native/ImlaNative/.build` by default,
 which can become large across worktrees. Use a shared scratch path for local
 testing:
 
 ```bash
-MUESLI_SWIFTPM_SCRATCH_PATH="$HOME/Library/Caches/muesli-spm/dev" \
+MUESLI_SWIFTPM_SCRATCH_PATH="$HOME/Library/Caches/imla-spm/dev" \
   MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh
 ```
 
@@ -158,7 +158,7 @@ path. Use separate names such as `dev`, `test`, or `agent-1`.
 Run the native test package:
 
 ```bash
-swift test --package-path native/MuesliNative
+swift test --package-path native/ImlaNative
 ```
 
 For CI-sized local checks, use the shard script:
@@ -172,8 +172,8 @@ For CI-sized local checks, use the shard script:
 For direct SwiftPM test runs with a shared cache:
 
 ```bash
-swift test --package-path native/MuesliNative \
-  --scratch-path "$HOME/Library/Caches/muesli-spm/test"
+swift test --package-path native/ImlaNative \
+  --scratch-path "$HOME/Library/Caches/imla-spm/test"
 ```
 
 ## Pull Requests
@@ -189,7 +189,7 @@ swift test --package-path native/MuesliNative \
 
 ## Contribution License
 
-Muesli is licensed under the [MIT License](LICENSE). By submitting a
+Imla is licensed under the [MIT License](LICENSE). By submitting a
 contribution, you agree that your contribution is licensed under the same MIT
 License. Your DCO sign-off certifies that you have the right to submit the
 contribution under those terms.
@@ -204,7 +204,7 @@ request description. Include the source and applicable license or terms.
 
 ## Developer Certificate of Origin
 
-Every non-merge commit contributed to Muesli must be signed off under the
+Every non-merge commit contributed to Imla must be signed off under the
 [Developer Certificate of Origin 1.1](DCO). The sign-off certifies that you
 created the contribution or otherwise have the right to submit it under the
 repository's open-source license.

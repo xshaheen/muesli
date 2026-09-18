@@ -1,23 +1,23 @@
-# Muesli SQLite database guide
+# Imla SQLite database guide
 
-This document is the contributor and coding-agent map of Muesli's local SQLite
+This document is the contributor and coding-agent map of Imla's local SQLite
 database. It explains ownership, relationships, sync boundaries, and the safe
 way to evolve the schema. The executable source of truth remains
-[`DictationStore.migrateIfNeeded()`](native/MuesliNative/Sources/MuesliCore/DictationStore.swift).
+[`DictationStore.migrateIfNeeded()`](native/ImlaNative/Sources/ImlaCore/DictationStore.swift).
 Update this guide whenever that schema changes.
 
 ## Where the database lives
 
-The database filename is `muesli.db` inside the active app's Application
+The database filename is `imla.db` inside the active app's Application
 Support directory. Common locations are:
 
-- Stable: `~/Library/Application Support/Muesli/muesli.db`
-- Default development app: `~/Library/Application Support/MuesliDev/muesli.db`
-- Fixed development lanes: `MuesliDevA`, `MuesliDevB`, or `MuesliDevC` in the
+- Stable: `~/Library/Application Support/Imla/imla.db`
+- Default development app: `~/Library/Application Support/ImlaDev/imla.db`
+- Fixed development lanes: `ImlaDevA`, `ImlaDevB`, or `ImlaDevC` in the
   corresponding Application Support directory
 
-Use `muesli-cli info` to resolve the active database instead of assuming a path.
-Do not edit a user's database directly while Muesli is running.
+Use `imla-cli info` to resolve the active database instead of assuming a path.
+Do not edit a user's database directly while Imla is running.
 
 ## Storage rules at a glance
 
@@ -169,7 +169,7 @@ treated as the authoritative source for dictation or meeting history.
 | `insights_token_totals` | All-time dictation/meeting counts per token |
 | `insights_daily_tokens` | Per-day dictation/meeting counts per token |
 
-## What is not stored in `muesli.db`
+## What is not stored in `imla.db`
 
 - Downloaded ASR and language-model weights
 - Audio recordings and waveform cache files
@@ -184,7 +184,7 @@ but the resources themselves remain files or platform-managed secrets.
 
 1. Update the fresh-database `CREATE TABLE` definition in
    `DictationStore.migrateIfNeeded()`.
-2. Add an idempotent upgrade path for existing databases. Existing Muesli code
+2. Add an idempotent upgrade path for existing databases. Existing Imla code
    commonly attempts `ALTER TABLE ... ADD COLUMN` and tolerates only the known
    duplicate-column case.
 3. Use `local_migrations` for a one-time data rewrite or backfill. Guard and
@@ -209,13 +209,13 @@ audio startup and meeting lifecycle paths.
 
 ## Safe inspection
 
-Quit the relevant Muesli build first, copy the database plus its `-wal` and
+Quit the relevant Imla build first, copy the database plus its `-wal` and
 `-shm` companions when present, and inspect the copy:
 
 ```bash
-sqlite3 "/path/to/copied-muesli.db" '.tables'
-sqlite3 "/path/to/copied-muesli.db" '.schema meetings'
-sqlite3 "/path/to/copied-muesli.db" 'PRAGMA foreign_key_check;'
+sqlite3 "/path/to/copied-imla.db" '.tables'
+sqlite3 "/path/to/copied-imla.db" '.schema meetings'
+sqlite3 "/path/to/copied-imla.db" 'PRAGMA foreign_key_check;'
 ```
 
 Use normal store APIs for mutations. Direct SQL writes bypass sync bookkeeping,

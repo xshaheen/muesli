@@ -22,7 +22,7 @@ while IFS= read -r file; do
       docs_only=false
       ;;
 
-    assets/sponsors/*|assets/repository-open-graph*|assets/muesli-readme-og.jpg|assets/muesli-github-ss.png)
+    assets/sponsors/*|assets/repository-open-graph*|assets/imla-readme-og.jpg|assets/imla-github-ss.png)
       site_or_metadata=true
       ;;
 
@@ -36,7 +36,7 @@ while IFS= read -r file; do
       docs_only=false
       ;;
 
-    scripts/build_native_app.sh|scripts/release*.sh|scripts/notarize_app.sh|scripts/test_packaged_cli.sh|scripts/verify_update_flow.sh|scripts/run_ci_test_shard.sh|scripts/muesli_spm_cache.sh)
+    scripts/build_native_app.sh|scripts/release*.sh|scripts/notarize_app.sh|scripts/test_packaged_cli.sh|scripts/verify_update_flow.sh|scripts/run_ci_test_shard.sh|scripts/imla_spm_cache.sh)
       release_surface=true
       packaging_surface=true
       docs_only=false

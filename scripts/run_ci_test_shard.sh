@@ -43,8 +43,8 @@ case "${shard}" in
       ComputerUseRunDiagnosticsTests
       ComputerUseToolRegistryTests
       ComputerUseTraceFormatterTests
-      MuesliCKSyncEngineTests
-      MuesliCLITests
+      ImlaCKSyncEngineTests
+      ImlaCLITests
       ChatGPTAuthTests
       ChatGPTResponsesTransportTests
       ChatGPTTokenStorageTests
@@ -249,7 +249,7 @@ if [[ "${list_filters}" == true ]]; then
   exit 0
 fi
 
-args=(--package-path native/MuesliNative)
+args=(--package-path native/ImlaNative)
 if [[ "${shard}" == meetings ]]; then
   # Concurrent suites can starve the utility-priority caption tasks on small
   # runners. Serialize test cases, preserving concurrency exercised inside each

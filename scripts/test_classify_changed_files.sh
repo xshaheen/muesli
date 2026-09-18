@@ -72,7 +72,7 @@ run_case docs_report_only \
   "native_or_packaging=false"
 
 run_case native_source \
-  "native/MuesliNative/Sources/App.swift" \
+  "native/ImlaNative/Sources/App.swift" \
   "docs_only=false" \
   "app_source=true" \
   "release_surface=false" \
@@ -248,7 +248,7 @@ run_case repo_policy \
   "native_or_packaging=false"
 
 run_case mixed_docs_and_source \
-  $'README.md\nnative/MuesliNative/Sources/App.swift' \
+  $'README.md\nnative/ImlaNative/Sources/App.swift' \
   "docs_only=false" \
   "app_source=true" \
   "release_surface=false" \
@@ -284,13 +284,13 @@ run_gate_case() {
 for metadata in docs/appcast.xml docs/appcast-preprod.xml docs/index.html docs/llms.txt; do
   run_gate_case metadata "$metadata" false
   for native_path in \
-    native/MuesliNative/Sources/App.swift \
-    native/MuesliNative/Package.resolved \
+    native/ImlaNative/Sources/App.swift \
+    native/ImlaNative/Package.resolved \
     scripts/release.sh \
     scripts/verify_update_flow.sh \
     scripts/classify_changed_files.sh \
     assets/AppIcon.icns \
-    docs/download/Muesli.dmg \
+    docs/download/Imla.dmg \
     .github/workflows/ci.yml \
     tools/unknown-helper.sh; do
     run_gate_case mixed "$metadata"$'\n'"$native_path" true
@@ -298,7 +298,7 @@ for metadata in docs/appcast.xml docs/appcast-preprod.xml docs/index.html docs/l
   done
 done
 run_gate_case metadata_batch $'docs/appcast.xml\ndocs/index.html\ndocs/llms.txt\nREADME.md' false
-run_gate_case download_artifact "docs/download/Muesli.dmg" true
+run_gate_case download_artifact "docs/download/Imla.dmg" true
 run_gate_case empty_fails_closed "" true
 
 echo "classifier tests passed"

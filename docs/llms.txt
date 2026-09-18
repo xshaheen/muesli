@@ -1,8 +1,8 @@
-# Muesli
+# Imla
 
 > Local-first AI dictation and meeting transcriber for macOS.
 
-Muesli is a free, open-source macOS application that provides hold-to-talk dictation and meeting transcription powered by on-device AI inference. Speech-to-text runs locally on Apple Silicon by default, with optional hosted dictation providers. No cloud is required for core functionality.
+Imla is a free, open-source macOS application that provides hold-to-talk dictation and meeting transcription powered by on-device AI inference. Speech-to-text runs locally on Apple Silicon by default, with optional hosted dictation providers. No cloud is required for core functionality.
 
 ## Features
 
@@ -17,7 +17,7 @@ Muesli is a free, open-source macOS application that provides hold-to-talk dicta
 
 - **Runtime**: Native Swift/AppKit application (not Electron)
 - **Speech Engine**: Fluid Audio SDK (CoreML, Apple Neural Engine)
-- **Storage**: Local SQLite database at ~/Library/Application Support/Muesli/
+- **Storage**: Local SQLite database at ~/Library/Application Support/Imla/
 - **Audio Capture**: AVAudioRecorder (mic), AudioHardwareCreateProcessTap (system audio)
 - **Platform**: macOS 14.2+ on Apple Silicon (M1/M2/M3/M4)
 
@@ -25,13 +25,13 @@ Muesli is a free, open-source macOS application that provides hold-to-talk dicta
 
 - Website: https://freedspeech.xyz
 - GitHub: https://github.com/xshaheen/muesli
-- Download: https://github.com/xshaheen/muesli/releases/download/v0.8.3/Muesli-0.8.3.dmg
+- Download: https://github.com/xshaheen/muesli/releases/download/v0.8.3/Imla-0.8.3.dmg
 - Support: https://buymeacoffee.com/phequals7
 - License: MIT
 
 ## Architecture
 
-Muesli is a menu bar app with two modes:
+Imla is a menu bar app with two modes:
 
 1. **Dictation Mode**: User holds Left Cmd key → mic records → on release, audio is transcribed locally by default or by the selected hosted provider → text is pasted at the active cursor position via accessibility APIs.
 
@@ -41,4 +41,4 @@ The app uses Fluid Audio's CoreML models running on the Apple Neural Engine for 
 
 ## Author
 
-Built by Shaheen (@xshaheen). A fork of Muesli-HQ/muesli.
+Built by Shaheen (@xshaheen). A fork of Muesli-HQ/imla.

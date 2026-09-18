@@ -1,0 +1,99 @@
+import AppKit
+import Testing
+@testable import ImlaNativeApp
+
+@Suite("Floating indicator surface style")
+struct FloatingIndicatorStyleTests {
+    @Test("every presentation uses the recording-derived neutral glass surface")
+    func everyRoleUsesRecordingDerivedNeutralGlass() {
+        for role in FloatingIndicatorPresentationRole.allCases {
+            let style = FloatingIndicatorSurfaceStyle.resolve(role: role)
+
+            #expect(style.tintHex == "1e1e2e")
+            #expect(style.tintAlpha == 0.60)
+            #expect(style.borderHex == "ffffff")
+            #expect(style.borderAlpha == 0.16)
+            #expect(style.borderWidth == 1)
+            #expect(style.glyphHex == "ffffff")
+            #expect(style.glyphAlpha == 0.95)
+            #expect(style.panelAlpha == 1)
+            #expect(style.usesGlassEffect)
+        }
+    }
+
+    @Test("reduce transparency uses an opaque neutral fallback")
+    func reduceTransparencyFallback() {
+        let style = FloatingIndicatorSurfaceStyle.resolve(
+            role: .warning,
+            reduceTransparency: true
+        )
+
+        #expect(!style.usesGlassEffect)
+        #expect(style.tintHex == "1e1e2e")
+        #expect(style.tintAlpha == 1)
+        #expect(style.panelAlpha == 1)
+        #expect(style.glyphHex == "ffffff")
+    }
+
+    @Test("collapsed idle stays opaque when transparency is reduced")
+    func collapsedIdleReduceTransparencyFallback() {
+        let normal = FloatingIndicatorSurfaceStyle.resolve(role: .idleCollapsed)
+        let reducedTransparency = FloatingIndicatorSurfaceStyle.resolve(
+            role: .idleCollapsed,
+            reduceTransparency: true
+        )
+
+        #expect(normal.panelAlpha == 1)
+        #expect(reducedTransparency.panelAlpha == 1)
+    }
+
+    @Test("increase contrast strengthens every border")
+    func increaseContrastBorder() {
+        for role in FloatingIndicatorPresentationRole.allCases {
+            let style = FloatingIndicatorSurfaceStyle.resolve(
+                role: role,
+                increaseContrast: true
+            )
+
+            #expect(style.borderWidth == 2)
+            #expect(style.borderAlpha >= 0.80)
+        }
+    }
+
+    @Test("secondary text remains legible")
+    func textOpacityFloor() {
+        for role in FloatingIndicatorPresentationRole.allCases {
+            let style = FloatingIndicatorSurfaceStyle.resolve(role: role)
+
+            #expect(style.textAlpha >= 0.82)
+        }
+    }
+}
+
+@Suite("Floating meeting panel surface style")
+struct FloatingMeetingPanelStyleTests {
+    @Test("semantic accents stay limited to the established state palette")
+    func semanticAccentPalette() {
+        #expect(ImlaTheme.defaultAccentDarkHex == 0xFF7043)
+        #expect(ImlaTheme.recordingHex == 0xFF7043)
+        #expect(ImlaTheme.transcribingHex == 0xFFB04D)
+        #expect(ImlaTheme.dangerHex == 0xFF6961)
+    }
+
+    @Test("compact and expanded selections resolve the same custom accent")
+    func selectionAccentOverride() {
+        #expect(ImlaTheme.resolvedAccentDarkHex(overrideHex: "#89b4fa") == 0x89B4FA)
+        #expect(ImlaTheme.resolvedAccentDarkHex(overrideHex: "not-a-color") == ImlaTheme.defaultAccentDarkHex)
+    }
+
+    @Test("an open panel can observe a refreshed selection accent")
+    @MainActor
+    func panelSelectionAccentRefresh() {
+        let model = FloatingMeetingTranscriptModel()
+
+        model.setSelectionAccentHex(0x89B4FA)
+
+        #expect(model.selectionAccentHex == 0x89B4FA)
+    }
+
+}

@@ -1,4 +1,4 @@
-# Muesli
+# Imla
 
 Local-first macOS dictation and meeting transcription for Apple Silicon. Speech-to-text runs
 on-device on the Neural Engine. Native Swift/AppKit — no Electron, no Python runtime, no cloud
@@ -6,11 +6,28 @@ STT bill.
 
 - **Dictation:** hold a hotkey, speak, release; text is pasted at the cursor.
 - **Meetings:** mic (You) + system audio (Others) → VAD chunking → diarization → AI notes.
-- **Agent surface:** `muesli-cli` speaks JSON over stdout for scripted transcription.
+- **Agent surface:** `imla-cli` speaks JSON over stdout for scripted transcription.
 
 Maintained by **Shaheen** <mxshaheen@gmail.com> at `xshaheen/muesli`. This is a rebranded hard
 fork of `Muesli-HQ/muesli`, which stays configured as the `upstream` remote for cherry-picks.
 **Never push to `upstream`.** Work lands on `dev` via `xshaheen/<topic>` branches.
+
+The rename from Muesli to Imla is complete for paths, modules, types, and everything the OS can
+observe. Four things still carry the old name, each on purpose:
+
+| Still `muesli` | Why it must stay |
+| --- | --- |
+| `muesli-cksyncengine-private-v1`, `muesli-text-records-sync-zone-v1` | **CloudKit zone and subscription IDs.** Renaming orphans every synced record. |
+| `muesli.sync.bridge.*`, `.muesli-download-state.json` | Persisted keys and on-disk state. Renaming silently discards bridge identity and re-downloads every ASR model. |
+| `iCloud.com.mueslihq.muesli` | Minting a new container needs an Apple Developer team this fork does not have. |
+| `MUESLI_*` environment variables | The script API. An unrecognised variable is ignored, not rejected, so renaming breaks existing automation *silently*. Flip them deliberately or not at all. |
+| `Muesli for iPhone` copy, `muesli://`, `Muesli-HQ/muesli-ios` | Name **upstream's** iOS companion app, which this fork does not rebuild. The iCloud bridge pairs with it. |
+| `/Volumes/MuesliBuildCache`, `Muesli-HQ` | A physical volume on the maintainer's disk, and the upstream GitHub org. |
+
+Test temp-directory prefixes (`muesli-nav-test-`, `muesli-chat-test-`, …) also still read `muesli`.
+They are inert, and were left alone to keep an unverifiable rename as small as possible.
+
+The GitHub repo is still `xshaheen/muesli`; only the product renamed.
 
 ## What decisions optimize for
 
@@ -39,18 +56,18 @@ Two consequences worth stating, because they read as sloppiness until you know t
 
 ## Architecture
 
-`native/MuesliNative/` is one SwiftPM package. Three targets carry the work (the rest are small
+`native/ImlaNative/` is one SwiftPM package. Three targets carry the work (the rest are small
 C-interop bridges and an app shell):
 
 | Target | Role |
 | --- | --- |
-| `MuesliCore` | Storage and pure logic: SQLite (`DictationStore`), path resolution (`MuesliPaths`), model downloads, language routing, transcription-quality scoring. No AppKit. |
-| `MuesliNativeApp` | The app. ~230 files. |
-| `MuesliCLI` | `muesli-cli`, JSON over stdout. |
+| `ImlaCore` | Storage and pure logic: SQLite (`DictationStore`), path resolution (`ImlaPaths`), model downloads, language routing, transcription-quality scoring. No AppKit. |
+| `ImlaNativeApp` | The app. ~230 files. |
+| `ImlaCLI` | `imla-cli`, JSON over stdout. |
 
 Four files are the hubs; a change usually starts at one of them:
 
-- `MuesliController.swift` — the orchestrator. Dictation, meetings, onboarding, app state.
+- `ImlaController.swift` — the orchestrator. Dictation, meetings, onboarding, app state.
 - `TranscriptionRuntime.swift` — routes to ASR backends, post-processing, VAD, diarization.
 - `MeetingSession.swift` — meeting lifecycle, capture, AEC, screen context.
 - `Models.swift` — the config schema *and* `BackendOption`, the ASR model catalog.
@@ -60,14 +77,14 @@ Four files are the hubs; a change usually starts at one of them:
 a decode test, because old configs must keep loading.
 
 `BackendOption` is the only list of ASR models. Read it rather than trusting any prose count of
-"how many models Muesli has" — that number has been wrong in every doc that hardcoded it.
+"how many models Imla has" — that number has been wrong in every doc that hardcoded it.
 
 ## Conventions
 
 - **Never hardcode the app's identity.** `AppIdentity` resolves display name, bundle name, and
-  support directory from `Info.plist`, so the same binary runs as Muesli, MuesliDev, or a named
+  support directory from `Info.plist`, so the same binary runs as Imla, ImlaDev, or a named
   lane against separate data. Paths go through `AppIdentity.supportDirectoryURL` or
-  `MuesliPaths`. A literal `"Muesli"` in a path is a bug.
+  `ImlaPaths`. A literal `"Imla"` in a path is a bug.
 - **Pull decisions out of views.** Geometry, state machines, and detection logic live in
   `nonisolated static` helpers or plain structs so they are testable without a window or a run
   loop. `MeetingRecordingPanelController`'s geometry helpers are the model to copy.
@@ -82,7 +99,7 @@ a decode test, because old configs must keep loading.
   recording is this repo's most repeated bug class.
 - **Log metadata, never content.** Counts, durations, state names, reason codes, non-content
   IDs. Never transcript text, dictated text, clipboard or screen contents, keys, or tokens.
-  Telemetry routes through `scripts/muesli_telemetry_channels.sh`; do not hardcode app IDs.
+  Telemetry routes through `scripts/imla_telemetry_channels.sh`; do not hardcode app IDs.
 - **Comments carry the reason,** not a restatement of the code and not a plan or ticket ID.
 
 ## Build and test
@@ -93,14 +110,26 @@ a decode test, because old configs must keep loading.
 - **Signing.** Release identity is resolved at recipe time: explicit `SIGN_IDENTITY=` wins, then
   the configured identity, then the keychain's first codesigning identity. Entitlements follow —
   a non-Developer-ID cert cannot back the iCloud/CloudKit entitlements without a provisioning
-  profile, so those builds sign with `scripts/MuesliLocalOnly.entitlements` and iCloud sync is
+  profile, so those builds sign with `scripts/ImlaLocalOnly.entitlements` and iCloud sync is
   off. Use `MUESLI_SKIP_SIGN=1` for ordinary local verification.
-- **Dev builds are isolated by design.** `./scripts/dev-test.sh` installs `MuesliDev.app`
-  (`com.muesli.dev`, data under `~/Library/Application Support/MuesliDev/`). Production data is
+- **Dev builds are isolated by design.** `./scripts/dev-test.sh` installs `ImlaDev.app`
+  (`com.xshaheen.imla.dev`, data under `~/Library/Application Support/ImlaDev/`). Production data is
   never touched. `--lane A|B|C` gives parallel worktrees separate bundles, data, and TCC
   identities; grant permissions once per lane and do not reset TCC unless you are testing the
   prompts themselves.
-- **SwiftPM scratch paths are shared, not package-local.** `scripts/muesli_spm_cache.sh` resolves
+- **The rename orphaned pre-Imla data; nothing migrates automatically.** A build from before the
+  rename wrote to `~/Library/Application Support/Muesli/muesli.db`; this one reads
+  `~/Library/Application Support/Imla/imla.db`. To carry history across, move it once by hand
+  before first launch:
+  ```bash
+  mv ~/Library/Application\ Support/Muesli ~/Library/Application\ Support/Imla
+  cd ~/Library/Application\ Support/Imla && for f in muesli.db*; do mv "$f" "imla.db${f#muesli.db}"; done
+  mv ~/.cache/muesli ~/.cache/imla        # keeps the downloaded ASR models; otherwise they re-download
+  ```
+  ChatGPT and Google OAuth tokens do **not** come across — they live in the Keychain under the
+  old service name and must be re-authenticated. macOS also treats Imla as a new app, so every
+  TCC permission is granted again from scratch.
+- **SwiftPM scratch paths are shared, not package-local.** `scripts/imla_spm_cache.sh` resolves
   them, so worktrees do not each grow a multi-GB `.build`. Concurrent builds must not share one
   path — give each channel, agent, or simultaneous build its own.
 - **LocalVQE gates signed packaging.** Meeting AEC defaults to LocalVQE, whose dylibs are
@@ -146,7 +175,7 @@ a decode test, because old configs must keep loading.
 | Reviewing a change, or judging a finding's severity | `REVIEW.md` |
 | Setting up a contributor environment, or the DCO and AI-disclosure rules | `CONTRIBUTING.md` |
 | Changing the SQLite schema | `database-schema.md` |
-| Driving the app from a script or agent | `skills/muesli-agent/references/cli-contract.md` |
+| Driving the app from a script or agent | `skills/imla-agent/references/cli-contract.md` |
 
 Subsystem behavior is documented **in the source**, next to the code that implements it —
 language routing, reverse-leak suppression, panel geometry, and the WhisperKit revision pin all

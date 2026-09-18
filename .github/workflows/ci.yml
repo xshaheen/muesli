@@ -109,7 +109,7 @@ jobs:
           swift --version
 
       - name: Build (release)
-        run: swift build --package-path native/MuesliNative -c release --product MuesliNativeApp
+        run: swift build --package-path native/ImlaNative -c release --product ImlaNativeApp
 
   # Swift tests — includes AppleSpeechAnalyzerBackendTests on macOS 26 in
   # dictation-transcription; a separate same-toolchain job would duplicate it.
@@ -139,7 +139,7 @@ jobs:
       - name: Run test shard
         run: bash ./scripts/run_ci_test_shard.sh "${{ matrix.shard }}"
 
-  # Packaged CLI smoke test — verify the app bundle contains muesli-cli
+  # Packaged CLI smoke test — verify the app bundle contains imla-cli
   cli-smoke:
     needs: changes
     if: needs.changes.outputs.native_or_packaging == 'true'
@@ -162,7 +162,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            native/MuesliNative/LocalVQE/lib
+            native/ImlaNative/LocalVQE/lib
             /tmp/LocalVQE
           key: localvqe-${{ runner.os }}-${{ hashFiles('scripts/build_localvqe.sh') }}
 

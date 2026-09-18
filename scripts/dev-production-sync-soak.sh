@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # Local-only Production CloudKit smoke/soak harness for the maintainer's
-# MuesliDev lane. This script is not bundled into Muesli.app.
+# ImlaDev lane. This script is not bundled into Imla.app.
 
-APP_PATH="/Applications/MuesliDev.app"
-SUPPORT_DIR="$HOME/Library/Application Support/MuesliDev"
-DATABASE_PATH="$SUPPORT_DIR/muesli.db"
+APP_PATH="/Applications/ImlaDev.app"
+SUPPORT_DIR="$HOME/Library/Application Support/ImlaDev"
+DATABASE_PATH="$SUPPORT_DIR/imla.db"
 RESULTS_PATH="$SUPPORT_DIR/sync-soak-results.jsonl"
 DIRECTION="both"
 COUNT=1
@@ -16,7 +16,7 @@ CHECK_ONLY=0
 
 usage() {
   cat <<'EOF'
-Run a privacy-preserving Production CloudKit sync soak from MuesliDev.
+Run a privacy-preserving Production CloudKit sync soak from ImlaDev.
 
 Usage:
   ./scripts/dev-production-sync-soak.sh [options]
@@ -30,7 +30,7 @@ Options:
   --check                         Validate the dev lane without writing records.
   --help                          Show this help.
 
-The mac-to-ios leg inserts a timestamped synthetic dictation into MuesliDev and
+The mac-to-ios leg inserts a timestamped synthetic dictation into ImlaDev and
 waits until CKSyncEngine records a successful Production save. Confirm the
 printed marker appears in the TestFlight app.
 
@@ -94,15 +94,15 @@ is_positive_integer "$COUNT" || fail "--count must be a positive integer."
 is_positive_integer "$INTERVAL_SECONDS" || fail "--interval must be a positive integer."
 is_positive_integer "$TIMEOUT_SECONDS" || fail "--timeout must be a positive integer."
 
-[[ "$APP_PATH" == "/Applications/MuesliDev.app" ]] || fail "unexpected app path."
-[[ "$SUPPORT_DIR" == "$HOME/Library/Application Support/MuesliDev" ]] || fail "unexpected support directory."
-[[ -d "$APP_PATH" ]] || fail "MuesliDev is not installed at $APP_PATH."
-[[ -f "$DATABASE_PATH" ]] || fail "MuesliDev database is missing at $DATABASE_PATH."
+[[ "$APP_PATH" == "/Applications/ImlaDev.app" ]] || fail "unexpected app path."
+[[ "$SUPPORT_DIR" == "$HOME/Library/Application Support/ImlaDev" ]] || fail "unexpected support directory."
+[[ -d "$APP_PATH" ]] || fail "ImlaDev is not installed at $APP_PATH."
+[[ -f "$DATABASE_PATH" ]] || fail "ImlaDev database is missing at $DATABASE_PATH."
 command -v sqlite3 >/dev/null || fail "sqlite3 is required."
 command -v codesign >/dev/null || fail "codesign is required."
 
 BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Contents/Info.plist" 2>/dev/null || true)"
-[[ "$BUNDLE_ID" == "com.muesli.dev" ]] || fail "refusing to run for bundle ID '$BUNDLE_ID'."
+[[ "$BUNDLE_ID" == "com.xshaheen.imla.dev" ]] || fail "refusing to run for bundle ID '$BUNDLE_ID'."
 
 ENTITLEMENTS_PLIST="$(mktemp "${TMPDIR:-/tmp}/muesli-sync-soak-entitlements.XXXXXX")"
 cleanup() {
@@ -110,13 +110,13 @@ cleanup() {
 }
 trap cleanup EXIT
 codesign -d --entitlements :- "$APP_PATH" > "$ENTITLEMENTS_PLIST" 2>/dev/null \
-  || fail "could not read MuesliDev entitlements."
+  || fail "could not read ImlaDev entitlements."
 ICLOUD_ENVIRONMENT="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.icloud-container-environment' "$ENTITLEMENTS_PLIST" 2>/dev/null || true)"
 [[ "$ICLOUD_ENVIRONMENT" == "Production" ]] \
   || fail "refusing to run without the exact Production CloudKit entitlement."
 
 if [[ "$CHECK_ONLY" -eq 1 ]]; then
-  printf 'PASS preflight | bundle=%s | CloudKit=%s | data=MuesliDev\n' "$BUNDLE_ID" "$ICLOUD_ENVIRONMENT"
+  printf 'PASS preflight | bundle=%s | CloudKit=%s | data=ImlaDev\n' "$BUNDLE_ID" "$ICLOUD_ENVIRONMENT"
   exit 0
 fi
 
@@ -160,7 +160,7 @@ run_mac_to_ios() {
     marker="MUESLI_SYNC_TEST_MAC_${started_epoch}_${index}"
     escaped_marker="${marker//\'/\'\'}"
 
-    sqlite3 "$DATABASE_PATH" "BEGIN IMMEDIATE; INSERT INTO dictations (timestamp, duration_seconds, raw_text, app_context, word_count, source, started_at, ended_at, updated_at, sync_dirty) VALUES ('$started_iso', 0, '$escaped_marker', 'muesli_sync_probe', 1, 'sync_probe', '$started_iso', '$started_iso', $started_epoch, 1); SELECT last_insert_rowid(); COMMIT;" > "${ENTITLEMENTS_PLIST}.row"
+    sqlite3 "$DATABASE_PATH" "BEGIN IMMEDIATE; INSERT INTO dictations (timestamp, duration_seconds, raw_text, app_context, word_count, source, started_at, ended_at, updated_at, sync_dirty) VALUES ('$started_iso', 0, '$escaped_marker', 'imla_sync_probe', 1, 'sync_probe', '$started_iso', '$started_iso', $started_epoch, 1); SELECT last_insert_rowid(); COMMIT;" > "${ENTITLEMENTS_PLIST}.row"
     row_id="$(sed -n '1p' "${ENTITLEMENTS_PLIST}.row")"
     rm -f "${ENTITLEMENTS_PLIST}.row"
     [[ "$row_id" =~ ^[0-9]+$ ]] || fail "failed to create the local synthetic probe."

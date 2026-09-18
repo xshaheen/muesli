@@ -22,7 +22,7 @@ not mean.
 ## Locating the store
 
 ```bash
-export MUESLI_ASR_CORPUS_DIR="$HOME/Library/Application Support/MuesliCorpora"
+export MUESLI_ASR_CORPUS_DIR="$HOME/Library/Application Support/ImlaCorpora"
 ```
 
 Any path outside the repository works; the example above is the maintainer's. This follows the
@@ -230,13 +230,13 @@ identified, mark model identity incomplete rather than guessing a cache path.
 Set these values to verified absolute paths, then inspect that binary's help before running:
 
 ```bash
-muesli_cli="/absolute/path/to/test/muesli-cli"
+imla_cli="/absolute/path/to/test/imla-cli"
 sample_audio="/absolute/path/to/licensed/sample.wav"
 journey_dir="/absolute/path/to/private/journey-evidence"
-"$muesli_cli" transcribe --help
+"$imla_cli" transcribe --help
 mkdir -p "$journey_dir/support"
-shasum -a 256 "$muesli_cli" "$sample_audio" > "$journey_dir/input-sha256.txt"
-"$muesli_cli" transcribe "$sample_audio" --model whisper-large-turbo --language ar \
+shasum -a 256 "$imla_cli" "$sample_audio" > "$journey_dir/input-sha256.txt"
+"$imla_cli" transcribe "$sample_audio" --model whisper-large-turbo --language ar \
   --format json --support-dir "$journey_dir/support" --output "$journey_dir/result-ar.json" \
   2> "$journey_dir/stderr-ar.log"
 ```
@@ -270,7 +270,7 @@ derived, reviewed evidence. This runbook is a procedure, not a recorded successf
 ## The run receipt and the report
 
 A sweep produces one **run receipt** — schema v2, defined by
-`native/MuesliNative/Sources/MuesliCore/TranscriptionQualityReceipt.swift` — and the report is
+`native/ImlaNative/Sources/ImlaCore/TranscriptionQualityReceipt.swift` — and the report is
 *rendered* from it by `TranscriptionQualityReport.markdown(for:)`. Nothing in the report is written
 by hand. Every number and every verdict is either already in the receipt or is the deterministic
 output of `TranscriptionQualityDecision`, so a report cannot drift from the measurement it claims to
@@ -278,7 +278,7 @@ describe, and re-rendering an old receipt reproduces its old report exactly.
 
 ### Where receipts live
 
-`native/MuesliNative/Tests/MuesliTests/Fixtures/TranscriptionQualityRuns/`, with its own
+`native/ImlaNative/Tests/ImlaTests/Fixtures/TranscriptionQualityRuns/`, with its own
 `manifest.json` and its own loader. It is deliberately **not** beside the frozen v1 baseline in
 `Fixtures/TranscriptionQuality/`: v1's contract test asserts exact set equality over its own
 directory, so a v2 file dropped in there fails the mandatory v1 gate. Do not merge the two.
@@ -395,9 +395,9 @@ Known, expected matches as of this document:
 - Audio: `assets/audio/bbc_world_news.mp3` and `assets/audio/ndtv.mp3` — the app's own sound-effect
   clips, unrelated to the harness. Any other tracked audio file is a leak.
 - Transcript-shaped fields: the frozen v1 fixture under
-  `native/MuesliNative/Tests/MuesliTests/Fixtures/TranscriptionQuality/` (synthetic,
+  `native/ImlaNative/Tests/ImlaTests/Fixtures/TranscriptionQuality/` (synthetic,
   maintainer-authored text, not corpus content); run receipts under
-  `native/MuesliNative/Tests/MuesliTests/Fixtures/TranscriptionQualityRuns/`, where `rawASR` and
+  `native/ImlaNative/Tests/ImlaTests/Fixtures/TranscriptionQualityRuns/`, where `rawASR` and
   `finalOutput` are *stage names* on a block of numbers and never hold text; and this document,
   which names the field keys. Anything else is a leak.
 

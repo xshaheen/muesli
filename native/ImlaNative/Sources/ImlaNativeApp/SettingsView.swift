@@ -1,0 +1,4583 @@
+import AppKit
+import AVFoundation
+import SwiftUI
+import ImlaCore
+import TelemetryDeck
+
+private struct MeetingDetectionAppOption: Identifiable {
+    let bundleID: String
+    let name: String
+    let icon: String
+
+    var id: String { bundleID }
+}
+
+private struct MicrophoneOption: Identifiable {
+    let uid: String?
+    let label: String
+
+    var id: String { uid ?? "__automatic__" }
+}
+
+enum SettingsPermissionRefreshReason {
+    case initialDisplay
+    case permissionRequested
+    case settingsSelected
+    case appActivated
+
+    var refreshesLaunchAtLogin: Bool {
+        self == .appActivated
+    }
+
+    var refreshesSystemAudio: Bool {
+        switch self {
+        case .initialDisplay, .settingsSelected, .appActivated:
+            true
+        case .permissionRequested:
+            false
+        }
+    }
+}
+
+struct ICloudLinkedDevicePresentation: Equatable {
+    let name: String
+    let platformLabel: String
+    let systemImage: String
+
+    init(name: String, platform: String?) {
+        self.name = name
+        switch platform?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "ipados":
+            platformLabel = "iPad"
+            systemImage = "ipad"
+        case "ios":
+            platformLabel = "iPhone"
+            systemImage = "iphone.gen3"
+        default:
+            platformLabel = "Device"
+            systemImage = "iphone.gen3"
+        }
+    }
+}
+
+private struct ICloudLinkedDeviceRow: View {
+    let device: ICloudLinkedDevicePresentation
+
+    var body: some View {
+        HStack(spacing: ImlaTheme.spacing8) {
+            Image(systemName: device.systemImage)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(ImlaTheme.accent)
+                .frame(width: 30, height: 30)
+                .background(ImlaTheme.accentSubtle)
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(device.name)
+                    .font(ImlaTheme.captionMedium())
+                    .foregroundStyle(ImlaTheme.textPrimary)
+                    .lineLimit(1)
+                Text("\(device.platformLabel) · Linked")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(ImlaTheme.textSecondary)
+            }
+
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(ImlaTheme.success)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, ImlaTheme.spacing8)
+        .padding(.vertical, 6)
+        .background(ImlaTheme.success.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall))
+        .overlay {
+            RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall)
+                .strokeBorder(ImlaTheme.success.opacity(0.18), lineWidth: 1)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(device.platformLabel) \(device.name), linked")
+    }
+}
+
+private enum OnDeviceCleanupModel: Identifiable {
+    case gguf(PostProcessorOption)
+    case gemma4(Gemma4LiteRTModel)
+
+    var id: String {
+        switch self {
+        case let .gguf(option): option.id
+        case let .gemma4(model): model.repoID
+        }
+    }
+
+    var label: String {
+        switch self {
+        case let .gguf(option): option.label
+        case let .gemma4(model): model.label
+        }
+    }
+
+    var quilLabel: String {
+        switch self {
+        case let .gguf(option): option.quilLabel
+        case let .gemma4(model): model.label
+        }
+    }
+
+    var quilBackend: TranscriptCleanupBackendOption {
+        switch self {
+        case .gguf: .local
+        case .gemma4: .gemma4LiteRT
+        }
+    }
+
+    var quilModelID: String {
+        switch self {
+        case let .gguf(option): option.id
+        case let .gemma4(model): model.repoID
+        }
+    }
+}
+
+struct SettingsView: View {
+    private enum FinalTranscriptOption {
+        case liveNemotron
+        case batch(BackendOption)
+
+        var label: String {
+            switch self {
+            case .liveNemotron:
+                return "\(MeetingLiveCaptionBackend.nemotron35.label) (live model)"
+            case .batch(let option):
+                return option.label
+            }
+        }
+    }
+
+    private enum PendingDataDestruction {
+        case dictations
+        case meetings
+
+        var title: String {
+            switch self {
+            case .dictations:
+                return "Clear dictation history?"
+            case .meetings:
+                return "Clear meeting history?"
+            }
+        }
+
+        var message: String {
+            switch self {
+            case .dictations:
+                return "This will permanently remove all saved dictations. This cannot be undone."
+            case .meetings:
+                return "This will permanently remove all saved meetings, notes, transcripts, and retained audio recordings. This cannot be undone."
+            }
+        }
+
+        var confirmLabel: String {
+            switch self {
+            case .dictations:
+                return "Clear Dictations"
+            case .meetings:
+                return "Clear Meetings"
+            }
+        }
+    }
+
+    let appState: AppState
+    let controller: ImlaController
+
+    private enum OpenAIConnectionTestState: Equatable {
+        case idle
+        case testing
+        case success
+        case failed(String)
+    }
+
+    @State private var chatGPTSignInError: String?
+    @State private var isSigningInChatGPT = false
+    @State private var openRouterSignInError: String?
+    @State private var isSigningInOpenRouter = false
+    @State private var isEnteringOpenRouterAPIKey = false
+    @State private var manualOpenRouterAPIKey = ""
+    @State private var pendingDataDestruction: PendingDataDestruction?
+    @State private var isShowingDictionaryAccessibilityPrompt = false
+    @State private var isPreviewingClip = false
+    @State private var selectedPane: SettingsPane
+    @State private var downloadedBackendOptions: [BackendOption] = []
+    @State private var downloadedPostProcOptions: [PostProcessorOption] = []
+    @State private var downloadedMeetingLiveCaptionBackends: [MeetingLiveCaptionBackend] = []
+    @State private var audioInputDevices: [AudioInputDeviceInfo] = []
+    @State private var audioInputDeviceRefreshTask: Task<Void, Never>?
+    @State private var permissionMonitoringClientID = UUID()
+    @State private var isModesPresented = false
+    @State private var notesLanguageErrorMessage: String?
+    @State private var isSessionDiagnosticsPresented = false
+    @State private var dictationStyleSettingsError: String?
+    @AppStorage("settings.pendingScreenContextEnable") private var pendingScreenContextEnable = false
+    @AppStorage("settings.pendingScreenContextRequestedAt") private var pendingScreenContextRequestedAt = 0.0
+    @State private var systemAudioGranted = false
+    @State private var isCheckingSystemAudioPermission = false
+    @State private var isUsingCustomOpenRouterModel = false
+    @State private var isUsingCustomOpenRouterDictationModel = false
+    @State private var hasRefreshedMeetingCalendarSources = false
+    @State private var isShowingICloudSyncReconnectConfirmation = false
+    @State private var isShowingICloudSyncResetConfirmation = false
+    @State private var isShowingIPhoneBridgeQRCode = false
+    @State private var openAIDictationAPIKey: String = ""
+    @State private var openAITestState: OpenAIConnectionTestState = .idle
+
+    init(appState: AppState, controller: ImlaController) {
+        self.appState = appState
+        self.controller = controller
+        _selectedPane = State(initialValue: appState.selectedSettingsPane)
+    }
+
+    private var micGranted: Bool {
+        appState.interactionPermissionSnapshot?.microphone ?? false
+    }
+
+    private var accessibilityGranted: Bool {
+        appState.interactionPermissionSnapshot?.accessibility ?? false
+    }
+
+    private var inputMonitoringGranted: Bool {
+        appState.interactionPermissionSnapshot?.inputMonitoring ?? false
+    }
+
+    private var screenRecordingGranted: Bool {
+        appState.interactionPermissionSnapshot?.screenRecording ?? false
+    }
+
+    // Uniform width for standard right-side controls.
+    private let controlWidth: CGFloat = 220
+    // Wider controls keep model/provider selections visually consistent in Settings.
+    private let meetingControlWidth: CGFloat = 275
+    private let iOSCompanionURL = IPhoneBridgeLinks.installURL
+    private let screenContextGrantIntentTimeout: TimeInterval = 15 * 60
+
+    private var languageProfileEditor: LanguageProfileSettingsModel {
+        appState.languageProfileSettings
+    }
+    private var meetingLanguageProfileEditor: LanguageProfileSettingsModel {
+        appState.meetingLanguageProfileSettings
+    }
+    /// The meeting card repeats the dictation migration banner only while the two
+    /// authorities still hold the same pin-derived copy, so an upgrader who
+    /// resolves it on one card is not left with a stale meeting profile (R5).
+    private var meetingProfileNeedsReview: Bool {
+        appState.config.languageProfileNeedsConfirmation
+            && appState.config.meetingSpokenLanguage == appState.config.dictationLanguageProfile
+    }
+    private let meetingDetectionAppOptions: [MeetingDetectionAppOption] = [
+        MeetingDetectionAppOption(bundleID: "com.google.Chrome", name: "Chrome", icon: "globe"),
+        MeetingDetectionAppOption(bundleID: "company.thebrowser.Browser", name: "Arc", icon: "globe"),
+        MeetingDetectionAppOption(bundleID: "com.apple.Safari", name: "Safari", icon: "globe"),
+        MeetingDetectionAppOption(bundleID: "com.microsoft.edgemac", name: "Edge", icon: "globe"),
+        MeetingDetectionAppOption(bundleID: "com.brave.Browser", name: "Brave", icon: "globe"),
+        MeetingDetectionAppOption(bundleID: "com.tinyspeck.slackmacgap", name: "Slack", icon: "message.fill"),
+        MeetingDetectionAppOption(bundleID: "us.zoom.xos", name: "Zoom", icon: "video.fill"),
+        MeetingDetectionAppOption(bundleID: "com.microsoft.teams2", name: "Teams", icon: "person.2.fill"),
+        MeetingDetectionAppOption(bundleID: "com.apple.FaceTime", name: "FaceTime", icon: "video.fill"),
+        MeetingDetectionAppOption(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", icon: "phone.fill"),
+    ]
+
+    private var dictationBackendOptions: [BackendOption] {
+        guard appState.dictationProvider.isHosted else {
+            return backendOptions(including: appState.selectedBackend)
+        }
+        return downloadedBackendOptions.filter(\.supportsHostedDictationFallback)
+    }
+
+    private var displayedDictationBackend: BackendOption? {
+        guard appState.dictationProvider.isHosted else { return appState.selectedBackend }
+        return BackendOption.resolveHostedDictationFallback(
+            selected: appState.selectedBackend,
+            available: dictationBackendOptions
+        )
+    }
+
+    private var disabledDictationBackendLabels: Set<String> {
+        guard !appState.selectedPostProcessorBackend.isCompatible(with: .gemma4E2BLiteRT),
+              dictationBackendOptions.contains(where: { $0.backend == "gemma4-litert" }) else { return [] }
+        return Set(dictationBackendOptions.filter { $0.backend == "gemma4-litert" }.map(\.label))
+    }
+
+    private var meetingBackendOptions: [BackendOption] {
+        downloadedBackendOptions.filter(\.supportsMeetingTranscription)
+    }
+
+    private var selectedMeetingLiveCaptionLabel: String {
+        let selected = appState.config.resolvedMeetingLiveCaptionBackend
+        guard appState.config.enableLiveStreamingPartials,
+              downloadedMeetingLiveCaptionBackends.contains(selected) else {
+            return "Off"
+        }
+        return selected.settingsLabel
+    }
+
+    private var usesNemotronLiveTranscript: Bool {
+        appState.config.usesNemotronLiveMeetingTranscript
+            && downloadedMeetingLiveCaptionBackends.contains(.nemotron35)
+    }
+
+    private var usesUnifiedMeetingTranscript: Bool {
+        downloadedMeetingLiveCaptionBackends.contains(.nemotron35)
+            && appState.config.usesUnifiedNemotronMeetingTranscript
+    }
+
+    private var finalTranscriptOptions: [FinalTranscriptOption] {
+        [.liveNemotron] + meetingBackendOptions.map(FinalTranscriptOption.batch)
+    }
+
+    private var selectedFinalTranscriptLabel: String {
+        if usesUnifiedMeetingTranscript {
+            return FinalTranscriptOption.liveNemotron.label
+        }
+        return selectedMeetingBackendLabel
+    }
+
+    private var meetingLiveTranscriptDescription: String {
+        let selected = appState.config.resolvedMeetingLiveCaptionBackend
+        guard appState.config.enableLiveStreamingPartials,
+              downloadedMeetingLiveCaptionBackends.contains(selected) else {
+            return "Shows completed transcript segments only."
+        }
+        if usesUnifiedMeetingTranscript {
+            return "Creates the live and final transcript."
+        }
+        if usesNemotronLiveTranscript {
+            return "Creates the live transcript; the selected final model transcribes separately."
+        }
+        return "Adds a low-latency preview."
+    }
+
+    private var selectedMeetingBackendLabel: String {
+        if meetingBackendOptions.contains(appState.selectedMeetingTranscriptionBackend) {
+            return appState.selectedMeetingTranscriptionBackend.label
+        }
+        return meetingBackendOptions.first?.label ?? "No downloaded models"
+    }
+
+    private var cleanupPromptPresets: [TranscriptCleanupPromptPreset] {
+        TranscriptCleanupPrompts.presets(custom: appState.config.customTranscriptCleanupPrompts)
+    }
+
+    private var cleanupBackendOptions: [TranscriptCleanupBackendOption] {
+        TranscriptCleanupBackendOption.all.filter { !$0.isGemma4LiteRT }
+    }
+
+    private var selectedQuilBackend: TranscriptCleanupBackendOption {
+        TranscriptCleanupBackendOption.resolved(appState.config.quilBackend)
+    }
+
+    private var selectedQuilModelSource: QuilModelSourceOption {
+        QuilModelSourceOption.resolved(for: selectedQuilBackend)
+    }
+
+    private var quilLocalModels: [OnDeviceCleanupModel] {
+        var models = downloadedPostProcOptions
+            .filter(\.supportsQuil)
+            .map(OnDeviceCleanupModel.gguf)
+        for model in Gemma4LiteRTModel.allCases where Gemma4LiteRTModelStore.isAvailableLocally(model: model) {
+            models.append(.gemma4(model))
+        }
+        return models
+    }
+
+    private var selectedQuilLocalModelLabel: String {
+        if selectedQuilBackend == .gemma4LiteRT {
+            return Gemma4LiteRTModel.resolved(appState.config.quilModel).label
+        }
+        return quilLocalModels.first(where: { $0.id == appState.config.quilModel })?.quilLabel
+            ?? quilLocalModels.first?.quilLabel
+            ?? "No compatible model"
+    }
+
+    private var selectedCleanupBackendLabel: String {
+        appState.selectedPostProcessorBackend.isOnDevice
+            ? TranscriptCleanupBackendOption.local.label
+            : appState.selectedPostProcessorBackend.label
+    }
+
+    private var onDeviceCleanupModels: [OnDeviceCleanupModel] {
+        var models = downloadedPostProcOptions
+            .filter { $0.isCompatible(with: appState.selectedBackend) }
+            .map(OnDeviceCleanupModel.gguf)
+        if TranscriptCleanupBackendOption.gemma4LiteRT.isCompatible(with: appState.selectedBackend) {
+            for model in Gemma4LiteRTModel.allCases where Gemma4LiteRTModelStore.isAvailableLocally(model: model) {
+                models.append(.gemma4(model))
+            }
+        }
+        return models
+    }
+
+    private var selectedOnDeviceCleanupModelLabel: String {
+        if appState.selectedPostProcessorBackend == .gemma4LiteRT {
+            return Gemma4LiteRTModel.resolved(appState.config.postProcessorGemmaModel).label
+        }
+        let selectedID = appState.activePostProcessor.id
+        return onDeviceCleanupModels.first(where: { $0.id == selectedID })?.label
+            ?? onDeviceCleanupModels.first?.label
+            ?? ""
+    }
+
+    private var selectedCleanupPromptName: String {
+        cleanupPromptPresets.first { $0.id == appState.config.activeTranscriptCleanupPromptId }?.name
+            ?? TranscriptCleanupPrompts.builtIns[0].name
+    }
+
+    private var cleanupModelUsesFixedPrompt: Bool {
+        appState.selectedPostProcessorBackend == .local
+            && appState.activePostProcessor.inputFormat == .s1Mini
+    }
+
+    private var gemmaCleanupIsUnavailable: Bool {
+        Gemma4LiteRTModel.allCases.contains { Gemma4LiteRTModelStore.isAvailableLocally(model: $0) }
+            && !TranscriptCleanupBackendOption.gemma4LiteRT.isCompatible(with: appState.selectedBackend)
+    }
+
+    private var cleanupBackendDescription: String {
+        if appState.selectedPostProcessorBackend.isOnDevice {
+            return onDeviceCleanupModels.isEmpty
+                ? "Download a cleanup model from Models to refine dictations on this Mac."
+                : "Refines dictated text on this Mac."
+        }
+        return "Sends dictated text to \(appState.selectedPostProcessorBackend.label) and may add latency."
+    }
+
+    private var selectedUpcomingMeetingsWindow: UpcomingMeetingsWindow {
+        UpcomingMeetingsWindow.resolve(dayCount: appState.config.upcomingMeetingsDayCount)
+    }
+
+    private var dictationMicrophoneOptions: [MicrophoneOption] {
+        microphoneOptions(selectedUID: appState.config.dictationInputDeviceUID)
+    }
+
+    private var selectedDictationMicrophoneLabel: String {
+        let selectedUID = appState.config.dictationInputDeviceUID
+        return dictationMicrophoneOptions.first(where: { $0.uid == selectedUID })?.label ?? "Automatic"
+    }
+
+    private var meetingMicrophoneOptions: [MicrophoneOption] {
+        microphoneOptions(selectedUID: appState.config.meetingInputDeviceUID)
+    }
+
+    private var selectedMeetingMicrophoneLabel: String {
+        let selectedUID = appState.config.meetingInputDeviceUID
+        return meetingMicrophoneOptions.first(where: { $0.uid == selectedUID })?.label ?? "Automatic"
+    }
+
+    private func microphoneOptions(selectedUID: String?) -> [MicrophoneOption] {
+        var options = [MicrophoneOption(uid: nil, label: "Automatic")]
+        options += audioInputDevices.map { MicrophoneOption(uid: $0.uid, label: $0.name) }
+        if let selectedUID, !options.contains(where: { $0.uid == selectedUID }) {
+            options.append(MicrophoneOption(uid: selectedUID, label: "Selected microphone unavailable"))
+        }
+        return options
+    }
+
+    private var activeFeatureTourTarget: FeatureTourTarget? {
+        appState.activeFeatureTourTarget
+    }
+
+    var body: some View {
+        ScrollViewReader { scrollProxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: ImlaTheme.spacing24) {
+
+                    settingsPanePicker
+                    paneContent
+                }
+                .padding(.horizontal, ImlaTheme.spacing32)
+            .padding(.top, ImlaTheme.pageTop)
+            .padding(.bottom, ImlaTheme.spacing32)
+            }
+            .background(ImlaTheme.backgroundBase)
+            .onAppear {
+                languageProfileEditor.load(using: controller.languageProfileClient())
+                meetingLanguageProfileEditor.load(using: controller.meetingLanguageProfileClient())
+                refreshDownloadedModelOptions()
+                refreshAudioInputDevices()
+                startPermissionMonitoring()
+                if appState.selectedMeetingSummaryBackend == .openRouter {
+                    loadOpenRouterFreeModelsIfNeeded()
+                }
+                if appState.dictationProvider == .openRouter,
+                   controller.hostedDictationModelVisibility.shows(.openRouter) {
+                    loadOpenRouterTranscriptionModelsIfNeeded()
+                }
+                scrollToFeatureTourTarget(activeFeatureTourTarget, using: scrollProxy)
+            }
+            .onChange(of: appState.config.dictationLanguageProfile) { _, profile in
+                languageProfileEditor.synchronize(with: profile)
+            }
+            .onChange(of: appState.config.meetingSpokenLanguage) { _, profile in
+                meetingLanguageProfileEditor.synchronize(with: profile)
+            }
+            .onDisappear {
+                SoundController.stopMaraudersMapClip()
+                isPreviewingClip = false
+                audioInputDeviceRefreshTask?.cancel()
+                audioInputDeviceRefreshTask = nil
+                stopPermissionMonitoring()
+            }
+            .onChange(of: appState.selectedTab) { _, tab in
+                if tab == .settings {
+                    selectedPane = appState.selectedSettingsPane
+                    refreshDownloadedModelOptions()
+                    refreshAudioInputDevices()
+                    refreshPermissionStatuses(for: .settingsSelected)
+                }
+            }
+            .onChange(of: appState.selectedSettingsPane) { _, pane in
+                selectedPane = pane
+            }
+            .onChange(of: selectedPane) { _, pane in
+                appState.selectedSettingsPane = pane
+                if pane == .dictation || pane == .meetings {
+                    loadCachedAudioInputDevices()
+                }
+                scrollToFeatureTourTarget(activeFeatureTourTarget, using: scrollProxy)
+            }
+            .onChange(of: activeFeatureTourTarget) { _, target in
+                scrollToFeatureTourTarget(target, using: scrollProxy)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                guard appState.selectedTab == .settings else { return }
+                refreshAudioInputDevices()
+                refreshPermissionStatuses(for: .appActivated)
+                if selectedPane == .meetings {
+                    Task {
+                        await controller.calendarAccessDidChange()
+                    }
+                }
+            }
+            .onChange(of: appState.selectedBackend) { _, _ in
+                refreshDownloadedModelOptions()
+            }
+            .onChange(of: appState.selectedMeetingTranscriptionBackend) { _, _ in
+                refreshDownloadedModelOptions()
+            }
+            .onChange(of: appState.selectedMeetingSummaryBackend) { _, backend in
+                if backend == .openRouter {
+                    loadOpenRouterFreeModelsIfNeeded()
+                }
+            }
+            .alert(
+                pendingDataDestruction?.title ?? "Confirm Destructive Action",
+                isPresented: Binding(
+                    get: { pendingDataDestruction != nil },
+                    set: { if !$0 { pendingDataDestruction = nil } }
+                )
+            ) {
+                Button("Cancel", role: .cancel) {
+                    pendingDataDestruction = nil
+                }
+                Button(pendingDataDestruction?.confirmLabel ?? "Delete", role: .destructive) {
+                    switch pendingDataDestruction {
+                    case .dictations:
+                        controller.clearDictationHistory()
+                    case .meetings:
+                        controller.clearMeetingHistory()
+                    case nil:
+                        break
+                    }
+                    pendingDataDestruction = nil
+                }
+            } message: {
+                Text(pendingDataDestruction?.message ?? "")
+            }
+            .alert(
+                "Enable Accessibility?",
+                isPresented: $isShowingDictionaryAccessibilityPrompt
+            ) {
+                Button("Cancel", role: .cancel) {
+                    controller.cancelDictionaryCorrectionAccessibilityEnableRequest()
+                }
+                Button("Enable") {
+                    controller.requestDictionaryCorrectionAccessibilityEnable()
+                }
+            } message: {
+                Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, then relaunch Imla to turn suggestions on.")
+            }
+            .alert("Reconnect iCloud sync?", isPresented: $isShowingICloudSyncReconnectConfirmation) {
+                Button("Cancel", role: .cancel) {}
+                Button("Reconnect") {
+                    controller.reconnectICloudSyncToCurrentAccount()
+                }
+            } message: {
+                Text("Reconnect with this iCloud account. Local history and audio stay on this Mac.")
+            }
+            .alert("Reset iCloud sync?", isPresented: $isShowingICloudSyncResetConfirmation) {
+                Button("Cancel", role: .cancel) {}
+                Button("Reset sync", role: .destructive) {
+                    controller.resetICloudSync()
+                }
+            } message: {
+                Text("Clear this Mac's sync connection and set it up again. Local history, audio, and CloudKit data won't be deleted.")
+            }
+            .sheet(isPresented: $isShowingIPhoneBridgeQRCode, onDismiss: {
+                controller.cancelIPhoneBridgeDeviceDiscovery()
+            }) {
+                IPhoneBridgeQRCodeSheet(
+                    deepLinkURL: IPhoneBridgeLinks.iOSSyncDeepLinkURL,
+                    installURL: IPhoneBridgeLinks.installURL,
+                    isWaitingForDevice: appState.iCloudBridgeCompanionDiscoveryState == .waiting
+                )
+            }
+            .onChange(of: syncQRCodePresentationPhase) { _, phase in
+                guard phase == .dismiss else { return }
+                isShowingIPhoneBridgeQRCode = false
+                TelemetryDeck.signal("bridge_qr_auto_dismissed", parameters: ["platform": "macos_settings"])
+            }
+            .sheet(isPresented: $isModesPresented) {
+                DictationModesView(
+                    appState: appState,
+                    controller: controller,
+                    onClose: { isModesPresented = false }
+                )
+            }
+            .sheet(isPresented: $isSessionDiagnosticsPresented) {
+                SessionDiagnosticsView(
+                    service: controller.localDiagnosticsService,
+                    onClose: { isSessionDiagnosticsPresented = false }
+                )
+            }
+        }
+    }
+
+    private func scrollToFeatureTourTarget(_ target: FeatureTourTarget?, using proxy: ScrollViewProxy) {
+        guard let target,
+              target == .liveCaptionsSetting
+                || target == .cloudCleanupSetting
+                || target == .dictationProviderSetting
+                || target == .quillSettings else { return }
+        DispatchQueue.main.async {
+            withAnimation(ImlaTheme.Motion.eased(0.2)) {
+                proxy.scrollTo(target.rawValue, anchor: .center)
+            }
+        }
+    }
+
+    private func refreshDownloadedModelOptions() {
+        controller.refreshMeetingTranscriptionSelectionForAvailability()
+        downloadedBackendOptions = BackendOption.downloaded
+        downloadedPostProcOptions = PostProcessorOption.downloaded
+        downloadedMeetingLiveCaptionBackends = MeetingLiveCaptionBackend.allCases.filter(\.isDownloaded)
+    }
+
+    private func refreshAudioInputDevices() {
+        loadCachedAudioInputDevices()
+        audioInputDeviceRefreshTask?.cancel()
+        audioInputDeviceRefreshTask = Task { @MainActor in
+            let devices = await controller.refreshDictationInputDevices()
+            guard !Task.isCancelled else { return }
+            audioInputDevices = devices
+        }
+    }
+
+    private func loadCachedAudioInputDevices() {
+        audioInputDevices = controller.cachedDictationInputDevices()
+    }
+
+    private func backendOptions(including selection: BackendOption) -> [BackendOption] {
+        var options = downloadedBackendOptions
+        if !options.contains(where: { $0 == selection }) {
+            options.insert(selection, at: 0)
+        }
+        return options
+    }
+
+    private static let accentPresets: [(hex: String, name: String)] = [
+        (AppConfig.defaultAccentMarker, "Default"),
+        ("2563eb", "Blue"),
+        ("ef4444", "Red"),
+        ("f59e0b", "Amber"),
+        ("10b981", "Green"),
+        ("8b5cf6", "Purple"),
+        ("ec4899", "Pink"),
+        ("1e1e2e", "Dark"),
+    ]
+
+    private func screenContextDescription(includesScreenOCR: Bool) -> String {
+        if !accessibilityGranted {
+            return "Grant Accessibility, then toggle again if needed."
+        }
+        if includesScreenOCR, !screenRecordingGranted {
+            return "Adds nearby app text for post-processing. Screen Recording enables OCR context."
+        }
+        if includesScreenOCR {
+            return "Adds nearby app text and OCR context."
+        }
+        return "Adds nearby app text for post-processing."
+    }
+
+    private var dictationOCRContextDescription: String {
+        if !appState.config.enableScreenContext {
+            return "Turn on App context first."
+        }
+        if !screenRecordingGranted {
+            return "Grant Screen Recording to add frontmost-window OCR text."
+        }
+        return "Adds frontmost-window OCR text. Cloud cleanup may send this text to the selected provider."
+    }
+
+    @ViewBuilder
+    private func screenContextRow(
+        _ title: String,
+        includesScreenOCR: Bool = false,
+        controlWidth rowControlWidth: CGFloat? = nil
+    ) -> some View {
+        let width = rowControlWidth ?? controlWidth
+        HStack(alignment: .top, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(ImlaTheme.body())
+                    .foregroundStyle(ImlaTheme.textPrimary)
+                Text(screenContextDescription(includesScreenOCR: includesScreenOCR))
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textTertiary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 20)
+
+            ZStack(alignment: .trailing) {
+                Color.clear.frame(width: width, height: 1)
+                screenContextControl(width: width)
+            }
+        }
+        .frame(minHeight: 52)
+    }
+
+    @ViewBuilder
+    private var dictationOCRContextRow: some View {
+        let width = controlWidth
+        HStack(alignment: .top, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Screen OCR context")
+                    .font(ImlaTheme.body())
+                    .foregroundStyle(ImlaTheme.textPrimary)
+                Text(dictationOCRContextDescription)
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textTertiary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 20)
+
+            ZStack(alignment: .trailing) {
+                Color.clear.frame(width: width, height: 1)
+                dictationOCRContextControl(width: width)
+            }
+        }
+        .frame(minHeight: 52)
+    }
+
+
+    private var settingsPanePicker: some View {
+        HStack {
+            Spacer()
+            Picker("", selection: $selectedPane) {
+                ForEach(SettingsPane.allCases) { pane in
+                    Text(pane.title).tag(pane)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 760)
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private var paneContent: some View {
+        switch selectedPane {
+        case .general:
+            generalSettingsPane
+        case .sync:
+            syncSettingsPane
+        case .dictation:
+            dictationSettingsPane
+        case .computerUse:
+            computerUseSettingsPane
+        case .meetings:
+            meetingsSettingsPane
+        case .appearance:
+            appearanceSettingsPane
+        }
+    }
+
+    private var generalSettingsPane: some View {
+        VStack(alignment: .leading, spacing: ImlaTheme.spacing24) {
+            settingsSection("General") {
+                VStack(alignment: .leading, spacing: ImlaTheme.spacing8) {
+                    settingsRow("Launch at login") {
+                        settingsSwitch(isOn: appState.config.launchAtLogin) { newValue in
+                            controller.setLaunchAtLogin(newValue)
+                        }
+                    }
+                    if appState.launchAtLoginRegistrationState == .requiresApproval {
+                        launchAtLoginApprovalPrompt
+                    }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Open dashboard on launch") {
+                    settingsSwitch(isOn: appState.config.openDashboardOnLaunch) { newValue in
+                        controller.updateConfig { $0.openDashboardOnLaunch = newValue }
+                    }
+                }
+            }
+
+            permissionsSection
+
+            settingsSection("Data") {
+                HStack(spacing: ImlaTheme.spacing12) {
+                    actionButton("Clear dictation history", role: .destructive) {
+                        pendingDataDestruction = .dictations
+                    }
+                    actionButton("Clear meeting history", role: .destructive) {
+                        pendingDataDestruction = .meetings
+                    }
+                    .disabled(controller.isMeetingRecording())
+                    .help("Stop the current meeting recording before clearing meeting history.")
+                }
+                // The card stacks its children with no spacing because settingsRow carries
+                // its own 44pt rhythm. A bare control row has none, so it needs its own.
+                .frame(minHeight: 44)
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow(
+                    "Session diagnostics",
+                    description: "Inspect, export, or clear local-only, short-retention transcription traces."
+                ) {
+                    actionButton("Open Diagnostics…") {
+                        isSessionDiagnosticsPresented = true
+                    }
+                }
+            }
+        }
+    }
+
+    private var launchAtLoginApprovalPrompt: some View {
+        HStack(spacing: ImlaTheme.spacing8) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ImlaTheme.danger)
+            Text("Requires approval in System Settings")
+                .font(ImlaTheme.caption())
+                .foregroundStyle(ImlaTheme.textTertiary)
+            Spacer(minLength: ImlaTheme.spacing12)
+            Button {
+                controller.openLaunchAtLoginSettings()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.up.forward.square")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Open")
+                }
+            }
+            .buttonStyle(.plain)
+            .font(ImlaTheme.font(size: 11, weight: .medium))
+            .foregroundStyle(ImlaTheme.accent)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(ImlaTheme.accentSubtle)
+            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            .help("Open Login Items in System Settings")
+        }
+        .padding(.leading, ImlaTheme.spacing16)
+        .padding(.trailing, ImlaTheme.spacing16)
+        .padding(.bottom, ImlaTheme.spacing8)
+    }
+
+    private var syncSettingsPane: some View {
+        VStack(alignment: .leading, spacing: ImlaTheme.spacing24) {
+            settingsSection("iCloud Sync") {
+                HStack(spacing: ImlaTheme.spacing12) {
+                    VStack(alignment: .leading, spacing: ImlaTheme.spacing4) {
+                        Text("Sync with iPhone or iPad")
+                            .font(ImlaTheme.body())
+                            .foregroundStyle(ImlaTheme.textPrimary)
+                        Text(syncStatusText)
+                            .font(ImlaTheme.caption())
+                            .foregroundStyle(ImlaTheme.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let lastSyncedText = syncLastSyncedText {
+                            Text("Last synced: \(lastSyncedText)")
+                                .font(ImlaTheme.caption())
+                                .foregroundStyle(ImlaTheme.textTertiary)
+                        }
+                        if let linkedDevice = syncLinkedDevice {
+                            ICloudLinkedDeviceRow(device: linkedDevice)
+                                .padding(.top, ImlaTheme.spacing4)
+                        } else if let unlinkedDeviceText = syncUnlinkedDeviceText {
+                            Text(unlinkedDeviceText)
+                                .font(ImlaTheme.caption())
+                                .foregroundStyle(ImlaTheme.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Spacer(minLength: ImlaTheme.spacing16)
+                    syncFlowControls
+                        .frame(width: controlWidth)
+                }
+
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var syncFlowControls: some View {
+        VStack(spacing: ImlaTheme.spacing8) {
+            switch syncFlowAction {
+            case .setUp:
+                actionButton("Set up sync", systemImage: "icloud") {
+                    showSyncSetupQRCode(source: "macos_settings_setup")
+                    controller.enableIPhoneBridgeSync()
+                }
+            case .continueSetup:
+                actionButton("Continue setup", systemImage: "qrcode") {
+                    showSyncSetupQRCode(source: "macos_settings_continue")
+                    controller.enableIPhoneBridgeSync()
+                }
+            case .connectDevice:
+                actionButton("Connect device", systemImage: "qrcode") {
+                    showSyncSetupQRCode(source: "macos_settings")
+                }
+            case .waitingForDevice:
+                actionButton("Checking…", systemImage: "arrow.triangle.2.circlepath") {}
+                    .disabled(true)
+            case .syncNow:
+                actionButton("Sync now", systemImage: "arrow.triangle.2.circlepath") {
+                    controller.performICloudSync()
+                }
+            case .reconnect:
+                actionButton("Reconnect", systemImage: "arrow.triangle.2.circlepath") {
+                    isShowingICloudSyncReconnectConfirmation = true
+                }
+            case .reset:
+                actionButton("Reset sync", systemImage: "arrow.counterclockwise.icloud") {
+                    isShowingICloudSyncResetConfirmation = true
+                }
+            case .retry:
+                actionButton("Try again", systemImage: "arrow.triangle.2.circlepath") {
+                    controller.enableIPhoneBridgeSync()
+                }
+            case .working:
+                actionButton("Working…", systemImage: "arrow.triangle.2.circlepath") {}
+                    .disabled(true)
+            }
+
+            if shouldOfferICloudSyncReset {
+                actionButton("Reset sync", systemImage: "arrow.counterclockwise.icloud") {
+                    isShowingICloudSyncResetConfirmation = true
+                }
+            }
+        }
+    }
+
+    private func showSyncSetupQRCode(source: String) {
+        isShowingIPhoneBridgeQRCode = true
+        controller.beginIPhoneBridgeDeviceDiscovery()
+        TelemetryDeck.signal("bridge_qr_shown", parameters: ["platform": source])
+    }
+
+    private var syncFlowAction: ICloudSyncFlowAction {
+        ICloudSyncFlowPolicy.action(
+            for: displayedICloudBridgeState,
+            isEnabled: appState.config.iCloudSyncEnabled,
+            hasCompanionDevice: appState.iCloudBridgeCompanionDeviceName != nil,
+            companionDiscoveryState: appState.iCloudBridgeCompanionDiscoveryState
+        )
+    }
+
+    private var syncQRCodePresentationPhase: ICloudSyncQRCodePresentationPhase {
+        ICloudSyncQRCodePresentationPolicy.phase(
+            isPresented: isShowingIPhoneBridgeQRCode,
+            hasCompanionDevice: appState.iCloudBridgeCompanionDeviceName != nil
+        )
+    }
+
+    private var displayedICloudBridgeState: ICloudBridgeState {
+        appState.iCloudBridgeState
+    }
+
+    private var syncStatusText: String {
+        switch displayedICloudBridgeState {
+        case .checkingICloud:
+            return "Checking iCloud…"
+        case .syncing:
+            if appState.isICloudBridgeActivationPending {
+                return appState.iCloudBridgeCompanionDeviceName == nil
+                    ? "Setting up sync…"
+                    : "Device linked. Finishing sync…"
+            }
+            return "Syncing…"
+        case .needsICloud:
+            return "Sign in to iCloud to sync."
+        case .needsReconnection:
+            if ICloudSyncRecoveryPolicy.action(for: appState.iCloudBridgeState) == .resetAccountLink {
+                return "Reset sync to start again."
+            }
+            return "Reconnect to keep syncing."
+        case .needsAccountReplacement:
+            return "Reset sync to use this iCloud account."
+        case .error:
+            return appState.iCloudBridgeCompanionDeviceName == nil
+                ? "Setup was interrupted. Continue to pair your device."
+                : "Sync couldn't finish. Try again."
+        case .active:
+            guard appState.config.iCloudSyncEnabled else { return "Sync is off." }
+            if appState.iCloudBridgeCompanionDeviceName != nil {
+                return "Sync is on. Audio stays on this Mac."
+            }
+            switch appState.iCloudBridgeCompanionDiscoveryState {
+            case .waiting:
+                return "Finishing device setup…"
+            case .timedOut:
+                return "Couldn't find your device. Open Imla there, then try again."
+            case .idle:
+                return "Ready to connect. Audio stays on this Mac."
+            }
+        case .notConfigured:
+            return "Set up private iCloud text sync."
+        }
+    }
+
+    private var syncLastSyncedText: String? {
+        guard let date = appState.iCloudLastSyncedAt else { return nil }
+        return DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .short)
+    }
+
+    private var syncLinkedDevice: ICloudLinkedDevicePresentation? {
+        guard let remoteDeviceName = appState.iCloudBridgeCompanionDeviceName else { return nil }
+        return ICloudLinkedDevicePresentation(
+            name: remoteDeviceName,
+            platform: appState.iCloudBridgeRemoteDevicePlatform
+        )
+    }
+
+    private var syncUnlinkedDeviceText: String? {
+        guard appState.config.iCloudSyncEnabled else { return nil }
+        switch appState.iCloudBridgeCompanionDiscoveryState {
+        case .waiting:
+            return "Waiting for iPhone or iPad…"
+        case .timedOut:
+            return "No device found yet."
+        case .idle:
+            return "No linked device yet."
+        }
+    }
+
+    private var shouldOfferICloudSyncReset: Bool {
+        appState.config.iCloudSyncEnabled
+            && displayedICloudBridgeState == .active
+            && (syncFlowAction == .syncNow || syncFlowAction == .connectDevice)
+    }
+
+    private var dictationModelSettingsSection: some View {
+        settingsSection("Speech Recognition") {
+            settingsRow("Provider", controlWidth: meetingControlWidth) {
+                settingsMenu(
+                    selection: appState.dictationProvider.label,
+                    options: DictationProvider.allCases.map(\.label)
+                ) { label in
+                    if let provider = DictationProvider.allCases.first(where: { $0.label == label }) {
+                        controller.selectDictationProvider(provider)
+                    }
+                }
+            }
+            .id(FeatureTourTarget.dictationProviderSetting.rawValue)
+            .featureTourTarget(.dictationProviderSetting)
+            Divider().background(ImlaTheme.surfaceBorder)
+            if appState.dictationProvider == .openAI {
+                openAIDictationSettingsRows
+                Divider().background(ImlaTheme.surfaceBorder)
+            } else if appState.dictationProvider == .openRouter {
+                openRouterDictationSettingsRows
+                Divider().background(ImlaTheme.surfaceBorder)
+            }
+            settingsRow(appState.dictationProvider.isHosted ? "Fallback model" : "Dictation model", controlWidth: meetingControlWidth) {
+                if let displayedDictationBackend {
+                    settingsMenu(
+                        selection: displayedDictationBackend.label,
+                        options: dictationBackendOptions.map(\.label),
+                        disabledOptions: disabledDictationBackendLabels
+                    ) { label in
+                        if let option = dictationBackendOptions.first(where: { $0.label == label }) {
+                            controller.selectBackend(option)
+                        }
+                    }
+                } else {
+                    Text("No compatible model installed")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if appState.dictationProvider.isHosted {
+                settingsDescription(
+                    displayedDictationBackend == nil
+                        ? "Download a non-streaming local model to enable automatic fallback."
+                        : "Used automatically if \(appState.dictationProvider.label) transcription fails."
+                )
+            }
+            if !disabledDictationBackendLabels.isEmpty {
+                settingsDescription("Gemma 4 dictation is unavailable while Gemma 4 is the cleanup backend.")
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            // A hosted provider transcribes through its local fallback, so the
+            // profile is explained against the backend that actually runs.
+            settingsDescription(
+                controller.languageProfileClient().presentation(
+                    appState.config.dictationLanguageProfile,
+                    displayedDictationBackend ?? appState.selectedBackend
+                ).explanation
+            )
+        }
+    }
+
+    private var languageProfileSettingsSection: some View {
+        languageProfileSection(
+            title: "Dictation languages",
+            editor: languageProfileEditor,
+            client: controller.languageProfileClient(),
+            spokenLanguagesDescription: "Choose any languages you use. Leave empty for automatic detection.",
+            dominantLanguageDescription: "Pins compatible recognizers. Leave unset to preserve code-switching.",
+            saveTitle: "Save language profile",
+            showsMigrationConfirmation: appState.config.languageProfileNeedsConfirmation,
+            crossReference: "Meetings use their own languages in Meetings › Meeting languages."
+        )
+    }
+
+    /// Both language cards render through here so the meeting card cannot drift
+    /// from the dictation one. Only the copy, the editor, the save seam and the
+    /// banner condition vary; the workload lives in the client's presentation.
+    @ViewBuilder
+    private func languageProfileSection(
+        title: String,
+        editor: LanguageProfileSettingsModel,
+        client: @autoclosure @escaping () -> LanguageProfileClient,
+        spokenLanguagesDescription: String,
+        dominantLanguageDescription: String,
+        saveTitle: String,
+        showsMigrationConfirmation: Bool,
+        crossReference: String,
+        trailingContent: (() -> AnyView)? = nil
+    ) -> some View {
+        settingsSection(title) {
+            if showsMigrationConfirmation {
+                Label(
+                    "Previous model language choices disagreed. Review this profile, then save it.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(ImlaTheme.caption())
+                .foregroundStyle(ImlaTheme.transcribing)
+            }
+
+            settingsRow(
+                "Spoken languages",
+                description: spokenLanguagesDescription,
+                controlWidth: meetingControlWidth
+            ) {
+                Menu {
+                    Button {
+                        editor.useAutomaticDetection()
+                    } label: {
+                        HStack {
+                            Text("Automatic detection")
+                            if editor.selectedLanguages.isEmpty {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                    Divider()
+                    ForEach(TranscriptionLanguage.allCases) { language in
+                        Button {
+                            editor.toggle(language)
+                        } label: {
+                            HStack {
+                                Text(language.label)
+                                if editor.selectedLanguages.contains(language) {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Text(languageSelectionSummary(for: editor))
+                        .lineLimit(1)
+                        .frame(width: meetingControlWidth, alignment: .trailing)
+                }
+                .menuStyle(.borderlessButton)
+            }
+
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow(
+                "Dominant language",
+                description: dominantLanguageDescription,
+                controlWidth: meetingControlWidth
+            ) {
+                let options: [TranscriptionLanguage?] = [nil]
+                    + editor.selectedLanguages.map(Optional.some)
+                FixedWidthPopUp(
+                    selection: editor.dominantLanguage?.label ?? "No dominant language",
+                    options: options.map { $0?.label ?? "No dominant language" },
+                    onSelectIndex: { index in
+                        guard options.indices.contains(index) else { return }
+                        editor.setDominant(options[index])
+                    }
+                )
+                .frame(height: 24)
+            }
+
+            if let trailingContent {
+                Divider().background(ImlaTheme.surfaceBorder)
+                trailingContent()
+            }
+
+            Divider().background(ImlaTheme.surfaceBorder)
+            HStack(spacing: ImlaTheme.spacing12) {
+                Button(saveTitle) {
+                    editor.save(using: client())
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!editor.hasUnsavedChanges && !showsMigrationConfirmation)
+
+                if let errorMessage = editor.errorMessage {
+                    Text(errorMessage)
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(ImlaTheme.danger)
+                } else if editor.didSave {
+                    Label("Saved", systemImage: "checkmark.circle.fill")
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(ImlaTheme.success)
+                }
+            }
+            settingsDescription(crossReference)
+        }
+    }
+
+    private func languageSelectionSummary(for editor: LanguageProfileSettingsModel) -> String {
+        let selected = editor.selectedLanguages
+        if selected.isEmpty { return "Automatic detection" }
+        if selected.count <= 2 { return selected.map(\.label).joined(separator: ", ") }
+        return "\(selected.count) languages"
+    }
+
+    private var languageSelectionSummary: String {
+        languageSelectionSummary(for: languageProfileEditor)
+    }
+
+    /// Meetings get their own card, directly after Transcription so its footer
+    /// explains the backend chosen just above it (KD1, R5).
+    private var meetingLanguageProfileSettingsSection: some View {
+        languageProfileSection(
+            title: "Meeting languages",
+            editor: meetingLanguageProfileEditor,
+            client: controller.meetingLanguageProfileClient(),
+            spokenLanguagesDescription: meetingSpokenLanguagesDescription,
+            dominantLanguageDescription: "Pins compatible recognizers. Leave unset to preserve code-switching.",
+            saveTitle: "Save meeting languages",
+            showsMigrationConfirmation: meetingProfileNeedsReview,
+            crossReference: "Dictation uses its own languages in Dictation › Dictation languages.",
+            trailingContent: { AnyView(meetingNotesLanguageRow) }
+        )
+    }
+
+    private var meetingSpokenLanguagesDescription: String {
+        appState.isMeetingRecording
+            ? "Choose any languages you use. Applies to the next meeting; the current recording keeps its languages."
+            : "Choose any languages you use. Leave empty for automatic detection."
+    }
+
+    @ViewBuilder
+    private var meetingNotesLanguageRow: some View {
+        let policies = MeetingArtifactLanguagePolicy.allCases.filter { $0 != .english }
+        let current = appState.config.meetingArtifactLanguagePolicy
+        // A persisted English policy stays persisted but reads as Automatic until
+        // a positive English instruction lands (KD3, Scope Boundaries).
+        let displayed = current == .english ? .automatic : current
+        settingsRow(
+            "Notes language",
+            description: meetingNotesLanguageDescription,
+            controlWidth: meetingControlWidth
+        ) {
+            FixedWidthPopUp(
+                selection: displayed.label,
+                options: policies.map(\.label),
+                onSelectIndex: { index in
+                    guard policies.indices.contains(index) else { return }
+                    do {
+                        try controller.saveMeetingArtifactLanguagePolicy(policies[index])
+                        notesLanguageErrorMessage = nil
+                    } catch {
+                        notesLanguageErrorMessage = error.localizedDescription
+                    }
+                }
+            )
+            .frame(height: 24)
+        }
+        if let notesLanguageErrorMessage {
+            Text(notesLanguageErrorMessage)
+                .font(ImlaTheme.caption())
+                .foregroundStyle(ImlaTheme.danger)
+        }
+    }
+
+    private var meetingNotesLanguageDescription: String {
+        appState.isMeetingRecording
+            ? "Applies to the next meeting and to notes regenerated after saving."
+            : "Automatic follows the meeting; Arabic always writes notes in Arabic."
+    }
+
+    @ViewBuilder
+    private var openAIDictationSettingsRows: some View {
+        settingsRow("API Key", controlWidth: meetingControlWidth) {
+            PastableSecureField(
+                text: appState.config.openAIAPIKey,
+                placeholder: "sk-...",
+                onChange: { val in
+                    openAITestState = .idle
+                    controller.setOpenAIDictationAPIKey(val)
+                }
+            )
+            .frame(height: 22)
+        }
+        if controller.hostedDictationModelVisibility.shows(.openAI) {
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Model", controlWidth: meetingControlWidth) {
+                settingsModelMenu(
+                    currentModel: appState.config.openaiDictationModel,
+                    presets: openAIDictationModelPresets
+                ) { controller.selectOpenAIDictationModel($0) }
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Connection", controlWidth: meetingControlWidth) {
+                openAITestControl
+            }
+        }
+    }
+
+    private var openAIDictationModelPresets: [SummaryModelPreset] {
+        OpenAITranscriptionClient.modelPresets.map { SummaryModelPreset(id: $0, label: $0) }
+    }
+
+    @ViewBuilder
+    private var openRouterDictationSettingsRows: some View {
+        settingsRow("Account", controlWidth: meetingControlWidth) {
+            openRouterAccountControl(selectMeetingSummaryBackend: false)
+        }
+        if controller.hostedDictationModelVisibility.shows(.openRouter) {
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Model", controlWidth: meetingControlWidth) {
+                openRouterTranscriptionModelMenu
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Custom model ID", controlWidth: meetingControlWidth) {
+                settingsModelTextField(
+                    currentModel: appState.config.openRouterDictationModel,
+                    placeholder: "provider/model",
+                    onBeginEditing: { isUsingCustomOpenRouterDictationModel = true }
+                ) { controller.selectOpenRouterDictationModel($0) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var openAITestControl: some View {
+        switch openAITestState {
+        case .idle:
+            HStack {
+                Spacer()
+                compactActionButton("Test connection") {
+                    testOpenAIConnection()
+                }
+            }
+        case .testing:
+            HStack(spacing: 8) {
+                Spacer()
+                ProgressView()
+                    .controlSize(.small)
+                Text("Testing…")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ImlaTheme.textTertiary)
+            }
+        case .success:
+            HStack(spacing: 6) {
+                Spacer()
+                Circle()
+                    .fill(ImlaTheme.success)
+                    .frame(width: 6, height: 6)
+                Text("Connected")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ImlaTheme.success)
+                compactActionButton("Test again") {
+                    testOpenAIConnection()
+                }
+            }
+        case .failed(let message):
+            HStack(spacing: 6) {
+                Spacer()
+                Text("Failed")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ImlaTheme.recording)
+                    .help(message)
+                compactActionButton("Retry") {
+                    testOpenAIConnection()
+                }
+            }
+        }
+    }
+
+    private func testOpenAIConnection() {
+        openAITestState = .testing
+        Task {
+            do {
+                try await controller.testOpenAIConnection()
+                await MainActor.run { openAITestState = .success }
+            } catch {
+                await MainActor.run { openAITestState = .failed(error.localizedDescription) }
+            }
+        }
+    }
+
+    private var meetingTranscriptionSettingsSection: some View {
+        settingsSection("Transcription") {
+            settingsRow(
+                "Microphone",
+                description: "Only affects Imla. Changes apply immediately.",
+                controlWidth: meetingControlWidth
+            ) {
+                let options = meetingMicrophoneOptions
+                FixedWidthPopUp(
+                    selection: selectedMeetingMicrophoneLabel,
+                    options: options.map(\.label),
+                    onSelectIndex: { index in
+                        guard options.indices.contains(index) else { return }
+                        controller.selectMeetingInputDeviceUID(options[index].uid)
+                        loadCachedAudioInputDevices()
+                    }
+                )
+                .frame(height: 24)
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow(
+                "Live preview model",
+                description: meetingLiveTranscriptDescription,
+                controlWidth: meetingControlWidth
+            ) {
+                if !downloadedMeetingLiveCaptionBackends.isEmpty {
+                    settingsMenu(
+                        selection: selectedMeetingLiveCaptionLabel,
+                        options: downloadedMeetingLiveCaptionBackends.map(\.settingsLabel) + ["Off"]
+                    ) { label in
+                        guard label != "Off" else {
+                            controller.updateConfig { $0.enableLiveStreamingPartials = false }
+                            return
+                        }
+                        guard let backend = downloadedMeetingLiveCaptionBackends.first(where: { $0.settingsLabel == label }) else {
+                            return
+                        }
+                        controller.updateConfig {
+                            $0.meetingLiveCaptionBackend = backend.rawValue
+                            $0.enableLiveStreamingPartials = true
+                        }
+                    }
+                } else {
+                    Text("Download from Models")
+                        .font(ImlaTheme.font(size: 12, weight: .medium))
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: meetingControlWidth, alignment: .trailing)
+                }
+            }
+            .id(FeatureTourTarget.liveCaptionsSetting.rawValue)
+            .featureTourTarget(.liveCaptionsSetting)
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Final transcript", controlWidth: meetingControlWidth) {
+                if usesNemotronLiveTranscript {
+                    let options = finalTranscriptOptions
+                    FixedWidthPopUp(
+                        selection: selectedFinalTranscriptLabel,
+                        options: options.map(\.label),
+                        onSelectIndex: { index in
+                            guard options.indices.contains(index) else { return }
+                            switch options[index] {
+                            case .liveNemotron:
+                                controller.selectLiveMeetingTranscriptAsFinal()
+                            case .batch(let option):
+                                controller.selectMeetingFinalTranscriptBackend(option)
+                            }
+                        }
+                    )
+                    .frame(height: 24)
+                } else if meetingBackendOptions.isEmpty {
+                    Text("No downloaded models")
+                        .font(ImlaTheme.body())
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    settingsMenu(
+                        selection: selectedMeetingBackendLabel,
+                        options: meetingBackendOptions.map(\.label)
+                    ) { label in
+                        if let option = meetingBackendOptions.first(where: { $0.label == label }) {
+                            controller.selectMeetingFinalTranscriptBackend(option)
+                        }
+                    }
+                }
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsDescription(
+                meetingLanguageExplanation
+            )
+            if let liveCaptionLanguageNotice {
+                settingsDescription(liveCaptionLanguageNotice)
+            }
+        }
+    }
+
+    /// The meeting selection explained against whichever backend actually
+    /// produces the final transcript: Nemotron under `.meetingLive` when it is
+    /// the unified source, the selected meeting backend under `.meetingFinal`
+    /// otherwise (R7).
+    private var meetingLanguageExplanation: String {
+        let backend = usesUnifiedMeetingTranscript
+            ? BackendOption.nemotron35Multilingual
+            : appState.selectedMeetingTranscriptionBackend
+        return controller.meetingLanguageProfileClient().presentation(
+            appState.config.meetingSpokenLanguage,
+            backend
+        ).explanation
+    }
+
+    /// Parakeet Live Captions is not a routable backend, so it cannot follow the
+    /// meeting languages; say so rather than letting the preview look broken (R10).
+    private var liveCaptionLanguageNotice: String? {
+        guard appState.config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU else { return nil }
+        let selected = appState.config.meetingSpokenLanguage.selectedLanguages
+        guard !(selected.isEmpty || selected == [.english]) else { return nil }
+        return "Live preview does not follow meeting languages."
+    }
+
+    /// Whether repair is actually reaching dictations, and why not when it is not (R8).
+    ///
+    /// A bilingual user is told repair is automatic, so silence here would read as
+    /// "it is working" in exactly the case where it is not.
+    private var mixedLanguageRepairStatus: String? {
+        guard appState.config.dictationLanguageProfile.isBilingual else { return nil }
+        guard appState.config.enablePostProcessor else {
+            return "Mixed-language repair needs AI transcript cleanup switched on."
+        }
+        guard !cleanupModelUsesFixedPrompt else {
+            // S1-mini substitutes its own trained prompt for the composed one, so
+            // the repair block never reaches the model.
+            return "S1-mini uses its own instructions, so mixed-language repair does not apply."
+        }
+        return "Mixed-language repair is on for your selected dictation languages."
+    }
+
+    private var dictationCleanupSettingsSection: some View {
+        settingsSection("Dictation Cleanup") {
+            if let mixedLanguageRepairStatus {
+                settingsRow("AI transcript cleanup", description: mixedLanguageRepairStatus) {
+                    settingsSwitch(isOn: appState.config.enablePostProcessor) { newValue in
+                        controller.setPostProcessorEnabled(newValue)
+                    }
+                }
+            } else {
+                settingsRow("AI transcript cleanup") {
+                    settingsSwitch(isOn: appState.config.enablePostProcessor) { newValue in
+                        controller.setPostProcessorEnabled(newValue)
+                    }
+                }
+            }
+            if appState.config.enablePostProcessor {
+                Divider().background(ImlaTheme.surfaceBorder)
+                if cleanupModelUsesFixedPrompt {
+                    fixedCleanupPromptNotice
+                } else {
+                    cleanupPromptSettings
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow(
+                    "Cleanup source",
+                    description: cleanupBackendDescription,
+                    controlWidth: meetingControlWidth
+                ) {
+                    settingsMenu(
+                        selection: selectedCleanupBackendLabel,
+                        options: cleanupBackendOptions.map(\.label)
+                    ) { label in
+                        if let option = cleanupBackendOptions.first(where: { $0.label == label }) {
+                            controller.selectPostProcessorBackend(option)
+                        }
+                    }
+                }
+                .id(FeatureTourTarget.cloudCleanupSetting.rawValue)
+                .featureTourTarget(.cloudCleanupSetting)
+                if appState.selectedPostProcessorBackend.isOnDevice {
+                    Divider().background(ImlaTheme.surfaceBorder)
+                    settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
+                        if onDeviceCleanupModels.isEmpty {
+                            compactActionButton("View cleanup models", systemImage: "arrow.right") {
+                                controller.showModels(category: .postProcessing)
+                            }
+                            .frame(width: meetingControlWidth, alignment: .trailing)
+                        } else {
+                            FixedWidthPopUp(
+                                selection: selectedOnDeviceCleanupModelLabel,
+                                options: onDeviceCleanupModels.map(\.label),
+                                onSelectIndex: { index in
+                                    guard onDeviceCleanupModels.indices.contains(index) else { return }
+                                    switch onDeviceCleanupModels[index] {
+                                    case let .gguf(option):
+                                        controller.selectPostProcessor(option)
+                                    case let .gemma4(model):
+                                        controller.selectGemma4PostProcessor(model)
+                                    }
+                                }
+                            )
+                            .frame(height: 24)
+                        }
+                    }
+                    if gemmaCleanupIsUnavailable {
+                        Text("Gemma 4 is unavailable for cleanup while a Gemma 4 model is selected for dictation.")
+                            .font(ImlaTheme.body())
+                            .foregroundStyle(ImlaTheme.textTertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else {
+                    hostedCleanupSettings(for: appState.selectedPostProcessorBackend)
+                }
+            }
+        }
+    }
+
+    private var quilSettingsSection: some View {
+        settingsSection("Quill", icon: QuillIcon.image()) {
+            settingsRow(
+                "Rewrite selected text",
+                description: "Highlight text to transform it. With no selection, Quill generates and pastes at the cursor."
+            ) {
+                settingsSwitch(isOn: appState.config.enableQuilMode) { newValue in
+                    _ = controller.updateQuilModeEnabled(newValue)
+                }
+            }
+            if let quilPermissionMessage = controller.independentShortcutPermissionMessageIfNeeded(
+                isEnabled: appState.config.enableQuilMode
+            ) {
+                Text(quilPermissionMessage)
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.transcribing)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Group {
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow(
+                    "Play Quill sounds",
+                    description: "Play the activation and release cues for Quill mode."
+                ) {
+                    settingsSwitch(isOn: appState.config.quilSoundEnabled) { newValue in
+                        controller.updateConfig { $0.quilSoundEnabled = newValue }
+                    }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Model source", controlWidth: meetingControlWidth) {
+                    settingsMenu(
+                        selection: selectedQuilModelSource.label,
+                        options: QuilModelSourceOption.all.map(\.label)
+                    ) { label in
+                        guard let source = QuilModelSourceOption.all.first(where: { $0.label == label }) else {
+                            return
+                        }
+                        if source == .localModels {
+                            if !selectedQuilBackend.isOnDevice {
+                                selectQuilLocalModel(quilLocalModels.first)
+                            }
+                        } else if let backend = source.hostedBackend {
+                            controller.updateConfig {
+                                $0.quilBackend = backend.backend
+                                $0.quilModel = TranscriptCleanupClient.defaultModel(for: backend)
+                            }
+                        }
+                    }
+                }
+                if selectedQuilBackend.isOnDevice {
+                    Divider().background(ImlaTheme.surfaceBorder)
+                    settingsRow("Quill model", controlWidth: meetingControlWidth) {
+                        if quilLocalModels.isEmpty {
+                            compactActionButton("View local models", systemImage: "arrow.right") {
+                                controller.showModels(category: .quill)
+                            }
+                            .frame(width: meetingControlWidth, alignment: .trailing)
+                        } else {
+                            FixedWidthPopUp(
+                                selection: selectedQuilLocalModelLabel,
+                                options: quilLocalModels.map(\.quilLabel),
+                                onSelectIndex: { index in
+                                    guard quilLocalModels.indices.contains(index) else { return }
+                                    selectQuilLocalModel(quilLocalModels[index])
+                                }
+                            )
+                            .frame(height: 24)
+                        }
+                    }
+                } else {
+                    hostedQuilSettings(for: selectedQuilBackend)
+                }
+            }
+        }
+        .id(FeatureTourTarget.quillSettings.rawValue)
+        .featureTourTarget(.quillSettings)
+    }
+
+    private func selectQuilLocalModel(_ model: OnDeviceCleanupModel?) {
+        controller.updateConfig {
+            let resolved = model ?? .gguf(PostProcessorOption.defaultQuilOption)
+            $0.quilBackend = resolved.quilBackend.backend
+            $0.quilModel = resolved.quilModelID
+        }
+        if appState.config.enableQuilMode {
+            _ = controller.ensureQuilModelIsAvailable()
+        }
+    }
+
+    @ViewBuilder
+    private func hostedQuilSettings(for backend: TranscriptCleanupBackendOption) -> some View {
+        if backend == .hosted(.chatGPT) {
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Account", controlWidth: meetingControlWidth) {
+                chatGPTAccountControl(selectMeetingSummaryBackend: false)
+            }
+        } else if backend == .hosted(.openAI) {
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("API Key", controlWidth: meetingControlWidth) {
+                PastableSecureField(
+                    text: appState.config.openAIAPIKey,
+                    placeholder: "sk-...",
+                    onChange: { value in controller.updateConfig { $0.openAIAPIKey = value } }
+                ).frame(height: 22)
+            }
+        } else if backend == .hosted(.openRouter) {
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Account", controlWidth: meetingControlWidth) {
+                openRouterAccountControl(selectMeetingSummaryBackend: false)
+            }
+        } else if backend == .hosted(.ollama) {
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Ollama URL", controlWidth: meetingControlWidth) {
+                PastableTextField(
+                    text: appState.config.ollamaURL,
+                    placeholder: "http://localhost:11434",
+                    onChange: { value in controller.updateConfig { $0.ollamaURL = value } }
+                ).frame(height: 22)
+            }
+        } else if backend == .hosted(.lmStudio) {
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("LM Studio URL", controlWidth: meetingControlWidth) {
+                PastableTextField(
+                    text: appState.config.lmStudioURL,
+                    placeholder: "http://localhost:1234",
+                    onChange: { value in controller.updateConfig { $0.lmStudioURL = value } }
+                ).frame(height: 22)
+            }
+        } else if backend == .hosted(.customLLM) {
+            customLLMSettingsRows(model: appState.config.quilModel) { value in
+                controller.updateConfig { $0.quilModel = value }
+            }
+        }
+        if backend != .hosted(.customLLM) {
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Quill model", controlWidth: meetingControlWidth) {
+                settingsModelTextField(
+                    currentModel: appState.config.quilModel,
+                    placeholder: TranscriptCleanupClient.defaultModel(for: backend)
+                ) { value in controller.updateConfig { $0.quilModel = value } }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func hostedCleanupSettings(for backend: TranscriptCleanupBackendOption) -> some View {
+        switch backend.llmBackend {
+        case .some(.chatGPT):
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Account", controlWidth: meetingControlWidth) {
+                chatGPTAccountControl(selectMeetingSummaryBackend: false)
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
+                settingsModelMenu(
+                    currentModel: appState.config.postProcessorChatGPTModel,
+                    presets: SummaryModelPreset.chatGPTTranscriptCleanupModels
+                ) { controller.updatePostProcessorModel($0, for: backend) }
+            }
+            let model = TranscriptCleanupClient.configuredModel(for: backend, config: appState.config)
+            if !ReasoningEffortPolicy.selectableEfforts(for: model).isEmpty {
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Thinking", controlWidth: meetingControlWidth) {
+                    settingsReasoningSlider(
+                        model: model,
+                        preferred: appState.config.transcriptCleanupReasoningEffort,
+                        accessibilityLabel: "Transcript cleanup thinking"
+                    ) { effort in
+                        controller.updateConfig { $0.transcriptCleanupReasoningEffort = effort }
+                    }
+                }
+            }
+        case .some(.openAI):
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("API Key", controlWidth: meetingControlWidth) {
+                PastableSecureField(
+                    text: appState.config.openAIAPIKey,
+                    placeholder: "sk-...",
+                    onChange: { val in controller.updateConfig { $0.openAIAPIKey = val } }
+                )
+                .frame(height: 22)
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
+                settingsModelMenu(
+                    currentModel: appState.config.postProcessorOpenAIModel,
+                    presets: SummaryModelPreset.openAIModels
+                ) { controller.updatePostProcessorModel($0, for: backend) }
+            }
+            let model = TranscriptCleanupClient.configuredModel(for: backend, config: appState.config)
+            if !ReasoningEffortPolicy.selectableEfforts(for: model).isEmpty {
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Thinking", controlWidth: meetingControlWidth) {
+                    settingsReasoningSlider(
+                        model: model,
+                        preferred: appState.config.transcriptCleanupReasoningEffort,
+                        accessibilityLabel: "Transcript cleanup thinking"
+                    ) { effort in
+                        controller.updateConfig { $0.transcriptCleanupReasoningEffort = effort }
+                    }
+                }
+            }
+            keyStatusRow(key: appState.config.openAIAPIKey)
+        case .some(.openRouter):
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Account", controlWidth: meetingControlWidth) {
+                openRouterAccountControl(selectMeetingSummaryBackend: false)
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Model preset", controlWidth: meetingControlWidth) {
+                settingsModelMenu(
+                    currentModel: appState.config.postProcessorOpenRouterModel,
+                    presets: SummaryModelPreset.openRouterModels
+                ) { controller.updatePostProcessorModel($0, for: backend) }
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Custom model ID", controlWidth: meetingControlWidth) {
+                settingsModelTextField(
+                    currentModel: appState.config.postProcessorOpenRouterModel,
+                    placeholder: "provider/model"
+                ) { controller.updatePostProcessorModel($0, for: backend) }
+            }
+        case .some(.ollama):
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Ollama URL", controlWidth: meetingControlWidth) {
+                PastableTextField(
+                    text: appState.config.ollamaURL,
+                    placeholder: "http://localhost:11434",
+                    onChange: { val in controller.updateConfig { $0.ollamaURL = val } }
+                )
+                .frame(height: 22)
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
+                settingsModelTextField(
+                    currentModel: appState.config.postProcessorOllamaModel,
+                    placeholder: TranscriptCleanupClient.defaultModel(for: backend)
+                ) { controller.updatePostProcessorModel($0, for: backend) }
+            }
+        case .some(.lmStudio):
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("LM Studio URL", controlWidth: meetingControlWidth) {
+                PastableTextField(
+                    text: appState.config.lmStudioURL,
+                    placeholder: "http://localhost:1234",
+                    onChange: { val in controller.updateConfig { $0.lmStudioURL = val } }
+                )
+                .frame(height: 22)
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
+                settingsModelTextField(
+                    currentModel: appState.config.postProcessorLMStudioModel,
+                    placeholder: "Loaded LM Studio model"
+                ) { controller.updatePostProcessorModel($0, for: backend) }
+            }
+        case .some(.customLLM):
+            customLLMSettingsRows(model: appState.config.postProcessorCustomLLMModel) {
+                controller.updatePostProcessorModel($0, for: backend)
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private var customInstructionsSettingsSection: some View {
+        settingsSection("Custom Instructions") {
+            VStack(alignment: .leading, spacing: ImlaTheme.spacing8) {
+                Text("Standing preferences for how Imla rewrites your words. Applies to AI transcript cleanup, meeting transcript cleanup, and meeting notes.")
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                CustomInstructionsEditor(committed: appState.config.customInstructions) { text in
+                    controller.setCustomInstructions(text)
+                }
+
+                if let note = customInstructionsScopeNote {
+                    Text(note)
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// Names the one dictation-side caveat that applies to the current cleanup
+    /// setup, so the user knows where the instructions are inert or shortened.
+    private var customInstructionsScopeNote: String? {
+        if !appState.config.enablePostProcessor {
+            return "Dictation cleanup is off; instructions still apply to meetings."
+        }
+        if cleanupModelUsesFixedPrompt {
+            return "S1-mini uses Superwhisper’s built-in normalization instructions, so custom instructions do not affect dictation with that model."
+        }
+        if appState.selectedPostProcessorBackend == .local {
+            return "The on-device model reads the first \(DictationCleanupPromptComposer.onDeviceCustomInstructionsLimit) characters."
+        }
+        return nil
+    }
+
+    /// One entry point into the Modes screen. The captions say what is inert right
+    /// now so a user is never editing instructions that cannot reach the model.
+    private var cleanupPromptSettings: some View {
+        VStack(alignment: .leading, spacing: ImlaTheme.spacing12) {
+            settingsRow(
+                "Modes",
+                description: "Per-app and per-website instructions, and the key to press after pasting.",
+                controlWidth: meetingControlWidth
+            ) {
+                compactActionButton("Manage modes\u{2026}", systemImage: "slider.horizontal.3") {
+                    isModesPresented = true
+                }
+                .accessibilityLabel("Manage modes")
+            }
+
+            settingsRow(
+                "Match modes by website",
+                description: "Reads the address of the page you dictate into, to pick a mode. It is never stored or sent.",
+                controlWidth: meetingControlWidth
+            ) {
+                settingsSwitch(isOn: appState.config.matchModesByWebsite) { enabled in
+                    controller.updateConfig { $0.matchModesByWebsite = enabled }
+                }
+                .accessibilityLabel("Match modes by website")
+            }
+
+            if !appState.config.enablePostProcessor {
+                Text("Cleanup is off, so mode instructions are inactive. The key a mode presses after pasting still works.")
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+            } else if cleanupModelUsesFixedPrompt {
+                Text("This cleanup model uses a fixed prompt, so mode instructions do not affect it. The key a mode presses after pasting still works.")
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    /// Read-only: meeting repair follows the meeting language selection, so there
+    /// is nothing to toggle here (R11).
+    private var meetingTranscriptCleanupSection: some View {
+        let status = MeetingCleanupStatus.describe(
+            config: appState.config,
+            isChatGPTAuthenticated: appState.isChatGPTAuthenticated
+        )
+        return settingsSection("Meeting Transcript Cleanup") {
+            settingsRow(
+                "Repair mixed-language transcripts",
+                description: status.detail,
+                controlWidth: meetingControlWidth
+            ) {
+                Text(status.state)
+                    .font(ImlaTheme.body())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+            }
+        }
+    }
+
+    private var fixedCleanupPromptNotice: some View {
+        settingsRow(
+            "Cleanup prompt",
+            description: "S1-mini uses Superwhisper’s built-in normalization instructions.",
+            controlWidth: meetingControlWidth
+        ) {
+            Text("Built in")
+                .font(ImlaTheme.body())
+                .foregroundStyle(ImlaTheme.textSecondary)
+                .frame(width: meetingControlWidth, alignment: .trailing)
+        }
+    }
+
+    private var meetingSummarySettingsSection: some View {
+        settingsSection("Meeting Summaries") {
+            settingsRow(
+                "Summary backend",
+                description: "Remote summaries may send transcripts, notes, screen context, and participant names.",
+                controlWidth: meetingControlWidth
+            ) {
+                settingsMenu(
+                    selection: appState.selectedMeetingSummaryBackend.label,
+                    options: MeetingSummaryBackendOption.all.map(\.label)
+                ) { label in
+                    if let option = MeetingSummaryBackendOption.all.first(where: { $0.label == label }) {
+                        controller.selectMeetingSummaryBackend(option)
+                    }
+                }
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+
+            if appState.selectedMeetingSummaryBackend == .chatGPT {
+                settingsRow("Account", controlWidth: meetingControlWidth) {
+                    chatGPTAccountControl()
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Model", controlWidth: meetingControlWidth) {
+                    settingsModelMenu(
+                        currentModel: appState.config.chatGPTModel,
+                        presets: SummaryModelPreset.chatGPTModels
+                    ) { val in controller.updateConfig { $0.chatGPTModel = val } }
+                }
+                let model = appState.config.chatGPTModel.isEmpty
+                    ? (SummaryModelPreset.chatGPTModels.first?.id ?? "")
+                    : appState.config.chatGPTModel
+                if !ReasoningEffortPolicy.selectableEfforts(for: model).isEmpty {
+                    Divider().background(ImlaTheme.surfaceBorder)
+                    settingsRow("Thinking", controlWidth: meetingControlWidth) {
+                        settingsReasoningSlider(
+                            model: model,
+                            preferred: appState.config.meetingSummaryReasoningEffort,
+                            accessibilityLabel: "Meeting summary thinking"
+                        ) { effort in
+                            controller.updateConfig { $0.meetingSummaryReasoningEffort = effort }
+                        }
+                    }
+                }
+            } else if appState.selectedMeetingSummaryBackend == .openAI {
+                settingsRow("API Key", controlWidth: meetingControlWidth) {
+                    PastableSecureField(
+                        text: appState.config.openAIAPIKey,
+                        placeholder: "sk-...",
+                        onChange: { val in controller.updateConfig { $0.openAIAPIKey = val } }
+                    )
+                    .frame(height: 22)
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Model", controlWidth: meetingControlWidth) {
+                    settingsModelMenu(
+                        currentModel: appState.config.openAIModel,
+                        presets: SummaryModelPreset.openAIModels
+                    ) { val in controller.updateConfig { $0.openAIModel = val } }
+                }
+                let model = appState.config.openAIModel.isEmpty
+                    ? (SummaryModelPreset.openAIModels.first?.id ?? "")
+                    : appState.config.openAIModel
+                if !ReasoningEffortPolicy.selectableEfforts(for: model).isEmpty {
+                    Divider().background(ImlaTheme.surfaceBorder)
+                    settingsRow("Thinking", controlWidth: meetingControlWidth) {
+                        settingsReasoningSlider(
+                            model: model,
+                            preferred: appState.config.meetingSummaryReasoningEffort,
+                            accessibilityLabel: "Meeting summary thinking"
+                        ) { effort in
+                            controller.updateConfig { $0.meetingSummaryReasoningEffort = effort }
+                        }
+                    }
+                }
+                keyStatusRow(key: appState.config.openAIAPIKey)
+            } else if appState.selectedMeetingSummaryBackend == .ollama {
+                settingsRow("Ollama URL", controlWidth: meetingControlWidth) {
+                    PastableTextField(
+                        text: appState.config.ollamaURL,
+                        placeholder: "http://localhost:11434",
+                        onChange: { val in controller.updateConfig { $0.ollamaURL = val } }
+                    )
+                    .frame(height: 22)
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Model", controlWidth: meetingControlWidth) {
+                    settingsModelTextField(
+                        currentModel: appState.config.ollamaModel,
+                        placeholder: "qwen3.5"
+                    ) { val in controller.updateConfig { $0.ollamaModel = val } }
+                }
+            } else if appState.selectedMeetingSummaryBackend == .lmStudio {
+                settingsRow("LM Studio URL", controlWidth: meetingControlWidth) {
+                    PastableTextField(
+                        text: appState.config.lmStudioURL,
+                        placeholder: "http://localhost:1234",
+                        onChange: { val in controller.updateConfig { $0.lmStudioURL = val } }
+                    )
+                    .frame(height: 22)
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Model", controlWidth: meetingControlWidth) {
+                    settingsModelTextField(
+                        currentModel: appState.config.lmStudioModel,
+                        placeholder: "Select a loaded LM Studio model"
+                    ) { val in controller.updateConfig { $0.lmStudioModel = val } }
+                }
+            } else if appState.selectedMeetingSummaryBackend == .customLLM {
+                customLLMSettingsRows(model: appState.config.customLLMModel) {
+                    val in controller.updateConfig { $0.customLLMModel = val }
+                }
+            } else {
+                settingsRow("Account", controlWidth: meetingControlWidth) {
+                    openRouterAccountControl()
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Model", controlWidth: meetingControlWidth) {
+                    openRouterFreeModelMenu
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Custom model ID", controlWidth: meetingControlWidth) {
+                    settingsModelTextField(
+                        currentModel: appState.config.openRouterModel,
+                        placeholder: "provider/model",
+                        onBeginEditing: { isUsingCustomOpenRouterModel = true }
+                    ) { val in controller.updateConfig { $0.openRouterModel = val } }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func customLLMSettingsRows(model: String, onModelChange: @escaping (String) -> Void) -> some View {
+        Divider().background(ImlaTheme.surfaceBorder)
+        settingsRow("API Format", controlWidth: meetingControlWidth) {
+            settingsMenu(
+                selection: CustomLLMFormat(rawValue: appState.config.customLLMFormat)?.label ?? CustomLLMFormat.openAI.label,
+                options: CustomLLMFormat.allCases.map(\.label)
+            ) { label in
+                guard let format = CustomLLMFormat.allCases.first(where: { $0.label == label }) else { return }
+                controller.updateConfig { $0.customLLMFormat = format.rawValue }
+            }
+        }
+        Divider().background(ImlaTheme.surfaceBorder)
+        settingsRow("Endpoint", controlWidth: meetingControlWidth) {
+            PastableTextField(
+                text: appState.config.customLLMURL,
+                placeholder: appState.config.customLLMFormat == CustomLLMFormat.anthropic.rawValue
+                    ? "https://api.anthropic.com"
+                    : "http://localhost:8080/v1",
+                onChange: { val in controller.updateConfig { $0.customLLMURL = val } }
+            )
+            .frame(height: 22)
+        }
+        Divider().background(ImlaTheme.surfaceBorder)
+        settingsRow("API Key", controlWidth: meetingControlWidth) {
+            PastableSecureField(
+                text: appState.config.customLLMAPIKey,
+                placeholder: appState.config.customLLMFormat == CustomLLMFormat.anthropic.rawValue
+                    ? "Required for Anthropic API"
+                    : "Optional for local servers",
+                onChange: { val in controller.updateConfig { $0.customLLMAPIKey = val } }
+            )
+            .frame(height: 22)
+        }
+        Divider().background(ImlaTheme.surfaceBorder)
+        settingsRow("Model", controlWidth: meetingControlWidth) {
+            settingsModelTextField(
+                currentModel: model,
+                placeholder: appState.config.customLLMFormat == CustomLLMFormat.anthropic.rawValue
+                    ? "claude-3-5-sonnet-20241022"
+                    : "custom-model-id"
+            ) { val in onModelChange(val) }
+        }
+    }
+
+    private var dictationSettingsPane: some View {
+        VStack(alignment: .leading, spacing: ImlaTheme.spacing24) {
+            languageProfileSettingsSection
+
+            dictationModelSettingsSection
+
+            settingsSection("Transcription") {
+                settingsRow(
+                    "Microphone",
+                    description: "Automatic uses system input, or Mac mic with AirPods."
+                ) {
+                    let options = dictationMicrophoneOptions
+                    FixedWidthPopUp(
+                        selection: selectedDictationMicrophoneLabel,
+                        options: options.map(\.label),
+                        onSelectIndex: { index in
+                            guard index >= 0, index < options.count else { return }
+                            controller.selectDictationInputDeviceUID(options[index].uid)
+                            loadCachedAudioInputDevices()
+                        }
+                    )
+                    .frame(height: 24)
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Save dictation recording") {
+                    settingsMenu(
+                        selection: dictationRecordingSaveLabel(for: appState.config.dictationRecordingSavePolicy),
+                        options: DictationRecordingSavePolicy.allCases.map(dictationRecordingSaveLabel(for:))
+                    ) { label in
+                        guard let policy = dictationRecordingSavePolicy(for: label) else { return }
+                        controller.updateConfig { $0.dictationRecordingSavePolicy = policy }
+                    }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow(
+                    "Dictionary suggestions",
+                    description: "Suggest words after corrections by briefly reading focused app text via Accessibility."
+                ) {
+                    settingsSwitch(isOn: appState.config.enableDictionaryCorrectionPrompts) { newValue in
+                        handleDictionaryCorrectionPromptsToggle(newValue)
+                    }
+                    .help("Briefly reads focused app text after dictation to detect corrections.")
+                }
+            }
+
+            dictationCleanupSettingsSection
+
+            customInstructionsSettingsSection
+
+            quilSettingsSection
+
+            settingsSection("Advanced") {
+                settingsRow("Pause media during dictation") {
+                    settingsSwitch(isOn: appState.config.pauseMediaDuringDictation) { newValue in
+                        controller.updateConfig { $0.pauseMediaDuringDictation = newValue }
+                    }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Mute system audio during dictation") {
+                    settingsSwitch(isOn: appState.config.muteSystemAudioDuringDictation) { newValue in
+                        controller.updateConfig { $0.muteSystemAudioDuringDictation = newValue }
+                    }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                screenContextRow("App context")
+                Divider().background(ImlaTheme.surfaceBorder)
+                dictationOCRContextRow
+            }
+        }
+    }
+
+    private var computerUseSettingsPane: some View {
+        VStack(alignment: .leading, spacing: ImlaTheme.spacing24) {
+            settingsSection("Computer Use") {
+                settingsRow("Enable planner", controlWidth: meetingControlWidth) {
+                    settingsSwitch(isOn: appState.config.enableComputerUsePlanner) { newValue in
+                        controller.updateConfig { $0.enableComputerUsePlanner = newValue }
+                    }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Account", controlWidth: meetingControlWidth) {
+                    chatGPTAccountControl()
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Planner model", controlWidth: meetingControlWidth) {
+                    settingsModelMenu(
+                        currentModel: appState.config.computerUsePlannerModel,
+                        presets: SummaryModelPreset.computerUsePlannerModels
+                    ) { val in controller.updateConfig { $0.computerUsePlannerModel = val } }
+                }
+                let plannerModel = ComputerUsePlannerClient.plannerModel(for: appState.config)
+                if !ReasoningEffortPolicy.selectableEfforts(for: plannerModel).isEmpty {
+                    Divider().background(ImlaTheme.surfaceBorder)
+                    settingsRow("Thinking", controlWidth: meetingControlWidth) {
+                        settingsReasoningSlider(
+                            model: plannerModel,
+                            preferred: appState.config.computerUseReasoningEffort,
+                            accessibilityLabel: "Computer use thinking"
+                        ) { effort in
+                            controller.updateConfig { $0.computerUseReasoningEffort = effort }
+                        }
+                    }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Timeout", controlWidth: meetingControlWidth) {
+                    integerInput(
+                        label: "Computer use timeout",
+                        value: Binding(
+                            get: { max(appState.config.computerUseTimeoutSeconds, 1) },
+                            set: { newValue in
+                                controller.updateConfig { $0.computerUseTimeoutSeconds = max(newValue, 1) }
+                            }
+                        ),
+                        range: 1...600,
+                        step: 15,
+                        unit: { $0 == 1 ? "second" : "seconds" }
+                    )
+                }
+            }
+        }
+    }
+
+    private var meetingsSettingsPane: some View {
+        VStack(alignment: .leading, spacing: ImlaTheme.spacing24) {
+            meetingTranscriptionSettingsSection
+
+            meetingLanguageProfileSettingsSection
+
+            settingsSection("Meeting Context") {
+                screenContextRow("Meeting context", includesScreenOCR: true)
+            }
+
+            meetingSummarySettingsSection
+
+            meetingTranscriptCleanupSection
+
+            settingsSection("Meeting Notes") {
+                settingsRow("Default template", controlWidth: meetingControlWidth) {
+                    meetingTemplateMenu(selectionID: appState.config.defaultMeetingTemplateID) { id in
+                        controller.updateDefaultMeetingTemplate(id: id)
+                    }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Summary retries", controlWidth: meetingControlWidth) {
+                    integerInput(
+                        label: "Summary retries",
+                        value: Binding(
+                            get: {
+                                MeetingSummaryRetryPolicy.clampedRetryCount(appState.config.meetingSummaryRetryCount)
+                            },
+                            set: { newValue in
+                                controller.updateConfig {
+                                    $0.meetingSummaryRetryCount = MeetingSummaryRetryPolicy.clampedRetryCount(newValue)
+                                }
+                            }
+                        ),
+                        range: 0...MeetingSummaryRetryPolicy.maximumRetryCount,
+                        unit: { $0 == 1 ? "retry" : "retries" }
+                    )
+                }
+                settingsDescription("Retry transient AI summary failures before saving failed notes.")
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Templates", controlWidth: meetingControlWidth) {
+                    actionButton("Manage Templates…") {
+                        controller.showMeetingTemplatesManager()
+                    }
+                }
+            }
+
+            settingsSection("Recording") {
+                settingsRow("Auto-record calendar meetings") {
+                    settingsSwitch(isOn: appState.config.autoRecordMeetings) { newValue in
+                        controller.updateConfig { $0.autoRecordMeetings = newValue }
+                    }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Floating Record button") {
+                    settingsSwitch(isOn: appState.config.showMeetingRecordButton) { newValue in
+                        controller.updateConfig { $0.showMeetingRecordButton = newValue }
+                    }
+                }
+                settingsDescription("Shows a small Record pill while a meeting app is active. One click starts recording; drag to move. Requires meeting detection.")
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Save meeting recording") {
+                    settingsMenu(
+                        selection: recordingSaveLabel(for: appState.config.meetingRecordingSavePolicy),
+                        options: MeetingRecordingSavePolicy.allCases.map(recordingSaveLabel(for:))
+                    ) { label in
+                        guard let policy = recordingSavePolicy(for: label) else { return }
+                        controller.updateConfig { $0.meetingRecordingSavePolicy = policy }
+                    }
+                }
+                if appState.config.meetingRecordingSavePolicy != .never {
+                    Divider().background(ImlaTheme.surfaceBorder)
+                    settingsRow("Recording format") {
+                        settingsMenu(
+                            selection: appState.config.resolvedMeetingRecordingFileFormat.displayName,
+                            options: MeetingRecordingFileFormat.allCases.map(recordingFileFormatLabel(for:))
+                        ) { label in
+                            guard let format = recordingFileFormat(for: label) else { return }
+                            controller.updateConfig { $0.meetingRecordingFileFormat = format.rawValue }
+                        }
+                    }
+                    settingsDescription("M4A is recommended for smaller files. WAV is lossless and uses more storage.")
+                }
+            }
+
+            settingsSection("Auto Export") {
+                settingsRow("Auto-export meetings") {
+                    settingsSwitch(isOn: appState.config.autoExportMarkdownEnabled) { newValue in
+                        controller.updateConfig { $0.autoExportMarkdownEnabled = newValue }
+                    }
+                }
+                if appState.config.autoExportMarkdownEnabled {
+                    Divider().background(ImlaTheme.surfaceBorder)
+                    settingsRow("Destination folder") {
+                        autoExportFolderPicker
+                    }
+                    Divider().background(ImlaTheme.surfaceBorder)
+                    settingsRow("Content") {
+                        settingsMenu(
+                            selection: appState.config.resolvedAutoExportMarkdownContent.displayName,
+                            options: MeetingExportContent.allCases.map(\.displayName)
+                        ) { label in
+                            guard let index = MeetingExportContent.allCases.firstIndex(where: { $0.displayName == label }) else { return }
+                            let content = MeetingExportContent.allCases[index]
+                            controller.updateConfig { $0.autoExportMarkdownContent = content.rawValue }
+                        }
+                    }
+                    Divider().background(ImlaTheme.surfaceBorder)
+                    settingsRow("File format") {
+                        settingsMenu(
+                            selection: appState.config.resolvedAutoExportFileFormat.displayName,
+                            options: MeetingAutoExportFileFormat.allCases.map(\.displayName)
+                        ) { label in
+                            guard let format = MeetingAutoExportFileFormat.allCases.first(where: { $0.displayName == label }) else { return }
+                            controller.updateConfig { $0.autoExportFileFormat = format.rawValue }
+                        }
+                    }
+                }
+                Text("Automatically saves each completed meeting to the chosen folder in the selected format.")
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textTertiary)
+                    .padding(.horizontal, ImlaTheme.spacing16)
+            }
+
+            settingsSection("Meeting Notifications") {
+                settingsRow("Scheduled meetings") {
+                    settingsSwitch(isOn: appState.config.showScheduledMeetingNotifications) { newValue in
+                        controller.updateConfig { $0.showScheduledMeetingNotifications = newValue }
+                    }
+                }
+                settingsDescription("Show notifications for calendar meetings with a join link.")
+
+                if appState.config.showScheduledMeetingNotifications {
+                    Divider().background(ImlaTheme.surfaceBorder)
+
+                    settingsRow("Reminder timing") {
+                        settingsMenu(
+                            selection: scheduledMeetingLeadTimeLabel(for: appState.config.scheduledMeetingNotificationLeadTime),
+                            options: ScheduledMeetingNotificationLeadTime.allCases.map(scheduledMeetingLeadTimeLabel(for:))
+                        ) { label in
+                            guard let leadTime = scheduledMeetingLeadTime(for: label) else { return }
+                            controller.updateConfig { $0.scheduledMeetingNotificationLeadTime = leadTime }
+                        }
+                    }
+                    settingsDescription("At start time avoids early calendar-only prompts before you join.")
+                }
+
+                Divider().background(ImlaTheme.surfaceBorder)
+
+                settingsRow("Default action") {
+                    settingsMenu(
+                        selection: appState.config.meetingJoinDefaultAction.buttonLabel,
+                        options: MeetingJoinDefaultAction.allCases.map(\.buttonLabel)
+                    ) { label in
+                        guard let action = meetingJoinDefaultAction(for: label) else { return }
+                        controller.updateConfig { $0.meetingJoinDefaultAction = action }
+                    }
+                }
+                settingsDescription("Primary button for notifications and Coming Up. Pick “Transcribe Only” if you join in another browser.")
+
+                Divider().background(ImlaTheme.surfaceBorder)
+
+                settingsRow("Auto-detected meetings") {
+                    settingsSwitch(isOn: appState.config.showMeetingDetectionNotification) { newValue in
+                        controller.updateConfig { $0.showMeetingDetectionNotification = newValue }
+                    }
+                }
+                settingsDescription("Show notifications when a call is detected from browser, camera, microphone, or app audio activity.")
+
+                if appState.config.showMeetingDetectionNotification {
+                    Divider().background(ImlaTheme.surfaceBorder)
+                    mutedMeetingDetectionAppsControl
+                }
+            }
+
+            settingsSection("Calendars") {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Use calendars already connected to your Mac.")
+                            .font(ImlaTheme.body())
+                        Text("Add or remove accounts in macOS System Settings.")
+                            .font(ImlaTheme.caption())
+                            .foregroundStyle(ImlaTheme.textSecondary)
+                    }
+                    Spacer()
+                    Button("Manage accounts…", action: CalendarIntegration.openAccounts)
+                        .buttonStyle(.borderedProminent)
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Upcoming meetings", controlWidth: meetingControlWidth) {
+                    settingsMenu(
+                        selection: selectedUpcomingMeetingsWindow.label,
+                        options: UpcomingMeetingsWindow.allCases.map(\.label)
+                    ) { label in
+                        guard let window = UpcomingMeetingsWindow.allCases.first(where: { $0.label == label }) else { return }
+                        controller.updateUpcomingMeetingsWindow(dayCount: window.dayCount)
+                    }
+                }
+                settingsDescription("Controls how many calendar days appear in Coming Up, the menu bar, and scheduled meeting checks.")
+                Divider().background(ImlaTheme.surfaceBorder)
+                calendarSourcesControl
+                    .padding(.bottom, ImlaTheme.spacing8)
+            }
+
+            settingsSection("Advanced") {
+                settingsRow("Enable post-meeting hook", controlWidth: meetingControlWidth) {
+                    settingsSwitch(isOn: appState.config.meetingHookEnabled) { newValue in
+                        controller.updateConfig { $0.meetingHookEnabled = newValue }
+                    }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Hook script", controlWidth: meetingControlWidth) {
+                    meetingHookPathPicker
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Timeout", controlWidth: meetingControlWidth) {
+                    meetingHookTimeoutControl
+                }
+                settingsDescription("Runs a user-supplied executable after each completed meeting. The executable receives JSON on stdin and must already be runnable on its own.")
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Suppress echoed local speech", controlWidth: meetingControlWidth) {
+                    settingsSwitch(isOn: appState.config.meetingReverseLeakSuppression) { newValue in
+                        controller.updateConfig { $0.meetingReverseLeakSuppression = newValue }
+                    }
+                }
+                settingsDescription("Removes your own voice from the Others track when the far end echoes it back, so a sentence is not transcribed twice. Turning it off applies to the meeting in progress. Saved recordings and re-transcription always keep the original audio, and session diagnostics record what was removed.")
+            }
+            .padding(.top, ImlaTheme.spacing8)
+        }
+        .onAppear {
+            refreshMeetingCalendarSourcesIfNeeded()
+        }
+    }
+
+    private var appearanceSettingsPane: some View {
+        VStack(alignment: .leading, spacing: ImlaTheme.spacing24) {
+            settingsSection("Appearance") {
+                settingsRow("Dark mode") {
+                    settingsSwitch(isOn: appState.config.darkMode) { newValue in
+                        controller.updateConfig { $0.darkMode = newValue }
+                    }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Menu bar icon") {
+                    menuBarIconPicker
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Show hotkey in menu bar") {
+                    settingsSwitch(isOn: appState.config.showHotkeyInMenuBar) { newValue in
+                        controller.updateConfig { $0.showHotkeyInMenuBar = newValue }
+                    }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Accent color") {
+                    glassTintPicker
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Play sound effects") {
+                    settingsSwitch(isOn: appState.config.soundEnabled) { newValue in
+                        controller.updateConfig { $0.soundEnabled = newValue }
+                    }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Idle dot near your text") {
+                    settingsSwitch(isOn: appState.config.showDictationIdleDot) { newValue in
+                        controller.updateConfig { $0.showDictationIdleDot = newValue }
+                    }
+                }
+                settingsDescription("Keep the Mini's dot near your text context when you're not dictating. It hides while you type or scroll; press Escape to hide it until you move to another field. Turn off to only show the Mini while recording or processing.")
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Show next meeting in menu bar") {
+                    settingsSwitch(isOn: appState.config.showNextMeetingInMenuBar) { newValue in
+                        controller.updateConfig { $0.showNextMeetingInMenuBar = newValue }
+                    }
+                }
+            }
+
+            if appState.config.maraudersMapUnlocked {
+                settingsSection("Marauder\u{2019}s Map") {
+                    settingsRow("Meeting countdown audio") {
+                        maraudersMapControl
+                    }
+                    Divider().background(ImlaTheme.surfaceBorder)
+                    settingsRow("") {
+                        Button {
+                            SoundController.stopMaraudersMapClip()
+                            isPreviewingClip = false
+                            controller.resetMaraudersMap()
+                        } label: {
+                            Text("Mischief Managed")
+                                .font(ImlaTheme.font(size: 11))
+                                .foregroundColor(ImlaTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private var glassTintPicker: some View {
+        HStack(spacing: 6) {
+            ForEach(Self.accentPresets, id: \.hex) { preset in
+                let isSelected = appState.config.recordingColorHex.lowercased() == preset.hex
+                Button {
+                    controller.updateConfig { $0.recordingColorHex = preset.hex }
+                } label: {
+                    Circle()
+                        .fill(
+                            preset.hex == AppConfig.defaultAccentMarker
+                                ? ImlaTheme.defaultAccent
+                                : Color(hex: preset.hex)
+                        )
+                        .frame(width: 22, height: 22)
+                        .overlay(
+                            Circle().strokeBorder(Color.white.opacity(isSelected ? 0.9 : 0), lineWidth: 2)
+                        )
+                        .overlay(
+                            Circle().strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help(preset.name)
+            }
+        }
+    }
+
+    private var menuBarIconPicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(MenuBarIconRenderer.options, id: \.id) { option in
+                    let isSelected = appState.config.menuBarIcon == option.id
+                    Button {
+                        controller.updateConfig { $0.menuBarIcon = option.id }
+                    } label: {
+                        Group {
+                            if option.id == "imla",
+                               let img = MenuBarIconRenderer.make(choice: "imla") {
+                                Image(nsImage: img)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 14, height: 14)
+                            } else {
+                                Image(systemName: option.id)
+                                    .font(.system(size: 12))
+                            }
+                        }
+                        .foregroundStyle(isSelected ? ImlaTheme.accent : ImlaTheme.textSecondary)
+                        .frame(width: 26, height: 26)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(isSelected ? ImlaTheme.surfaceSelected : Color.clear)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .strokeBorder(Color.white.opacity(isSelected ? 0.3 : 0.08), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help(option.label)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func chatGPTAccountControl(selectMeetingSummaryBackend: Bool = true) -> some View {
+        if appState.isChatGPTAuthenticated {
+            Button {
+                controller.signOutChatGPT()
+            } label: {
+                HStack(spacing: 5) {
+                    OpenAILogoShape()
+                        .fill(.white)
+                        .frame(width: 10, height: 10)
+                    Text("Signed in · Sign Out")
+                        .font(ImlaTheme.font(size: 11, weight: .medium))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(ImlaTheme.success)
+                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        } else if isSigningInChatGPT {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Signing in...")
+                    .font(ImlaTheme.font(size: 11))
+                    .foregroundStyle(ImlaTheme.textSecondary)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Button {
+                    isSigningInChatGPT = true
+                    chatGPTSignInError = nil
+                    Task {
+                        let error = await controller.signInWithChatGPT(selectMeetingSummaryBackend: selectMeetingSummaryBackend)
+                        isSigningInChatGPT = false
+                        chatGPTSignInError = error
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        OpenAILogoShape()
+                            .fill(.white)
+                            .frame(width: 10, height: 10)
+                        Text("Sign in with ChatGPT")
+                            .font(ImlaTheme.font(size: 11, weight: .medium))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(ImlaTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                }
+                .buttonStyle(.plain)
+
+                if let chatGPTSignInError {
+                    Text(chatGPTSignInError)
+                        .font(ImlaTheme.font(size: 10))
+                        .foregroundStyle(ImlaTheme.danger)
+                        .lineLimit(2)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var googleCalendarControl: some View {
+        if appState.isGoogleCalendarAuthenticated {
+            Button {
+                controller.signOutGoogleCalendar()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white)
+                    Text("Connected · Disconnect")
+                        .font(ImlaTheme.font(size: 11, weight: .medium))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(ImlaTheme.success)
+                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        } else if isSigningInGoogleCal {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Connecting...")
+                    .font(ImlaTheme.font(size: 11))
+                    .foregroundStyle(ImlaTheme.textSecondary)
+            }
+        } else if !appState.isGoogleCalendarVerified {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 5) {
+                    Image(systemName: "calendar.badge.plus")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.4))
+                    Text("Connect Google Calendar")
+                        .font(ImlaTheme.font(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(ImlaTheme.textTertiary.opacity(0.3))
+                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+
+                Text("Google OAuth verification pending")
+                    .font(ImlaTheme.font(size: 10))
+                    .foregroundStyle(ImlaTheme.textTertiary)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Button {
+                    isSigningInGoogleCal = true
+                    googleCalSignInError = nil
+                    Task {
+                        let error = await controller.signInWithGoogleCalendar()
+                        isSigningInGoogleCal = false
+                        googleCalSignInError = error
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "calendar.badge.plus")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white)
+                        Text("Connect Google Calendar")
+                            .font(ImlaTheme.font(size: 11, weight: .medium))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(ImlaTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                }
+                .buttonStyle(.plain)
+
+                if let googleCalSignInError {
+                    Text(googleCalSignInError)
+                        .font(ImlaTheme.font(size: 10))
+                        .foregroundStyle(ImlaTheme.danger)
+                        .lineLimit(2)
+                }
+            }
+        }
+    }
+
+
+    @ViewBuilder
+    private func openRouterAccountControl(
+        selectMeetingSummaryBackend: Bool = true
+    ) -> some View {
+        if appState.isOpenRouterAuthenticated {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 0) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(ImlaTheme.font(size: 10, weight: .semibold))
+                            .foregroundStyle(ImlaTheme.success)
+                        Text(appState.isOpenRouterEnvironmentManaged ? "Environment key" : "Connected")
+                            .font(ImlaTheme.font(size: 10, weight: .medium))
+                            .foregroundStyle(ImlaTheme.textSecondary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    Divider()
+                        .background(ImlaTheme.surfaceBorder)
+                        .padding(.vertical, 5)
+
+                    Button {
+                        controller.manageOpenRouterKey()
+                    } label: {
+                        Text("Manage key")
+                            .font(ImlaTheme.font(size: 10))
+                            .foregroundStyle(ImlaTheme.textSecondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .help("Manage this key at OpenRouter")
+
+                    Divider()
+                        .background(ImlaTheme.surfaceBorder)
+                        .padding(.vertical, 5)
+
+                    if appState.hasStoredOpenRouterCredential {
+                        Button {
+                            openRouterSignInError = controller.signOutOpenRouter()
+                            if openRouterSignInError == nil && !appState.isOpenRouterAuthenticated {
+                                isUsingCustomOpenRouterModel = false
+                                isUsingCustomOpenRouterDictationModel = false
+                            }
+                        } label: {
+                            Text(appState.isOpenRouterEnvironmentManaged ? "Forget local" : "Disconnect")
+                                .font(ImlaTheme.font(size: 10))
+                                .foregroundStyle(ImlaTheme.textSecondary)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .help("Remove Imla's local copy of this OpenRouter key")
+                    } else {
+                        Text("Managed externally")
+                            .font(ImlaTheme.font(size: 10))
+                            .foregroundStyle(ImlaTheme.textTertiary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(height: 24)
+                .background(ImlaTheme.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                        .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+                )
+
+                if let openRouterSignInError {
+                    Text(openRouterSignInError)
+                        .font(ImlaTheme.font(size: 10))
+                        .foregroundStyle(ImlaTheme.danger)
+                        .lineLimit(2)
+                }
+            }
+        } else if isSigningInOpenRouter {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Connecting...")
+                    .font(ImlaTheme.font(size: 11))
+                    .foregroundStyle(ImlaTheme.textSecondary)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 5) {
+                Button {
+                    isSigningInOpenRouter = true
+                    openRouterSignInError = nil
+                    Task {
+                        let error = await controller.signInWithOpenRouter(
+                            selectMeetingSummaryBackend: selectMeetingSummaryBackend
+                        )
+                        isSigningInOpenRouter = false
+                        openRouterSignInError = error
+                        if error == nil, appState.dictationProvider == .openRouter {
+                            loadOpenRouterTranscriptionModelsIfNeeded()
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "network")
+                            .font(ImlaTheme.font(size: 10, weight: .semibold))
+                            .foregroundStyle(.white)
+                        Text("Connect OpenRouter")
+                            .font(ImlaTheme.font(size: 11, weight: .medium))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(ImlaTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                }
+                .buttonStyle(.plain)
+
+                Button(isEnteringOpenRouterAPIKey ? "Cancel manual key" : "Enter API key manually") {
+                    isEnteringOpenRouterAPIKey.toggle()
+                    manualOpenRouterAPIKey = ""
+                    openRouterSignInError = nil
+                }
+                .buttonStyle(.link)
+                .font(ImlaTheme.font(size: 10))
+
+                if isEnteringOpenRouterAPIKey {
+                    HStack(spacing: 6) {
+                        PastableSecureField(
+                            text: manualOpenRouterAPIKey,
+                            placeholder: "sk-or-...",
+                            onChange: { manualOpenRouterAPIKey = $0 }
+                        )
+                        .frame(height: 22)
+
+                        Button("Save") {
+                            openRouterSignInError = controller.storeManualOpenRouterAPIKey(
+                                manualOpenRouterAPIKey,
+                                selectMeetingSummaryBackend: selectMeetingSummaryBackend
+                            )
+                            if openRouterSignInError == nil {
+                                manualOpenRouterAPIKey = ""
+                                isEnteringOpenRouterAPIKey = false
+                                if appState.dictationProvider == .openRouter {
+                                    loadOpenRouterTranscriptionModelsIfNeeded()
+                                }
+                            }
+                        }
+                        .disabled(manualOpenRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+
+                if let openRouterSignInError {
+                    Text(openRouterSignInError)
+                        .font(ImlaTheme.font(size: 10))
+                        .foregroundStyle(ImlaTheme.danger)
+                        .lineLimit(2)
+                }
+            }
+        }
+    }
+
+
+    private var maraudersMapControl: some View {
+        HStack(spacing: ImlaTheme.spacing8) {
+            settingsMenu(
+                selection: SoundController.labelForClip(
+                    id: appState.config.maraudersMapAudioClip,
+                    customPath: appState.config.maraudersMapCustomAudioPath
+                ),
+                options: SoundController.maraudersMapClipLabels
+            ) { label in
+                if label == "Custom\u{2026}" {
+                    pickCustomAudioFile()
+                } else if let preset = SoundController.maraudersMapPresets
+                    .first(where: { $0.label == label }) {
+                    SoundController.stopMaraudersMapClip()
+                    isPreviewingClip = false
+                    controller.updateConfig {
+                        $0.maraudersMapAudioClip = preset.id
+                        $0.maraudersMapCustomAudioPath = nil
+                    }
+                    controller.updateMaraudersMapAudioClip()
+                }
+            }
+            Button {
+                if isPreviewingClip {
+                    SoundController.stopMaraudersMapClip()
+                    isPreviewingClip = false
+                } else {
+                    SoundController.playMaraudersMapClip(
+                        id: appState.config.maraudersMapAudioClip,
+                        customPath: appState.config.maraudersMapCustomAudioPath
+                    ) {
+                        isPreviewingClip = false
+                    }
+                    isPreviewingClip = true
+                }
+            } label: {
+                Image(systemName: isPreviewingClip ? "stop.fill" : "play.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(ImlaTheme.textSecondary)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+        }
+    }
+
+    // MARK: - Marauder's Map
+
+    private func pickCustomAudioFile() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose an audio clip"
+        panel.allowedContentTypes = [.mp3, .mpeg4Audio, .wav, .aiff]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+
+        presentOpenPanel(panel) { url in
+            guard let appSupportBase = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+                fputs("[imla-native] Could not resolve Application Support directory\n", stderr)
+                return
+            }
+
+            do {
+                let supportDir = appSupportBase
+                    .appendingPathComponent(Bundle.main.infoDictionary?["ImlaSupportDirectoryName"] as? String ?? "Imla")
+                let destPath = try SoundController.importCustomClip(from: url, supportDir: supportDir)
+                controller.updateConfig {
+                    $0.maraudersMapAudioClip = SoundController.customClipID
+                    $0.maraudersMapCustomAudioPath = destPath
+                }
+                controller.updateMaraudersMapAudioClip()
+            } catch {
+                fputs("[imla-native] Failed to import custom audio: \(error)\n", stderr)
+            }
+        }
+    }
+
+    private func pickMeetingHookFile() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a hook script"
+        panel.prompt = "Choose Script"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.directoryURL = preferredMeetingHookDirectoryURL()
+
+        presentOpenPanel(panel) { url in
+            controller.updateConfig { $0.meetingHookPath = url.standardizedFileURL.path }
+        }
+    }
+
+    private func pickAutoExportFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a folder for exported notes"
+        panel.prompt = "Choose Folder"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = preferredAutoExportDirectoryURL()
+
+        presentOpenPanel(panel) { url in
+            controller.updateConfig { $0.autoExportMarkdownFolderPath = url.standardizedFileURL.path }
+        }
+    }
+
+    private func preferredAutoExportDirectoryURL() -> URL {
+        let configuredPath = appState.config.autoExportMarkdownFolderPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !configuredPath.isEmpty {
+            let configuredURL = URL(fileURLWithPath: configuredPath).standardizedFileURL
+            if FileManager.default.fileExists(atPath: configuredURL.path) {
+                return configuredURL
+            }
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents", isDirectory: true)
+    }
+
+    private func preferredMeetingHookDirectoryURL() -> URL {
+        let configuredPath = appState.config.meetingHookPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !configuredPath.isEmpty {
+            let configuredURL = URL(fileURLWithPath: configuredPath).standardizedFileURL
+            let parentDirectory = configuredURL.deletingLastPathComponent()
+            if FileManager.default.fileExists(atPath: parentDirectory.path) {
+                return parentDirectory
+            }
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop", isDirectory: true)
+    }
+
+    private func presentOpenPanel(_ panel: NSOpenPanel, onPick: @escaping (URL) -> Void) {
+        NSApp.activate()
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            panel.beginSheetModal(for: window) { response in
+                guard response == .OK, let url = panel.url else { return }
+                onPick(url)
+            }
+        } else {
+            panel.begin { response in
+                guard response == .OK, let url = panel.url else { return }
+                onPick(url)
+            }
+        }
+    }
+
+    // MARK: - Permissions
+
+    private var permissionsSection: some View {
+        settingsSection("Permissions") {
+            permissionStatusRow(
+                "Microphone",
+                granted: micGranted,
+                action: { AVCaptureDevice.requestAccess(for: .audio) { _ in } },
+                pane: "Privacy_Microphone"
+            )
+            Divider().background(ImlaTheme.surfaceBorder)
+            permissionStatusRow(
+                "Accessibility",
+                granted: accessibilityGranted,
+                action: {
+                    let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
+                    AXIsProcessTrustedWithOptions(opts)
+                },
+                pane: "Privacy_Accessibility"
+            )
+            Divider().background(ImlaTheme.surfaceBorder)
+            permissionStatusRow(
+                "Input Monitoring",
+                granted: inputMonitoringGranted,
+                action: {
+                    if !CGRequestListenEventAccess() {
+                        openPrivacyPane("Privacy_ListenEvent")
+                    }
+                },
+                pane: "Privacy_ListenEvent"
+            )
+            Divider().background(ImlaTheme.surfaceBorder)
+            permissionStatusRow(
+                "Screen Recording",
+                granted: screenRecordingGranted,
+                action: { CGRequestScreenCaptureAccess() },
+                pane: "Privacy_ScreenCapture"
+            )
+            if appState.config.useCoreAudioTap {
+                Divider().background(ImlaTheme.surfaceBorder)
+                permissionStatusRow(
+                    "System Audio",
+                    granted: systemAudioGranted,
+                    action: {
+                        guard !isCheckingSystemAudioPermission else { return }
+                        isCheckingSystemAudioPermission = true
+                        Task { @MainActor in
+                            defer { isCheckingSystemAudioPermission = false }
+                            systemAudioGranted = await CoreAudioSystemRecorder.requestSystemAudioAccess()
+                        }
+                    },
+                    pane: "Privacy_ScreenCapture",
+                    isBusy: isCheckingSystemAudioPermission
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func permissionStatusRow(
+        _ name: String,
+        granted: Bool,
+        action: @escaping () -> Void,
+        pane: String,
+        isBusy: Bool = false
+    ) -> some View {
+        HStack {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(granted ? ImlaTheme.success : ImlaTheme.danger)
+                    .frame(width: 8, height: 8)
+                Text(name)
+                    .font(ImlaTheme.body())
+                    .foregroundStyle(ImlaTheme.textPrimary)
+            }
+            Spacer()
+            if granted {
+                Text("Granted")
+                    .font(ImlaTheme.font(size: 11))
+                    .foregroundStyle(ImlaTheme.success)
+            } else {
+                Button(isBusy ? "Checking…" : "Grant") {
+                    action()
+                }
+                .disabled(isBusy)
+                .buttonStyle(.plain)
+                .font(ImlaTheme.font(size: 11, weight: .medium))
+                .foregroundStyle(ImlaTheme.accent)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(ImlaTheme.accentSubtle)
+                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            }
+            Button {
+                openPrivacyPane(pane)
+            } label: {
+                Image(systemName: "arrow.up.forward.square")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ImlaTheme.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Open in System Settings")
+        }
+        .frame(minHeight: 32)
+    }
+
+    private func openPrivacyPane(_ pane: String) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @ViewBuilder
+    private func screenContextControl(width: CGFloat? = nil) -> some View {
+        if accessibilityGranted {
+            settingsSwitch(isOn: appState.config.enableScreenContext) { newValue in
+                handleScreenContextToggle(newValue)
+            }
+            .frame(width: width, alignment: .trailing)
+        } else {
+            Button {
+                handleScreenContextToggle(true)
+            } label: {
+                Text("Grant")
+                    .font(ImlaTheme.font(size: 13, weight: .semibold))
+                    .foregroundStyle(ImlaTheme.accent)
+                    .frame(width: width)
+                    .frame(minHeight: 32)
+                    .background(ImlaTheme.accentSubtle)
+                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private func dictationOCRContextControl(width: CGFloat? = nil) -> some View {
+        if !appState.config.enableScreenContext {
+            settingsSwitch(isOn: false) { _ in }
+                .frame(width: width, alignment: .trailing)
+                .disabled(true)
+        } else if screenRecordingGranted {
+            settingsSwitch(isOn: appState.config.enableDictationOCRContext) { newValue in
+                controller.updateConfig { $0.enableDictationOCRContext = newValue }
+            }
+            .frame(width: width, alignment: .trailing)
+        } else {
+            Button {
+                _ = CGRequestScreenCaptureAccess()
+                refreshPermissionStatuses(for: .permissionRequested)
+            } label: {
+                Text("Grant")
+                    .font(ImlaTheme.font(size: 13, weight: .semibold))
+                    .foregroundStyle(ImlaTheme.accent)
+                    .frame(width: width)
+                    .frame(minHeight: 32)
+                    .background(ImlaTheme.accentSubtle)
+                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    @discardableResult
+    private func handleScreenContextToggle(_ enabled: Bool) -> Bool {
+        guard enabled else {
+            clearPendingScreenContextEnable()
+            controller.updateConfig {
+                $0.enableScreenContext = false
+                $0.enableDictationOCRContext = false
+            }
+            return false
+        }
+
+        guard accessibilityGranted else {
+            pendingScreenContextEnable = true
+            pendingScreenContextRequestedAt = Date().timeIntervalSince1970
+            let granted = controller.requestScreenContextEnable()
+            controller.refreshInteractionPermissionSnapshot()
+            if granted {
+                clearPendingScreenContextEnable()
+            }
+            return granted
+        }
+
+        clearPendingScreenContextEnable()
+        return controller.requestScreenContextEnable()
+    }
+
+    private func handleDictionaryCorrectionPromptsToggle(_ enabled: Bool) {
+        if controller.setDictionaryCorrectionPromptsFromToggle(enabled) == .needsAccessibilityPermission {
+            isShowingDictionaryAccessibilityPrompt = true
+        }
+    }
+
+    private func startPermissionMonitoring() {
+        controller.beginInteractionPermissionMonitoring(clientID: permissionMonitoringClientID)
+        refreshPermissionStatuses(for: .initialDisplay)
+    }
+
+    private func stopPermissionMonitoring() {
+        controller.endInteractionPermissionMonitoring(clientID: permissionMonitoringClientID)
+    }
+
+    private func refreshPermissionStatuses(for reason: SettingsPermissionRefreshReason) {
+        if reason.refreshesLaunchAtLogin {
+            controller.refreshLaunchAtLoginState()
+        }
+        controller.refreshInteractionPermissionSnapshot()
+        if reason.refreshesSystemAudio {
+            refreshSystemAudioPermissionIfNeeded()
+        }
+    }
+
+    private func clearPendingScreenContextEnable() {
+        pendingScreenContextEnable = false
+        pendingScreenContextRequestedAt = 0
+    }
+
+    private func refreshSystemAudioPermissionIfNeeded() {
+        guard appState.config.useCoreAudioTap, !isCheckingSystemAudioPermission else { return }
+        isCheckingSystemAudioPermission = true
+
+        Task {
+            let granted = await Task.detached(priority: .utility) {
+                CoreAudioSystemRecorder.checkSystemAudioPermission()
+            }.value
+            await MainActor.run {
+                self.systemAudioGranted = granted
+                self.isCheckingSystemAudioPermission = false
+            }
+        }
+    }
+
+    // MARK: - Layout Primitives
+
+    @ViewBuilder
+    private func settingsSection(
+        _ title: String,
+        icon: NSImage? = nil,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: ImlaTheme.spacing8) {
+            HStack(spacing: 5) {
+                if let icon {
+                    Image(nsImage: icon)
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 12, height: 12)
+                }
+                Text(title)
+                    .font(ImlaTheme.font(size: 11, weight: .semibold))
+                    .textCase(.uppercase)
+            }
+            .foregroundStyle(ImlaTheme.textTertiary)
+            .padding(.leading, 2)
+
+            VStack(alignment: .leading, spacing: 0) {
+                content()
+            }
+            .padding(ImlaTheme.spacing16)
+            .background(ImlaTheme.backgroundRaised)
+            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerMedium, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: ImlaTheme.cornerMedium, style: .continuous)
+                    .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+            )
+        }
+    }
+
+    /// Standardized row: label on left, control on right.
+    /// Controls share a fixed-width column so they all right-align consistently.
+    @ViewBuilder
+    private func settingsRow(_ label: String, controlWidth rowControlWidth: CGFloat? = nil, @ViewBuilder control: () -> some View) -> some View {
+        let width = rowControlWidth ?? controlWidth
+        HStack(alignment: .center) {
+            Text(label)
+                .font(ImlaTheme.body())
+                .foregroundStyle(ImlaTheme.textPrimary)
+                .layoutPriority(1)
+            Spacer(minLength: 20)
+            ZStack(alignment: .trailing) {
+                // Invisible spacer forces the ZStack to exactly controlWidth
+                Color.clear.frame(width: width, height: 1)
+                control()
+                    .frame(maxWidth: width)
+            }
+        }
+        .frame(minHeight: 32)
+    }
+
+    @ViewBuilder
+    private func settingsRow(
+        _ label: String,
+        description: String,
+        controlWidth rowControlWidth: CGFloat? = nil,
+        @ViewBuilder control: () -> some View
+    ) -> some View {
+        let width = rowControlWidth ?? controlWidth
+        HStack(alignment: .center, spacing: 20) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label)
+                    .font(ImlaTheme.body())
+                    .foregroundStyle(ImlaTheme.textPrimary)
+                Text(description)
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 0)
+
+            control()
+                .frame(width: width, alignment: .trailing)
+        }
+        .frame(minHeight: 44)
+    }
+
+    private func settingsDescription(_ text: String) -> some View {
+        Text(text)
+            .font(ImlaTheme.caption())
+            .foregroundStyle(ImlaTheme.textTertiary)
+            .padding(.horizontal, ImlaTheme.spacing16)
+            .padding(.top, -4)
+            .padding(.bottom, ImlaTheme.spacing8)
+    }
+
+    // MARK: - Controls
+
+    @ViewBuilder
+    private func settingsSwitch(isOn: Bool, onChange: @escaping (Bool) -> Void) -> some View {
+        HStack {
+            Spacer()
+            Toggle("", isOn: Binding(get: { isOn }, set: { onChange($0) }))
+                .toggleStyle(.switch)
+                .tint(ImlaTheme.accent)
+                .labelsHidden()
+        }
+    }
+
+    @ViewBuilder
+    private func settingsMenu(
+        selection: String,
+        options: [String],
+        disabledOptions: Set<String> = [],
+        onChange: @escaping (String) -> Void
+    ) -> some View {
+        FixedWidthPopUp(
+            selection: selection,
+            options: options,
+            disabledOptions: disabledOptions,
+            onChange: onChange
+        )
+            .frame(height: 24)
+    }
+
+    @ViewBuilder
+    private func compactActionButton(
+        _ title: String,
+        systemImage: String? = nil,
+        role: ButtonRole? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        let isDestructive = role == .destructive
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                Text(title)
+                    .lineLimit(1)
+            }
+            .font(ImlaTheme.font(size: 12, weight: .medium))
+            .foregroundStyle(isDestructive ? ImlaTheme.danger : ImlaTheme.textPrimary)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(isDestructive ? ImlaTheme.danger.opacity(0.1) : ImlaTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                    .strokeBorder(isDestructive ? ImlaTheme.danger.opacity(0.25) : ImlaTheme.surfaceBorder, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var mutedMeetingDetectionAppsControl: some View {
+        let muted = Set(appState.config.mutedMeetingDetectionAppBundleIDs)
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("Don't notify me when a call is detected in these apps:")
+                .font(ImlaTheme.body())
+                .foregroundStyle(ImlaTheme.textPrimary)
+
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+            ], alignment: .leading, spacing: 8) {
+                ForEach(meetingDetectionAppOptions) { app in
+                    mutedDetectionAppButton(app, isMuted: muted.contains(app.bundleID))
+                }
+            }
+        }
+        .padding(.leading, ImlaTheme.spacing16)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(ImlaTheme.surfaceBorder)
+                .frame(width: 2)
+        }
+    }
+
+    private func mutedDetectionAppButton(_ app: MeetingDetectionAppOption, isMuted: Bool) -> some View {
+        Button {
+            updateMutedMeetingDetectionApp(app.bundleID, isMuted: !isMuted)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: isMuted ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isMuted ? ImlaTheme.accent : ImlaTheme.textTertiary)
+                    .frame(width: 16)
+                Image(systemName: app.icon)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ImlaTheme.textTertiary)
+                    .frame(width: 14)
+                Text(app.name)
+                    .font(ImlaTheme.font(size: 12))
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(isMuted ? ImlaTheme.accentSubtle : ImlaTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                    .strokeBorder(isMuted ? ImlaTheme.accent.opacity(0.35) : ImlaTheme.surfaceBorder, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func updateMutedMeetingDetectionApp(_ bundleID: String, isMuted: Bool) {
+        controller.updateConfig { config in
+            var muted = Set(config.mutedMeetingDetectionAppBundleIDs)
+            if isMuted {
+                muted.insert(bundleID)
+            } else {
+                muted.remove(bundleID)
+            }
+            config.mutedMeetingDetectionAppBundleIDs = muted.sorted()
+        }
+    }
+
+    // MARK: - Calendars
+
+    private struct CalendarToggleItem: Identifiable, Equatable {
+        let id: String
+        let title: String
+        let colorHex: String?
+        let isEnabled: Bool
+    }
+
+    private struct CalendarSourceGroup: Identifiable, Equatable {
+        let id: String
+        let title: String
+        let subtitle: String
+        let items: [CalendarToggleItem]
+    }
+
+    private var calendarSourceGroups: [CalendarSourceGroup] {
+        let disabled = Set(appState.config.disabledCalendarIDs)
+        var groups: [CalendarSourceGroup] = []
+
+        let ekBySource = Dictionary(grouping: appState.availableEventKitCalendars) { $0.sourceTitle }
+        for sourceTitle in ekBySource.keys.sorted() {
+            let items = (ekBySource[sourceTitle] ?? [])
+                .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+                .map { cal in
+                    CalendarToggleItem(
+                        id: cal.id,
+                        title: cal.title,
+                        colorHex: cal.colorHex,
+                        isEnabled: !disabled.contains(cal.id)
+                    )
+                }
+            groups.append(CalendarSourceGroup(
+                id: "ek::\(sourceTitle)",
+                title: sourceTitle,
+                subtitle: calendarSourceSubtitle(for: sourceTitle),
+                items: items
+            ))
+        }
+
+        return groups
+    }
+
+    private var calendarSourcesControl: some View {
+        let sourceGroups = calendarSourceGroups
+        return VStack(alignment: .leading, spacing: ImlaTheme.spacing16) {
+            if sourceGroups.isEmpty {
+                CalendarAccessControl(refreshOnActivation: false) {
+                    await controller.calendarAccessDidChange()
+                }
+                Text("No calendars found. Add an account in macOS Internet Accounts and turn on Calendars, or open Calendar to manage local calendars and subscriptions.")
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(sourceGroups) { group in
+                    calendarSourceGroupView(group)
+                }
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            HStack(alignment: .top) {
+                Text("Uncheck a calendar to hide its meetings and notifications in Imla.")
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                Spacer()
+                Button("Open Calendar…", action: CalendarIntegration.openCalendar)
+                    .buttonStyle(.link)
+            }
+            Text("Manage accounts opens Internet Accounts. Changes there also affect other apps on this Mac.")
+                .font(ImlaTheme.caption())
+                .foregroundStyle(ImlaTheme.textTertiary)
+        }
+    }
+
+    @ViewBuilder
+    private func calendarSourceGroupView(_ group: CalendarSourceGroup) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(nsImage: CalendarIntegration.calendarIcon)
+                    .resizable()
+                    .frame(width: 32, height: 32)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.title)
+                        .font(ImlaTheme.font(size: 12, weight: .semibold))
+                        .foregroundStyle(ImlaTheme.textPrimary)
+                        .lineLimit(1)
+
+                    Text("\(group.subtitle) • \(group.items.count) \(group.items.count == 1 ? "calendar" : "calendars")")
+                        .font(ImlaTheme.font(size: 11))
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+            ], alignment: .leading, spacing: 8) {
+                ForEach(group.items) { item in
+                    calendarToggleButton(item)
+                }
+            }
+        }
+        .padding(ImlaTheme.spacing16)
+        .background(ImlaTheme.surfacePrimary)
+        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall))
+        .overlay(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall)
+            .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1))
+    }
+
+    private func calendarSourceSubtitle(for sourceTitle: String) -> String {
+        let normalized = sourceTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized == "icloud" {
+            return "iCloud account in macOS Calendar"
+        }
+        if normalized == "subscribed calendars" {
+            return "Subscribed in macOS Calendar"
+        }
+        if normalized == "other" {
+            return "System calendars from macOS"
+        }
+        return "Calendar account in macOS"
+    }
+
+    private func calendarToggleButton(_ item: CalendarToggleItem) -> some View {
+        Button {
+            updateDisabledCalendar(item.id, isDisabled: item.isEnabled)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: item.isEnabled ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(item.isEnabled ? ImlaTheme.accent : ImlaTheme.textTertiary)
+                    .frame(width: 16)
+                Circle()
+                    .fill(item.colorHex.map { Color(hex: $0) } ?? ImlaTheme.textTertiary)
+                    .frame(width: 8, height: 8)
+                Text(item.title)
+                    .font(ImlaTheme.font(size: 12))
+                    .foregroundStyle(item.isEnabled ? ImlaTheme.textPrimary : ImlaTheme.textTertiary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(ImlaTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                    .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.title)
+        .accessibilityValue(item.isEnabled ? "Included" : "Hidden")
+    }
+
+    private func refreshMeetingCalendarSourcesIfNeeded() {
+        guard !hasRefreshedMeetingCalendarSources else { return }
+        hasRefreshedMeetingCalendarSources = true
+        Task {
+            await controller.refreshAvailableEventKitCalendars()
+        }
+    }
+
+    private func updateDisabledCalendar(_ calendarID: String, isDisabled: Bool) {
+        controller.updateConfig { config in
+            var disabled = Set(config.disabledCalendarIDs)
+            if isDisabled {
+                disabled.insert(calendarID)
+            } else {
+                disabled.remove(calendarID)
+            }
+            config.disabledCalendarIDs = disabled.sorted()
+        }
+        Task { await controller.refreshUpcomingCalendarEvents() }
+    }
+
+    @ViewBuilder
+    private var autoExportFolderPicker: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "folder")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ImlaTheme.textTertiary)
+
+                if appState.config.autoExportMarkdownFolderPath.isEmpty {
+                    Text("Choose a folder…")
+                        .font(ImlaTheme.font(size: 12))
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                        .lineLimit(1)
+                } else {
+                    Text(appState.config.autoExportMarkdownFolderPath)
+                        .font(ImlaTheme.font(size: 12))
+                        .foregroundStyle(ImlaTheme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(ImlaTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                    .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+            )
+            .help(appState.config.autoExportMarkdownFolderPath.isEmpty ? "No destination folder selected" : appState.config.autoExportMarkdownFolderPath)
+
+            if !appState.config.autoExportMarkdownFolderPath.isEmpty {
+                Button {
+                    controller.updateConfig { $0.autoExportMarkdownFolderPath = "" }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(ImlaTheme.textSecondary)
+                        .frame(width: 28, height: 28)
+                        .background(ImlaTheme.surfacePrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                                .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear destination folder")
+                .help("Clear destination folder")
+            }
+
+            Button {
+                pickAutoExportFolder()
+            } label: {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                    .frame(width: 28, height: 28)
+                    .background(ImlaTheme.surfacePrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                            .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Choose destination folder")
+            .help("Choose destination folder")
+        }
+    }
+
+    @ViewBuilder
+    private var meetingHookPathPicker: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.badge.gearshape")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ImlaTheme.textTertiary)
+
+                if appState.config.meetingHookPath.isEmpty {
+                    Text("Choose a script…")
+                        .font(ImlaTheme.font(size: 12))
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                        .lineLimit(1)
+                } else {
+                    Text(appState.config.meetingHookPath)
+                        .font(ImlaTheme.font(size: 12))
+                        .foregroundStyle(ImlaTheme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(ImlaTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                    .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+            )
+            .frame(maxWidth: .infinity)
+            .help(appState.config.meetingHookPath.isEmpty ? "No hook script selected" : appState.config.meetingHookPath)
+
+            if !appState.config.meetingHookPath.isEmpty {
+                Button {
+                    controller.updateConfig { $0.meetingHookPath = "" }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(ImlaTheme.textSecondary)
+                        .frame(width: 28, height: 28)
+                        .background(ImlaTheme.surfacePrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                                .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("Clear hook script")
+            }
+
+            Button {
+                pickMeetingHookFile()
+            } label: {
+                Image(systemName: "folder")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                    .frame(width: 28, height: 28)
+                    .background(ImlaTheme.surfacePrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                            .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("Choose hook script")
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private var meetingHookTimeoutControl: some View {
+        integerInput(
+            label: "Meeting hook timeout",
+            value: Binding(
+                get: { max(appState.config.meetingHookTimeoutSeconds, 1) },
+                set: { newValue in
+                    controller.updateConfig { $0.meetingHookTimeoutSeconds = max(newValue, 1) }
+                }
+            ),
+            range: 1...600,
+            unit: { $0 == 1 ? "second" : "seconds" }
+        )
+    }
+
+    private func integerInput(
+        label: String,
+        value: Binding<Int>,
+        range: ClosedRange<Int>,
+        step: Int = 1,
+        unit: @escaping (Int) -> String
+    ) -> some View {
+        let clampedValue = min(max(value.wrappedValue, range.lowerBound), range.upperBound)
+        let clampedBinding = Binding(
+            get: { min(max(value.wrappedValue, range.lowerBound), range.upperBound) },
+            set: { value.wrappedValue = min(max($0, range.lowerBound), range.upperBound) }
+        )
+
+        return HStack(spacing: ImlaTheme.spacing8) {
+            TextField(label, value: clampedBinding, format: .number)
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .monospacedDigit()
+                .frame(width: 72)
+                .accessibilityLabel(label)
+
+            Text(unit(clampedValue))
+                .font(ImlaTheme.body())
+                .foregroundStyle(ImlaTheme.textSecondary)
+                .frame(width: 58, alignment: .leading)
+
+            Stepper(label, value: clampedBinding, in: range, step: step)
+                .labelsHidden()
+                .fixedSize()
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    @ViewBuilder
+    private func meetingTemplateMenu(selectionID: String, onChange: @escaping (String) -> Void) -> some View {
+        let allItems: [(id: String, label: String)] = {
+            var items: [(String, String)] = [(MeetingTemplates.autoID, MeetingTemplates.auto.title)]
+            items += controller.builtInMeetingTemplates().map { ($0.id, $0.title) }
+            items += controller.customMeetingTemplates().map { ($0.id, $0.name) }
+            return items
+        }()
+        let selectedLabel = allItems.first(where: { $0.id == selectionID })?.label ?? "Auto"
+        FixedWidthPopUp(
+            selection: selectedLabel,
+            options: allItems.map(\.label),
+            onSelectIndex: { index in
+                guard index >= 0 && index < allItems.count else { return }
+                onChange(allItems[index].id)
+            }
+        )
+        .frame(height: 24)
+    }
+
+    @ViewBuilder
+    private func settingsModelMenu(currentModel: String, presets: [SummaryModelPreset], onChange: @escaping (String) -> Void) -> some View {
+        let menuPresets = SummaryModelPreset.menuPresets(presets, currentModel: currentModel)
+        let effectiveModel = currentModel.isEmpty ? (presets.first?.id ?? "") : currentModel
+        let selectedLabel = menuPresets.first(where: { $0.id == effectiveModel })?.label ?? menuPresets.first?.label ?? ""
+        FixedWidthPopUp(
+            selection: selectedLabel,
+            options: menuPresets.map(\.label),
+            onSelectIndex: { index in
+                guard index >= 0 && index < menuPresets.count else { return }
+                let selectedId = menuPresets[index].id
+                onChange(selectedId == presets.first?.id ? "" : selectedId)
+            }
+        )
+        .frame(height: 24)
+    }
+
+    @ViewBuilder
+    private func settingsReasoningSlider(
+        model: String,
+        preferred: ReasoningEffort?,
+        accessibilityLabel: String,
+        onChange: @escaping (ReasoningEffort) -> Void
+    ) -> some View {
+        let efforts = ReasoningEffortPolicy.selectableEfforts(for: model)
+        if let effectiveEffort = ReasoningEffortPolicy.resolvedEffort(
+            for: model,
+            preferred: preferred
+        ) {
+            HStack(spacing: 12) {
+                Slider(
+                    value: Binding(
+                        get: {
+                            Double(efforts.firstIndex(of: effectiveEffort) ?? 0)
+                        },
+                        set: { value in
+                            let index = min(max(Int(value.rounded()), 0), efforts.count - 1)
+                            onChange(efforts[index])
+                        }
+                    ),
+                    in: 0 ... Double(efforts.count - 1),
+                    step: 1
+                )
+                .tint(ImlaTheme.accent)
+                .accessibilityLabel(accessibilityLabel)
+                .accessibilityValue(effectiveEffort.label)
+
+                Text(effectiveEffort.label)
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                    .frame(width: 80, alignment: .trailing)
+            }
+            .frame(height: 24)
+        }
+    }
+
+    @ViewBuilder
+    private func settingsModelTextField(
+        currentModel: String,
+        placeholder: String,
+        onBeginEditing: (() -> Void)? = nil,
+        onChange: @escaping (String) -> Void
+    ) -> some View {
+        PastableTextField(
+            text: currentModel,
+            placeholder: placeholder,
+            onBeginEditing: onBeginEditing,
+            onChange: { value in
+                onChange(value.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        )
+        .frame(height: 22)
+    }
+
+    @ViewBuilder
+    private var openRouterFreeModelMenu: some View {
+        if appState.openRouterSummaryCatalogState == .loading,
+           appState.openRouterSummaryModels.isEmpty {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Loading models")
+                    .font(ImlaTheme.font(size: 12, weight: .medium))
+                    .foregroundStyle(ImlaTheme.textTertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        } else if !appState.openRouterSummaryModels.isEmpty {
+            let openRouterFreeModels = appState.openRouterSummaryModels
+            let configuredModel = appState.config.openRouterModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            let configuredPreset = openRouterFreeModels.first { $0.id == configuredModel }
+            let showsCustomSelection = isUsingCustomOpenRouterModel
+                || (!configuredModel.isEmpty && configuredPreset == nil)
+            let customLabel = configuredModel.isEmpty
+                ? "Custom model ID"
+                : "Custom: \(configuredModel)"
+            let menuPresets = showsCustomSelection
+                ? openRouterFreeModels + [SummaryModelPreset(id: configuredModel, label: customLabel)]
+                : openRouterFreeModels
+            let selectedLabel = showsCustomSelection
+                ? customLabel
+                : (configuredPreset?.label ?? openRouterFreeModels[0].label)
+
+            HStack(spacing: 8) {
+                FixedWidthPopUp(
+                    selection: selectedLabel,
+                    options: menuPresets.map(\.label),
+                    onSelectIndex: { index in
+                        guard index >= 0 && index < menuPresets.count else { return }
+                        if showsCustomSelection && index == openRouterFreeModels.count {
+                            isUsingCustomOpenRouterModel = true
+                            return
+                        }
+                        isUsingCustomOpenRouterModel = false
+                        let selectedID = openRouterFreeModels[index].id
+                        controller.updateConfig {
+                            $0.openRouterModel = OpenRouterModelSelection.persistedModelID(for: selectedID)
+                        }
+                    }
+                )
+                .frame(height: 24)
+                if case .failed = appState.openRouterSummaryCatalogState {
+                    Button("Retry") {
+                        controller.loadOpenRouterModels(.text, force: true)
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                }
+            }
+        } else {
+            HStack(spacing: 8) {
+                if case .failed(let message) = appState.openRouterSummaryCatalogState {
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                        .lineLimit(1)
+                }
+                Button(appState.openRouterSummaryCatalogState == .idle ? "Load" : "Retry") {
+                    controller.loadOpenRouterModels(.text, force: true)
+                }
+                .font(ImlaTheme.font(size: 12, weight: .medium))
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    private func loadOpenRouterFreeModelsIfNeeded() {
+        controller.loadOpenRouterModels(.text)
+    }
+
+    @ViewBuilder
+    private var openRouterTranscriptionModelMenu: some View {
+        let placeholder = "Choose a model…"
+        let customOption = "Custom model ID"
+        let configured = OpenRouterTranscriptionClient.normalizedModel(
+            appState.config.openRouterDictationModel
+        )
+        let presets = appState.openRouterTranscriptionModels
+        let configuredPreset = presets.first(where: { $0.id == configured })
+        let options = [placeholder] + presets.map(\.label) + [customOption]
+        let selected = isUsingCustomOpenRouterDictationModel
+            ? customOption
+            : (configured.isEmpty ? placeholder : (configuredPreset?.label ?? customOption))
+
+        HStack(spacing: 8) {
+            if appState.openRouterTranscriptionCatalogState == .loading, presets.isEmpty {
+                ProgressView().controlSize(.small)
+            }
+            FixedWidthPopUp(
+                selection: selected,
+                options: options,
+                disabledOptions: [placeholder],
+                onSelectIndex: { index in
+                    guard index > 0 else { return }
+                    if index == options.count - 1 {
+                        isUsingCustomOpenRouterDictationModel = true
+                        return
+                    }
+                    isUsingCustomOpenRouterDictationModel = false
+                    controller.selectOpenRouterDictationModel(presets[index - 1].id)
+                }
+            )
+            .frame(height: 24)
+
+            if case .failed = appState.openRouterTranscriptionCatalogState {
+                Button("Retry") {
+                    controller.loadOpenRouterModels(.transcription, force: true)
+                }
+                .font(.system(size: 11, weight: .medium))
+            }
+        }
+    }
+
+    private func loadOpenRouterTranscriptionModelsIfNeeded() {
+        controller.loadOpenRouterModels(.transcription)
+    }
+
+    @ViewBuilder
+    private func keyStatusRow(key: String) -> some View {
+        HStack(spacing: 6) {
+            Spacer()
+            Circle()
+                .fill(key.isEmpty ? ImlaTheme.textTertiary : ImlaTheme.success)
+                .frame(width: 6, height: 6)
+            Text(key.isEmpty ? "No API key configured" : "Key configured")
+                .font(ImlaTheme.font(size: 11))
+                .foregroundStyle(key.isEmpty ? ImlaTheme.textTertiary : ImlaTheme.success)
+        }
+        .frame(minHeight: 20)
+    }
+
+    @ViewBuilder
+    private func actionButton(
+        _ title: String,
+        systemImage: String? = nil,
+        role: ButtonRole? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        let isDestructive = role == .destructive
+        Button(action: action) {
+            HStack(spacing: ImlaTheme.spacing8) {
+                Text(title)
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13, weight: .semibold))
+                        .symbolRenderingMode(.hierarchical)
+                }
+            }
+                .font(ImlaTheme.font(size: 13, weight: .medium))
+                .foregroundStyle(isDestructive ? ImlaTheme.danger : ImlaTheme.textPrimary)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, ImlaTheme.spacing16)
+                .padding(.vertical, ImlaTheme.spacing8)
+                .background(isDestructive ? ImlaTheme.danger.opacity(0.1) : ImlaTheme.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                        .strokeBorder(
+                            isDestructive ? ImlaTheme.danger.opacity(0.2) : ImlaTheme.surfaceBorder,
+                            lineWidth: 1
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func recordingSaveLabel(for policy: MeetingRecordingSavePolicy) -> String {
+        switch policy {
+        case .never:
+            return "Never"
+        case .prompt:
+            return "Ask every time"
+        case .always:
+            return "Always"
+        }
+    }
+
+    private func dictationRecordingSaveLabel(for policy: DictationRecordingSavePolicy) -> String {
+        switch policy {
+        case .never:
+            return "Never"
+        case .prompt:
+            return "Ask every time"
+        case .always:
+            return "Always"
+        }
+    }
+
+    private func dictationRecordingSavePolicy(for label: String) -> DictationRecordingSavePolicy? {
+        let policy = DictationRecordingSavePolicy.allCases.first {
+            dictationRecordingSaveLabel(for: $0) == label
+        }
+        if policy == nil {
+            assertionFailure("Unexpected dictation recording save label: \(label)")
+        }
+        return policy
+    }
+
+    private func recordingSavePolicy(for label: String) -> MeetingRecordingSavePolicy? {
+        let policy = MeetingRecordingSavePolicy.allCases.first { recordingSaveLabel(for: $0) == label }
+        if policy == nil {
+            assertionFailure("Unexpected recording save label: \(label)")
+        }
+        return policy
+    }
+
+    private func recordingFileFormatLabel(for format: MeetingRecordingFileFormat) -> String {
+        format.displayName
+    }
+
+    private func recordingFileFormat(for label: String) -> MeetingRecordingFileFormat? {
+        let format = MeetingRecordingFileFormat.allCases.first { recordingFileFormatLabel(for: $0) == label }
+        if format == nil {
+            assertionFailure("Unexpected recording file format label: \(label)")
+        }
+        return format
+    }
+
+    private func scheduledMeetingLeadTimeLabel(for leadTime: ScheduledMeetingNotificationLeadTime) -> String {
+        switch leadTime {
+        case .atStart:
+            return "At start time"
+        case .oneMinute:
+            return "1 min before"
+        case .threeMinutes:
+            return "3 min before"
+        case .fiveMinutes:
+            return "5 min before"
+        }
+    }
+
+    private func scheduledMeetingLeadTime(for label: String) -> ScheduledMeetingNotificationLeadTime? {
+        let leadTime = ScheduledMeetingNotificationLeadTime.allCases.first {
+            scheduledMeetingLeadTimeLabel(for: $0) == label
+        }
+        if leadTime == nil {
+            assertionFailure("Unexpected scheduled meeting notification lead time label: \(label)")
+        }
+        return leadTime
+    }
+
+    private func meetingJoinDefaultAction(for label: String) -> MeetingJoinDefaultAction? {
+        let action = MeetingJoinDefaultAction.allCases.first { $0.buttonLabel == label }
+        if action == nil {
+            assertionFailure("Unexpected meeting join default action label: \(label)")
+        }
+        return action
+    }
+}
+
+// MARK: - Pastable Secure Field (NSViewRepresentable)
+
+/// NSSecureTextField subclass that handles Cmd+V/C/X/A without needing a standard Edit menu.
+/// Required because the app runs as .accessory (no menu bar), so key equivalents
+/// don't route to text fields by default.
+class EditableNSSecureTextField: NSSecureTextField {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command) {
+            switch event.charactersIgnoringModifiers {
+            case "v":
+                if NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self) { return true }
+            case "c":
+                if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: self) { return true }
+            case "x":
+                if NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: self) { return true }
+            case "a":
+                if NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: self) { return true }
+            default:
+                break
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
+/// NSPopUpButton wrapper that respects width constraints (SwiftUI Picker with .menu style ignores them).
+struct FixedWidthPopUp: NSViewRepresentable {
+    let selection: String
+    let options: [String]
+    let disabledOptions: Set<String>
+    /// Reports the selected index, avoiding label collision issues.
+    let onSelectionIndex: (Int) -> Void
+
+    init(
+        selection: String,
+        options: [String],
+        disabledOptions: Set<String> = [],
+        onChange: @escaping (String) -> Void
+    ) {
+        self.selection = selection
+        self.options = options
+        self.disabledOptions = disabledOptions
+        self.onSelectionIndex = { index in
+            guard index >= 0 && index < options.count else { return }
+            guard !disabledOptions.contains(options[index]) else { return }
+            onChange(options[index])
+        }
+    }
+
+    init(
+        selection: String,
+        options: [String],
+        disabledOptions: Set<String> = [],
+        onSelectIndex: @escaping (Int) -> Void
+    ) {
+        self.selection = selection
+        self.options = options
+        self.disabledOptions = disabledOptions
+        self.onSelectionIndex = { index in
+            guard index >= 0 && index < options.count else { return }
+            guard !disabledOptions.contains(options[index]) else { return }
+            onSelectIndex(index)
+        }
+    }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton(frame: .zero, pullsDown: false)
+        button.removeAllItems()
+        button.addItems(withTitles: options)
+        button.menu?.autoenablesItems = false
+        updateEnabledItems(in: button)
+        button.selectItem(withTitle: selection)
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.selectionChanged(_:))
+        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return button
+    }
+
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        let currentTitles = button.itemTitles
+        if currentTitles != options {
+            button.removeAllItems()
+            button.addItems(withTitles: options)
+        }
+        updateEnabledItems(in: button)
+        if button.titleOfSelectedItem != selection {
+            button.selectItem(withTitle: selection)
+        }
+        context.coordinator.onSelectionIndex = onSelectionIndex
+    }
+
+    private func updateEnabledItems(in button: NSPopUpButton) {
+        for item in button.itemArray {
+            item.isEnabled = !disabledOptions.contains(item.title)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(onSelectionIndex: onSelectionIndex) }
+
+    class Coordinator: NSObject {
+        var onSelectionIndex: (Int) -> Void
+        init(onSelectionIndex: @escaping (Int) -> Void) { self.onSelectionIndex = onSelectionIndex }
+        @objc func selectionChanged(_ sender: NSPopUpButton) {
+            onSelectionIndex(sender.indexOfSelectedItem)
+        }
+    }
+}
+
+/// A text field that supports Cmd+V paste and masks the value when not focused.
+struct PastableSecureField: NSViewRepresentable {
+    let text: String
+    let placeholder: String
+    let onChange: (String) -> Void
+
+    func makeNSView(context: Context) -> EditableNSSecureTextField {
+        let field = EditableNSSecureTextField()
+        field.placeholderString = placeholder
+        field.font = .systemFont(ofSize: 13)
+        field.isBordered = true
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.delegate = context.coordinator
+        field.stringValue = text
+        return field
+    }
+
+    func updateNSView(_ nsView: EditableNSSecureTextField, context: Context) {
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onChange: onChange)
+    }
+
+    class Coordinator: NSObject, NSTextFieldDelegate {
+        let onChange: (String) -> Void
+
+        init(onChange: @escaping (String) -> Void) {
+            self.onChange = onChange
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            onChange(field.stringValue)
+        }
+    }
+}
+
+/// Plain text field with the same accessory-app edit shortcuts as secure fields.
+struct PastableTextField: NSViewRepresentable {
+    let text: String
+    let placeholder: String
+    let onBeginEditing: (() -> Void)?
+    let onChange: (String) -> Void
+
+    init(
+        text: String,
+        placeholder: String,
+        onBeginEditing: (() -> Void)? = nil,
+        onChange: @escaping (String) -> Void
+    ) {
+        self.text = text
+        self.placeholder = placeholder
+        self.onBeginEditing = onBeginEditing
+        self.onChange = onChange
+    }
+
+    func makeNSView(context: Context) -> EditableNSTextField {
+        let field = EditableNSTextField()
+        field.placeholderString = placeholder
+        field.font = .systemFont(ofSize: 13)
+        field.isBordered = true
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.delegate = context.coordinator
+        field.stringValue = text
+        return field
+    }
+
+    func updateNSView(_ nsView: EditableNSTextField, context: Context) {
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+        context.coordinator.onBeginEditing = onBeginEditing
+        context.coordinator.onChange = onChange
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onBeginEditing: onBeginEditing, onChange: onChange)
+    }
+
+    class Coordinator: NSObject, NSTextFieldDelegate {
+        var onBeginEditing: (() -> Void)?
+        var onChange: (String) -> Void
+
+        init(onBeginEditing: (() -> Void)?, onChange: @escaping (String) -> Void) {
+            self.onBeginEditing = onBeginEditing
+            self.onChange = onChange
+        }
+
+        func controlTextDidBeginEditing(_ obj: Notification) {
+            onBeginEditing?()
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            onChange(field.stringValue)
+        }
+    }
+}
+
+private extension Color {
+    init(hex: String) {
+        var h = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        h = h.hasPrefix("#") ? String(h.dropFirst()) : h
+        guard h.count == 6, let value = UInt64(h, radix: 16) else {
+            self = .black; return
+        }
+        self = Color(
+            red:   Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >> 8)  & 0xFF) / 255,
+            blue:  Double( value        & 0xFF) / 255
+        )
+    }
+}
+
+private extension NSColor {
+    func toHexString() -> String? {
+        guard let rgb = usingColorSpace(.sRGB) else { return nil }
+        let r = Int((rgb.redComponent   * 255).rounded())
+        let g = Int((rgb.greenComponent * 255).rounded())
+        let b = Int((rgb.blueComponent  * 255).rounded())
+        return String(format: "%02x%02x%02x", r, g, b)
+    }
+}

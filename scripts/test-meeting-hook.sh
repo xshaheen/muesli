@@ -6,7 +6,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-OUTPUT_DIR="${MUESLI_HOOK_TEST_DIR:-$HOME/Desktop/MuesliHookTest}"
+OUTPUT_DIR="${MUESLI_HOOK_TEST_DIR:-$HOME/Desktop/ImlaHookTest}"
 mkdir -p "$OUTPUT_DIR"
 
 PAYLOAD_FILE="$(mktemp "$OUTPUT_DIR/payload.XXXXXX.json")"
@@ -32,14 +32,14 @@ if [[ -z "$MEETING_ID" ]]; then
   exit 1
 fi
 
-if [[ -x "/Applications/MuesliDev.app/Contents/MacOS/muesli-cli" ]]; then
-  CLI_BIN="/Applications/MuesliDev.app/Contents/MacOS/muesli-cli"
-elif [[ -x "/Applications/Muesli.app/Contents/MacOS/muesli-cli" ]]; then
-  CLI_BIN="/Applications/Muesli.app/Contents/MacOS/muesli-cli"
-elif command -v muesli-cli >/dev/null 2>&1; then
-  CLI_BIN="$(command -v muesli-cli)"
+if [[ -x "/Applications/ImlaDev.app/Contents/MacOS/imla-cli" ]]; then
+  CLI_BIN="/Applications/ImlaDev.app/Contents/MacOS/imla-cli"
+elif [[ -x "/Applications/Imla.app/Contents/MacOS/imla-cli" ]]; then
+  CLI_BIN="/Applications/Imla.app/Contents/MacOS/imla-cli"
+elif command -v imla-cli >/dev/null 2>&1; then
+  CLI_BIN="$(command -v imla-cli)"
 else
-  echo "Could not find muesli-cli." >&2
+  echo "Could not find imla-cli." >&2
   exit 1
 fi
 

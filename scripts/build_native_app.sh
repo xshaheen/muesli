@@ -2,20 +2,20 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$ROOT/scripts/muesli_spm_cache.sh"
+source "$ROOT/scripts/imla_spm_cache.sh"
 source "$ROOT/scripts/localvqe_runtime.sh"
-PACKAGE_DIR="$ROOT/native/MuesliNative"
+PACKAGE_DIR="$ROOT/native/ImlaNative"
 DIST_DIR="$ROOT/dist-native"
 INSTALL_DIR="${MUESLI_INSTALL_DIR:-/Applications}"
 BUILD_CONFIG="${1:-release}"
-APP_BINARY="MuesliNativeApp"
-CLI_BINARY="muesli-cli"
-APP_NAME="${MUESLI_APP_NAME:-Muesli}"
+APP_BINARY="ImlaNativeApp"
+CLI_BINARY="imla-cli"
+APP_NAME="${MUESLI_APP_NAME:-Imla}"
 APP_DISPLAY_NAME="${MUESLI_DISPLAY_NAME:-$APP_NAME}"
 APP_BUNDLE_NAME="${MUESLI_APP_BUNDLE_NAME:-$APP_NAME.app}"
-APP_EXECUTABLE_NAME="${MUESLI_EXECUTABLE_NAME:-Muesli}"
+APP_EXECUTABLE_NAME="${MUESLI_EXECUTABLE_NAME:-Imla}"
 APP_SUPPORT_DIR_NAME="${MUESLI_SUPPORT_DIR_NAME:-$APP_DISPLAY_NAME}"
-BUNDLE_ID="${MUESLI_BUNDLE_ID:-com.muesli.app}"
+BUNDLE_ID="${MUESLI_BUNDLE_ID:-com.xshaheen.imla}"
 TELEMETRYDECK_APP_ID="${MUESLI_TELEMETRYDECK_APP_ID:-}"
 TELEMETRY_CHANNEL="${MUESLI_TELEMETRY_CHANNEL:-unconfigured}"
 DEFAULT_APP_VERSION="0.8.4"
@@ -50,7 +50,7 @@ if [[ "$CODESIGN_TIMESTAMP" == "none" ]]; then
   CODESIGN_TIMESTAMP="--timestamp=none"
 fi
 BUNDLE_THIN_ARCH="${MUESLI_BUNDLE_THIN_ARCH:-arm64}"
-# Compile path switch: xcodebuild against native/MuesliXcode (1) vs plain
+# Compile path switch: xcodebuild against native/ImlaXcode (1) vs plain
 # `swift build` (0). Only the xcodebuild path generates
 # Contents/Resources/Metadata.appintents (App Intents metadata extraction
 # runs for real Xcode Application targets, not SwiftPM executables), so all
@@ -59,8 +59,8 @@ BUNDLE_THIN_ARCH="${MUESLI_BUNDLE_THIN_ARCH:-arm64}"
 # so bare contributor invocations don't require xcodegen; set
 # MUESLI_USE_XCODE_BUILD=1 explicitly when testing Shortcuts by hand.
 USE_XCODE_BUILD="${MUESLI_USE_XCODE_BUILD:-0}"
-XCODE_PROJECT_DIR="$ROOT/native/MuesliXcode"
-XCODE_PRODUCT_NAME="Muesli"
+XCODE_PROJECT_DIR="$ROOT/native/ImlaXcode"
+XCODE_PRODUCT_NAME="Imla"
 
 thin_macho_to_bundle_arch() {
   local binary="$1"
@@ -102,12 +102,12 @@ if [[ -z "$TELEMETRYDECK_APP_ID" && "$TELEMETRY_CHANNEL" != "unconfigured" ]]; t
 fi
 
 SWIFT_BUILD_ARGS=(--package-path "$PACKAGE_DIR" -c "$BUILD_CONFIG")
-if ! muesli_spm_scratch_disabled; then
+if ! imla_spm_scratch_disabled; then
   DEFAULT_SCRATCH_CHANNEL="release"
   if [[ "$BUILD_CONFIG" == "debug" ]]; then
-    DEFAULT_SCRATCH_CHANNEL="$(muesli_worktree_spm_scratch_channel dev "$ROOT")"
+    DEFAULT_SCRATCH_CHANNEL="$(imla_worktree_spm_scratch_channel dev "$ROOT")"
   fi
-  SWIFTPM_SCRATCH_PATH="$(muesli_resolve_spm_scratch_path "$DEFAULT_SCRATCH_CHANNEL")"
+  SWIFTPM_SCRATCH_PATH="$(imla_resolve_spm_scratch_path "$DEFAULT_SCRATCH_CHANNEL")"
   mkdir -p "$SWIFTPM_SCRATCH_PATH"
   SWIFT_BUILD_ARGS+=(--scratch-path "$SWIFTPM_SCRATCH_PATH")
   echo "Using SwiftPM scratch path: $SWIFTPM_SCRATCH_PATH"
@@ -126,14 +126,14 @@ if [[ "$USE_XCODE_BUILD" == "1" ]]; then
   [[ "$BUILD_CONFIG" == "release" ]] && XCODE_CONFIG="Release"
 
   # Scope DerivedData like the SwiftPM scratch path: per-worktree for debug
-  # builds and per-app-name so concurrent dev lanes (MuesliDevA/B/C) and the
+  # builds and per-app-name so concurrent dev lanes (ImlaDevA/B/C) and the
   # production build never share an xcodebuild cache directory.
   if [[ "$BUILD_CONFIG" == "release" ]]; then
     XCODE_SCRATCH_CHANNEL="release"
   else
-    XCODE_SCRATCH_CHANNEL="$(muesli_worktree_spm_scratch_channel dev "$ROOT")"
+    XCODE_SCRATCH_CHANNEL="$(imla_worktree_spm_scratch_channel dev "$ROOT")"
   fi
-  XCODE_DERIVED_DATA="${MUESLI_XCODEBUILD_DERIVED_DATA:-$(muesli_default_spm_cache_root)/$XCODE_SCRATCH_CHANNEL/xcodebuild/$APP_NAME-$BUILD_CONFIG}"
+  XCODE_DERIVED_DATA="${MUESLI_XCODEBUILD_DERIVED_DATA:-$(imla_default_spm_cache_root)/$XCODE_SCRATCH_CHANNEL/xcodebuild/$APP_NAME-$BUILD_CONFIG}"
   mkdir -p "$XCODE_DERIVED_DATA"
 
   echo "Generating Xcode project (xcodegen)..."
@@ -150,8 +150,8 @@ if [[ "$USE_XCODE_BUILD" == "1" ]]; then
     performance_args=(SWIFT_OPTIMIZATION_LEVEL=-O GCC_OPTIMIZATION_LEVEL=3)
   fi
   xcodebuild build ${plugin_validation_args[@]+"${plugin_validation_args[@]}"} ${performance_args[@]+"${performance_args[@]}"} \
-    -project "$XCODE_PROJECT_DIR/MuesliXcode.xcodeproj" \
-    -scheme Muesli \
+    -project "$XCODE_PROJECT_DIR/ImlaXcode.xcodeproj" \
+    -scheme Imla \
     -configuration "$XCODE_CONFIG" \
     -destination 'platform=macOS' \
     -skipMacroValidation \
@@ -266,7 +266,7 @@ fi
 # Bundle LocalVQE runtime (default meeting AEC). The .gguf model is committed;
 # the shared libraries under LocalVQE/lib/ are gitignored and produced by
 # scripts/build_localvqe.sh. Without them the app silently falls back to DTLN.
-LOCALVQE_LIB_DIR="${MUESLI_LOCALVQE_LIB_DIR:-$ROOT/native/MuesliNative/LocalVQE/lib}"
+LOCALVQE_LIB_DIR="${MUESLI_LOCALVQE_LIB_DIR:-$ROOT/native/ImlaNative/LocalVQE/lib}"
 ALLOW_MISSING_LOCALVQE="${MUESLI_ALLOW_MISSING_LOCALVQE:-0}"
 REQUIRE_LOCALVQE="${MUESLI_REQUIRE_LOCALVQE:-0}"
 BUILD_LOCALVQE="${MUESLI_BUILD_LOCALVQE:-0}"
@@ -277,7 +277,7 @@ BUILD_LOCALVQE="${MUESLI_BUILD_LOCALVQE:-0}"
 refresh_localvqe_runtime_files() {
   local collected=""
   LOCALVQE_RUNTIME_FILES=()
-  if ! collected="$(muesli_collect_localvqe_runtime "$LOCALVQE_LIB_DIR")"; then
+  if ! collected="$(imla_collect_localvqe_runtime "$LOCALVQE_LIB_DIR")"; then
     echo "Unable to inspect LocalVQE runtime in $LOCALVQE_LIB_DIR" >&2
     return 1
   fi
@@ -286,7 +286,7 @@ refresh_localvqe_runtime_files() {
     LOCALVQE_RUNTIME_FILES+=("$dylib")
   done <<< "$collected"
 
-  if [[ ${#LOCALVQE_RUNTIME_FILES[@]} -gt 0 ]] && ! muesli_localvqe_runtime_is_complete "$LOCALVQE_LIB_DIR"; then
+  if [[ ${#LOCALVQE_RUNTIME_FILES[@]} -gt 0 ]] && ! imla_localvqe_runtime_is_complete "$LOCALVQE_LIB_DIR"; then
     echo "Ignoring incomplete LocalVQE runtime in $LOCALVQE_LIB_DIR" >&2
     LOCALVQE_RUNTIME_FILES=()
   fi
@@ -335,7 +335,7 @@ else
   done
   echo "Bundled LocalVQE runtime (${#LOCALVQE_RUNTIME_FILES[@]} files) from $LOCALVQE_LIB_DIR"
 fi
-LOCALVQE_MODEL_PATH="${MUESLI_LOCALVQE_MODEL_PATH:-$ROOT/native/MuesliNative/LocalVQE/models/localvqe-v1.2-1.3M-f32.gguf}"
+LOCALVQE_MODEL_PATH="${MUESLI_LOCALVQE_MODEL_PATH:-$ROOT/native/ImlaNative/LocalVQE/models/localvqe-v1.2-1.3M-f32.gguf}"
 if [[ -f "$LOCALVQE_MODEL_PATH" ]]; then
   mkdir -p "$STAGED_APP_DIR/Contents/Resources/Models/localvqe"
   cp "$LOCALVQE_MODEL_PATH" "$STAGED_APP_DIR/Contents/Resources/Models/localvqe/localvqe-v1.2-1.3M-f32.gguf"
@@ -343,7 +343,7 @@ fi
 
 # Bundle assets
 cp "$ROOT/assets/menu_m_template.png" "$STAGED_APP_DIR/Contents/Resources/menu_m_template.png"
-cp "$ROOT/assets/muesli.icns" "$STAGED_APP_DIR/Contents/Resources/muesli.icns"
+cp "$ROOT/assets/imla.icns" "$STAGED_APP_DIR/Contents/Resources/imla.icns"
 cp "$ROOT/assets/zoom-app.png" "$STAGED_APP_DIR/Contents/Resources/zoom-app.png"
 cp "$ROOT/assets/Google_Meet_icon_(2020).svg.png" "$STAGED_APP_DIR/Contents/Resources/google-meet.png"
 cp "$ROOT/assets/Microsoft_Office_Teams_(2025–present).svg.png" "$STAGED_APP_DIR/Contents/Resources/teams.png"
@@ -356,7 +356,7 @@ cp "$ROOT/assets/superwhisper-logo.png" "$STAGED_APP_DIR/Contents/Resources/supe
 cp "$ROOT/assets/bodhan-logo.png" "$STAGED_APP_DIR/Contents/Resources/bodhan-logo.png"
 cp "$ROOT/assets/google-logo.svg" "$STAGED_APP_DIR/Contents/Resources/google-logo.svg"
 cp "$ROOT/assets/insights-share-background.png" "$STAGED_APP_DIR/Contents/Resources/insights-share-background.png"
-cp "$ROOT/assets/muesli_app_icon.png" "$STAGED_APP_DIR/Contents/Resources/muesli_app_icon.png"
+cp "$ROOT/assets/imla_app_icon.png" "$STAGED_APP_DIR/Contents/Resources/imla_app_icon.png"
 cp "$ROOT/assets/quill-icon.svg" "$STAGED_APP_DIR/Contents/Resources/quill-icon.svg"
 if [[ -d "$ROOT/assets/fonts" ]]; then
   ditto "$ROOT/assets/fonts" "$STAGED_APP_DIR/Contents/Resources/fonts"
@@ -399,12 +399,12 @@ cat > "$STAGED_APP_DIR/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleIconFile</key>
-  <string>muesli.icns</string>
-  <key>MuesliSupportDirectoryName</key>
+  <string>imla.icns</string>
+  <key>ImlaSupportDirectoryName</key>
   <string>$APP_SUPPORT_DIR_NAME</string>
-  <key>MuesliTelemetryDeckAppID</key>
+  <key>ImlaTelemetryDeckAppID</key>
   <string>$TELEMETRYDECK_APP_ID</string>
-  <key>MuesliTelemetryChannel</key>
+  <key>ImlaTelemetryChannel</key>
   <string>$TELEMETRY_CHANNEL</string>
   <key>LSUIElement</key>
   <true/>
@@ -491,10 +491,10 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
 
   codesign --force --options runtime "$CODESIGN_TIMESTAMP" \
     --sign "$SIGN_IDENTITY" \
-    "$APP_DIR/Contents/MacOS/muesli-cli"
+    "$APP_DIR/Contents/MacOS/imla-cli"
 
   # Sign the app bundle with hardened runtime, secure timestamp, and entitlements
-  ENTITLEMENTS="${MUESLI_ENTITLEMENTS:-$ROOT/scripts/Muesli.entitlements}"
+  ENTITLEMENTS="${MUESLI_ENTITLEMENTS:-$ROOT/scripts/Imla.entitlements}"
   CODESIGN_ENTITLEMENTS="$ENTITLEMENTS"
   TEMP_ENTITLEMENTS=""
   APS_ENVIRONMENT="${MUESLI_APS_ENVIRONMENT:-}"
@@ -510,7 +510,7 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
   }
   trap cleanup_sign_temp_files EXIT
   if [[ -n "$PROVISIONING_PROFILE" ]]; then
-    PROFILE_PLIST="$(mktemp "${TMPDIR:-/tmp}/muesli-profile.XXXXXX")"
+    PROFILE_PLIST="$(mktemp "${TMPDIR:-/tmp}/imla-profile.XXXXXX")"
     SIGN_TEMP_FILES+=("$PROFILE_PLIST")
     if ! security cms -D -i "$PROVISIONING_PROFILE" > "$PROFILE_PLIST" 2>/dev/null; then
       echo "ERROR: could not decode provisioning profile: $PROVISIONING_PROFILE" >&2
@@ -523,7 +523,7 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
     fi
     if [[ -n "$PROFILE_APP_IDENTIFIER" ]]; then
       PROFILE_BUNDLE_ID="${PROFILE_APP_IDENTIFIER#*.}"
-      # shellcheck disable=SC2053 # Intentionally glob-match wildcard App IDs such as com.muesli.*.
+      # shellcheck disable=SC2053 # Intentionally glob-match wildcard App IDs such as com.xshaheen.imla.*.
       if [[ "$BUNDLE_ID" != $PROFILE_BUNDLE_ID ]]; then
         echo "ERROR: provisioning profile app identifier '$PROFILE_APP_IDENTIFIER' does not match bundle ID '$BUNDLE_ID'." >&2
         exit 1
@@ -547,7 +547,7 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
   fi
 
   if [[ -n "$APS_ENVIRONMENT" || -n "$PROFILE_PLIST" ]]; then
-    TEMP_ENTITLEMENTS="$(mktemp "${TMPDIR:-/tmp}/muesli-entitlements.XXXXXX")"
+    TEMP_ENTITLEMENTS="$(mktemp "${TMPDIR:-/tmp}/imla-entitlements.XXXXXX")"
     SIGN_TEMP_FILES+=("$TEMP_ENTITLEMENTS")
     cp "$ENTITLEMENTS" "$TEMP_ENTITLEMENTS"
     copy_profile_string_entitlement() {
@@ -630,7 +630,7 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
 else
   # No Developer ID certificate: ad-hoc sign for local dev instead of leaving the
   # bundle with SwiftPM's incoherent per-binary signature. An ad-hoc *bundle* signature
-  # binds Info.plist and adopts the bundle's CFBundleIdentifier (com.muesli.*) as the
+  # binds Info.plist and adopts the bundle's CFBundleIdentifier (com.xshaheen.imla.*) as the
   # signing identity, which macOS TCC needs to attribute Accessibility / Input-Monitoring
   # grants to the running process. Without it, AXIsProcessTrusted()/CGPreflightListenEventAccess()
   # keep returning false even after the user grants permission, so onboarding stalls.
@@ -651,7 +651,7 @@ else
   else
     echo "Ad-hoc signing for local dev (MUESLI_SKIP_SIGN=1; no Developer ID)..."
   fi
-  ENTITLEMENTS="${MUESLI_ENTITLEMENTS:-$ROOT/scripts/Muesli.entitlements}"
+  ENTITLEMENTS="${MUESLI_ENTITLEMENTS:-$ROOT/scripts/Imla.entitlements}"
 
   find "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Frameworks" -maxdepth 1 -name "*.framework" -type d | while read -r framework; do
     # Sign every nested standalone Mach-O (e.g. Sparkle's Versions/B/Autoupdate),
@@ -675,8 +675,8 @@ else
     fi
   done
 
-  if [[ -f "$APP_DIR/Contents/MacOS/muesli-cli" ]]; then
-    codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$APP_DIR/Contents/MacOS/muesli-cli"
+  if [[ -f "$APP_DIR/Contents/MacOS/imla-cli" ]]; then
+    codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$APP_DIR/Contents/MacOS/imla-cli"
   fi
 
   # Sign the bundle last so the Info.plist binding / identity stick.

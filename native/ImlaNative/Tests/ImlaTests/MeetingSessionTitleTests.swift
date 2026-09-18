@@ -1,0 +1,227 @@
+import Foundation
+import Testing
+@testable import ImlaNativeApp
+
+@Suite("Meeting processing stage")
+struct MeetingProcessingStageTests {
+    @Test("audio processing keeps dictation blocked")
+    func audioProcessingBlocksDictation() {
+        #expect(!MeetingProcessingStage.stoppingCapture.allowsDictation)
+        #expect(!MeetingProcessingStage.transcribingAudio.allowsDictation)
+        #expect(!MeetingProcessingStage.cleaningAudio.allowsDictation)
+    }
+
+    @Test("a blocked capture shutdown keeps microphone features gated after transcript processing")
+    func shutdownLeaseOutlivesTranscription() {
+        #expect(MeetingProcessingAdmissionPolicy.blocksDictation(
+            stages: [.generatingTitle], captureShutdownInProgress: true
+        ))
+        #expect(MeetingProcessingAdmissionPolicy.blocksDictation(
+            stages: [], captureShutdownInProgress: true
+        ))
+        #expect(!MeetingProcessingAdmissionPolicy.blocksDictation(
+            stages: [], captureShutdownInProgress: false
+        ))
+    }
+
+    @Test("post-transcription processing allows dictation")
+    func postTranscriptionAllowsDictation() {
+        #expect(MeetingProcessingStage.generatingTitle.allowsDictation)
+        #expect(MeetingProcessingStage.summarizingNotes.allowsDictation)
+    }
+
+    @Test("active dictation transcription cannot be replaced by meeting progress")
+    func activeDictationTranscriptionStaysBlocked() {
+        #expect(!DictationStartAdmissionPolicy.allowsStart(
+            dictationState: .transcribing,
+            isMeetingAudioProcessing: false
+        ))
+    }
+
+    @Test("dictation admission follows meeting audio processing boundary")
+    func admissionFollowsMeetingAudioProcessingBoundary() {
+        #expect(!DictationStartAdmissionPolicy.allowsStart(
+            dictationState: .idle,
+            isMeetingAudioProcessing: true
+        ))
+        #expect(DictationStartAdmissionPolicy.allowsStart(
+            dictationState: .idle,
+            isMeetingAudioProcessing: false
+        ))
+    }
+
+    @Test("cleanup from a blocked hotkey start cannot retire active transcription")
+    func blockedStartCleanupIsIgnored() {
+        #expect(DictationStartAdmissionPolicy.shouldIgnoreCleanupAfterBlockedStart(
+            hasStartedRecording: false,
+            isStreaming: false,
+            dictationState: .transcribing,
+            isMeetingAudioProcessing: false
+        ))
+        #expect(DictationStartAdmissionPolicy.shouldIgnoreCleanupAfterBlockedStart(
+            hasStartedRecording: false,
+            isStreaming: false,
+            dictationState: .idle,
+            isMeetingAudioProcessing: true
+        ))
+        #expect(!DictationStartAdmissionPolicy.shouldIgnoreCleanupAfterBlockedStart(
+            hasStartedRecording: false,
+            isStreaming: false,
+            dictationState: .preparing,
+            isMeetingAudioProcessing: false
+        ))
+        #expect(!DictationStartAdmissionPolicy.shouldIgnoreCleanupAfterBlockedStart(
+            hasStartedRecording: true,
+            isStreaming: false,
+            dictationState: .recording,
+            isMeetingAudioProcessing: false
+        ))
+    }
+
+    @Test("any blocking meeting keeps dictation blocked across arbitrary overlap")
+    func arbitraryMeetingOverlapStaysBlocked() {
+        #expect(MeetingProcessingAdmissionPolicy.blocksDictation(stages: [
+            .generatingTitle,
+            .summarizingNotes,
+            .transcribingAudio,
+            .generatingTitle,
+        ]))
+        #expect(!MeetingProcessingAdmissionPolicy.blocksDictation(stages: [
+            .generatingTitle,
+            .summarizingNotes,
+            .generatingTitle,
+            .summarizingNotes,
+        ]))
+    }
+}
+
+@Suite("Meeting session title selection")
+struct MeetingSessionTitleTests {
+    @Test("calendar event title is used when present")
+    func calendarEventTitleCandidate() {
+        let title = MeetingSession.calendarTitleCandidate(
+            originalTitle: "April Town Hall",
+            calendarEventID: "calendar-event-123"
+        )
+
+        #expect(title == "April Town Hall")
+    }
+
+    @Test("blank calendar event title falls through")
+    func blankCalendarEventTitleFallsThrough() {
+        let title = MeetingSession.calendarTitleCandidate(
+            originalTitle: "  \n\t  ",
+            calendarEventID: "calendar-event-123"
+        )
+
+        #expect(title == nil)
+    }
+
+    @Test("non-calendar meeting does not use original title as a calendar title")
+    func nonCalendarMeetingFallsThrough() {
+        let title = MeetingSession.calendarTitleCandidate(
+            originalTitle: "Quick Note",
+            calendarEventID: nil
+        )
+
+        #expect(title == nil)
+    }
+}
+
+@Suite("Meeting session recovery policy")
+struct MeetingSessionRecoveryPolicyTests {
+    @Test("active session final authority follows source transitions")
+    func activeSessionFinalAuthorityFollowsSourceTransitions() {
+        var config = AppConfig()
+        config.enableLiveStreamingPartials = true
+        config.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
+        let session = MeetingSession(
+            title: "Authority transition",
+            calendarEventID: nil,
+            backend: .whisperLargeTurbo,
+            runtime: RuntimePaths(
+                repoRoot: FileManager.default.temporaryDirectory,
+                menuIcon: nil,
+                appIcon: nil,
+                bundlePath: nil
+            ),
+            config: config,
+            templateSnapshot: MeetingTemplates.auto.snapshot,
+            transcriptionCoordinator: TranscriptionCoordinator()
+        )
+
+        #expect(session.usesLiveNemotronTranscriptAsFinal())
+
+        session.updateTranscriptionAuthority(
+            backend: .whisperLargeTurbo,
+            usesUnifiedNemotronTranscript: false
+        )
+        #expect(!session.usesLiveNemotronTranscriptAsFinal())
+
+        session.updateTranscriptionAuthority(
+            backend: .whisperLargeTurbo,
+            usesUnifiedNemotronTranscript: true
+        )
+        #expect(session.usesLiveNemotronTranscriptAsFinal())
+    }
+
+    @Test("legacy Nemotron configuration keeps the unified final transcript")
+    func legacyNemotronConfigurationKeepsUnifiedFinalTranscript() {
+        var config = AppConfig()
+        config.enableLiveStreamingPartials = true
+        config.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
+
+        #expect(config.usesUnifiedNemotronMeetingTranscript)
+    }
+
+    @Test("a selected batch model makes Nemotron preview-only")
+    func selectedBatchModelMakesNemotronPreviewOnly() {
+        var config = AppConfig()
+        config.enableLiveStreamingPartials = true
+        config.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
+        config.useLiveMeetingTranscriptAsFinal = false
+
+        #expect(!config.usesUnifiedNemotronMeetingTranscript)
+    }
+
+    @Test("Nemotron falls back to system audio when streaming produced no segments")
+    func unifiedNemotronRecoversEmptySystemTranscript() {
+        #expect(MeetingSession.shouldAttemptSystemRecovery(
+            usesStreamingFinalTranscript: true,
+            hasSystemSegments: false
+        ))
+    }
+
+    @Test("Nemotron skips redundant system recovery when streaming produced segments")
+    func unifiedNemotronKeepsStreamingSystemTranscript() {
+        #expect(!MeetingSession.shouldAttemptSystemRecovery(
+            usesStreamingFinalTranscript: true,
+            hasSystemSegments: true
+        ))
+    }
+
+    @Test("verified streaming silence does not retranscribe the entire system recording")
+    func finalizedSilenceSkipsSystemRecovery() {
+        #expect(!MeetingSession.shouldAttemptSystemRecovery(
+            usesStreamingFinalTranscript: true,
+            hasSystemSegments: false,
+            hasCompleteStreamingCoverage: true
+        ))
+    }
+
+    @Test("batch meeting paths retain their existing system recovery behavior")
+    func batchPathStillAttemptsSystemRecovery() {
+        #expect(MeetingSession.shouldAttemptSystemRecovery(
+            usesStreamingFinalTranscript: false,
+            hasSystemSegments: true
+        ))
+    }
+
+    @Test("batch meeting paths recover when no system segments exist")
+    func batchPathRecoversEmptySystemTranscript() {
+        #expect(MeetingSession.shouldAttemptSystemRecovery(
+            usesStreamingFinalTranscript: false,
+            hasSystemSegments: false
+        ))
+    }
+}

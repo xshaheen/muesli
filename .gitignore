@@ -64,13 +64,13 @@ __pycache__/
 
 # Build artifacts
 dist-native/
-native/MuesliNative/.build/
-native/MuesliNative/.build-direct/
-native/MuesliNative/.xcodebuild/
-native/MuesliNative/LocalVQE/lib/
+native/ImlaNative/.build/
+native/ImlaNative/.build-direct/
+native/ImlaNative/.xcodebuild/
+native/ImlaNative/LocalVQE/lib/
 
 # Generated Xcode project (regenerate with `xcodegen generate` from project.yml)
-native/MuesliXcode/*.xcodeproj/
+native/ImlaXcode/*.xcodeproj/
 build/
 dist/
 output/
