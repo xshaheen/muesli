@@ -5,20 +5,23 @@
 <h1 align="center">Muesli</h1>
 
 <p align="center">
-<a href="https://trendshift.io/repositories/25442?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-25442" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/25442" alt="Muesli-HQ%2Fmuesli | Trendshift" width="250" height="55"/></a>
-</p>
-
-<p align="center">
   <strong>Local-first dictation & meeting transcription for macOS</strong><br>
   100% on-device speech-to-text · Zero cloud costs · Privacy by default
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
-  <a href="https://buymeacoffee.com/phequals7"><img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow?logo=buymeacoffee&logoColor=white" alt="Buy Me A Coffee" /></a>
   <img src="https://img.shields.io/badge/platform-macOS%2014.2%2B-lightgrey?logo=apple" alt="macOS 14.2+" />
   <img src="https://img.shields.io/badge/Apple%20Silicon-optimized-green" alt="Apple Silicon" />
 </p>
+
+---
+
+> **This is a fork.** Maintained by [Shaheen](https://github.com/xshaheen) at
+> [`xshaheen/muesli`](https://github.com/xshaheen/muesli), forked from
+> [`Muesli-HQ/muesli`](https://github.com/Muesli-HQ/muesli) and substantially changed since.
+> It is not affiliated with or endorsed by the upstream project. For upstream's releases,
+> support, and sponsors, go to upstream.
 
 ---
 
@@ -82,38 +85,23 @@ Live transcription is off by default. Download Parakeet Realtime EOU or Nemotron
 
 ## Install
 
-### Download (recommended)
+This fork ships no prebuilt binaries: notarization needs a Developer ID Application
+certificate it does not have, and the Homebrew cask named `muesli` belongs to upstream.
+Build from source.
 
-Download the latest `.dmg` from [Releases](https://github.com/Muesli-HQ/muesli/releases), open it, and drag Muesli to Applications — or double-click to install automatically.
-
-### Homebrew
-
-```bash
-brew install --cask muesli
-```
-
-Current Homebrew also resolves `brew install muesli` to the official cask; the
-`--cask` form is shown to make the app install explicit.
-
-### Build from source
-
-**Requirements:** macOS 14.2+, Xcode 16+
+**Requirements:** macOS 14.2+, Xcode 16+, Apple Silicon
 
 ```bash
-# Clone
-git clone https://github.com/Muesli-HQ/muesli.git
+git clone https://github.com/xshaheen/muesli.git
 cd muesli
 
-# Build and install to /Applications
-./scripts/build_native_app.sh
-
-# Contributor dev build without the maintainer Developer ID certificate
-MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh
+make build                       # signed with your own identity, installs to /Applications
+MUESLI_SKIP_SIGN=1 make dev      # isolated MuesliDev.app, separate bundle ID and data
 ```
 
-Release builds are signed by the maintainer Developer ID certificate. External
-contributors can use the unsigned dev build for local testing; it installs
-`MuesliDev.app` with a separate bundle ID and app data directory.
+`make help` lists every target. Builds signed with anything other than a Developer ID
+certificate are not notarized — fine on your own machine, but Gatekeeper warns elsewhere,
+and iCloud sync is off because those entitlements need a provisioning profile.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full local development workflow.
 
 The selected transcription model downloads on demand (~450 MB for the recommended Parakeet v3).
@@ -434,14 +422,14 @@ TelemetryDeck receives only coarse enum values for dictation backend, paste meth
 Contributions welcome! To get started:
 
 ```bash
-git clone https://github.com/Muesli-HQ/muesli.git
+git clone https://github.com/xshaheen/muesli.git
 cd muesli
 swift build --package-path native/MuesliNative -c release
 swift test --package-path native/MuesliNative
 ./scripts/test_packaged_cli.sh
 ```
 
-1,148 tests covering model configuration, custom word and phrase matching, filler removal, transcription routing, data persistence, CLI contract/path-resolution logic, speaker diarization alignment, token consolidation, camera-based meeting detection, CoreAudio system capture, ChatGPT OAuth logic, Ollama summaries, update-flow policy, launch at login, paste/clipboard safety, meeting export, meeting navigation, upcoming-meeting window behavior, and Google Calendar URL extraction.
+The suite covers model configuration, custom word and phrase matching, filler removal, transcription routing, data persistence, CLI contract/path-resolution logic, speaker diarization alignment, token consolidation, camera-based meeting detection, CoreAudio system capture, ChatGPT OAuth logic, Ollama summaries, launch at login, paste/clipboard safety, meeting export, meeting navigation, upcoming-meeting window behavior, and Google Calendar URL extraction.
 
 Current test scope:
 
@@ -453,27 +441,9 @@ Please open an issue before submitting large PRs.
 
 ---
 
-## Support
-
-If Muesli saves you time, consider supporting development:
-
-<a href="https://buymeacoffee.com/phequals7"><img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow?style=for-the-badge&logo=buymeacoffee&logoColor=white" alt="Buy Me A Coffee" /></a>
-
----
-
 ## Acknowledgements
 
-Muesli has been possible because of the generosity of companies such as:
-
-<p>
-  <a href="https://www.greptile.com"><img src="assets/sponsors/greptile.svg" alt="Greptile" height="44" /></a>
-  &nbsp;&nbsp;&nbsp;
-  <a href="https://openai.com/codex/"><img src="assets/OpenAI_Logo.svg.png" alt="OpenAI Codex" height="44" /></a>
-  &nbsp;&nbsp;&nbsp;
-  <a href="https://telemetrydeck.com"><img src="assets/sponsors/telemetrydeck.svg" alt="TelemetryDeck" height="44" /></a>
-  &nbsp;&nbsp;&nbsp;
-  <a href="https://www.coderabbit.ai"><img src="assets/sponsors/coderabbit.svg" alt="CodeRabbit" height="44" /></a>
-</p>
+Muesli is built on this work:
 
 - [FluidAudio](https://github.com/FluidInference/FluidAudio) — CoreML speech models for Apple devices (Parakeet TDT, Qwen3 ASR, Silero VAD, speaker diarization)
 - [localai-org/LocalVQE](https://github.com/localai-org/LocalVQE) — on-device acoustic echo cancellation for meeting transcription
@@ -492,26 +462,5 @@ Muesli has been possible because of the generosity of companies such as:
 
 ## License
 
-[MIT](LICENSE) — free and open source.
-
----
-
-## Resources
-
-- [Apple Neural Engine speech-to-text on Mac](https://muesli.works/apple-neural-engine-speech-to-text-mac) — how Muesli uses Apple Silicon, CoreML, and local ASR for fast dictation.
-- [Local speech-to-text glossary](https://muesli.works/local-speech-to-text-glossary) — ASR, VAD, diarization, acoustic echo cancellation, Parakeet, Whisper, and Qwen3 ASR.
-- [Best dictation apps for Mac](https://muesli.works/best-dictation-apps-mac) — a practical comparison of Mac dictation tools.
-- [Offline dictation for Mac](https://muesli.works/offline-dictation-mac) — why local-first voice typing matters.
-- [Local meeting transcription for Mac](https://muesli.works/local-meeting-transcription-mac) — meeting notes without adding a bot.
-
----
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=Muesli-HQ%2Fmuesli&type=date&legend=top-left">
-   <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Muesli-HQ/muesli&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Muesli-HQ/muesli&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Muesli-HQ/muesli&type=date&legend=top-left" />
-   </picture>
-</a>
+[MIT](LICENSE) — free and open source. Copyright is shared with the upstream project the
+fork descends from; see [LICENSE](LICENSE).

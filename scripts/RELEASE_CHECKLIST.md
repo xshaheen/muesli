@@ -20,11 +20,18 @@ This checklist is for **verification** after the script runs, and for manual rec
 
 ## Signing Profiles
 
+> **This fork cannot currently produce a notarized release.** Notarization needs a Developer ID
+> Application certificate, and the maintainer identity
+> (`Apple Development: mxshaheen@icloud.com (AMM3J847CY)`) is not one. Local and dev-lane builds
+> below work today; every step that requires Developer ID, a CloudKit provisioning profile, or
+> the `iCloud.com.mueslihq.muesli` container is inherited from upstream and is not reachable
+> until this fork has its own Apple Developer team and app identity.
+
 Muesli's default entitlements include CloudKit (`iCloud.com.mueslihq.muesli`). Any cloud-entitled build must be signed with a provisioning profile whose app identifier matches the bundle ID and whose certificate matches the signing identity.
 
 - [ ] Dev lane `MuesliDev` / `com.muesli.dev`
   - Use profile: `../muesli-ios/secrets/mueslimacosdevcloudkitcommueslidev.provisionprofile`
-  - Use identity: `Apple Development: Pranav Hari Guruvayurappan (59WTZW55XG)`
+  - Use identity: `Apple Development: mxshaheen@icloud.com (AMM3J847CY)`
   - Use `MUESLI_CODESIGN_TIMESTAMP=none`
   - `scripts/dev-test.sh --cloud-entitlements` auto-selects these values when that local profile exists
 
@@ -41,7 +48,7 @@ Muesli's default entitlements include CloudKit (`iCloud.com.mueslihq.muesli`). A
 - [ ] Stable `Muesli` / `com.muesli.app`
   - Export `MUESLI_PROVISIONING_PROFILE=/path/to/com.muesli.app.profile`
   - Maintainer local profile: `../muesli-ios/secrets/mueslimacosproductiondeveloperidcloudkit.provisionprofile`
-  - Use `Developer ID Application: Pranav Hari Guruvayurappan (58W55QJ567)`
+  - Use `Developer ID Application: <not yet available to this fork>`
   - Final app and DMG must be notarized, stapled, and accepted by Gatekeeper
 
 If launch fails with `No matching profile found`, the embedded profile, bundle ID, entitlements, or signing identity do not match.
@@ -51,7 +58,7 @@ If launch fails with `No matching profile found`, the embedded profile, bundle I
 - [ ] `scripts/build_native_app.sh` completes without error
 - [ ] App installed to `/Applications/Muesli.app`
 - [ ] Verify signature: `codesign -dvvv /Applications/Muesli.app 2>&1 | grep "Authority"`
-  - Must show `Developer ID Application: Pranav Hari Guruvayurappan (58W55QJ567)`
+  - Must show `Developer ID Application: <not yet available to this fork>`
 - [ ] Verify effective entitlements:
   ```bash
   codesign -d --entitlements :- /Applications/Muesli.app | plutil -p -

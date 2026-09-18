@@ -4,6 +4,10 @@ Thanks for helping improve Muesli. This project is a native macOS app built
 with SwiftPM, AppKit, SwiftUI, and a small set of shell scripts around local
 builds and CI shards.
 
+This repository is a fork of [`Muesli-HQ/muesli`](https://github.com/Muesli-HQ/muesli)
+maintained by Shaheen at [`xshaheen/muesli`](https://github.com/xshaheen/muesli). Send
+pull requests here; for the upstream project, contribute upstream.
+
 ## Requirements
 
 - macOS 14.2 or newer
@@ -12,9 +16,9 @@ builds and CI shards.
 
 ## Local Development Build
 
-Maintainer release builds are signed with a Developer ID certificate that
-external contributors do not have. For local development, build the isolated
-dev app without signing:
+This fork has no Developer ID certificate, so it produces no notarized builds at
+all — everyone, maintainer included, works from source. For local development,
+build the isolated dev app without signing:
 
 ```bash
 MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh
@@ -118,15 +122,16 @@ that can be reviewed and tested.
 
 ## Release Signing
 
-Official preprod and stable release scripts require maintainer-only Developer
-ID provisioning profiles:
+`scripts/release.sh`, `release-preprod.sh`, and `release-alpha.sh` are inherited
+from upstream and **cannot complete in this fork**: they notarize, which needs a
+Developer ID Application certificate and provisioning profiles this fork does not
+have. They are kept so the path is recoverable if the fork gets its own Apple
+Developer team; do not run them expecting a release.
 
-- `com.muesli.preprod` for `scripts/release-preprod.sh`
-- `com.muesli.app` for `scripts/release.sh`
-
-Those profiles are not committed to the repository. Maintainers pass them with
-`MUESLI_PROVISIONING_PROFILE`; contributors should not need to run these
-release scripts for normal PR validation.
+Auto-update is off for the same reason. Builds omit `SUFeedURL` entirely rather
+than inheriting upstream's appcast, which would have updated a fork build into
+upstream's binary. Set `MUESLI_SPARKLE_FEED_URL` and `MUESLI_SPARKLE_EDKEY`
+together to turn it back on against a feed you control.
 
 Before packaging a signed release, ensure a *complete* LocalVQE runtime is
 present (`./scripts/build_localvqe.sh`). `build_native_app.sh` fails closed when

@@ -97,24 +97,9 @@ dist-notary/
 dist-preprod/
 dist-release/
 scripts/notarize_dmg.sh
-scripts/dev-test.sh
 
-# Legacy files (kept locally, not tracked)
-CLAUDE.md
+# Agent session scratch (PreCompact handoffs)
 Context/
-app.py
-main.py
-setup.py
-ui/
-native/system_audio.swift
-scripts/postprocess_py2app_bundle.sh
-scripts/setup_no_torch_env.sh
-requirements-no-torch.txt
-requirements-no-torch-dev.txt
-research/
-assets/muesli_app_icon_traced*.svg
-assets/menu_mic_template.png
-context.md
 
 # IDE
 .claude/

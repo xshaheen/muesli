@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_PATH="${1:-/Applications/Muesli.app}"
 OUTPUT_DIR="${2:-$ROOT/dist-release}"
-SIGN_IDENTITY="${MUESLI_SIGN_IDENTITY:-Developer ID Application: Pranav Hari Guruvayurappan (58W55QJ567)}"
+SIGN_IDENTITY="${MUESLI_SIGN_IDENTITY:-Apple Development: mxshaheen@icloud.com (AMM3J847CY)}"
 BACKGROUND_DIR="$ROOT/scripts/assets"
 
 if [[ ! -d "$APP_PATH" ]]; then

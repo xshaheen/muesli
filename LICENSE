@@ -1,6 +1,11 @@
 MIT License
 
+Copyright (c) 2026 Shaheen <mxshaheen@gmail.com>
 Copyright (c) 2026 Pranav Hari
+
+This is a fork of https://github.com/Muesli-HQ/muesli. The upstream copyright
+notice above is retained as the MIT License requires; the first line covers the
+changes made in this fork.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

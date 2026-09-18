@@ -22,11 +22,26 @@ DEFAULT_APP_VERSION="0.8.3"
 APP_VERSION="${MUESLI_BUILD_VERSION:-$DEFAULT_APP_VERSION}"
 APP_BUNDLE_VERSION="${MUESLI_BUNDLE_VERSION:-$APP_VERSION}"
 APP_SHORT_VERSION="${MUESLI_SHORT_VERSION:-$APP_VERSION}"
-SPARKLE_FEED_URL="${MUESLI_SPARKLE_FEED_URL-https://muesli-hq.github.io/muesli/appcast.xml}"
-SPARKLE_EDKEY="${MUESLI_SPARKLE_EDKEY-ok9CQBJ3f0MJ2GXuGBubc6VyeWyb5exmqP2b9DceqH4=}"
+# This fork publishes no appcast and holds no Sparkle signing key, so auto-update
+# is off unless both values are supplied. They previously defaulted to upstream's
+# feed and public key, which pointed every build of this fork at upstream's
+# releases — a check would have replaced the running app with upstream's binary.
+# Setting only one of the two is a configuration error: Sparkle would either have
+# nowhere to look or no way to verify what it downloaded.
+SPARKLE_FEED_URL="${MUESLI_SPARKLE_FEED_URL-}"
+SPARKLE_EDKEY="${MUESLI_SPARKLE_EDKEY-}"
+if [[ -n "$SPARKLE_FEED_URL" && -z "$SPARKLE_EDKEY" ]]; then
+  echo "error: MUESLI_SPARKLE_FEED_URL is set without MUESLI_SPARKLE_EDKEY." >&2
+  echo "       An unverified update feed must not ship." >&2
+  exit 1
+fi
+if [[ -z "$SPARKLE_FEED_URL" && -n "$SPARKLE_EDKEY" ]]; then
+  echo "error: MUESLI_SPARKLE_EDKEY is set without MUESLI_SPARKLE_FEED_URL." >&2
+  exit 1
+fi
 STAGED_APP_DIR="$DIST_DIR/$APP_BUNDLE_NAME"
 APP_DIR="$INSTALL_DIR/$APP_BUNDLE_NAME"
-DEFAULT_SIGN_IDENTITY="Developer ID Application: Pranav Hari Guruvayurappan (58W55QJ567)"
+DEFAULT_SIGN_IDENTITY="Apple Development: mxshaheen@icloud.com (AMM3J847CY)"
 SIGN_IDENTITY="${MUESLI_SIGN_IDENTITY:-$DEFAULT_SIGN_IDENTITY}"
 SKIP_SIGN="${MUESLI_SKIP_SIGN:-0}"
 PROVISIONING_PROFILE="${MUESLI_PROVISIONING_PROFILE:-}"
@@ -342,6 +357,20 @@ if [[ -d "$ROOT/assets/audio" ]]; then
   ditto "$ROOT/assets/audio" "$STAGED_APP_DIR/Contents/Resources/audio"
 fi
 
+# Omit the Sparkle keys entirely when no feed is configured. An empty SUFeedURL
+# still reads as "a feed is configured" to Sparkle; an absent one disables it.
+if [[ -n "$SPARKLE_FEED_URL" ]]; then
+  SPARKLE_PLIST_ENTRIES="  <key>SUFeedURL</key>
+  <string>$SPARKLE_FEED_URL</string>
+  <key>SUPublicEDKey</key>
+  <string>$SPARKLE_EDKEY</string>
+  <key>SUEnableAutomaticChecks</key>
+  <true/>"
+else
+  SPARKLE_PLIST_ENTRIES="  <key>SUEnableAutomaticChecks</key>
+  <false/>"
+fi
+
 cat > "$STAGED_APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -385,12 +414,7 @@ cat > "$STAGED_APP_DIR/Contents/Info.plist" <<PLIST
   <string>$APP_DISPLAY_NAME reads calendar events to help with meeting recordings.</string>
   <key>NSContactsUsageDescription</key>
   <string>$APP_DISPLAY_NAME lets you add people from Contacts to meeting notes.</string>
-  <key>SUFeedURL</key>
-  <string>$SPARKLE_FEED_URL</string>
-  <key>SUPublicEDKey</key>
-  <string>$SPARKLE_EDKEY</string>
-  <key>SUEnableAutomaticChecks</key>
-  <true/>
+$SPARKLE_PLIST_ENTRIES
 </dict>
 </plist>
 PLIST

@@ -6,7 +6,7 @@ struct AboutView: View {
     let onOpenManualDiagnosticReport: () -> Void
     let onSetAutomaticDiagnosticIssuePrompts: (Bool) -> Void
 
-    private let githubURL = "https://github.com/Muesli-HQ/muesli"
+    private let githubURL = "https://github.com/xshaheen/muesli"
     private let donateURL = "https://buymeacoffee.com/phequals7"
     private let actionButtonWidth: CGFloat = 136
 

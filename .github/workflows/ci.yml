@@ -184,9 +184,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify Sparkle update metadata
-        run: ./scripts/verify_update_flow.sh --skip-dmg
-
+      # No Sparkle appcast to verify: this fork publishes no update feed, and
+      # builds omit SUFeedURL entirely. Restore this step alongside the feed.
       - name: Test CloudKit release entitlement contract
         run: python3 ./scripts/test_verify_cloud_entitlements.py
 

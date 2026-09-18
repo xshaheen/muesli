@@ -413,7 +413,9 @@ final class SparkleUpdateDelegate: NSObject, SPUUpdaterDelegate, SPUStandardUser
 enum UpdateFailureGuidance {
     private static let noUpdateErrorCode = 1001
 
-    static let downloadPageURLString = "https://muesli-hq.github.io/muesli/"
+    /// Only reachable once an update feed is configured; this fork ships none.
+    /// It must point at whoever publishes that feed, never at upstream.
+    static let downloadPageURLString = "https://github.com/xshaheen/muesli/releases"
 
     static let message = """
     Please quit Muesli, reopen it from Applications, and try the update once more.

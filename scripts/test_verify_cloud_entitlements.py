@@ -36,8 +36,8 @@ def run(entitlements: dict, profile: dict | None = None) -> subprocess.Completed
 
 
 base_entitlements = {
-    "com.apple.application-identifier": "58W55QJ567.com.muesli.app",
-    "com.apple.developer.team-identifier": "58W55QJ567",
+    "com.apple.application-identifier": "TEAMIDTEST.com.muesli.app",
+    "com.apple.developer.team-identifier": "TEAMIDTEST",
     "com.apple.developer.icloud-container-environment": "Production",
     "com.apple.developer.icloud-container-identifiers": ["iCloud.com.mueslihq.muesli"],
     "com.apple.developer.icloud-services": ["CloudKit"],
@@ -45,8 +45,8 @@ base_entitlements = {
 }
 base_profile = {
     "Entitlements": {
-        "com.apple.application-identifier": "58W55QJ567.com.muesli.app",
-        "com.apple.developer.team-identifier": "58W55QJ567",
+        "com.apple.application-identifier": "TEAMIDTEST.com.muesli.app",
+        "com.apple.developer.team-identifier": "TEAMIDTEST",
         "com.apple.developer.aps-environment": "production",
         "com.apple.developer.icloud-container-environment": ["Development", "Production"],
         "com.apple.developer.icloud-container-identifiers": ["iCloud.com.mueslihq.muesli"],
@@ -72,8 +72,8 @@ assert run(missing_environment, base_profile).returncode != 0
 
 wrong_profile = {
     "Entitlements": {
-        "com.apple.application-identifier": "58W55QJ567.com.muesli.app",
-        "com.apple.developer.team-identifier": "58W55QJ567",
+        "com.apple.application-identifier": "TEAMIDTEST.com.muesli.app",
+        "com.apple.developer.team-identifier": "TEAMIDTEST",
         "com.apple.developer.aps-environment": "production",
         "com.apple.developer.icloud-container-environment": "Development",
         "com.apple.developer.icloud-container-identifiers": ["iCloud.com.mueslihq.muesli"],
@@ -82,7 +82,7 @@ wrong_profile = {
 assert run(base_entitlements, wrong_profile).returncode != 0
 
 for key, bad_value in (
-    ("com.apple.application-identifier", "58W55QJ567.com.example.wrong"),
+    ("com.apple.application-identifier", "TEAMIDTEST.com.example.wrong"),
     ("com.apple.developer.team-identifier", "DIFFERENT01"),
     ("com.apple.developer.aps-environment", "development"),
 ):

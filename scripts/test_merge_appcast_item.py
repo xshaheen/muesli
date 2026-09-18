@@ -81,7 +81,7 @@ class MergeAppcastItemTests(unittest.TestCase):
             output = root / "output.xml"
             legacy_item = HISTORICAL_ITEM.replace(
                 "https://github.com/Muesli-HQ/muesli/releases/download/v0.7.1/Muesli-0.7.1.dmg",
-                "https://pHequals7.github.io/muesli/Muesli-0.7.1.dmg",
+                "https://example.invalid/muesli/Muesli-0.7.1.dmg",
             )
             existing.write_text(HEADER + legacy_item + FOOTER, encoding="utf-8")
             generated.write_text(HEADER + GENERATED_ITEM + FOOTER, encoding="utf-8")
