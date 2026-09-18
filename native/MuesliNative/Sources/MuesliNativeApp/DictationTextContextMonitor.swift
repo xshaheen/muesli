@@ -306,7 +306,8 @@ final class DictationTextContextMonitor {
         isResolving = true
         Task.detached(priority: .utility) { [weak self] in
             let resolution = DictationCaretAnchorProvider.resolveEditableFocus(primaryMaxY: primaryMaxY)
-            await self?.publish(resolution, generation: generation)
+            guard let self else { return }
+            await MainActor.run { self.publish(resolution, generation: generation) }
         }
     }
 

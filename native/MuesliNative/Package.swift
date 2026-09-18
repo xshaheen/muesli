@@ -42,7 +42,7 @@ let package = Package(
                 "MuesliCore",
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "LLM", package: "LLM.swift"),
-                .target(name: "CLiteRTLM_mac", condition: .when(platforms: [.macOS])),
+                .target(name: "CLiteRTLMBridge", condition: .when(platforms: [.macOS])),
                 .product(name: "WhisperKit", package: "WhisperKit"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "TelemetryDeck", package: "SwiftSDK"),
@@ -98,8 +98,21 @@ let package = Package(
             path: "Sources/LocalVQEBridge",
             publicHeadersPath: "include"
         ),
+        // Thin source wrapper that owns the CLiteRTLM module declaration.
+        // This avoids a module.modulemap collision between CLiteRTLM_mac_lib and
+        // FluidAudio's NemoTextProcessing xcframeworks when both are linked, as
+        // the build system (SwiftPM/xcodebuild) flattens all xcframework headers
+        // to the same include/ output dir and conflicts on the filename.
+        .target(
+            name: "CLiteRTLMBridge",
+            dependencies: [
+                .target(name: "CLiteRTLM_mac_lib", condition: .when(platforms: [.macOS])),
+            ],
+            path: "Sources/CLiteRTLMBridge",
+            publicHeadersPath: "include"
+        ),
         .binaryTarget(
-            name: "CLiteRTLM_mac",
+            name: "CLiteRTLM_mac_lib",
             url: "https://github.com/google-ai-edge/LiteRT-LM/releases/download/v0.13.1/CLiteRTLM_mac.xcframework.zip",
             checksum: "ec9ffe230dc39117a7fc8933b1cc15910454027fee6d3041534ab7cf17313981"
         ),

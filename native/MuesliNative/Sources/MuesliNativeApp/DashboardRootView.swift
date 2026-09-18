@@ -14,7 +14,6 @@ struct DashboardRootView: View {
     let appState: AppState
     let controller: MuesliController
     @State private var featureTourTargetFrames: [FeatureTourTarget: CGRect] = [:]
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var isSidebarCollapsed = false
 
     /// The window's titlebar is opaque chrome that spans the whole width, so a page that
@@ -46,7 +45,7 @@ struct DashboardRootView: View {
             .foregroundStyle(MuesliTheme.textPrimary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, MuesliTheme.spacing24)
-            .padding(.top, Self.titlebarHeight + MuesliTheme.pageTop)
+            .padding(.top, MuesliTheme.spacing16)
             .padding(.bottom, MuesliTheme.spacing12)
     }
 
@@ -77,44 +76,38 @@ struct DashboardRootView: View {
 
     private static let collapseShortcut = KeyboardShortcut("s", modifiers: [.control, .command])
 
-    /// Collapsing hides the split view's sidebar entirely and shows our own rail,
-    /// so the two never appear at once and the detail view keeps its identity.
+    /// Swaps the leading column between the full sidebar and the icon rail.
     private func toggleCollapsed() {
         withAnimation(MuesliTheme.Motion.eased(0.22)) {
             isSidebarCollapsed.toggle()
-            columnVisibility = isSidebarCollapsed ? .detailOnly : .all
         }
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            sidebar
-                .frame(minWidth: Self.sidebarMinimumWidth)
-                .navigationSplitViewColumnWidth(
-                    min: Self.sidebarMinimumWidth,
-                    ideal: Self.sidebarIdealWidth,
-                    max: Self.sidebarMaximumWidth
-                )
-                // SidebarView draws its own collapse control, so the system chevron
-                // would be a second, competing toggle.
-                .toolbar(removing: .sidebarToggle)
-        } detail: {
+        // Our own two columns, not NavigationSplitView.
+        //
+        // macOS 26 draws a split view's sidebar as an inset rounded card that never
+        // reaches the window's corner, so the traffic lights always landed on bare window
+        // above it. That card is the "separate bar", and no amount of padding removes it.
+        // A plain HStack lets the leading column own the corner, so the lights sit on the
+        // sidebar's own surface the way they do in Finder and WhatsApp. Nothing here used
+        // the split view's navigation, and it also clamped the collapsed rail's width.
+        HStack(spacing: 0) {
+            if isSidebarCollapsed {
+                collapsedRail
+            } else {
+                sidebar
+                    .frame(width: Self.sidebarIdealWidth)
+            }
+
             VStack(alignment: .leading, spacing: 0) {
                 pageHeader
                 detailContent
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(MuesliTheme.backgroundBase)
-            // The rail lives here rather than in the sidebar column so its width is
-            // ours; safeAreaInset also insets the detail content, so nothing hides
-            // behind it.
-            .safeAreaInset(edge: .leading, spacing: 0) {
-                if isSidebarCollapsed {
-                    collapsedRail
-                }
-            }
         }
-        .navigationSplitViewStyle(.balanced)
+        .ignoresSafeArea(.container, edges: .top)
 
         .frame(minWidth: 640, minHeight: 480)
         .preferredColorScheme(appState.config.darkMode ? .dark : .light)
@@ -207,12 +200,6 @@ struct DashboardRootView: View {
                 onDismiss: { controller.dismissDiagnosticIncidentPrompt() }
             )
         }
-    }
-
-    static func toggledColumnVisibility(
-        after visibility: NavigationSplitViewVisibility
-    ) -> NavigationSplitViewVisibility {
-        visibility == .all ? .detailOnly : .all
     }
 
     @ViewBuilder

@@ -213,6 +213,60 @@ Read any ranking produced from this store as *a ranking on public broadcast-styl
 that in the report alongside which cohort rests on which corpus. Closing that gap needs a personal
 dictation corpus, which is deliberately out of scope.
 
+## Checking a configured language journey
+
+The default backend sweep leaves language arguments at their shipped defaults; it does not prove
+the same backend with Arabic selected. Keep that comparison separate from a check of the user's
+configured journey. The existing CLI can exercise file transcription with an explicit language;
+it does not exercise the microphone, hotkey, dictation cleanup, or insertion into another app.
+
+Use an already built test CLI and already provisioned models. Choose a licensed local sample and a
+private evidence directory outside the repository. Record the source commit and binary SHA-256;
+for the sample, record its corpus/sample id, revision, duration and audio SHA-256. Record the exact
+resolved model revision and SHA-256 of each model artifact used, including configuration/tokenizer
+files. A CLI model alias alone does not pin those bytes. If the loaded model artifacts cannot be
+identified, mark model identity incomplete rather than guessing a cache path.
+
+Set these values to verified absolute paths, then inspect that binary's help before running:
+
+```bash
+muesli_cli="/absolute/path/to/test/muesli-cli"
+sample_audio="/absolute/path/to/licensed/sample.wav"
+journey_dir="/absolute/path/to/private/journey-evidence"
+"$muesli_cli" transcribe --help
+mkdir -p "$journey_dir/support"
+shasum -a 256 "$muesli_cli" "$sample_audio" > "$journey_dir/input-sha256.txt"
+"$muesli_cli" transcribe "$sample_audio" --model whisper-large-turbo --language ar \
+  --format json --support-dir "$journey_dir/support" --output "$journey_dir/result-ar.json" \
+  2> "$journey_dir/stderr-ar.log"
+```
+
+Record the command, exit status, elapsed time and resulting artifact hashes in the private run
+record. If comparing configurations, repeat with `--language auto` and `--language en,ar`, each
+with distinct result/log paths and otherwise identical inputs. With the current CLI capabilities,
+`ar` selects single-language decoding for this model; `auto` and `en,ar` both use automatic
+detection. The latter is not an Arabic-English constrained decoder. Unsupported or degraded
+model/language combinations fail with `invalid_input`; do not silently change the model or selection.
+
+Keep requested language, expected routing from the tested source revision, and observed routing as
+separate fields. `TranscribeCommand.swift` owns CLI capabilities and passes the resolved decision
+to the backend; `TranscriptionLanguageRouting.swift` owns the shared resolution. Current CLI JSON
+reports the model and warnings but omits requested/effective routing. A successful transcript or
+a routing unit test therefore does not independently observe the decoder's runtime selection. Cite
+any captured backend routing evidence; otherwise mark observed routing **unavailable**. Do not fill
+that field from the requested arguments or the language of the output.
+
+Inspect the transcript against the licensed reference and record the relevant failure: translation,
+missing speech, incorrect code-switching, or domain-term loss. This recipe proves only the measured
+file-transcription result. It omits `--save-meeting` and `--summarize`; persistence, summarization,
+and the live dictation journey remain untested. To claim live dictation behavior, use the existing
+quality harness or an explicitly authorized isolated app lane and capture the actual language,
+cleanup and insertion path. The default sweep cannot supply explicit-language proof without a
+configured-language extension at that harness owner.
+
+Keep result JSON, transcripts and detailed logs private under the corpus rules above. Commit only
+derived, reviewed evidence. This runbook is a procedure, not a recorded successful language test.
+
 ## The run receipt and the report
 
 A sweep produces one **run receipt** — schema v2, defined by

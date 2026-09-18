@@ -272,13 +272,6 @@ struct SidebarHitAreaTests {
         #expect(DashboardRootView.sidebarMinimumWidth >= 260)
     }
 
-    @Test("sidebar toggle restores or hides the navigation column")
-    func sidebarVisibilityToggleCycles() {
-        #expect(DashboardRootView.toggledColumnVisibility(after: .all) == .detailOnly)
-        #expect(DashboardRootView.toggledColumnVisibility(after: .detailOnly) == .all)
-        #expect(DashboardRootView.toggledColumnVisibility(after: .automatic) == .all)
-    }
-
     @Test("primary sidebar rows use their full highlighted surface as the hit target")
     func primarySidebarRowsExpandBeforeApplyingHitShape() throws {
         let source = try source(named: "SidebarView.swift")
