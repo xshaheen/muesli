@@ -78,7 +78,10 @@ thin_macho_to_bundle_arch() {
   local tmp="${binary}.thin"
   lipo "$binary" -thin "$BUNDLE_THIN_ARCH" -output "$tmp"
   chmod +x "$tmp"
-  mv "$tmp" "$binary"
+  # -f: a dylib copied out of an xcframework keeps its read-only r-x------ mode,
+  # and mv onto an unwritable destination prompts when stdin is a terminal —
+  # which hangs an interactive build but never CI.
+  mv -f "$tmp" "$binary"
 }
 
 if [[ -n "$TELEMETRYDECK_APP_ID" && ! "$TELEMETRYDECK_APP_ID" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
@@ -101,7 +104,14 @@ if [[ -z "$TELEMETRYDECK_APP_ID" && "$TELEMETRY_CHANNEL" != "unconfigured" ]]; t
   exit 2
 fi
 
-SWIFT_BUILD_ARGS=(--package-path "$PACKAGE_DIR" -c "$BUILD_CONFIG")
+# --build-system native: the default swiftbuild engine stages every binary
+# target's headers into one flat Products/<cfg>/include/, so CLiteRTLM_mac and
+# FluidAudio's NemoTextProcessing — which each ship a Headers/module.modulemap —
+# collide on filename ("Multiple commands produce .../include/module.modulemap").
+# The legacy engine passes each -I separately. It is deprecated; the durable fix
+# is one of those xcframeworks dropping its root module map, or SwiftPM keeping
+# binary-target headers in per-target directories.
+SWIFT_BUILD_ARGS=(--package-path "$PACKAGE_DIR" -c "$BUILD_CONFIG" --build-system native)
 if ! imla_spm_scratch_disabled; then
   DEFAULT_SCRATCH_CHANNEL="release"
   if [[ "$BUILD_CONFIG" == "debug" ]]; then
@@ -224,6 +234,7 @@ if [[ "$USE_XCODE_BUILD" != "1" ]]; then
     [[ -f "$dylib" ]] || continue
     target="$STAGED_APP_DIR/Contents/MacOS/$(basename "$dylib")"
     cp -fRL "$dylib" "$target"
+    chmod u+w "$target"
     thin_macho_to_bundle_arch "$target"
   done
 fi
@@ -331,6 +342,7 @@ else
   for dylib in "${LOCALVQE_RUNTIME_FILES[@]}"; do
     target="$STAGED_APP_DIR/Contents/MacOS/$(basename "$dylib")"
     cp -fRL "$dylib" "$target"
+    chmod u+w "$target"
     thin_macho_to_bundle_arch "$target"
   done
   echo "Bundled LocalVQE runtime (${#LOCALVQE_RUNTIME_FILES[@]} files) from $LOCALVQE_LIB_DIR"
