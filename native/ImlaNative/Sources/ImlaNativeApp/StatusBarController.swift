@@ -237,8 +237,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(meetingBackendItem)
 
         menu.addItem(.separator())
-        menu.addItem(actionItem(title: "Settings…", action: #selector(ImlaController.openSettingsTab)))
-        menu.addItem(actionItem(title: "What's New in Imla", action: #selector(ImlaController.showWhatsNew)))
+        // Settings and What's New live in the app menu (and Settings in the
+        // dashboard sidebar); repeating them here only lengthened the menu that
+        // has to stay scannable while a recording is running.
         menu.addItem(checkForUpdatesItem())
         menu.addItem(.separator())
         menu.addItem(actionItem(title: "Quit", action: #selector(ImlaController.quitApp)))

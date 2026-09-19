@@ -2767,7 +2767,10 @@ struct AppConfig: Codable {
     var computerUseHotkeyTriggerThresholdMS: Int = HotkeyTriggerTiming.defaultThresholdMilliseconds
     var meetingRecordingHotkeyTriggerThresholdMS: Int = HotkeyTriggerTiming.defaultMeetingThresholdMilliseconds
     var launchAtLogin: Bool = false
-    var openDashboardOnLaunch: Bool = true
+    /// A menu-bar app that opens a window at login is a window the user did not
+    /// ask for; the dashboard is one click away in the menu. Settings turns it
+    /// back on.
+    var openDashboardOnLaunch: Bool = false
     var showFloatingIndicator: Bool = true
     /// Keeps the Dictation Mini's idle dot near the focused text context while not dictating.
     var showDictationIdleDot: Bool = true
