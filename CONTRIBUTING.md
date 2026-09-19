@@ -4,14 +4,14 @@ Thanks for helping improve Imla. This project is a native macOS app built
 with SwiftPM, AppKit, SwiftUI, and a small set of shell scripts around local
 builds and CI shards.
 
-This repository is a fork of [`Muesli-HQ/muesli`](https://github.com/Muesli-HQ/muesli)
+This repository is a fork of [`Muesli-HQ/imla`](https://github.com/Muesli-HQ/imla)
 maintained by Shaheen at [`xshaheen/muesli`](https://github.com/xshaheen/muesli). Send
 pull requests here; for the upstream project, contribute upstream.
 
 ## Requirements
 
-- macOS 14.2 or newer
-- Xcode 16 or newer
+- macOS 26 build host (the app deployment target remains macOS 14.2)
+- Xcode 26.6 (Swift 6.3), matching CI; MLX Swift requires Swift 6.3
 - Apple Silicon Mac for the main app workflows
 
 ## Local Development Build

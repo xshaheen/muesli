@@ -13,6 +13,7 @@ let package = Package(
         .executable(name: "imla-cli", targets: ["ImlaCLI"]),
     ],
     dependencies: [
+        .package(url: "https://github.com/ml-explore/mlx-swift.git", exact: "0.31.6"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.6"),
         // Pinned to the commit fixing empty transcriptions when `promptTokens` are set
@@ -40,6 +41,7 @@ let package = Package(
             name: "ImlaNativeApp",
             dependencies: [
                 "ImlaCore",
+                .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "LLM", package: "LLM.swift"),
                 .target(name: "CLiteRTLM_mac_lib", condition: .when(platforms: [.macOS])),

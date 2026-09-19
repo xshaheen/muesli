@@ -18,7 +18,7 @@ APP_SUPPORT_DIR_NAME="${MUESLI_SUPPORT_DIR_NAME:-$APP_DISPLAY_NAME}"
 BUNDLE_ID="${MUESLI_BUNDLE_ID:-com.xshaheen.imla}"
 TELEMETRYDECK_APP_ID="${MUESLI_TELEMETRYDECK_APP_ID:-}"
 TELEMETRY_CHANNEL="${MUESLI_TELEMETRY_CHANNEL:-unconfigured}"
-DEFAULT_APP_VERSION="0.8.3"
+DEFAULT_APP_VERSION="0.8.4"
 APP_VERSION="${MUESLI_BUILD_VERSION:-$DEFAULT_APP_VERSION}"
 APP_BUNDLE_VERSION="${MUESLI_BUNDLE_VERSION:-$APP_VERSION}"
 APP_SHORT_VERSION="${MUESLI_SHORT_VERSION:-$APP_VERSION}"
@@ -151,7 +151,15 @@ if [[ "$USE_XCODE_BUILD" == "1" ]]; then
 
   echo "Building app target via xcodebuild ($XCODE_CONFIG)..."
   set +e
-  xcodebuild build \
+  plugin_validation_args=()
+  if [[ "${MUESLI_TRUST_PACKAGE_PLUGINS:-0}" == "1" ]]; then
+    plugin_validation_args=(-skipPackagePluginValidation)
+  fi
+  performance_args=()
+  if [[ "${MUESLI_PROFILE_OPTIMIZED:-0}" == "1" ]]; then
+    performance_args=(SWIFT_OPTIMIZATION_LEVEL=-O GCC_OPTIMIZATION_LEVEL=3)
+  fi
+  xcodebuild build ${plugin_validation_args[@]+"${plugin_validation_args[@]}"} ${performance_args[@]+"${performance_args[@]}"} \
     -project "$XCODE_PROJECT_DIR/ImlaXcode.xcodeproj" \
     -scheme Imla \
     -configuration "$XCODE_CONFIG" \
@@ -357,7 +365,7 @@ cp "$ROOT/assets/OpenAI_Logo.svg.png" "$STAGED_APP_DIR/Contents/Resources/openai
 cp "$ROOT/assets/cohere.png" "$STAGED_APP_DIR/Contents/Resources/cohere-logo.png"
 cp "$ROOT/assets/Qwen_logo.svg.png" "$STAGED_APP_DIR/Contents/Resources/qwen-logo.png"
 cp "$ROOT/assets/superwhisper-logo.png" "$STAGED_APP_DIR/Contents/Resources/superwhisper-logo.png"
-cp "$ROOT/assets/AI4Bharat_logo.png" "$STAGED_APP_DIR/Contents/Resources/ai4bharat-logo.png"
+cp "$ROOT/assets/bodhan-logo.png" "$STAGED_APP_DIR/Contents/Resources/bodhan-logo.png"
 cp "$ROOT/assets/google-logo.svg" "$STAGED_APP_DIR/Contents/Resources/google-logo.svg"
 cp "$ROOT/assets/insights-share-background.png" "$STAGED_APP_DIR/Contents/Resources/insights-share-background.png"
 cp "$ROOT/assets/imla_app_icon.png" "$STAGED_APP_DIR/Contents/Resources/imla_app_icon.png"
@@ -514,7 +522,7 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
   }
   trap cleanup_sign_temp_files EXIT
   if [[ -n "$PROVISIONING_PROFILE" ]]; then
-    PROFILE_PLIST="$(mktemp "${TMPDIR:-/tmp}/muesli-profile.XXXXXX")"
+    PROFILE_PLIST="$(mktemp "${TMPDIR:-/tmp}/imla-profile.XXXXXX")"
     SIGN_TEMP_FILES+=("$PROFILE_PLIST")
     if ! security cms -D -i "$PROVISIONING_PROFILE" > "$PROFILE_PLIST" 2>/dev/null; then
       echo "ERROR: could not decode provisioning profile: $PROVISIONING_PROFILE" >&2
@@ -551,7 +559,7 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
   fi
 
   if [[ -n "$APS_ENVIRONMENT" || -n "$PROFILE_PLIST" ]]; then
-    TEMP_ENTITLEMENTS="$(mktemp "${TMPDIR:-/tmp}/muesli-entitlements.XXXXXX")"
+    TEMP_ENTITLEMENTS="$(mktemp "${TMPDIR:-/tmp}/imla-entitlements.XXXXXX")"
     SIGN_TEMP_FILES+=("$TEMP_ENTITLEMENTS")
     cp "$ENTITLEMENTS" "$TEMP_ENTITLEMENTS"
     copy_profile_string_entitlement() {

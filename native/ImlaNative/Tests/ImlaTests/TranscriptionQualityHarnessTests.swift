@@ -366,7 +366,7 @@ struct TranscriptionQualityRunnerTests {
     @Test("backends without an automatic language option are recorded as pinned")
     func languageConfigurationNamesPinnedBackends() {
         #expect(TranscriptionQualityEligibility.languageConfiguration(for: .cohereTranscribe) == "pinned:en")
-        #expect(TranscriptionQualityEligibility.languageConfiguration(for: .indicASR) == "pinned:hi")
+        #expect(TranscriptionQualityEligibility.languageConfiguration(for: .bodhanFlex) == "pinned:hi")
         #expect(TranscriptionQualityEligibility.languageConfiguration(for: .parakeetMultilingual) == "automatic")
         #expect(TranscriptionQualityEligibility.languageConfiguration(for: .whisperTiny) == "automatic")
         #expect(TranscriptionQualityEligibility.languageConfiguration(for: .nemotron35Multilingual) == "automatic")
@@ -412,7 +412,10 @@ struct TranscriptionQualityRunnerTests {
             "phequals/cohere-transcribe-coreml-mixed-precision": "pinned:en",
             "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML": "automatic",
             "FluidInference/sensevoice-small-coreml": "automatic",
-            "phequals/indic-conformer-600m-multilingual-coreml-rnnt": "pinned:hi",
+            "phequals/indic-transcribe-core-coreml": "pinned:hi",
+            "phequals/indic-transcribe-core-coreml-int8": "pinned:hi",
+            "phequals/indic-transcribe-flex-coreml": "pinned:hi",
+            "phequals/indic-transcribe-flex-coreml-int8": "pinned:hi",
         ]
         for backend in BackendOption.all {
             let configuration = TranscriptionQualityEligibility.languageConfiguration(for: backend)

@@ -47,11 +47,38 @@ struct ImlaCLITests {
     func cliContextUsesExplicitSupportDirectory() {
         let context = CLIContext(
             dbPath: nil,
-            supportDir: "/tmp/muesli-support"
+            supportDir: "/tmp/imla-support"
         )
 
-        #expect(context.supportDirectory.path == "/tmp/muesli-support")
-        #expect(context.databaseURL.path == "/tmp/muesli-support/imla.db")
+        #expect(context.supportDirectory.path == "/tmp/imla-support")
+        #expect(context.databaseURL.path == "/tmp/imla-support/imla.db")
+    }
+
+    @Test("summary config reads the app's persisted OpenRouter selection and protected credential")
+    func summaryConfigReadsAppOpenRouterSettings() throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("imla-cli-openrouter-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+
+        try Data(
+            #"{"meeting_summary_backend":"openrouter","openrouter_model":"openai/gpt-oss-120b:free"}"#.utf8
+        )
+            .write(to: supportDirectory.appendingPathComponent("config.json"))
+        try Data(#"{"api_key":"sk-or-cli-test","user_id":"user_test"}"#.utf8)
+            .write(to: supportDirectory.appendingPathComponent("openrouter-auth.json"))
+
+        let config = CLISummaryConfig.load(from: supportDirectory)
+        #expect(config.meetingSummaryBackend == "openrouter")
+        #expect(config.openRouterModel == "openai/gpt-oss-120b:free")
+        #expect(config.openRouterAPIKey == "sk-or-cli-test")
+    }
+
+    @Test("CLI OpenRouter summaries use the free router when no model is configured")
+    func cliOpenRouterUsesProviderManagedDefaultModel() {
+        #expect(CLISummaryClient.resolvedOpenRouterModel("") == "openrouter/free")
+        #expect(CLISummaryClient.resolvedOpenRouterModel("  \n") == "openrouter/free")
+        #expect(CLISummaryClient.resolvedOpenRouterModel("custom/model") == "custom/model")
     }
 
     @Test("migration runs before a read so a legacy database gains new columns")
@@ -489,13 +516,13 @@ struct ImlaCLITests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("imla-cli-dictionary-\(UUID().uuidString).json")
         try Data("""
-        [{"word": "museli", "replacement": "muesli", "matching_threshold": 0.85}]
+        [{"word": "museli", "replacement": "imla", "matching_threshold": 0.85}]
         """.utf8).write(to: url)
 
         let words = try ImlaAudioTranscriptionPipeline.loadCustomWords(from: url)
         #expect(words.count == 1)
         #expect(words[0].word == "museli")
-        #expect(words[0].targetWord == "muesli")
+        #expect(words[0].targetWord == "imla")
     }
 
     @Test("loadCustomWords accepts a config.json-shaped object")
@@ -568,7 +595,7 @@ struct ImlaCLITests {
         let fixture = try TranscribeFixture()
         let dictionaryURL = fixture.directory.appendingPathComponent("dictionary.json")
         try Data("""
-        [{"word": "museli", "replacement": "muesli"}]
+        [{"word": "museli", "replacement": "imla"}]
         """.utf8).write(to: dictionaryURL)
 
         let pipeline = ImlaAudioTranscriptionPipeline(
@@ -590,7 +617,7 @@ struct ImlaCLITests {
             context: fixture.context
         )
 
-        #expect(result.transcript == "I love muesli")
+        #expect(result.transcript == "I love imla")
     }
 
     @Test("pipeline rejects a dictionary that removes the entire transcript")
@@ -665,7 +692,7 @@ struct ImlaCLITests {
     func transcribeTextOutputIsTranscriptOnly() throws {
         let result = ImlaAudioTranscriptionResult(
             title: "Demo",
-            transcript: "hello from muesli",
+            transcript: "hello from imla",
             summary: nil,
             durationSeconds: 2,
             wordCount: 3,
@@ -674,14 +701,14 @@ struct ImlaCLITests {
             savedMeetingID: nil
         )
 
-        #expect(result.textOutput == "hello from muesli\n")
+        #expect(result.textOutput == "hello from imla\n")
     }
 
     @Test("transcribe markdown output includes title summary and transcript")
     func transcribeMarkdownOutputIncludesSections() throws {
         let result = ImlaAudioTranscriptionResult(
             title: "Demo",
-            transcript: "hello from muesli",
+            transcript: "hello from imla",
             summary: "## Summary\n\n- Done",
             durationSeconds: 2,
             wordCount: 3,
@@ -699,7 +726,7 @@ struct ImlaCLITests {
 
         ## Raw Transcript
 
-        hello from muesli
+        hello from imla
         """)
     }
 
@@ -708,7 +735,7 @@ struct ImlaCLITests {
         let payload = TranscribeJSONPayload(
             ImlaAudioTranscriptionResult(
                 title: "Demo",
-                transcript: "hello from muesli",
+                transcript: "hello from imla",
                 summary: "## Summary\n\n- Done",
                 durationSeconds: 4,
                 wordCount: 3,
@@ -728,7 +755,7 @@ struct ImlaCLITests {
         #expect(json["ok"] as? Bool == true)
         #expect(json["command"] as? String == "imla-cli transcribe")
         let payloadData = try #require(json["data"] as? [String: Any])
-        #expect(payloadData["transcript"] as? String == "hello from muesli")
+        #expect(payloadData["transcript"] as? String == "hello from imla")
         #expect(payloadData["model"] as? String == "parakeet-v2")
         #expect(payloadData["savedMeetingID"] as? Int == 12)
         #expect(payloadData["summary"] as? String == "## Summary\n\n- Done")
@@ -894,7 +921,7 @@ private struct TranscribeFixture {
 
     init() throws {
         directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("imla-cli-test-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("muesli-cli-test-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         sourceURL = directory.appendingPathComponent("recording.wav")
         wavURL = directory.appendingPathComponent("prepared.wav")

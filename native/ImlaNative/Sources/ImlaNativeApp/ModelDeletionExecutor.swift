@@ -59,10 +59,12 @@ enum ModelDeletionPlan: Sendable, Equatable {
                 at: CohereTranscribeModelStore.cacheDirectory(),
                 fileManager: fileManager
             )
-        case "indicasr":
-            if IndicASRModelStore.localOverrideDirectory() == nil {
+        case "bodhan":
+            // A local override points at weights the user manages themselves, so
+            // deleting the model must not remove them.
+            if let bodhan = BodhanModel(rawValue: model), bodhan.localOverride == nil {
                 try removeItemIfPresent(
-                    at: IndicASRModelStore.cacheDirectory(),
+                    at: bodhan.cacheDirectory,
                     fileManager: fileManager
                 )
             }

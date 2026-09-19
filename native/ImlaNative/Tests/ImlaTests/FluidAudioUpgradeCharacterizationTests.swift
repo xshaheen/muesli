@@ -93,7 +93,8 @@ struct FluidAudioUpgradeCharacterizationTests {
             "FluidInference/sensevoice-small-coreml",
             "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
             "phequals/cohere-transcribe-coreml-mixed-precision",
-            "phequals/indic-conformer-600m-multilingual-coreml-rnnt",
+            // IndicASR retired in favour of Bodhan, so its model is deliberately
+            // no longer offered.
         ]
         let present = Set(BackendOption.all.map(\.model))
         for model in expected {

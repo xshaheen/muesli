@@ -116,19 +116,19 @@
   <a href="./" class="back">&larr; freedspeech.xyz</a>
 
   <h1>Privacy Policy</h1>
-  <p class="updated">Last updated: August 11, 2026</p>
+  <p class="updated">Last updated: September 18, 2026</p>
 
   <div class="highlight">
-    <p><strong>Imla is local-first.</strong> Speech-to-text processing runs on your Mac and audio is not sent to a transcription service. Optional hosted cleanup, meeting-note, calendar, update, telemetry, and private iCloud features exchange only the data described below.</p>
+    <p><strong>Imla is local-first.</strong> By default, speech-to-text processing runs on your Mac and audio is not sent to a transcription service. If you explicitly select an optional hosted dictation provider, Imla sends that dictation audio to OpenAI or through OpenRouter to your selected upstream model for transcription. Optional hosted cleanup, meeting-note, calendar, update, telemetry, and private iCloud features exchange only the data described below.</p>
   </div>
 
   <h2>What Imla Does</h2>
-  <p>Imla is a macOS application for dictation and meeting transcription. It uses on-device machine learning models (CoreML / Apple Neural Engine) to convert speech to text entirely on your Mac.</p>
+  <p>Imla is a macOS application for dictation and meeting transcription. It uses on-device machine learning models (CoreML / Apple Neural Engine) to convert speech to text entirely on your Mac by default. Optional OpenAI and OpenRouter dictation providers are available only when you choose and configure them.</p>
 
   <h2>Data That Stays on Your Device</h2>
-  <p>The following data is created and stored locally on your Mac:</p>
+  <p>The following data is created and stored locally on your Mac. It is not transmitted to any external server unless you explicitly enable an optional cloud service described below:</p>
   <ul>
-    <li><strong>Audio recordings</strong> &mdash; microphone and system audio captured during dictation and meetings</li>
+    <li><strong>Audio recordings</strong> &mdash; microphone and system audio captured during dictation and meetings; dictation audio is sent to a hosted service only while you have explicitly selected OpenAI or OpenRouter as the dictation provider</li>
     <li><strong>Transcripts and meeting notes</strong> &mdash; stored in a local SQLite database; text can also be copied to your private iCloud database when text sync is enabled</li>
     <li><strong>Configuration and preferences</strong> &mdash; stored in a local JSON file. Mode definitions &mdash; their names, instructions, activation apps, activation websites and send keys &mdash; and history provenance stay in that local file and are not synced to iCloud.</li>
     <li><strong>Speech-to-text models</strong> &mdash; downloaded once from public model repositories (HuggingFace) and cached locally</li>
@@ -139,6 +139,8 @@
   <p>Imla offers optional integrations that connect to external services. These are opt-in and require explicit user action:</p>
   <ul>
     <li><strong>Hosted dictation cleanup</strong> &mdash; if you select ChatGPT, OpenAI, OpenRouter, or another configured hosted provider, Imla sends the transcript and the locally selected style instructions to that provider. Separately enabled App Context is included only when that setting is on. Mode names, activation apps, and activation websites are not sent merely to select a mode and are not added to telemetry.</li>
+    <li><strong>OpenAI dictation (OpenAI API)</strong> &mdash; if you select OpenAI as your dictation provider and add your own API key, microphone audio is streamed directly to OpenAI's Realtime transcription API. OpenAI's API data controls explain how API data is used, retained, and excluded from model training by default; see <a href="https://platform.openai.com/docs/models/default-usage-policies-by-endpoint">OpenAI's API data-controls documentation</a> for the current retention and data-sharing settings.</li>
+    <li><strong>OpenRouter dictation</strong> &mdash; if you select OpenRouter as your dictation provider, connect an account or key, and choose a transcription model, the completed dictation recording is sent through OpenRouter to that selected upstream model. Processing is governed by OpenRouter's and the selected model provider's policies.</li>
     <li><strong>Meeting summarization (OpenAI API / OpenRouter)</strong> &mdash; if configured, meeting transcripts are sent to the selected API provider to generate summaries. This is governed by the respective provider's privacy policy.</li>
     <li><strong>Meeting summarization (ChatGPT subscription)</strong> &mdash; if you sign in with your ChatGPT account, transcripts are sent to OpenAI's API for summarization using your existing subscription.</li>
     <li><strong>Sparkle update checks</strong> &mdash; disabled in this build. No update feed is configured, so the app makes no update requests at all.</li>
@@ -174,7 +176,7 @@
   <p>Transcript-cleanup debug JSONL is off by default and can be enabled only through Imla's developer environment flags. It is written locally in the app support directory and may contain bounded transcript, cleanup output, App Context, error text, and the selected mode ID and selection source. The file rotates when it exceeds 5 MB. These debug entries are not sent to TelemetryDeck.</p>
 
   <h2>No Personal Data Collection</h2>
-  <p><strong>Imla does not operate a server that stores your transcripts or audio.</strong> Data is transmitted only when you enable or use the optional hosted cleanup, meeting-note, private iCloud text-sync, calendar, update-check, or anonymous telemetry features described above. Local transcription, local cleanup, and local style matching work without sending their content to Imla.</p>
+  <p><strong>Imla does not operate a server that stores your transcripts or audio.</strong> Data is transmitted only when you enable or use the optional hosted dictation, hosted cleanup, meeting-note, private iCloud text-sync, calendar, update-check, or anonymous telemetry features described above. Local transcription, local cleanup, and local style matching work without sending their content to Imla.</p>
 
   <h2>Open Source</h2>
   <p>Imla's source code is publicly available on <a href="https://github.com/xshaheen/muesli">GitHub</a> under the MIT license. You can inspect exactly what the application does with your data.</p>
@@ -189,7 +191,7 @@
   <p>For questions about this privacy policy, open an issue on <a href="https://github.com/xshaheen/muesli/issues">GitHub</a> or reach out to the maintainer via the repository.</p>
 </div>
 
-<footer>muesli &middot; local-first &middot; open source</footer>
+<footer>imla &middot; local-first &middot; open source</footer>
 
 </body>
 </html>

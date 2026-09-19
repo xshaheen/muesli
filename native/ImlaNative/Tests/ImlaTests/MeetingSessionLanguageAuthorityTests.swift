@@ -59,10 +59,10 @@ struct MeetingSessionLanguageAuthorityTests {
             default:
                 return false
             }
-        case "indicasr":
+        case "bodhan":
             switch decision {
             case .pinned(let language), .fixed(let language):
-                return IndicASRLanguage(rawValue: language.rawValue) != nil
+                return BodhanLanguage(rawValue: language.rawValue) != nil
             default:
                 return false
             }

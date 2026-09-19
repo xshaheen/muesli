@@ -30,7 +30,7 @@ struct ConfigStoreTests {
         defer { try? FileManager.default.removeItem(at: store.supportDirectory()) }
         let original = store.load()
 
-        var config = original
+        var config = AppConfig()
         config.openAIAPIKey = "sk-test-roundtrip"
         config.openAIModel = "gpt-5.4-pro"
         config.openRouterAPIKey = "sk-or-test-roundtrip"
@@ -44,7 +44,11 @@ struct ConfigStoreTests {
         let loaded = store.load()
         #expect(loaded.openAIAPIKey == "sk-test-roundtrip")
         #expect(loaded.openAIModel == "gpt-5.4-pro")
-        #expect(loaded.openRouterAPIKey == "sk-or-test-roundtrip")
+        #expect(loaded.openRouterAPIKey.isEmpty)
+        #expect(
+            try OpenRouterCredentialStore(supportDirectory: store.supportDirectory()).load()?.apiKey ==
+                "sk-or-test-roundtrip"
+        )
         #expect(loaded.openRouterModel == "nvidia/nemotron-3-super-120b-a12b:free")
         #expect(loaded.cohereLanguage == CohereTranscribeLanguage.german.rawValue)
         #expect(loaded.whisperLanguage == WhisperKitLanguage.german.rawValue)
@@ -52,11 +56,13 @@ struct ConfigStoreTests {
         #expect(loaded.meetingSummaryBackend == "openrouter")
     }
 
-    @Test("config path is in Application Support")
+    @Test("config path honors the isolated support directory")
     func configPath() {
-        let store = ConfigStore()
+        let supportDirectory = makeSupportDirectory(label: "path")
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+        let store = ConfigStore(supportDirectory: supportDirectory)
         let path = store.configPath().path
-        #expect(path.contains("Application Support"))
+        #expect(path.hasPrefix(supportDirectory.path))
         #expect(path.hasSuffix("config.json"))
     }
 
@@ -282,7 +288,7 @@ struct ConfigStoreTests {
         #expect(reloaded.cohereLanguage == CohereTranscribeLanguage.arabic.rawValue)
         #expect(reloaded.nemotron35Language == Nemotron35Language.arabic.rawValue)
         #expect(reloaded.whisperLanguage == WhisperKitLanguage.arabic.rawValue)
-        #expect(reloaded.indicASRLanguage == IndicASRLanguage.defaultLanguage.rawValue)
+        #expect(reloaded.bodhanLanguage == BodhanLanguage.defaultLanguage.rawValue)
     }
 
     /// AE7: saving the meeting card must leave the dictation authority, the four
@@ -300,7 +306,7 @@ struct ConfigStoreTests {
         )
         seed.languageProfileNeedsConfirmation = true
         seed.cohereLanguage = "de"
-        seed.indicASRLanguage = "hi"
+        seed.bodhanLanguage = "hi"
         seed.whisperLanguage = "de"
         seed.nemotron35Language = "de"
 
@@ -315,7 +321,7 @@ struct ConfigStoreTests {
         #expect(reloaded.dictationLanguageProfile == seed.dictationLanguageProfile)
         #expect(reloaded.languageProfileNeedsConfirmation)
         #expect(reloaded.cohereLanguage == "de")
-        #expect(reloaded.indicASRLanguage == "hi")
+        #expect(reloaded.bodhanLanguage == "hi")
         #expect(reloaded.whisperLanguage == "de")
         #expect(reloaded.nemotron35Language == "de")
     }
@@ -405,5 +411,44 @@ struct ConfigStoreTests {
 
         let attributes = try FileManager.default.attributesOfItem(atPath: store.legacyBackupURL().path)
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+    }
+
+    @Test("legacy migration preserves an existing dedicated credential")
+    func legacyMigrationPreservesExistingCredential() throws {
+        let supportDirectory = makeSupportDirectory(label: "migration-existing")
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+        try FileManager.default.createDirectory(
+            at: supportDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let credentialStore = OpenRouterCredentialStore(supportDirectory: supportDirectory)
+        let existingCredential = OpenRouterCredential(
+            apiKey: "sk-or-new-oauth",
+            userID: "user-new"
+        )
+        try credentialStore.save(existingCredential)
+
+        var staleConfig = AppConfig()
+        staleConfig.openRouterAPIKey = "sk-or-stale-legacy"
+        let configURL = supportDirectory.appendingPathComponent("config.json")
+        try JSONEncoder().encode(staleConfig).write(to: configURL, options: .atomic)
+
+        let loaded = ConfigStore(supportDirectory: supportDirectory).load()
+
+        #expect(loaded.openRouterAPIKey.isEmpty)
+        #expect(try credentialStore.load() == existingCredential)
+        let persistedConfig = try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data(contentsOf: configURL)
+        )
+        #expect(persistedConfig.openRouterAPIKey.isEmpty)
+    }
+
+    private func makeSupportDirectory(label: String) -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(
+            "imla-config-\(label)-\(UUID().uuidString)",
+            isDirectory: true
+        )
     }
 }

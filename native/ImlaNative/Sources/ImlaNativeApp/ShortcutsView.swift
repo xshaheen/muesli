@@ -5,6 +5,7 @@ import ImlaCore
 struct ShortcutsView: View {
     let appState: AppState
     let controller: ImlaController
+    @State private var permissionMonitoringClientID = UUID()
     @State private var recordingTarget: ShortcutTarget?
     @State private var eventMonitor: Any?
     @State private var pendingModifierKeyCode: UInt16?
@@ -38,9 +39,30 @@ struct ShortcutsView: View {
             .padding(.bottom, ImlaTheme.spacing32)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .onAppear {
+            controller.beginInteractionPermissionMonitoring(clientID: permissionMonitoringClientID)
+            reconcilePushToTalkState()
+            reconcileIndependentShortcutState()
+        }
+        .onChange(of: appState.interactionPermissionSnapshot) { _, snapshot in
+            guard let snapshot else { return }
+            reconcilePushToTalkState(permissions: snapshot.onboardingSnapshot)
+            reconcileIndependentShortcutState()
+        }
         .onDisappear {
+            controller.endInteractionPermissionMonitoring(clientID: permissionMonitoringClientID)
             stopRecording()
         }
+    }
+
+    private var isPushToTalkEnabled: Bool {
+        appState.config.enablePushToTalk
+    }
+
+    private var pushToTalkPermissionMessage: String {
+        PushToTalkEnablementPolicy.PermissionProfile.resolved(
+            for: appState.config.resolvedOnboardingUseCase
+        ).missingPermissionsMessage
     }
 
     private enum ShortcutTarget {
@@ -62,17 +84,27 @@ struct ShortcutsView: View {
                         .foregroundStyle(ImlaTheme.textSecondary)
                 }
                 Spacer()
-                hotkeyBadge(appState.config.dictationHotkey)
+                HStack(spacing: ImlaTheme.spacing8) {
+                    Text(isPushToTalkEnabled ? "On" : "Off")
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(ImlaTheme.textSecondary)
+                    Toggle("Push to Talk", isOn: Binding(
+                        get: { isPushToTalkEnabled },
+                        set: updatePushToTalkEnabled
+                    ))
+                    .toggleStyle(.switch)
+                    .tint(ImlaTheme.accent)
+                    .labelsHidden()
+                }
             }
 
             Divider()
                 .background(ImlaTheme.surfaceBorder)
 
-            shortcutControls(
-                target: .dictation,
-                threshold: appState.config.hotkeyTriggerThresholdMS
-            ) { value in
-                controller.updateConfig { $0.hotkeyTriggerThresholdMS = value }
+            pushToTalkControls
+
+            if !isPushToTalkEnabled {
+                pushToTalkDisabledMessage
             }
 
             if let dictationShortcutMessage {
@@ -269,7 +301,7 @@ struct ShortcutsView: View {
     ) -> some View {
         HStack(spacing: ImlaTheme.spacing12) {
             hotkeyBadge(hotkey(for: target))
-            changeButton(for: target)
+            compactChangeButton(for: target)
                 .disabled(!isEnabled)
                 .opacity(isEnabled ? 1 : 0.55)
             Spacer(minLength: ImlaTheme.spacing16)
@@ -280,6 +312,25 @@ struct ShortcutsView: View {
                 )
             }
         }
+    }
+
+    private var pushToTalkControls: some View {
+        HStack(spacing: ImlaTheme.spacing12) {
+            Text("Shortcut")
+                .font(ImlaTheme.caption())
+                .foregroundStyle(ImlaTheme.textSecondary)
+            hotkeyBadge(appState.config.dictationHotkey)
+            compactChangeButton(for: .dictation)
+            Spacer(minLength: ImlaTheme.spacing16)
+            thresholdInput(
+                value: appState.config.hotkeyTriggerThresholdMS,
+                label: "Hold duration"
+            ) { value in
+                controller.updateConfig { $0.hotkeyTriggerThresholdMS = value }
+            }
+        }
+        .disabled(!isPushToTalkEnabled)
+        .opacity(isPushToTalkEnabled ? 1 : 0.55)
     }
 
     private func hotkey(for target: ShortcutTarget) -> HotkeyConfig {
@@ -295,9 +346,13 @@ struct ShortcutsView: View {
         }
     }
 
-    private func thresholdInput(value: Int, onChange: @escaping (Int) -> Void) -> some View {
+    private func thresholdInput(
+        value: Int,
+        label: String = "Hold",
+        onChange: @escaping (Int) -> Void
+    ) -> some View {
         HStack(spacing: ImlaTheme.spacing8) {
-            Text("Hold")
+            Text(label)
                 .font(ImlaTheme.caption())
                 .foregroundStyle(ImlaTheme.textSecondary)
 
@@ -330,13 +385,29 @@ struct ShortcutsView: View {
         .help("Hold threshold: \(HotkeyTriggerTiming.minThresholdMilliseconds)-\(HotkeyTriggerTiming.maxThresholdMilliseconds) ms")
     }
 
+    private var pushToTalkDisabledMessage: some View {
+        HStack(spacing: ImlaTheme.spacing8) {
+            Image(systemName: "info.circle")
+                .foregroundStyle(ImlaTheme.accent)
+            Text(pushToTalkDisabledMessageText)
+                .font(ImlaTheme.caption())
+                .foregroundStyle(ImlaTheme.textSecondary)
+        }
+    }
+
+    private var pushToTalkDisabledMessageText: String {
+        appState.config.resolvedOnboardingUseCase.includesPushToTalk
+            ? "Push to Talk is turned off."
+            : "Dictation wasn’t enabled during setup."
+    }
+
     private func shortcutMessage(_ message: String) -> some View {
         Text(message)
             .font(ImlaTheme.caption())
             .foregroundStyle(ImlaTheme.transcribing)
     }
 
-    private func changeButton(for target: ShortcutTarget) -> some View {
+    private func compactChangeButton(for target: ShortcutTarget) -> some View {
         Button {
             if recordingTarget == target {
                 stopRecording()
@@ -344,9 +415,9 @@ struct ShortcutsView: View {
                 startRecording(target)
             }
         } label: {
-            Text(recordingTarget == target ? recordingPrompt(for: target) : "Change Shortcut")
+            Text(recordingTarget == target ? recordingPrompt(for: target) : "Change…")
                 .font(ImlaTheme.body())
-                .foregroundStyle(recordingTarget == target ? ImlaTheme.accent : ImlaTheme.textPrimary)
+                .foregroundStyle(ImlaTheme.accent)
         }
         .buttonStyle(.plain)
         .padding(.horizontal, ImlaTheme.spacing12)
@@ -357,6 +428,67 @@ struct ShortcutsView: View {
             RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
                 .strokeBorder(recordingTarget == target ? ImlaTheme.accent.opacity(0.3) : ImlaTheme.surfaceBorder, lineWidth: 1)
         )
+    }
+
+    private func updatePushToTalkEnabled(_ enabled: Bool) {
+        if !enabled, recordingTarget == .dictation {
+            stopRecording()
+        }
+        let result = controller.updatePushToTalkEnabled(enabled, requestPermissions: enabled)
+        switch result {
+        case .alreadyEnabled, .enabled, .disabled:
+            dictationShortcutMessage = nil
+        case .needsPermissions:
+            dictationShortcutMessage = pushToTalkPermissionMessage
+        }
+    }
+
+    private func reconcilePushToTalkState(
+        permissions: OnboardingPermissionSnapshot? = nil
+    ) {
+        if let result = controller.reconcilePendingPushToTalkEnableIfReady(permissions: permissions) {
+            switch result {
+            case .alreadyEnabled, .enabled, .disabled:
+                dictationShortcutMessage = nil
+            case .needsPermissions:
+                dictationShortcutMessage = pushToTalkPermissionMessage
+            }
+            return
+        }
+
+        guard isPushToTalkEnabled, let permissions else { return }
+        let profile = PushToTalkEnablementPolicy.PermissionProfile.resolved(
+            for: appState.config.resolvedOnboardingUseCase
+        )
+        if profile.hasRequiredPermissions(permissions) {
+            if dictationShortcutMessage == profile.missingPermissionsMessage {
+                dictationShortcutMessage = nil
+            }
+        } else if dictationShortcutMessage == nil
+                    || dictationShortcutMessage == profile.missingPermissionsMessage {
+            dictationShortcutMessage = profile.missingPermissionsMessage
+        }
+    }
+
+    private func reconcileIndependentShortcutState() {
+        let permissionMessage = ShortcutFeatureEnablementPolicy.missingPermissionsMessage
+        let computerUsePermissionMessage = controller.independentShortcutPermissionMessageIfNeeded(
+            isEnabled: appState.config.enableComputerUseHotkey
+        )
+        if let computerUsePermissionMessage {
+            computerUseShortcutMessage = computerUsePermissionMessage
+        } else if computerUseShortcutMessage == permissionMessage {
+            computerUseShortcutMessage = nil
+        }
+
+        let quilPermissionMessage = controller.independentShortcutPermissionMessageIfNeeded(
+            isEnabled: appState.config.enableQuilMode
+        )
+        if let quilPermissionMessage {
+            quilShortcutMessage = quilPermissionMessage
+        } else if quilShortcutMessage == permissionMessage {
+            quilShortcutMessage = nil
+        }
     }
 
     private func recordingPrompt(for target: ShortcutTarget) -> String {

@@ -6,6 +6,11 @@ import Testing
 @Suite("MeetingNeuralAec")
 struct MeetingNeuralAecTests {
 
+    @Test("LocalVQE defaults to one inference thread")
+    func localVQEDefaultsToOneInferenceThread() {
+        #expect(LocalVQEAudioProcessor.defaultThreadCount == 1)
+    }
+
     @Test("bundle candidates prefer Contents/Resources in packaged apps")
     func candidateURLsPreferResourceDirectory() throws {
         let fixture = try makeTemporaryAppBundle()
@@ -150,7 +155,7 @@ struct MeetingNeuralAecTests {
         var error = [CChar](repeating: 0, count: 512)
         let context = imla_localvqe_create(
             modelURL.path,
-            "/tmp/muesli-missing-localvqe-\(UUID().uuidString).dylib",
+            "/tmp/imla-missing-localvqe-\(UUID().uuidString).dylib",
             2,
             &error,
             Int32(error.count)

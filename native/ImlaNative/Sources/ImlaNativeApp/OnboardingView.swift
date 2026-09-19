@@ -17,6 +17,15 @@ struct OnboardingView: View {
     @State private var isSigningInChatGPT = false
     @State private var chatGPTSignInDone = false
     @State private var chatGPTSignInError: String?
+    @State private var isSigningInOpenRouter = false
+    @State private var openRouterSignInDone = false
+    @State private var openRouterSignInError: String?
+    @State private var isEnteringOpenRouterAPIKey = false
+    // This fork keeps direct Google Calendar sign-in, which upstream dropped in
+    // favour of EventKit alone.
+    @State private var isSigningInGoogleCal = false
+    @State private var googleCalSignInDone = false
+    @State private var googleCalSignInError: String?
 
     // Permission states — polled from OS every second
     @State private var micGranted = false
@@ -28,6 +37,10 @@ struct OnboardingView: View {
     @State private var grantingPermissionName: String?
     @State private var nativePermissionPromptName: String?
     @State private var recentlyGrantedPermissionName: String?
+    @State private var permissionAdvanceTask: Task<Void, Never>?
+    @State private var permissionAdvanceGeneration: UUID?
+    @State private var hasCompletedPermissionsStep: Bool
+    @State private var selectionBeforeEverything: OnboardingUseCase?
 
     // Hotkey recorder
     @State private var selectedHotkey: HotkeyConfig
@@ -55,14 +68,17 @@ struct OnboardingView: View {
     @State private var modelReadyIndicatorBackend: BackendOption?
     @State private var modelReadyIndicatorTask: Task<Void, Never>?
 
-    // Google Calendar
-    @State private var isSigningInGoogleCal = false
-    @State private var googleCalSignInDone = false
-    @State private var googleCalSignInError: String?
     @State private var hasFinishedOnboarding = false
 
     static let permissionsStep = OnboardingFlow.Step.permissions.rawValue
     static let dictationTestStep = OnboardingFlow.dictationTestStep
+    private static let bundledImlaLogo: NSImage = {
+        if let url = Bundle.main.url(forResource: "imla_app_icon", withExtension: "png"),
+           let image = NSImage(contentsOf: url) {
+            return image
+        }
+        return NSApplication.shared.applicationIconImage
+    }()
 
     private var orderedSteps: [Int] {
         OnboardingFlow.orderedSteps(for: selectedUseCase)
@@ -87,10 +103,7 @@ struct OnboardingView: View {
     }
 
     private var onboardingModelDescription: String {
-        if BackendOption.onboardingDefault == .appleSpeechAnalyzer {
-            return "Use Apple Speech, or choose another local model to download while you continue setup."
-        }
-        return "Start with a fast local model. Larger models can download while you continue setup."
+        "Start with a fast local model. Larger models can download while you continue setup."
     }
 
     init(
@@ -128,22 +141,29 @@ struct OnboardingView: View {
             permissions: initialPermissions,
             useCase: initialUseCase,
             permissionsStep: Self.permissionsStep,
-            dictationTestStep: Self.dictationTestStep
+            dictationTestStep: Self.dictationTestStep,
+            useCoreAudioTap: appState.config.useCoreAudioTap
         )
-        let effectiveInitialStep = OnboardingFlow.normalizedStep(permissionGatedInitialStep, for: initialUseCase)
+        let sanitizedInitialBackend = BackendOption.resolvedOnboardingBackend(initialBackend)
+        let modelGatedInitialStep = OnboardingFlow.modelGatedResumeStep(
+            requestedStep: permissionGatedInitialStep,
+            initialBackend: initialBackend,
+            resolvedBackend: sanitizedInitialBackend
+        )
+        let effectiveInitialStep = OnboardingFlow.normalizedStep(modelGatedInitialStep, for: initialUseCase)
 
         _currentStep = State(initialValue: effectiveInitialStep)
+        _hasCompletedPermissionsStep = State(initialValue: OnboardingFlow.hasCompletedPermissionsStep(
+            resumingAt: effectiveInitialStep
+        ))
         _userName = State(initialValue: initialUserName)
         _selectedUseCase = State(initialValue: initialUseCase)
-        let sanitizedInitialBackend = BackendOption.onboarding.contains(initialBackend)
-            ? initialBackend
-            : BackendOption.onboardingDefault
         _selectedBackend = State(initialValue: sanitizedInitialBackend)
         _selectedCohereLanguage = State(initialValue: initialCohereLanguage)
         _selectedHotkey = State(initialValue: initialHotkey)
         _summaryBackend = State(initialValue: initialSummaryBackend)
-        _modelDownloadProgress = State(initialValue: initialModelDownloadProgress)
-        _modelDownloadStatus = State(initialValue: initialModelDownloadStatus)
+        _modelDownloadProgress = State(initialValue: sanitizedInitialBackend == initialBackend ? initialModelDownloadProgress : nil)
+        _modelDownloadStatus = State(initialValue: sanitizedInitialBackend == initialBackend ? initialModelDownloadStatus : nil)
         _micGranted = State(initialValue: initialMicGranted)
         _accessibilityGranted = State(initialValue: initialAccessibilityGranted)
         _inputMonitoringGranted = State(initialValue: initialInputMonitoringGranted)
@@ -161,7 +181,7 @@ struct OnboardingView: View {
                 case 3: permissionsStep
                 case 4: dictationTestStep
                 case 5: meetingSummaryStep
-                case 6: googleCalendarStep
+                case 6: calendarAccessStep
                 default: EmptyView()
                 }
             }
@@ -216,7 +236,10 @@ struct OnboardingView: View {
         .onChange(of: userName) { _, _ in
             saveProgress(atStep: currentStep)
         }
-        .onChange(of: selectedUseCase) { _, _ in
+        .onChange(of: selectedUseCase) { previousUseCase, newUseCase in
+            if previousUseCase != newUseCase {
+                hasCompletedPermissionsStep = false
+            }
             if !orderedSteps.contains(currentStep) {
                 currentStep = OnboardingFlow.normalizedStep(currentStep, for: selectedUseCase)
             }
@@ -255,7 +278,7 @@ struct OnboardingView: View {
                 goToNextStep()
             }
         case 1:
-            onboardingButton(selectedBackend.isDownloaded ? "Continue" : "Download & Continue", enabled: true) {
+            onboardingButton(selectedBackend.isDownloaded ? "Continue" : "Download & Continue", enabled: selectedBackend.isCompatible()) {
                 startDownload()
             }
         case 2:
@@ -264,13 +287,7 @@ struct OnboardingView: View {
             }
         case 3:
             onboardingButton(currentStepIndex == orderedSteps.count - 1 ? "Finish" : "Continue", enabled: requiredPermissionsGranted) {
-                if selectedUseCase.includesPushToTalk {
-                    saveProgressAndRestart()
-                } else if currentStepIndex == orderedSteps.count - 1 {
-                    finishOnboarding(withKey: false)
-                } else {
-                    goToNextStep()
-                }
+                advancePastPermissions()
             }
         case 4:
             if dictationTestResult != nil {
@@ -302,13 +319,11 @@ struct OnboardingView: View {
         case 5:
             HStack(spacing: ImlaTheme.spacing12) {
                 skipButton { goToNextStep() }
-                onboardingButton("Continue", enabled: true) {
-                    goToNextStep()
-                }
+                onboardingButton("Continue", enabled: true) { goToNextStep() }
             }
         case 6:
             HStack(spacing: ImlaTheme.spacing12) {
-                skipButton { finishOnboarding(withKey: true) }
+                skipButton("Not now") { finishOnboarding(withKey: true) }
                 onboardingButton("Finish", enabled: true) {
                     finishOnboarding(withKey: true)
                 }
@@ -348,8 +363,8 @@ struct OnboardingView: View {
     }
 
     @ViewBuilder
-    private func skipButton(action: @escaping () -> Void) -> some View {
-        Button("Skip", action: action)
+    private func skipButton(_ title: String = "Skip", action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
             .buttonStyle(.plain)
             .font(ImlaTheme.body())
             .foregroundStyle(ImlaTheme.textSecondary)
@@ -517,7 +532,7 @@ struct OnboardingView: View {
     private var dictationTestSubtitle: AttributedString {
         let markdown: String
         if isSelectedModelReadyForDictationTest {
-            markdown = selectedUseCase.includesVoiceNotes
+            markdown = selectedUseCase.includesVoiceNotes && !selectedUseCase.includesDictation
                 ? "Hold **\(selectedHotkey.label)** to record a voice note, then release.\nYour words should appear below."
                 : "Hold **\(selectedHotkey.label)** and say something, then release.\nYour words should appear below."
         } else {
@@ -527,7 +542,9 @@ struct OnboardingView: View {
     }
 
     private var dictationTestPreparationSubtitleMarkdown: String {
-        let unlockCopy = selectedUseCase.includesVoiceNotes ? "Voice note test" : "Dictation"
+        let unlockCopy = selectedUseCase.includesVoiceNotes && !selectedUseCase.includesDictation
+            ? "Voice note test"
+            : "Dictation"
         if isModelPreparingAfterDownload {
             return "Optimizing **\(selectedBackend.label)** for this Mac.\n\(unlockCopy) will unlock when it is ready."
         }
@@ -556,9 +573,12 @@ struct OnboardingView: View {
         VStack(spacing: ImlaTheme.spacing16) {
             Spacer()
 
-            MWaveformIcon(barCount: 13, spacing: 3)
-                .foregroundStyle(ImlaTheme.accent)
-                .frame(width: 80, height: 48)
+            Image(nsImage: Self.bundledImlaLogo)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 64, height: 64)
+                .accessibilityLabel("Imla")
 
             VStack(spacing: ImlaTheme.spacing8) {
                 Text("Welcome to Imla")
@@ -599,36 +619,36 @@ struct OnboardingView: View {
                         icon: "waveform",
                         title: "Voice Notes",
                         subtitle: "Record in Imla",
-                        selected: selectedUseCase == .voiceNotes
+                        selected: selectedUseCase.includesVoiceNotes
                     ) {
-                        selectedUseCase = .voiceNotes
+                        toggleCapability(.voiceNotes)
                     }
 
                     useCaseCard(
                         icon: "keyboard.fill",
                         title: "Dictation",
                         subtitle: "Paste into apps",
-                        selected: selectedUseCase == .dictation
+                        selected: selectedUseCase.includesDictation
                     ) {
-                        selectedUseCase = .dictation
+                        toggleCapability(.dictation)
                     }
 
                     useCaseCard(
                         icon: "person.2.fill",
                         title: "Meetings",
                         subtitle: "Notes and summaries",
-                        selected: selectedUseCase == .meetings
+                        selected: selectedUseCase.includesMeetings
                     ) {
-                        selectedUseCase = .meetings
+                        toggleCapability(.meetings)
                     }
 
                     useCaseCard(
                         icon: "rectangle.3.group.fill",
                         title: "Everything",
-                        subtitle: "Dictation + meetings",
-                        selected: selectedUseCase == .dictationAndMeetings
+                        subtitle: "All workflows",
+                        selected: selectedUseCase == .everything
                     ) {
-                        selectedUseCase = .dictationAndMeetings
+                        toggleEverything()
                     }
                 }
             }
@@ -665,8 +685,18 @@ struct OnboardingView: View {
                 RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
                     .strokeBorder(selected ? ImlaTheme.accent : ImlaTheme.surfaceBorder, lineWidth: 1)
             )
+            .overlay(alignment: .topLeading) {
+                if selected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(7)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
         }
         .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.18), value: selected)
     }
 
     // MARK: - Step 2: Model Selection
@@ -761,7 +791,9 @@ struct OnboardingView: View {
 
     private func modelCard(option: BackendOption) -> some View {
         let isSelected = selectedBackend == option
+        let incompatibilityReason = option.incompatibilityReason()
         return Button {
+            guard option.isCompatible() else { return }
             selectedBackend = option
         } label: {
             HStack(spacing: ImlaTheme.spacing12) {
@@ -777,7 +809,7 @@ struct OnboardingView: View {
                     HStack(spacing: 6) {
                         Text(option.label)
                             .font(ImlaTheme.headline())
-                            .foregroundStyle(ImlaTheme.textPrimary)
+                            .foregroundStyle(incompatibilityReason == nil ? ImlaTheme.textPrimary : ImlaTheme.textTertiary)
                         if option == BackendOption.onboardingDefault {
                             Text("Recommended")
                                 .font(ImlaTheme.font(size: 9, weight: .semibold))
@@ -793,7 +825,12 @@ struct OnboardingView: View {
                     }
                     Text(option.description)
                         .font(ImlaTheme.caption())
-                        .foregroundStyle(ImlaTheme.textSecondary)
+                        .foregroundStyle(incompatibilityReason == nil ? ImlaTheme.textSecondary : ImlaTheme.textTertiary)
+                    if let incompatibilityReason {
+                        Label(incompatibilityReason, systemImage: "exclamationmark.triangle")
+                            .font(ImlaTheme.caption())
+                            .foregroundStyle(ImlaTheme.textTertiary)
+                    }
                 }
 
                 Spacer()
@@ -807,13 +844,16 @@ struct OnboardingView: View {
             )
         }
         .buttonStyle(.plain)
+        .disabled(incompatibilityReason != nil)
+        .help(incompatibilityReason ?? option.label)
     }
 
     // MARK: - Step 3: Permissions (sequential, one at a time)
 
     /// The ordered list of permissions to grant during onboarding.
-    /// Keep this to the core dictation path so first-run setup gets to a
-    /// successful transcription before meeting-specific permissions appear.
+    /// Request the permission union for the capabilities selected during setup.
+    /// Screen Recording remains optional because it enriches meeting context but
+    /// is not required to capture the meeting's audio.
     private var permissionSteps: [(icon: String, name: String, description: String, granted: Bool, action: () -> Void)] {
         var steps: [(String, String, String, Bool, () -> Void)] = [
             ("mic.fill", "Microphone", "Record audio for voice notes, dictation, and meetings", micGranted, {
@@ -828,11 +868,46 @@ struct OnboardingView: View {
             }
             steps += [
             ("keyboard.fill", "Input Monitoring", "Detect hotkey for push-to-talk recording", inputMonitoringGranted, {
+                self.controller.beginSystemPermissionGuide(for: .inputMonitoring)
                 if !CGRequestListenEventAccess() {
-                    self.openSystemSettings("Privacy_ListenEvent")
+                    self.openSystemSettings(
+                        "Privacy_ListenEvent",
+                        yieldBehavior: OnboardingSystemSettingsYieldPolicy.behavior(for: .inputMonitoring)
+                    )
                 }
             }),
             ]
+        }
+        if selectedUseCase.includesMeetings {
+            if appState.config.useCoreAudioTap {
+                steps.append((
+                    "speaker.wave.2.fill",
+                    "System Audio",
+                    "Capture meeting audio from other participants",
+                    systemAudioGranted,
+                    {
+                        Task {
+                            let granted = await CoreAudioSystemRecorder.requestSystemAudioAccess()
+                            await MainActor.run {
+                                self.systemAudioGranted = granted
+                                if granted {
+                                    self.notePermissionGranted("System Audio")
+                                } else {
+                                    self.saveProgress(atStep: self.currentStep)
+                                }
+                            }
+                        }
+                    }
+                ))
+            } else {
+                steps.append((
+                    "rectangle.dashed.badge.record",
+                    "Screen & System Audio",
+                    "Capture meeting audio from other participants",
+                    screenRecordingGranted,
+                    { CGRequestScreenCaptureAccess() }
+                ))
+            }
         }
         return steps
     }
@@ -982,8 +1057,22 @@ struct OnboardingView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity)
-        .onAppear { startPermissionPolling() }
-        .onDisappear { stopPermissionPolling() }
+        .onAppear {
+            startPermissionPolling()
+            schedulePermissionAdvanceIfReady()
+        }
+        .onChange(of: requiredPermissionsGranted) { _, granted in
+            if granted {
+                schedulePermissionAdvanceIfReady()
+            } else {
+                cancelScheduledPermissionAdvance()
+            }
+        }
+        .onDisappear {
+            cancelScheduledPermissionAdvance()
+            stopPermissionPolling()
+            controller.dismissSystemPermissionGuide()
+        }
     }
 
     private func permissionButtonTitle(for permissionName: String, isConfirmingGrant: Bool) -> String {
@@ -999,6 +1088,7 @@ struct OnboardingView: View {
 
     private func requestAccessibilityPermission() {
         nativePermissionPromptName = "Accessibility"
+        controller.beginSystemPermissionGuide(for: .accessibility)
         controller.prepareOnboardingForNativePermissionPrompt()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
@@ -1018,8 +1108,9 @@ struct OnboardingView: View {
         grantingPermissionName = nil
         nativePermissionPromptName = nil
         recentlyGrantedPermissionName = nil
-        selectedUseCase = .voiceNotes
-        currentStep = OnboardingFlow.normalizedStep(currentStep, for: .voiceNotes)
+        controller.dismissSystemPermissionGuide()
+        selectedUseCase = selectedUseCase.replacingDictationWithVoiceNotes
+        currentStep = OnboardingFlow.normalizedStep(currentStep, for: selectedUseCase)
         saveProgress(atStep: currentStep)
     }
 
@@ -1030,6 +1121,7 @@ struct OnboardingView: View {
         case "Microphone": return "Privacy_Microphone"
         case "Accessibility": return "Privacy_Accessibility"
         case "Input Monitoring": return "Privacy_ListenEvent"
+        case "System Audio", "Screen & System Audio": return "Privacy_ScreenCapture"
         default: return "Privacy_Microphone"
         }
     }
@@ -1094,7 +1186,8 @@ struct OnboardingView: View {
                 systemAudio: systemAudioGranted,
                 screenRecording: screenRecordingGranted
             ),
-            for: selectedUseCase
+            for: selectedUseCase,
+            useCoreAudioTap: appState.config.useCoreAudioTap
         )
     }
 
@@ -1111,6 +1204,81 @@ struct OnboardingView: View {
     private func stopPermissionPolling() {
         permissionPollTimer?.invalidate()
         permissionPollTimer = nil
+    }
+
+    private func schedulePermissionAdvanceIfReady() {
+        guard OnboardingFlow.shouldSchedulePermissionAdvance(
+            currentStep: currentStep,
+            requiredPermissionsGranted: requiredPermissionsGranted,
+            hasCompletedPermissionsStep: hasCompletedPermissionsStep,
+            hasScheduledTask: permissionAdvanceTask != nil
+        ) else { return }
+
+        let generation = UUID()
+        permissionAdvanceGeneration = generation
+        permissionAdvanceTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard permissionAdvanceGeneration == generation, !Task.isCancelled else { return }
+            guard currentStep == Self.permissionsStep, requiredPermissionsGranted else {
+                permissionAdvanceGeneration = nil
+                permissionAdvanceTask = nil
+                return
+            }
+
+            permissionAdvanceGeneration = nil
+            permissionAdvanceTask = nil
+            advancePastPermissions()
+        }
+    }
+
+    private func cancelScheduledPermissionAdvance() {
+        permissionAdvanceGeneration = nil
+        permissionAdvanceTask?.cancel()
+        permissionAdvanceTask = nil
+    }
+
+    private func advancePastPermissions() {
+        cancelScheduledPermissionAdvance()
+        controller.dismissSystemPermissionGuide()
+        let action = OnboardingFlow.permissionAdvanceAction(
+            for: selectedUseCase,
+            currentStepIndex: currentStepIndex,
+            orderedStepCount: orderedSteps.count,
+            hasCompletedPermissionsStep: hasCompletedPermissionsStep
+        )
+        hasCompletedPermissionsStep = true
+        switch action {
+        case .restartForDictationTest:
+            saveProgressAndRestart()
+        case .finish:
+            finishOnboarding(withKey: false)
+        case .next:
+            goToNextStep()
+        }
+    }
+
+    private func toggleCapability(_ capability: OnboardingCapability) {
+        applyUseCaseSelection(OnboardingFlow.toggling(
+            capability,
+            in: OnboardingFlow.UseCaseSelectionState(
+                selectedUseCase: selectedUseCase,
+                selectionBeforeEverything: selectionBeforeEverything
+            )
+        ))
+    }
+
+    private func toggleEverything() {
+        applyUseCaseSelection(OnboardingFlow.togglingEverything(
+            in: OnboardingFlow.UseCaseSelectionState(
+                selectedUseCase: selectedUseCase,
+                selectionBeforeEverything: selectionBeforeEverything
+            )
+        ))
+    }
+
+    private func applyUseCaseSelection(_ state: OnboardingFlow.UseCaseSelectionState) {
+        selectedUseCase = state.selectedUseCase
+        selectionBeforeEverything = state.selectionBeforeEverything
     }
 
     private func refreshPermissions() {
@@ -1132,6 +1300,10 @@ struct OnboardingView: View {
             return accessibilityGranted
         case "Input Monitoring":
             return inputMonitoringGranted
+        case "System Audio":
+            return systemAudioGranted
+        case "Screen & System Audio":
+            return screenRecordingGranted
         default:
             return false
         }
@@ -1140,6 +1312,9 @@ struct OnboardingView: View {
     @MainActor
     private func notePermissionGranted(_ permissionName: String) {
         guard recentlyGrantedPermissionName != permissionName else { return }
+        if PermissionDragGuidePermission(permissionName: permissionName) != nil {
+            controller.dismissSystemPermissionGuide()
+        }
         grantingPermissionName = nil
         nativePermissionPromptName = nil
         recentlyGrantedPermissionName = permissionName
@@ -1181,19 +1356,32 @@ struct OnboardingView: View {
 
     private func openSystemSettingsForPermission(at permissionIndex: Int) {
         let steps = permissionSteps
+        var guidePermission: PermissionDragGuidePermission?
         if permissionIndex < steps.count {
-            grantingPermissionName = steps[permissionIndex].name
+            let permissionName = steps[permissionIndex].name
+            grantingPermissionName = permissionName
             nativePermissionPromptName = nil
             recentlyGrantedPermissionName = nil
             saveProgress(atStep: currentStep)
+            guidePermission = PermissionDragGuidePermission(permissionName: permissionName)
+            if let guidePermission {
+                controller.beginSystemPermissionGuide(for: guidePermission)
+            }
         }
-        openSystemSettings(systemSettingsPane(for: permissionIndex))
+        openSystemSettings(
+            systemSettingsPane(for: permissionIndex),
+            yieldBehavior: OnboardingSystemSettingsYieldPolicy.behavior(for: guidePermission)
+        )
     }
 
-    private func openSystemSettings(_ pane: String) {
+    private func openSystemSettings(
+        _ pane: String,
+        yieldBehavior: OnboardingSystemSettingsYieldBehavior
+    ) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
-            controller.yieldOnboardingFocusToSystemSettings()
-            NSWorkspace.shared.open(url)
+            if NSWorkspace.shared.open(url) {
+                controller.yieldOnboardingFocusToSystemSettings(using: yieldBehavior)
+            }
         }
     }
 
@@ -1292,7 +1480,7 @@ struct OnboardingView: View {
             Spacer()
 
             VStack(spacing: ImlaTheme.spacing8) {
-                Text(selectedUseCase.includesVoiceNotes ? "Test Voice Note" : "Test Dictation")
+                Text(selectedUseCase.includesVoiceNotes && !selectedUseCase.includesDictation ? "Test Voice Note" : "Test Dictation")
                     .font(ImlaTheme.title1())
                     .foregroundStyle(ImlaTheme.textPrimary)
 
@@ -1419,6 +1607,9 @@ struct OnboardingView: View {
                 withAnimation { isDictationTesting = true }
                 dictationTestError = nil
             }
+            controller.dictationTestRecordingStopped = {
+                withAnimation { isDictationTesting = false }
+            }
             controller.dictationTestCallback = { text in
                 if text.isEmpty {
                     dictationTestError = "No speech detected. Try again."
@@ -1438,11 +1629,7 @@ struct OnboardingView: View {
             // Cancel any in-flight recording before clearing callbacks to prevent
             // the transcription Task from falling through to the production paste path
             Task { await controller.cancelTestDictation() }
-            controller.dictationTestCallback = nil
-            controller.dictationTestFailureCallback = nil
-            controller.dictationTestRecordingStarted = nil
-            controller.dictationTestBackend = nil
-            controller.dictationTestCohereLanguage = nil
+            controller.clearDictationTestLifecycle()
             // Stop the test monitor while moving through onboarding, but leave the
             // production monitor running when finishing from the dictation test.
             if !hasFinishedOnboarding {
@@ -1463,7 +1650,10 @@ struct OnboardingView: View {
                     .font(ImlaTheme.title1())
                     .foregroundStyle(ImlaTheme.textPrimary)
 
-                Text("Connect an LLM provider to get AI-powered meeting notes.\nYou can set this up later in Settings.")
+                Text(
+                    "Connect an LLM provider for AI-powered meeting notes.\n"
+                        + "Remote summaries may send transcripts, notes, screen context, and participant names off-device."
+                )
                     .font(ImlaTheme.body())
                     .foregroundStyle(ImlaTheme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -1574,13 +1764,84 @@ struct OnboardingView: View {
                             .foregroundStyle(ImlaTheme.success)
                     }
                 }
-            } else {
-                if summaryBackend == .openRouter {
-                    Text("OpenRouter supports many model providers through one API key.")
-                        .font(ImlaTheme.caption())
-                        .foregroundStyle(ImlaTheme.textTertiary)
-                }
+            } else if summaryBackend == .openRouter {
+                Text("Connect OpenRouter in your browser. Imla receives a dedicated API key after you approve access.")
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                    .multilineTextAlignment(.center)
 
+                if appState.isOpenRouterAuthenticated || openRouterSignInDone {
+                    HStack(spacing: 6) {
+                        Image(systemName: "network")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("OpenRouter connected")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(ImlaTheme.success)
+                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall))
+                } else if isSigningInOpenRouter {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Connecting...")
+                            .font(.system(size: 12))
+                            .foregroundStyle(ImlaTheme.textSecondary)
+                    }
+                } else {
+                    Button {
+                        isSigningInOpenRouter = true
+                        openRouterSignInError = nil
+                        apiKey = ""
+                        isEnteringOpenRouterAPIKey = false
+                        Task {
+                            let error = await controller.signInWithOpenRouter()
+                            isSigningInOpenRouter = false
+                            openRouterSignInDone = OpenRouterAuthManager.shared.isAuthenticated
+                            openRouterSignInError = error
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "network")
+                                .font(.system(size: 13, weight: .semibold))
+                            Text("Connect OpenRouter")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(ImlaTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(isEnteringOpenRouterAPIKey ? "Cancel manual key" : "Enter API key manually") {
+                        isEnteringOpenRouterAPIKey.toggle()
+                        apiKey = ""
+                        openRouterSignInError = nil
+                    }
+                    .buttonStyle(.link)
+                    .font(.system(size: 11))
+
+                    if isEnteringOpenRouterAPIKey {
+                        PastableSecureField(
+                            text: apiKey,
+                            placeholder: "sk-or-...",
+                            onChange: { apiKey = $0 }
+                        )
+                        .frame(width: 320, height: 28)
+                    }
+
+                    if let openRouterSignInError {
+                        Text(openRouterSignInError)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.red)
+                            .lineLimit(2)
+                    }
+                }
+            } else {
                 VStack(alignment: .leading, spacing: ImlaTheme.spacing8) {
                     Text("API Key")
                         .font(ImlaTheme.caption())
@@ -1588,7 +1849,7 @@ struct OnboardingView: View {
 
                     PastableSecureField(
                         text: apiKey,
-                        placeholder: summaryBackend == .openAI ? "sk-..." : "sk-or-...",
+                        placeholder: "sk-...",
                         onChange: { apiKey = $0 }
                     )
                     .frame(width: 320, height: 28)
@@ -1625,6 +1886,7 @@ struct OnboardingView: View {
     // MARK: - Actions
 
     private func startDownload() {
+        guard selectedBackend.isCompatible() else { return }
         ensureModelDownloadStarted()
         goToNextStep()
     }
@@ -1668,6 +1930,10 @@ struct OnboardingView: View {
     }
 
     private func ensureModelDownloadStarted() {
+        if let reason = selectedBackend.incompatibilityReason() {
+            modelDownloadError = reason
+            return
+        }
         if modelReadyBackend == selectedBackend {
             isModelStillDownloading = false
             modelDownloadProgress = 1.0
@@ -1982,19 +2248,21 @@ struct OnboardingView: View {
         }
     }
 
-    private var googleCalendarStep: some View {
+    private var calendarAccessStep: some View {
         VStack(spacing: ImlaTheme.spacing24) {
             Spacer()
-
-            VStack(spacing: ImlaTheme.spacing8) {
-                Text("Google Calendar")
-                    .font(ImlaTheme.title1())
-                    .foregroundStyle(ImlaTheme.textPrimary)
-
-                Text("Connect Google Calendar to see upcoming meetings.\nYou can set this up later in Settings.")
-                    .font(ImlaTheme.body())
-                    .foregroundStyle(ImlaTheme.textSecondary)
-                    .multilineTextAlignment(.center)
+            Image(nsImage: CalendarIntegration.calendarIcon)
+                .resizable()
+                .frame(width: 80, height: 80)
+                .accessibilityHidden(true)
+            Text("Bring your meetings into Imla")
+                .font(ImlaTheme.title1())
+                .foregroundStyle(ImlaTheme.textPrimary)
+            Text("Allow access to macOS Calendar to see upcoming meetings and get reminders.")
+                .font(ImlaTheme.body())
+                .foregroundStyle(ImlaTheme.textSecondary)
+            CalendarAccessControl {
+                await controller.calendarAccessDidChange()
             }
 
             VStack(spacing: ImlaTheme.spacing12) {
@@ -2073,8 +2341,15 @@ struct OnboardingView: View {
                 }
             }
 
+            Button("Set up calendar accounts…", action: CalendarIntegration.openAccounts)
+                .buttonStyle(.link)
+            Divider().background(ImlaTheme.surfaceBorder)
+            Text("Already use Google or Exchange? Add the account in macOS Internet Accounts and turn on Calendars.")
+                .font(ImlaTheme.caption())
+                .foregroundStyle(ImlaTheme.textSecondary)
             Spacer()
         }
+        .multilineTextAlignment(.center)
         .padding(.horizontal, ImlaTheme.spacing32)
     }
 

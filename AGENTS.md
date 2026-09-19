@@ -42,7 +42,11 @@ When these conflict, the earlier one wins.
    Work added there — a main-thread hop, a synchronous file read, a model warmup — is a
    regression even when it is correct.
 4. **It works with no account, no key, and no network.** Cloud backends are enhancements layered
-   on a complete offline app, never the path that makes a feature function.
+   on a complete offline app, never the path that makes a feature function. Hosted dictation
+   (OpenAI Realtime, OpenRouter) is one of those enhancements: it is opt-in, it falls back to a
+   local backend, and selecting it is the only thing that sends dictation audio off the machine.
+   Model downloads go straight to Hugging Face — no plan configures a mirror, because routing a
+   user's downloads through someone else's bucket is a network path they never chose.
 
 Two consequences worth stating, because they read as sloppiness until you know the reason:
 
@@ -143,6 +147,11 @@ a decode test, because old configs must keep loading.
 - **Shipped builds go through xcodebuild,** not SwiftPM, because App Intents metadata only
   extracts for a real Xcode application target. Needs `xcodegen` and full Xcode.
   `MUESLI_USE_XCODE_BUILD=0` is the escape hatch and ships without Shortcuts support.
+- **The toolchain floor is Xcode 26.6 / macOS 26,** because MLX Swift needs Swift 6.3. That is
+  what building natively and running the full test suite require; the app's deployment target is
+  still macOS 14.2. Builds and test shards pin `--build-system native`: the default engine stages
+  every binary target's headers into one flat `include/`, where two vendored xcframeworks'
+  module maps collide.
 - **CI is Linux-first for anything it can run there.** Agents on Linux cannot build the app or
   run `swift test`. They can run the whole `classifier-tests` job:
   `test_classify_changed_files.sh`, `test_ci_test_shards.sh`, `test_merge_appcast_item.py`, and

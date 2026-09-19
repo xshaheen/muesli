@@ -37,23 +37,92 @@ struct ChatGPTResponsesResult {
     let wasTruncated: Bool
 }
 
-enum ChatGPTResponsesClient {
-    static let whamURL = URL(string: "https://chatgpt.com/backend-api/wham/responses")!
-    private static let requestTimeout: TimeInterval = 120
+/// Shared request construction for ChatGPT-authenticated Responses calls.
+///
+/// Imla routes its existing ChatGPT OAuth credentials to the Codex inference
+/// lane. That direct third-party contract is compatibility-sensitive, so keep
+/// request metadata centralized and the client identity honest: these headers
+/// describe Imla and never impersonate an official Codex client. WHAM remains
+/// available only as an explicit, process-level emergency rollback.
+enum ChatGPTResponsesTransport {
+    enum Backend: Equatable {
+        case codex
+        case wham
 
+        var responsesURL: URL {
+            switch self {
+            case .codex:
+                return URL(string: "https://chatgpt.com/backend-api/codex/responses")!
+            case .wham:
+                return URL(string: "https://chatgpt.com/backend-api/wham/responses")!
+            }
+        }
+    }
+
+    static let environmentKey = "MUESLI_CHATGPT_TRANSPORT"
+    static let requestTimeout: TimeInterval = 120
+    static let originator = "imla"
+
+    static func selectedBackend(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Backend {
+        let requested = environment[environmentKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return requested == "wham" ? .wham : .codex
+    }
+
+    static func makeRequest(
+        body: [String: Any],
+        token: String,
+        accountId: String,
+        timeoutInterval: TimeInterval = ChatGPTResponsesTransport.requestTimeout,
+        appVersion: String = AppIdentity.marketingVersion,
+        sessionID: UUID = UUID(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> URLRequest {
+        let backend = selectedBackend(environment: environment)
+        var request = URLRequest(url: backend.responsesURL)
+        // A caller's own deadline may tighten the ceiling but never raise it.
+        request.timeoutInterval = min(max(timeoutInterval, 0.1), requestTimeout)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if !accountId.isEmpty {
+            request.setValue(accountId, forHTTPHeaderField: "ChatGPT-Account-Id")
+        }
+        if backend == .codex {
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+            request.setValue(originator, forHTTPHeaderField: "originator")
+            request.setValue("Imla/\(appVersion)", forHTTPHeaderField: "User-Agent")
+            request.setValue(sessionID.uuidString.lowercased(), forHTTPHeaderField: "session_id")
+        }
+        var supportedBody = body
+        if backend == .codex {
+            // ChatGPT's Codex endpoint rejects this public Responses API field.
+            supportedBody.removeValue(forKey: "max_output_tokens")
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: supportedBody)
+        return request
+    }
+}
+
+enum ChatGPTResponsesClient {
     static func respond(
         systemPrompt: String,
         userPrompt: String,
         model: String,
         logCategory: String,
-        maxOutputTokens: Int? = nil
+        maxOutputTokens: Int? = nil,
+        reasoningEffort: ReasoningEffort? = nil
     ) async throws -> String {
         try await respondDetailed(
             systemPrompt: systemPrompt,
             userPrompt: userPrompt,
             model: model,
             logCategory: logCategory,
-            maxOutputTokens: maxOutputTokens
+            maxOutputTokens: maxOutputTokens,
+            reasoningEffort: reasoningEffort
         ).text
     }
 
@@ -62,13 +131,15 @@ enum ChatGPTResponsesClient {
         messages: [ChatGPTResponsesMessage],
         model: String,
         logCategory: String,
-        maxOutputTokens: Int? = nil
+        maxOutputTokens: Int? = nil,
+        reasoningEffort: ReasoningEffort? = nil
     ) async throws -> String {
         try await respondDetailed(
             messages: messages,
             model: model,
             logCategory: logCategory,
-            maxOutputTokens: maxOutputTokens
+            maxOutputTokens: maxOutputTokens,
+            reasoningEffort: reasoningEffort
         ).text
     }
 
@@ -79,7 +150,8 @@ enum ChatGPTResponsesClient {
         model: String,
         logCategory: String,
         maxOutputTokens: Int? = nil,
-        timeoutInterval: TimeInterval = requestTimeout
+        reasoningEffort: ReasoningEffort? = nil,
+        timeoutInterval: TimeInterval = ChatGPTResponsesTransport.requestTimeout
     ) async throws -> ChatGPTResponsesResult {
         try await respondDetailed(
             messages: [
@@ -89,6 +161,7 @@ enum ChatGPTResponsesClient {
             model: model,
             logCategory: logCategory,
             maxOutputTokens: maxOutputTokens,
+            reasoningEffort: reasoningEffort,
             timeoutInterval: timeoutInterval
         )
     }
@@ -98,20 +171,23 @@ enum ChatGPTResponsesClient {
         model: String,
         logCategory: String,
         maxOutputTokens: Int? = nil,
-        timeoutInterval: TimeInterval = requestTimeout
+        reasoningEffort: ReasoningEffort? = nil,
+        timeoutInterval: TimeInterval = ChatGPTResponsesTransport.requestTimeout
     ) async throws -> ChatGPTResponsesResult {
         let (token, accountId) = try await ChatGPTAuthManager.shared.validAccessToken()
-        let body = requestBody(messages: messages, model: model, maxOutputTokens: maxOutputTokens)
+        let body = requestBody(
+            messages: messages,
+            model: model,
+            maxOutputTokens: maxOutputTokens,
+            reasoningEffort: reasoningEffort
+        )
 
-        var request = URLRequest(url: whamURL)
-        request.timeoutInterval = min(max(timeoutInterval, 0.1), requestTimeout)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if !accountId.isEmpty {
-            request.setValue(accountId, forHTTPHeaderField: "ChatGPT-Account-Id")
-        }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let request = try ChatGPTResponsesTransport.makeRequest(
+            body: body,
+            token: token,
+            accountId: accountId,
+            timeoutInterval: timeoutInterval
+        )
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -121,7 +197,7 @@ enum ChatGPTResponsesClient {
             let message = extractErrorMessage(from: errorData)
                 ?? String(data: errorData, encoding: .utf8)
                 ?? "(unknown)"
-            fputs("[\(logCategory)] ChatGPT WHAM: HTTP \(httpStatus): \(String(message.prefix(500)))\n", stderr)
+            fputs("[\(logCategory)] ChatGPT Responses: HTTP \(httpStatus): \(String(message.prefix(500)))\n", stderr)
             throw ChatGPTResponsesError.backendFailed(statusCode: httpStatus, message: message)
         }
 
@@ -141,7 +217,7 @@ enum ChatGPTResponsesClient {
         let fullText = accumulatedOutputText(deltaText: deltaText, finalText: finalText)
         let trimmed = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
         let truncationNote = wasTruncated ? " (hit output cap)" : ""
-        fputs("[\(logCategory)] ChatGPT WHAM: collected \(trimmed.count) chars\(truncationNote)\n", stderr)
+        fputs("[\(logCategory)] ChatGPT Responses: collected \(trimmed.count) chars\(truncationNote)\n", stderr)
         return ChatGPTResponsesResult(text: trimmed, wasTruncated: wasTruncated)
     }
 
@@ -149,7 +225,8 @@ enum ChatGPTResponsesClient {
         systemPrompt: String,
         userPrompt: String,
         model: String,
-        maxOutputTokens: Int? = nil
+        maxOutputTokens: Int? = nil,
+        reasoningEffort: ReasoningEffort? = nil
     ) -> [String: Any] {
         requestBody(
             messages: [
@@ -157,7 +234,8 @@ enum ChatGPTResponsesClient {
                 ChatGPTResponsesMessage(role: .user, content: userPrompt),
             ],
             model: model,
-            maxOutputTokens: maxOutputTokens
+            maxOutputTokens: maxOutputTokens,
+            reasoningEffort: reasoningEffort
         )
     }
 
@@ -167,7 +245,8 @@ enum ChatGPTResponsesClient {
     static func requestBody(
         messages: [ChatGPTResponsesMessage],
         model: String,
-        maxOutputTokens: Int? = nil
+        maxOutputTokens: Int? = nil,
+        reasoningEffort: ReasoningEffort? = nil
     ) -> [String: Any] {
         // System content is `instructions`, not an `input` entry. Multiple system messages
         // join in order rather than overwriting, so a caller that layers instructions keeps
@@ -204,11 +283,11 @@ enum ChatGPTResponsesClient {
             "instructions": instructions.joined(separator: "\n\n"),
             "input": input,
         ]
+        if let effort = ReasoningEffortPolicy.apiValue(for: model, preferred: reasoningEffort) {
+            body["reasoning"] = ["effort": effort]
+        }
         if let maxOutputTokens, maxOutputTokens > 0 {
             body["max_output_tokens"] = maxOutputTokens
-        }
-        if let effort = SummaryModelPreset.reasoningEffort(for: model) {
-            body["reasoning"] = ["effort": effort]
         }
         return body
     }

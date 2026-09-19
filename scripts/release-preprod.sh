@@ -11,7 +11,7 @@ set -euo pipefail
 #   - App name: ImlaPreprod
 #   - Bundle ID: com.xshaheen.imla.preprod
 #   - Support dir: ~/Library/Application Support/ImlaPreprod
-#   - Sparkle feed: https://muesli-hq.github.io/muesli/appcast-preprod.xml
+#   - Sparkle feed: https://imla-hq.github.io/imla/appcast-preprod.xml
 #
 # Required signing environment:
 #   MUESLI_PROVISIONING_PROFILE=/path/to/com.xshaheen.imla.preprod.profile
@@ -56,7 +56,7 @@ PROVISIONING_PROFILE="${MUESLI_PROVISIONING_PROFILE:-}"
 APP_NAME="ImlaPreprod"
 BUNDLE_ID="com.xshaheen.imla.preprod"
 SUPPORT_DIR_NAME="ImlaPreprod"
-PREPROD_FEED_URL="https://muesli-hq.github.io/muesli/appcast-preprod.xml"
+PREPROD_FEED_URL="https://imla-hq.github.io/imla/appcast-preprod.xml"
 OUTPUT_DIR="$ROOT/dist-preprod"
 INSTALL_DIR="$OUTPUT_DIR/install-root"
 APP_DIR="$INSTALL_DIR/${APP_NAME}.app"
@@ -386,7 +386,7 @@ echo "  Hosted asset verified and prerelease published."
 echo "[11/11] Updating preprod appcast..."
 "$GENERATE_APPCAST" "$OUTPUT_DIR" -o "$APPCAST_PATH"
 
-perl -0pi -e 's{https://muesli-hq\.github\.io/muesli/(ImlaPreprod-([0-9][0-9A-Za-z\.\-]*)\.dmg)}{"https://github.com/xshaheen/muesli/releases/download/v$2/$1"}ge' "$APPCAST_PATH"
+perl -0pi -e 's{https://imla-hq\.github\.io/imla/(ImlaPreprod-([0-9][0-9A-Za-z\.\-]*)\.dmg)}{"https://github.com/Muesli-HQ/imla/releases/download/v$2/$1"}ge' "$APPCAST_PATH"
 perl -0pi -e 's{^\h*<enclosure\b[^>]*\bsparkle:deltaFrom="[^"]*"[^>]*/>\n}{}mg' "$APPCAST_PATH"
 perl -0pi -e 's{^\h*<sparkle:deltas>\s*</sparkle:deltas>\n}{}mg' "$APPCAST_PATH"
 python3 - "$APPCAST_PATH" "$SPARKLE_BUILD_VERSION" "$VERSION" <<'PY'
@@ -444,7 +444,7 @@ git add "$APPCAST_PATH"
 if git diff --cached --quiet; then
   echo "  No preprod appcast changes to commit."
 else
-  git commit -m "Update preprod appcast for v${VERSION}"
+  git commit --signoff -m "Update preprod appcast for v${VERSION}"
   git push origin HEAD
   echo "  Pushed preprod appcast update."
 fi

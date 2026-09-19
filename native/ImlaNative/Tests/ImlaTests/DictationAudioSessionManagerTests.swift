@@ -1,5 +1,6 @@
 import CoreAudio
 import Foundation
+import ImlaCore
 import Testing
 @testable import ImlaNativeApp
 
@@ -310,6 +311,22 @@ struct DictationAudioSessionManagerTests {
             }
             return false
         })
+    }
+
+    @Test("route callback consumes the controller cache without refreshing HAL again")
+    func routeCallbackAvoidsDuplicateRouteRefresh() {
+        let harness = Harness(routeKind: .speakerLike)
+
+        harness.manager.refreshRoute(
+            intent: .idlePrewarm(.routeChange),
+            canWarmUp: true,
+            refreshRoutingCache: false
+        )
+        harness.wait()
+
+        #expect(harness.route.refreshCalls == 0)
+        #expect(harness.recorder.warmUpCalls == 0)
+        #expect(harness.recorder.startCalls == 0)
     }
 
     @Test("speaker route skips idle warmup when default input is not built in")
@@ -1082,5 +1099,45 @@ private final class FakeDictationRoute: DictationAudioRouting {
 
     func refreshRouteAfterDictationSession() {
         restoreCalls += 1
+    }
+}
+
+// Reuse the fake recorder to exercise the controller without opening a microphone.
+extension ComputerUseRunDiagnosticsTests {
+    @Test("denied screen permission releases prepared CUA ownership before the next interaction")
+    @MainActor
+    func permissionDenialReleasesPreparedSession() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = DictationStore(databaseURL: directory.appendingPathComponent("imla.db"))
+        try store.migrateIfNeeded()
+        let harness = Harness(routeKind: .speakerLike)
+        let controller = ImlaController(
+            runtime: RuntimePaths(repoRoot: directory, menuIcon: nil, appIcon: nil, bundlePath: nil),
+            dictationStore: store,
+            configStore: ConfigStore(supportDirectory: directory)
+        )
+        controller.computerUseAudioSessionManager = harness.manager
+        controller.handleComputerUsePrepare()
+        harness.wait()
+        // Computer use announces itself on the cursor overlay here, so dictation
+        // state stays idle; the armed audio session is what prepare owns.
+        #expect(harness.manager.hasActiveSession)
+
+        #expect(!controller.ensureComputerUseScreenRecordingAccess(isGranted: false))
+        harness.wait()
+        #expect(!harness.manager.hasActiveSession)
+        #expect(controller.appState.dictationState == .idle)
+        #expect(controller.canPrepareComputerUseCommand)
+
+        controller.handleComputerUsePrepare()
+        harness.wait()
+        #expect(harness.manager.hasActiveSession)
+        #expect(controller.ensureComputerUseScreenRecordingAccess(isGranted: true))
+        #expect(harness.manager.hasActiveSession)
+        #expect(harness.recorder.activateCalls == 2)
+        #expect(!controller.ensureComputerUseScreenRecordingAccess(isGranted: false))
+        harness.wait()
     }
 }

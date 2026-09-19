@@ -104,8 +104,18 @@ struct ImlaCKSyncRecordBatch: Sendable {
     let staleChanges: [CKSyncEngine.PendingRecordZoneChange]
 }
 
-enum ImlaCKSyncError: Error {
-    case accountChanged
+enum ImlaCKSyncError: Error, Equatable, LocalizedError {
+    case differentProductionAccount
+    case legacyAccountNeedsReconnection
+
+    var errorDescription: String? {
+        switch self {
+        case .differentProductionAccount:
+            return "This Mac was synced with a different iCloud account. Return to that account, or reset iCloud sync and set it up again."
+        case .legacyAccountNeedsReconnection:
+            return "This Mac's older sync history needs to be reconnected before it can use your current iCloud account."
+        }
+    }
 }
 
 struct ImlaCKSyncLegacyScopeMigration: Sendable, Equatable {
@@ -149,12 +159,15 @@ actor ImlaCKSyncEngine: CKSyncEngineDelegate {
     private var preparationTaskID: UUID?
     private var preparationGeneration = 0
     private var accountBoundaryBlocked = true
+    private var accountBoundaryError = ImlaCKSyncError.differentProductionAccount
     private var conflictBaseRecords: [CKRecord.ID: CKRecord] = [:]
     private var uploaded = ICloudSyncKindCounts()
     private var downloaded = ICloudSyncKindCounts()
     private var bridgeRefreshTask: Task<Void, Never>?
     private var bridgeRefreshForceRequested = false
+    private var targetZoneFetchProcessingFailed = false
     private let bridgeRefreshDidFinish: (@MainActor @Sendable () -> Void)?
+    private let syncZoneFetchDidSucceed: (@MainActor @Sendable () -> Void)?
     private let engineCancellationObserver: @Sendable () async -> Void
 
     nonisolated static func isSyncNotification(_ userInfo: [AnyHashable: Any]) -> Bool {
@@ -170,6 +183,7 @@ actor ImlaCKSyncEngine: CKSyncEngineDelegate {
         legacyAccountRecordVerifier: (@Sendable (Set<String>) async throws -> Set<String>)? = nil,
         legacyScopeMigration: ImlaCKSyncLegacyScopeMigration? = ImlaCKSyncEngine.productionLegacyScopeMigration,
         bridgeRefreshDidFinish: (@MainActor @Sendable () -> Void)? = nil,
+        syncZoneFetchDidSucceed: (@MainActor @Sendable () -> Void)? = nil,
         engineCancellationObserver: @escaping @Sendable () async -> Void = {}
     ) {
         self.store = store
@@ -177,6 +191,7 @@ actor ImlaCKSyncEngine: CKSyncEngineDelegate {
         self.legacyAccountRecordVerifier = legacyAccountRecordVerifier
         self.legacyScopeMigration = legacyScopeMigration
         self.bridgeRefreshDidFinish = bridgeRefreshDidFinish
+        self.syncZoneFetchDidSucceed = syncZoneFetchDidSucceed
         self.engineCancellationObserver = engineCancellationObserver
     }
 
@@ -233,7 +248,20 @@ actor ImlaCKSyncEngine: CKSyncEngineDelegate {
                     let options = CKSyncEngine.SendChangesOptions(
                         scope: .zoneIDs([ImlaICloudSyncEngine.Schema.syncZoneID])
                     )
-                    try await syncEngine.sendChanges(options)
+                    do {
+                        try await syncEngine.sendChanges(options)
+                    } catch {
+                        // Resetting the local account link deliberately clears
+                        // CloudKit system fields and requeues the same stable IDs.
+                        // The first save can therefore return serverRecordChanged
+                        // (plus batchRequestFailed siblings). The delegate has
+                        // already resolved each returned conflict or left it in the
+                        // durable outbox, so this batch is progress to be retried,
+                        // not a user-visible sync failure.
+                        guard ImlaICloudSyncEngine.isResolvedRecordConflictBatch(error) else {
+                            throw error
+                        }
+                    }
                 }
             },
             fetch: {
@@ -290,9 +318,22 @@ actor ImlaCKSyncEngine: CKSyncEngineDelegate {
         _ = try await prepareEngine()
     }
 
+    /// Validates the account and prepares the constant sync zone without
+    /// constructing CKSyncEngine. QR pairing uses the legacy companion record,
+    /// so the automatically syncing text engine should not start until the
+    /// companion has been confirmed.
+    func prepareForBridgeActivation() async throws {
+        try await preparePreflightIfNeeded()
+    }
+
     private func prepareEngine() async throws -> CKSyncEngine {
+        try await preparePreflightIfNeeded()
+        return try makeEngineIfNeeded()
+    }
+
+    private func preparePreflightIfNeeded() async throws {
         if !preparationState.requiresPreparation {
-            return try makeEngineIfNeeded()
+            return
         }
 
         let generation = preparationGeneration
@@ -340,7 +381,6 @@ actor ImlaCKSyncEngine: CKSyncEngineDelegate {
             guard preparationState.isPrepared else {
                 throw CancellationError()
             }
-            return try makeEngineIfNeeded()
         } catch {
             if preparationTaskID == taskID {
                 preparationTask = nil
@@ -363,9 +403,65 @@ actor ImlaCKSyncEngine: CKSyncEngineDelegate {
                 engine.state.remove(pendingRecordZoneChanges: engine.state.pendingRecordZoneChanges)
             }
             try store.clearCloudSyncStateData(forKey: Self.stateKey)
-            throw ImlaCKSyncError.accountChanged
+            throw accountBoundaryError
         }
         return try await preflight.prepareForCKSyncEngine(store: store)
+    }
+
+    /// Explicitly adopts the current private iCloud account for an ambiguous
+    /// pre-0.8.3 library. The store transaction preserves authored content and
+    /// audio while clearing only account-scoped CloudKit metadata and requeueing
+    /// eligible text. A definite Production-owner mismatch remains blocked.
+    func reconnectLegacyLibrary() async throws {
+        let currentUser = try await resolvedContainer().userRecordID()
+        try await reconnectLegacyLibrary(currentUser: currentUser)
+        try await prepare()
+    }
+
+    @discardableResult
+    func reconnectLegacyLibrary(currentUser: CKRecord.ID) async throws -> Bool {
+        guard let legacyScopeMigration else {
+            throw ImlaCKSyncError.legacyAccountNeedsReconnection
+        }
+
+        await invalidatePreparation(cancelEngine: true)
+        try Task.checkCancellation()
+        let requestedScope = Self.accountScope(for: currentUser)
+        let reconnected = try store.reconnectCloudSyncAccountScope(
+            expectedScope: requestedScope,
+            accountScopeKey: Self.accountScopeKey,
+            stateKey: Self.stateKey,
+            legacyAccountScopeKey: legacyScopeMigration.accountScopeKey,
+            legacyStateKey: legacyScopeMigration.stateKey
+        )
+        guard reconnected else {
+            accountBoundaryBlocked = true
+            accountBoundaryError = .differentProductionAccount
+            throw accountBoundaryError
+        }
+
+        accountBoundaryBlocked = false
+        return true
+    }
+
+    /// Resets local account ownership and engine metadata after explicit user
+    /// confirmation. This is valid for healthy, mismatched, and legacy state:
+    /// setup must explicitly claim the currently signed-in account afterward.
+    @discardableResult
+    func resetCloudSyncAccount() async throws -> Bool {
+        await invalidatePreparation(cancelEngine: true)
+        try Task.checkCancellation()
+        let reset = try store.resetCloudSyncAccountLink(
+            accountScopeKey: Self.accountScopeKey,
+            stateKey: Self.stateKey,
+            legacyAccountScopeKey: legacyScopeMigration?.accountScopeKey,
+            legacyStateKey: legacyScopeMigration?.stateKey
+        )
+        guard reset else { throw accountBoundaryError }
+
+        accountBoundaryBlocked = true
+        accountBoundaryError = .legacyAccountNeedsReconnection
+        return true
     }
 
     private func invalidatePreparation(cancelEngine: Bool) async {
@@ -402,6 +498,10 @@ actor ImlaCKSyncEngine: CKSyncEngineDelegate {
         }
     }
 
+    func requestBridgeDeviceRefresh() {
+        scheduleBridgeDeviceRefresh(forceRefresh: true)
+    }
+
     private func runBridgeDeviceRefreshes() async {
         while !Task.isCancelled {
             let forceRefresh = bridgeRefreshForceRequested
@@ -418,7 +518,7 @@ actor ImlaCKSyncEngine: CKSyncEngineDelegate {
 
     private func makeEngineIfNeeded() throws -> CKSyncEngine {
         if let engine { return engine }
-        guard !accountBoundaryBlocked else { throw ImlaCKSyncError.accountChanged }
+        guard !accountBoundaryBlocked else { throw accountBoundaryError }
 
         let serialization: CKSyncEngine.State.Serialization?
         if let data = try store.cloudSyncStateData(forKey: Self.stateKey) {
@@ -568,10 +668,15 @@ actor ImlaCKSyncEngine: CKSyncEngineDelegate {
 
             case .fetchedRecordZoneChanges(let changes):
                 guard !accountBoundaryBlocked else { break }
-                try handleFetchedRecords(
-                    changes.modifications.map(\.record),
-                    state: syncEngine.state
-                )
+                do {
+                    try handleFetchedRecords(
+                        changes.modifications.map(\.record),
+                        state: syncEngine.state
+                    )
+                } catch {
+                    targetZoneFetchProcessingFailed = true
+                    throw error
+                }
                 // Imla represents deletion as a saved tombstone. Hard-deletion
                 // notifications are intentionally ignored for this record contract.
 
@@ -611,19 +716,29 @@ actor ImlaCKSyncEngine: CKSyncEngineDelegate {
                 }
 
             case .didFetchRecordZoneChanges(let changes):
-                if changes.zoneID == ImlaICloudSyncEngine.Schema.syncZoneID,
-                   let error = changes.error,
-                   ImlaICloudSyncEngine.isSyncZoneRecoveryError(error) {
-                    await invalidatePreparation(cancelEngine: false)
+                if changes.zoneID == ImlaICloudSyncEngine.Schema.syncZoneID {
+                    let processingFailed = targetZoneFetchProcessingFailed
+                    targetZoneFetchProcessingFailed = false
+                    if let error = changes.error {
+                        if ImlaICloudSyncEngine.isSyncZoneRecoveryError(error) {
+                            await invalidatePreparation(cancelEngine: false)
+                        }
+                    } else if !accountBoundaryBlocked, !processingFailed {
+                        await syncZoneFetchDidSucceed?()
+                    }
                 }
 
             case .sentDatabaseChanges,
                  .willFetchChanges,
-                 .willFetchRecordZoneChanges,
                  .didFetchChanges,
                  .willSendChanges,
                  .didSendChanges:
                 break
+
+            case .willFetchRecordZoneChanges(let changes):
+                if changes.zoneID == ImlaICloudSyncEngine.Schema.syncZoneID {
+                    targetZoneFetchProcessingFailed = false
+                }
 
             @unknown default:
                 break
@@ -768,12 +883,14 @@ actor ImlaCKSyncEngine: CKSyncEngineDelegate {
         preflight: ImlaICloudSyncEngine? = nil
     ) async throws -> Bool {
         accountBoundaryBlocked = true
+        accountBoundaryError = .legacyAccountNeedsReconnection
         let requestedScope = Self.accountScope(for: userRecordID)
 
         if let persistedScope = try store.cloudSyncStateData(forKey: Self.accountScopeKey) {
             let matches = persistedScope == Data(requestedScope.utf8)
             accountBoundaryBlocked = !matches
             if !matches {
+                accountBoundaryError = .differentProductionAccount
                 fputs("[imla-native] CKSyncEngine account boundary blocked\n", stderr)
             }
             return matches
@@ -827,8 +944,13 @@ actor ImlaCKSyncEngine: CKSyncEngineDelegate {
         )
         accountBoundaryBlocked = !matches
         if !matches {
+            accountBoundaryError = .differentProductionAccount
             fputs("[imla-native] CKSyncEngine account boundary blocked\n", stderr)
         }
         return matches
+    }
+
+    func currentAccountBoundaryError() -> ImlaCKSyncError? {
+        accountBoundaryBlocked ? accountBoundaryError : nil
     }
 }

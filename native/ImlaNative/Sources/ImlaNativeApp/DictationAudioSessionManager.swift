@@ -89,6 +89,7 @@ protocol DictationAudioRecording: AnyObject {
     var onNoAudioTimeout: ((Date) -> Void)? { get set }
     var onRecordingFailed: ((Error, UUID) -> Void)? { get set }
     var onLatencyEvent: ((String, Date) -> Void)? { get set }
+    var onAudioBuffer: (([Float]) -> Void)? { get set }
 
     func prepare() throws
     func beginExplicitWarmup(preferredInputDeviceID: AudioObjectID?)
@@ -99,6 +100,13 @@ protocol DictationAudioRecording: AnyObject {
     func stop() -> URL?
     func cancel()
     func currentPower() -> Float
+}
+
+extension DictationAudioRecording {
+    var onAudioBuffer: (([Float]) -> Void)? {
+        get { nil }
+        set {}
+    }
 }
 
 extension MicrophoneRecorder: DictationAudioRecording {}
@@ -161,6 +169,11 @@ final class DictationAudioSessionManager: @unchecked Sendable {
     private var externalSessionHint = false
 
     var onEvent: ((DictationAudioSessionEvent) -> Void)?
+
+    var onAudioBuffer: (([Float]) -> Void)? {
+        get { recorder.onAudioBuffer }
+        set { recorder.onAudioBuffer = newValue }
+    }
 
     init(
         recorder: DictationAudioRecording,
@@ -454,8 +467,19 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         }
     }
 
-    func refreshRoute(intent: DictationWarmupIntent, delay: TimeInterval = 0, canWarmUp: Bool) {
-        routingController.refreshRouteCache()
+    func refreshRoute(
+        intent: DictationWarmupIntent,
+        delay: TimeInterval = 0,
+        canWarmUp: Bool,
+        refreshRoutingCache: Bool = true
+    ) {
+        // A route-controller callback already follows its own cache refresh.
+        // Re-entering the controller from that callback performs a second HAL
+        // inspection in the same transition and can wedge on CoreAudio's
+        // command gate. Other callers retain the explicit refresh by default.
+        if refreshRoutingCache {
+            routingController.refreshRouteCache()
+        }
         queue.async { [self] in
             self.routeRefreshGeneration += 1
             let generation = self.routeRefreshGeneration

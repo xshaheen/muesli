@@ -19,7 +19,7 @@
 
 > **This is a fork.** Maintained by [Shaheen](https://github.com/xshaheen) at
 > [`xshaheen/muesli`](https://github.com/xshaheen/muesli), forked from
-> [`Muesli-HQ/muesli`](https://github.com/Muesli-HQ/muesli) and substantially changed since.
+> [`Muesli-HQ/imla`](https://github.com/Muesli-HQ/imla) and substantially changed since.
 > It is not affiliated with or endorsed by the upstream project. For upstream's releases,
 > support, and sponsors, go to upstream.
 
@@ -30,27 +30,46 @@
 Imla is a **lightweight native macOS app** that combines **WisprFlow-style dictation** and **Granola-style meeting transcription** in one tool. Speech-to-text runs locally on Apple Silicon and audio is not sent to a transcription service. Optional hosted cleanup and meeting-note providers receive text only when you configure and use them.
 
 <p align="center">
-  <img src="assets/imla-github-ss.png" alt="Imla interface showing dictations and meeting history" width="900" />
+  <img src="assets/imla-github-ss.png" alt="Imla 0.8.4 Timeline with illustrative dictation, meeting, iPhone, and Computer Use entries" width="900" />
 </p>
+
+<p align="center"><sub>Illustrative entries and usage statistics. Personal content has been replaced.</sub></p>
+
+### New in 0.8.4
+
+| Feature | What you can do |
+|---|---|
+| **Quill** | Ask a question, rewrite selected text, or create text at the cursor with your voice. |
+| **Bodhan for Indic languages** | Dictate across Indic languages and English, including code-switching. |
+| **Live meeting transcripts** | Use Apple Speech on macOS 26+. Live transcription is off by default. |
+| **Re-summarize meetings** | Choose a different summary model for a saved meeting. |
+| **BYOK dictation** | Use OpenAI or OpenRouter when you want hosted transcription. Local by default. |
+
+This release also adds S1-mini English cleanup, Apple Shortcuts and Siri actions, clearer macOS calendar management, and iCloud reconnection recovery. [Read the full 0.8.4 release notes](docs/release-notes/0.8.4.md).
 
 ### Dictation
 Hold your hotkey (or double-tap for hands-free mode) → speak → release → transcribed text is pasted at your cursor. **~0.13 second latency** via Parakeet TDT on the Apple Neural Engine.
+
+By default, dictation uses an on-device model. You can instead opt into OpenAI Speech-to-Text with your own API key, which streams microphone audio directly to OpenAI over a Realtime WebSocket, or connect OpenRouter and explicitly choose a transcription model. OpenRouter dictation sends the completed recording through OpenRouter to the selected upstream model. Imla retains the local recording only long enough to fall back to a compatible installed on-device model if the hosted request fails; streaming-only models are excluded from fallback.
+
+### Quill
+Select text and speak an instruction to rewrite it, or ask a question and generate text at the cursor with no selection. Choose your model in **Models → Quill**. If a required local model is missing or a selected account is signed out, Imla prompts you to download the model or sign in before use.
 
 ### Meeting Transcription
 Start a meeting recording → Imla captures your mic (You) and system audio (Others) simultaneously → VAD-driven chunked transcription happens during the meeting at natural speech boundaries → speaker diarization identifies individual remote speakers (Speaker 1, Speaker 2, etc.) → when you stop, the transcript is ready in seconds, not minutes. Generate structured meeting notes via OpenAI, free OpenRouter models, your ChatGPT Plus/Pro subscription, or local Ollama models.
 
 Live meeting transcripts have two explicit modes. **Nemotron 3.5** provides a multilingual continuous transcript and defaults to using it as the final raw transcript before diarization and note generation. You can instead select any downloaded meeting model as the authoritative final transcript while keeping Nemotron for live preview. **Parakeet Realtime EOU** is a low-latency English preview paired with a separately selected final model. Settings always shows which model owns the final transcript.
 
-Live transcription is off by default. Download Parakeet Realtime EOU or Nemotron 3.5 from Models, then select one under **Settings → Meetings → Transcription**. The waveform-hover preview can be enabled separately from the same section. Downloading a streaming model does not activate it automatically.
+Live transcription is off by default. Choose Apple Speech, or download Parakeet Realtime EOU or Nemotron 3.5, from Models and then select one under **Settings → Meetings → Transcription**. The waveform-hover preview can be enabled separately from the same section. Making a live model available does not activate it automatically.
 
 ---
 
 ## Features
 
 - **Native macOS architecture** — Swift, AppKit, and SwiftUI app code with in-process CoreML/ANE, Metal, and LiteRT-LM inference.
-- **Multiple ASR providers** — Apple Speech (system-managed on macOS 26+), Parakeet TDT and Nemotron 3.5 (Neural Engine), Cohere Transcribe 2B (mixed precision CoreML), multilingual Whisper Tiny/Small/Large Turbo (CoreML/ANE via WhisperKit), Qwen3 ASR, SenseVoice Small, Indic ASR, and experimental Gemma 4 E2B.
+- **Multiple ASR providers** — Apple Speech (system-managed on macOS 26+), Parakeet TDT and Nemotron 3.5 (Neural Engine), Cohere Transcribe 2B (mixed precision CoreML), multilingual Whisper Tiny/Small/Large Turbo (CoreML/ANE via WhisperKit), Qwen3 ASR, SenseVoice Small, Bodhan Core/Flex for Indic and English speech, and experimental Gemma 4 E2B.
 - **Hold-to-talk & hands-free** — Hold hotkey for quick dictation, or double-tap for sustained recording.
-- **Quill voice rewriting** — Highlight text to rewrite it from a spoken instruction, or generate new text at the cursor with no selection. Quill supports local and hosted models, hands-free activation, and an independent toggle for its activation and release sounds.
+- **Quill voice writing and answers** — Highlight text to rewrite it from a spoken instruction, or generate new text at the cursor with no selection. Quill supports local and hosted models, hands-free activation, and an independent toggle for its activation and release sounds.
 - **Apple Shortcuts & Siri** — Six preconfigured actions out of the box: Start/Stop Dictation (latched hands-free mode, same as double-tapping the hotkey), Start/Stop Meeting Recording, Get Last Dictation, and Get Last Meeting Notes. Trigger them from Spotlight, Siri ("Start a meeting recording in Imla"), keyboard shortcuts, or Shortcuts automations — e.g. auto-record when a calendar event starts, or pipe your last dictation into Notes, Messages, or Files.
 - **Meeting recording** — Captures mic + system audio (including Bluetooth/AirPods) with a CoreAudio process tap by default and ScreenCaptureKit fallback. System audio from Zoom, Teams, and other call clients stays on the Others side of the transcript.
 - **Live meeting transcript** — Choose Nemotron 3.5 for multilingual live text with either Nemotron or a separate downloaded final model, or Parakeet Realtime EOU for an English live preview.
@@ -58,17 +77,17 @@ Live transcription is off by default. Download Parakeet Realtime EOU or Nemotron
 - **Speaker diarization** — Identifies individual speakers in system audio (Speaker 1, Speaker 2, etc.) using FluidAudio's pyannote-based CoreML diarization model.
 - **Camera-based meeting detection** — Detects when your webcam + mic activate in a recognized meeting app (Zoom, Chrome, Teams, FaceTime, Slack, WhatsApp). Camera alone (e.g. Photo Booth) won't trigger false positives.
 - **Join & Transcribe** — Extracts meeting URLs from calendar events (Zoom, Google Meet, Teams, Webex, Chime, FaceTime). Split-button notification: "Join & Transcribe" opens the meeting + starts transcription, "Join Only" opens without transcribing, "Transcribe Only" starts transcription without joining. Platform icons (Zoom, Meet) in the notification panel.
-- **Google Calendar integration** — Connect your Google Calendar to see upcoming meetings in the Coming Up section and status bar. Choose whether Imla watches today, two days, or three days of upcoming events. Event-driven notifications via `EKEventStoreChangedNotification` for instant calendar change detection. Pre-meeting countdowns via Marauder's Map easter egg.
+- **macOS Calendar integration** — See upcoming meetings from calendars connected to your Mac, including iCloud, Google, and Exchange, in the Coming Up section and status bar. Choose whether Imla watches today, two days, or three days of upcoming events. Event-driven notifications via `EKEventStoreChangedNotification` for instant calendar change detection. Pre-meeting countdowns via Marauder's Map easter egg.
 - **Import Audio** — Import m4a, mp4, wav, or mp3 files for offline transcription, speaker diarization, title generation, summaries, and saved meeting history.
 - **Meeting export** — Export meeting notes or transcripts as PDF (paginated US Letter) or Markdown. Format picker in the save panel, auto-opens the exported file.
 - **Meeting templates** — Built-in and custom templates for meeting notes. Choose a template before or after recording — re-summarize any meeting with a different template.
 - **Dismiss calendar events** — Hide irrelevant events from Coming Up, status bar, and menu bar. Dismissed events are pruned automatically.
-- **iCloud Text Sync & iPhone Bridge** — Privately sync dictation text, meeting transcripts, notes, summaries, and manual notes with Imla for iPhone through iCloud. Audio recordings are never synced.
+- **iCloud Text Sync & iPhone Bridge** — Privately sync dictation text, meeting transcripts, notes, summaries, and manual notes with Muesli for iPhone through iCloud. Audio recordings are never synced.
 - **Writing Styles** — Opt in to editable app groups with exact or full-value wildcard bundle-ID and hostname matchers, plus exact target exceptions and a global fallback. Matching is deterministic and local; versioned JSON import/export moves only styles, groups, matchers, exceptions, and the global default. Style rules and local history provenance do not sync to iCloud.
 - **Local or hosted AI cleanup** — Keep cleanup on-device with Qwen/Gemma, or configure a hosted provider. Hosted cleanup receives transcript text plus the selected style instructions; separately enabled App Context is included only when that feature is on.
 - **Optional transcript cleanup** — Refine dictated text locally with **[S1-mini by Superwhisper](https://huggingface.co/superwhisper/s1-mini-GGUF)**, Imla's GGUF cleanup models, or on-device Gemma 4 E2B; hosted providers are also available when preferred.
 - **Filler word removal** — Automatically strips "uh", "um", "er", "hmm" and verbal disfluencies.
-- **AI meeting notes** — BYOK with OpenAI or OpenRouter, sign in with your ChatGPT Plus/Pro subscription (no API key needed), or use local Ollama models. Auto-generated meeting titles. Re-summarize any meeting.
+- **AI meeting notes** — BYOK with OpenAI or OpenRouter, sign in with your ChatGPT Plus/Pro subscription (no API key needed), or use local Ollama models. Auto-generated meeting titles. Re-summarize any saved meeting with a different summary model.
 - **ChatGPT OAuth** — Sign in with your existing ChatGPT subscription via browser-based OAuth (PKCE). Tokens stored in the app support directory with owner-only file permissions.
 - **Computer Use planner** — Optional voice-driven planner that can execute local app and browser actions from dictated commands with configurable model and timeout settings.
 - **Post-meeting hooks** — Run a user-supplied executable after completed meetings. Hooks receive a JSON payload on stdin and log results in the app support directory.
@@ -86,14 +105,14 @@ Live transcription is off by default. Download Parakeet Realtime EOU or Nemotron
 ## Install
 
 This fork ships no prebuilt binaries: notarization needs a Developer ID Application
-certificate it does not have, and the Homebrew cask named `muesli` belongs to upstream.
+certificate it does not have, and the Homebrew cask named `imla` belongs to upstream.
 Build from source.
 
 **Requirements:** macOS 14.2+, Xcode 16+, Apple Silicon
 
 ```bash
 git clone https://github.com/xshaheen/muesli.git
-cd muesli
+cd imla
 
 make build                       # signed with your own identity, installs to /Applications
 MUESLI_SKIP_SIGN=1 make dev      # isolated ImlaDev.app, separate bundle ID and data
@@ -104,7 +123,7 @@ certificate are not notarized — fine on your own machine, but Gatekeeper warns
 and iCloud sync is off because those entitlements need a provisioning profile.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full local development workflow.
 
-The selected transcription model downloads on demand (~450 MB for the recommended Parakeet v3).
+The selected transcription model downloads on demand (~565 MB for the default English Parakeet Unified; ~450 MB for multilingual Parakeet v3).
 The app bundle also includes the arm64 LiteRT-LM runtime (~61 MB) for experimental
 Gemma 4 support; its ~2.6 GB model weights download only when Gemma is selected.
 
@@ -116,7 +135,7 @@ Imla bundles an agent-friendly local CLI inside the app bundle:
 
 - Installed path: `/Applications/Imla.app/Contents/MacOS/imla-cli`
 - Dev path: `native/ImlaNative/.build/arm64-apple-macosx/debug/imla-cli`
-- Future Homebrew alias: `muesli` once the official cask exposes the bundled binary as a command
+- Future Homebrew alias: `imla` once the official cask exposes the bundled binary as a command
 
 The CLI is designed for coding agents such as Codex and Claude Code. It exposes meetings, dictations, raw transcripts, stored notes, and local audio-file transcription. Existing data commands return stable JSON so an agent can analyze them with its own model and write notes back without requiring a user-supplied OpenAI or OpenRouter key. `transcribe` prints plain transcript text by default so it works naturally in shell pipelines.
 
@@ -136,7 +155,7 @@ The CLI is designed for coding agents such as Codex and Claude Code. It exposes 
    ```
    Homebrew users should eventually be able to use:
    ```bash
-   muesli transcribe file.mp3
+   imla transcribe file.mp3
    ```
 4. List recent meetings or dictations:
    ```bash
@@ -226,7 +245,7 @@ The app's **Dictionary** tab supports importing and exporting the personal dicti
 [
   {
     "word": "museli",
-    "replacement": "muesli",
+    "replacement": "imla",
     "matching_threshold": 0.85
   }
 ]
@@ -318,15 +337,17 @@ Important meeting fields:
 
 | Model | Backend | Runtime | Size | Languages | Latency |
 |-------|---------|---------|------|-----------|---------|
-| **Apple Speech** | SpeechAnalyzer / SpeechTranscriber | System-managed | No Imla model download | System-supported locales | macOS 26+, system dependent |
-| **Parakeet v3** (recommended) | FluidAudio | CoreML / Neural Engine | ~450 MB | 25 languages | ~0.13s |
+| **Apple Speech** | SpeechAnalyzer / SpeechTranscriber | System-managed | No Imla model download | System-supported locales | Dictation, live + final meetings on macOS 26+ |
+| **Parakeet Unified** (default for English) | FluidAudio | CoreML / Neural Engine | ~565 MB | English | Offline batch |
+| **Parakeet v3** (multilingual) | FluidAudio | CoreML / Neural Engine | ~450 MB | 25 languages | ~0.13s |
 | Parakeet v2 | FluidAudio | CoreML / Neural Engine | ~450 MB | English only | ~0.13s |
 | Parakeet Realtime EOU | FluidAudio | CoreML / Neural Engine | ~430 MB | English only | Live preview |
 | **Cohere Transcribe 2B** | CoreML | FP16 encoder + INT8 decoder | ~3.8 GB | 14 languages | ~1s |
 | Nemotron 3.5 Multilingual | FluidInference | CoreML / Neural Engine | ~665 MB | 100+ locales | Live; optional final |
 | SenseVoice Small | FluidAudio | INT8 CoreML / Neural Engine | ~240 MB | 50+ languages | ~1s |
 | Qwen3 ASR | FluidAudio | CoreML / Neural Engine | ~1.3 GB | 52 languages | ~2-3s |
-| Indic ASR | CoreML | RNNT | ~618 MB | 7 Indian languages | Experimental |
+| Bodhan Core | CoreML + MLX | CoreML encoder + autoregressive decoder | ~2.46 GB FP16 / ~1.27 GB INT8 weights | 25 languages, including English; auto-detect | Final transcription |
+| Bodhan Flex | CoreML + MLX | CoreML encoder + autoregressive decoder | ~2.46 GB FP16 / ~1.27 GB INT8 weights | 27 languages, including English; auto-detect | Final transcription |
 | Gemma 4 E2B | LiteRT-LM | Metal GPU decoder + CPU audio encoder | ~2.6 GB | Multilingual | Experimental |
 | Whisper Tiny Multilingual | WhisperKit | CoreML / Neural Engine | ~153 MB | Multilingual | Fastest Whisper option |
 | Whisper Tiny English | WhisperKit | CoreML / Neural Engine | ~153 MB | English only | Fastest English Whisper option |
@@ -334,6 +355,12 @@ Important meeting fields:
 | Whisper Small English | WhisperKit | CoreML / Neural Engine | ~250 MB | English only | ~1-2s |
 | Whisper Medium English | WhisperKit | CoreML / Neural Engine | ~1.5 GB | English only | Slower, more accurate English option |
 | Whisper Large Turbo Multilingual | WhisperKit | CoreML / Neural Engine | ~626 MB | Multilingual | ~2-4s |
+
+**Bodhan Core and Flex** replace the former seven-language AI4Bharat IndicASR integration. Core uses native-script output, including many English terms spoken within Indic utterances. Flex supports mixed-script output—Indic text in its native script and English terms in Latin letters—and spoken-number formatting. Output quality varies, so try both from the production model catalog. Each card has a precision dropdown beside the language selector, with independently downloadable FP16 and INT8 choices. Both require macOS 15 or later and warm up before the app reports readiness. Longer recordings are processed in overlapping chunks.
+
+Both FP16 and INT8 use a CoreML encoder and a native MLX decoder. The precision dropdown changes weight precision for both components, with no development settings required. Fresh FP16 downloads include the MLX decoder instead of the older CoreML decoder and cross-projection packages. The variants have separate downloads and can be removed independently. INT8 is **weight-only quantization**: activations and KV cache remain floating point. The 1.27 GB figure covers encoder and MLX decoder weights, excluding compilation caches. These are storage sizes, not RAM requirements: runtime memory also includes activations, decoder KV cache, and CoreML/MLX allocations. CoreML device placement is runtime-dependent; Neural Engine execution is not guaranteed.
+
+Existing saved IndicASR selections migrate to Bodhan Flex, preserving their language preference. Previously downloaded legacy model files are not automatically deleted.
 
 Apple Speech uses the system `SpeechAnalyzer` and `SpeechTranscriber` APIs on
 macOS 26 and compatible Apple hardware. Its language assets are managed by the
@@ -365,8 +392,9 @@ cannot load.
 
 Source/dev builds need the LocalVQE runtime built once with
 `./scripts/build_localvqe.sh` (the model is committed; the dylibs under
-`native/ImlaNative/LocalVQE/lib/` are not). Without that step, packaging
-warns and the app falls back to DTLN. See `CONTRIBUTING.md`.
+`native/ImlaNative/LocalVQE/lib/` are not). Signed packaging refuses to proceed without the complete runtime, including
+`liblocalvqe` and its required `libggml` libraries. A warm SwiftPM cache does not
+supply these gitignored libraries. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Models download on demand from HuggingFace. Manage them from the **Models** tab in the dashboard.
 
@@ -384,7 +412,19 @@ Imla needs these macOS permissions (guided during onboarding):
 | **Screen Recording** *(OCR opt-in)* | Capture OCR screen context separately from Accessibility; Writing Styles never trigger or use OCR |
 | **Input Monitoring** | Detect hotkey presses globally |
 | **Camera** *(implicit)* | Detect webcam activation for meeting detection |
-| **Calendar** *(optional)* | Show upcoming meetings from Google Calendar |
+| **Calendar** *(optional)* | Read calendars connected to macOS to show upcoming meetings and reminders |
+
+---
+
+## Calendar setup and management
+
+Imla uses macOS Calendar through EventKit. A direct Google Calendar sign-in is not currently available in Imla.
+
+1. In **System Settings → Internet Accounts**, add your Google, Exchange, or other calendar account and enable **Calendars**. Accounts already available in Apple Calendar can be used by Imla.
+2. Allow Imla full Calendar access during onboarding or from **Settings → Meetings → Calendars**. If access was denied, use **Open Calendar Privacy Settings…** to enable it in macOS. Calendar access is optional; you can choose **Not now** during onboarding.
+3. In Imla's **Settings → Meetings → Calendars**, select which calendars to include. Unchecking a calendar hides its meetings and notifications in Imla without deleting calendar data.
+
+**Manage accounts…** opens macOS Internet Accounts, where you can add or remove accounts. Account changes there also affect other apps on your Mac. **Open Calendar…** opens Apple Calendar, where you can create or delete individual calendars and manage subscriptions. Imla refreshes its calendar list when you return from macOS settings.
 
 ---
 
@@ -395,7 +435,7 @@ Imla needs these macOS permissions (guided during onboarding):
 | App | Swift, AppKit, SwiftUI |
 | Primary ASR | [FluidAudio](https://github.com/FluidInference/FluidAudio) and FluidInference models (Parakeet TDT, Nemotron 3.5, SenseVoice Small, and Qwen3 ASR on CoreML/ANE) |
 | Cohere ASR | [Cohere Transcribe](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026) (FP16 encoder + INT8 decoder on CoreML) |
-| Indic ASR | AI4Bharat IndicConformer RNNT CoreML backend |
+| Bodhan ASR | [Bodhan AI](https://huggingface.co/bodhan-ai) Core/Flex with a CoreML encoder and native [MLX Swift](https://github.com/ml-explore/mlx-swift) decoder |
 | Gemma ASR / cleanup | [Google LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) with Gemma 4 E2B (Metal GPU decoder + CPU audio encoder) |
 | Whisper ASR | [WhisperKit](https://github.com/argmaxinc/WhisperKit) (CoreML/ANE) |
 | Voice activity | Silero VAD via FluidAudio (streaming, event-driven) |
@@ -403,7 +443,7 @@ Imla needs these macOS permissions (guided during onboarding):
 | Camera detection | CoreMediaIO property listeners (event-driven) |
 | System audio | CoreAudio process tap by default; ScreenCaptureKit (`SCStream`) fallback |
 | Meeting notes | OpenAI / OpenRouter (BYOK), ChatGPT subscription (OAuth), or Ollama |
-| Calendar | Google Calendar API (OAuth 2.0) |
+| Calendar | Apple EventKit (macOS Calendar accounts) |
 | Sync | CloudKit private database for text-only iCloud sync |
 | Automation | Computer Use planner and post-meeting executable hooks |
 | Export | Meeting PDF/Markdown + versioned Writing Styles JSON |
@@ -423,9 +463,9 @@ Contributions welcome! To get started:
 
 ```bash
 git clone https://github.com/xshaheen/muesli.git
-cd muesli
-swift build --package-path native/ImlaNative -c release
-swift test --package-path native/ImlaNative
+cd imla
+swift build --package-path native/ImlaNative --scratch-path "$HOME/Library/Caches/imla-spm/contributor" -c release
+swift test --package-path native/ImlaNative --scratch-path "$HOME/Library/Caches/imla-spm/contributor"
 ./scripts/test_packaged_cli.sh
 ```
 
@@ -453,7 +493,8 @@ Imla is built on this work:
 - [NVIDIA Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) — FastConformer TDT speech recognition model
 - [Cohere Transcribe](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026) — 2B parameter autoregressive ASR (#1 Open ASR Leaderboard)
 - [Qwen3-ASR](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) — Multilingual speech recognition (52 languages)
-- [AI4Bharat IndicASR](https://huggingface.co/ai4bharat/indic-conformer-600m-multilingual) — IndicConformer multilingual ASR model for Indian languages
+- [Bodhan AI Core](https://huggingface.co/bodhan-ai/indic-transcribe-core) and [Flex](https://huggingface.co/bodhan-ai/indic-transcribe-flex) — multilingual Indic/English ASR; community [Core](https://huggingface.co/phequals/indic-transcribe-core-coreml) and [Flex](https://huggingface.co/phequals/indic-transcribe-flex-coreml) CoreML/MLX conversions
+- [MLX Swift](https://github.com/ml-explore/mlx-swift) — native Apple-silicon decoding for both FP16 and INT8 Bodhan hybrid runtimes
 - [Google LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) — Native on-device Gemma runtime with Swift APIs and Metal acceleration
 - [Gemma 4 E2B LiteRT-LM](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm) — Experimental multimodal transcription and cleanup model
 - [pyannote](https://github.com/pyannote/pyannote-audio) — Speaker diarization (via FluidAudio CoreML conversion)

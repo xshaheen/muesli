@@ -10,6 +10,10 @@ import os
 /// Protocol for system audio capture backends (ScreenCaptureKit vs CoreAudio tap).
 protocol SystemAudioCapturing: AnyObject {
     var onPCMSamples: (([Int16]) -> Void)? { get set }
+    /// A hardware output-route transition occurred. This is a lightweight
+    /// signal only: observers must not synchronously inspect CoreAudio from
+    /// this callback because the HAL may still be rebuilding its device graph.
+    var onRouteChange: (() -> Void)? { get set }
     var isRecording: Bool { get }
     var isPaused: Bool { get }
     func start() async throws
@@ -23,39 +27,38 @@ protocol SystemAudioCapturing: AnyObject {
     /// Samples are flowing again after an interruption.
     var onSystemAudioRecovery: (() -> Void)? { get set }
 
-    /// Monotonic liveness counter advanced by every IO callback while
-    /// capturing. A stall while recording means the capture graph is dead even
-    /// if every API reports success. Backends without a heartbeat (the SCK
-    /// fallback) return 0 and are exempt from stall monitoring.
-    var captureHeartbeat: UInt64 { get }
-    /// Fired when a route-change rebuild fails permanently (all retries
-    /// exhausted). Capture is dead from this point unless a later route change
-    /// or recovery attempt succeeds.
+    /// Fired when a rebuild fails permanently (all retries exhausted). Capture
+    /// is dead from this point unless a later recovery attempt succeeds.
     var onCaptureFailure: ((Error) -> Void)? { get set }
-    /// True while a route-change/health rebuild (including retries) is in
-    /// flight; the watchdog treats this as a known-transient stall window.
+    /// True while a failure-recovery rebuild (including retries) is in flight.
     var isRebuilding: Bool { get }
-    /// Whether this backend advances captureHeartbeat during capture. Backends
-    /// without a heartbeat (SCK) must be excluded from stall monitoring.
-    var supportsHeartbeatMonitoring: Bool { get }
+    /// Positive recorder state set only after tap rebuild attempts exhaust.
+    /// A flat callback stream is deliberately not equivalent to failure:
+    /// healthy global process taps may quiesce while system output is silent.
+    var captureIsDead: Bool { get }
+    /// Whether this backend can report and recover explicit capture failures.
+    var supportsFailureRecovery: Bool { get }
     /// True while a route transition is still settling (recent notification).
-    /// The watchdog skips stall evaluation in this window: the old tap's
-    /// heartbeat stalling mid-transition is expected, not a dead graph.
+    /// Explicit failure recovery waits for this window to end so it does not
+    /// add more HAL work while the daemon is already reconfiguring routes.
     var isRouteSettling: Bool { get }
-    /// Health-driven rebuild: tear down and recreate the capture graph with
-    /// the same bounded retry policy used for route changes. Returns whether a
-    /// rebuild was actually started. Default no-op (false) for backends without
-    /// a rebuild path.
+    /// Explicit-failure recovery: tear down and recreate the capture graph with
+    /// bounded retries. Returns whether a rebuild was actually started. Default
+    /// no-op (false) for backends without a rebuild path.
     @discardableResult
     func rebuildForHealthRecovery(reason: String) -> Bool
 }
 
 extension SystemAudioCapturing {
-    var captureHeartbeat: UInt64 { 0 }
     var isRebuilding: Bool { false }
-    var supportsHeartbeatMonitoring: Bool { false }
+    var captureIsDead: Bool { false }
+    var supportsFailureRecovery: Bool { false }
     var isRouteSettling: Bool { false }
     var onCaptureFailure: ((Error) -> Void)? {
+        get { nil }
+        set {}
+    }
+    var onRouteChange: (() -> Void)? {
         get { nil }
         set {}
     }
@@ -121,6 +124,12 @@ struct RebuildRetryPolicy: Equatable {
 /// - Hardware-synchronized with mic input when used in an aggregate device
 final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnosticsProviding {
     var onPCMSamples: (([Int16]) -> Void)?
+    private let routeCallbackLock = NSLock()
+    private var routeCallback: (() -> Void)?
+    var onRouteChange: (() -> Void)? {
+        get { routeCallbackLock.withLock { routeCallback } }
+        set { routeCallbackLock.withLock { routeCallback = newValue } }
+    }
 
     private var tapID: AudioObjectID = kAudioObjectUnknown
     private var aggregateDeviceID: AudioDeviceID = kAudioObjectUnknown
@@ -128,6 +137,10 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
     private var deviceIOBlock: AudioDeviceIOBlock?
     private let deviceIOQueue = DispatchQueue(label: "com.xshaheen.imla.system-audio-tap.io", qos: .userInitiated)
     private let processingQueue = DispatchQueue(label: "com.xshaheen.imla.system-audio-tap")
+    /// Kept separate from audio processing and route inspection. A wedged HAL
+    /// query or a saturated sample-processing queue must not hide the one
+    /// signal that lets the mic watchdog recover from the transition.
+    private let routeSignalQueue = DispatchQueue(label: "com.xshaheen.imla.system-audio-route-signal")
     private var defaultOutputDeviceListenerBlock: AudioObjectPropertyListenerBlock?
 
     private var outputFile: FileHandle?
@@ -136,12 +149,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
     private var activeCaptureGeneration: UInt64 = 0
     private let recordingFlag = ManagedAtomic(false)
     private let pausedFlag = ManagedAtomic(false)
-    /// Monotonic liveness counter: advanced by every IO callback while
-    /// capturing. A stall while isRecording && !isPaused means the capture
-    /// graph is dead even when every CoreAudio call reported success.
-    private let heartbeatCounter = ManagedAtomic<UInt64>(0)
-    var captureHeartbeat: UInt64 { heartbeatCounter.load(ordering: .relaxed) }
-    /// Fired when a route-change/health rebuild exhausts its retry budget and
+    /// Fired when a failure-recovery rebuild exhausts its retry budget and
     /// capture is dead. Bridged to episode telemetry by MeetingSession.
     var onCaptureFailure: ((Error) -> Void)?
     var onSystemAudioInterruption: (() -> Void)?
@@ -153,7 +161,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
     /// True while a route-change/health rebuild (including retries) is in
     /// flight; the watchdog treats this as a known-transient stall window.
     private(set) var isRebuilding = false
-    var supportsHeartbeatMonitoring: Bool { true }
+    var supportsFailureRecovery: Bool { true }
     /// Set when a rebuild exhausts its retry budget. The recorder deliberately
     /// keeps isRecording/onPCMSamples alive in that state so the watchdog can
     /// drive a later health-recovery rebuild — flipping them would make the
@@ -173,8 +181,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
     /// Read across queues via atomics; written from processingQueue.
     private let lastRouteChangeAtMs = ManagedAtomic<Int64>(0)
     /// True while a route transition is still settling (recent notification).
-    /// The watchdog skips stall evaluation in this window: the old tap's
-    /// heartbeat stalling mid-transition is expected, not a dead graph.
+    /// Explicit recovery is deferred until CoreAudio route churn settles.
     var isRouteSettling: Bool {
         let lastRoute = lastRouteChangeAtMs.load(ordering: .relaxed)
         guard lastRoute != 0 else { return false }
@@ -245,6 +252,10 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
     }
 
     func start() async throws {
+        try await MeetingCaptureLifecycle.onDriverQueue { [self] in try startCapture() }
+    }
+
+    private func startCapture() throws {
         guard !isRecording else { return }
 
         let dir = FileManager.default.temporaryDirectory
@@ -266,10 +277,11 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
             try createTapAndAggregateDevice()
             try setupAndStartAudioDevice()
             // The listener is record-only: it timestamps route transitions so
-            // the watchdog and mic recovery can defer stall diagnosis until
-            // the daemon settles. It never rebuilds — the tap is a global
-            // process mix and rides route changes untouched (proven live).
-            installDefaultOutputDeviceListener()
+            // explicit recovery can wait until the daemon settles. It never
+            // rebuilds — the global process tap rides route changes untouched.
+            processingQueue.sync {
+                installDefaultOutputDeviceListener()
+            }
             fputs("[system-audio] CoreAudio tap capture started\n", stderr)
         } catch {
             fputs("[system-audio] CoreAudio tap start failed: \(error)\n", stderr)
@@ -295,9 +307,10 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         // A rebuild retry pending on processingQueue must not fire after
         // teardown (attemptTapRebuild also guards on isRecording, belt and
         // suspenders).
-        rebuildRetryWorkItem?.cancel()
-        isRebuilding = false
         processingQueue.sync {
+            removeDefaultOutputDeviceListener()
+            rebuildRetryWorkItem?.cancel()
+            isRebuilding = false
             teardownTapAndAudioDevice()
             onPCMSamples = nil
         }
@@ -336,8 +349,11 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         // equivalent to ScreenCaptureKit's "system audio" stream: all process
         // output mixed to stereo, excluding Imla itself. The previous
         // device-stream tap could be valid but zero-filled on some routes.
+        guard let ownProcessID = Self.currentProcessAudioObjectID() else {
+            throw RecorderError.coreAudioSetupFailed("resolve own process for tap exclusion", kAudioHardwareBadObjectError)
+        }
         let tapDesc = Self.makeGlobalTapDescription(
-            excludingProcessID: Self.currentProcessAudioObjectID(),
+            excludingProcessID: ownProcessID,
             name: "Imla System Audio Tap"
         )
 
@@ -345,9 +361,8 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         // system permission dialog on first use ("… would like to record audio
         // from other applications").
         var status = AudioHardwareCreateProcessTap(tapDesc, &tapID)
-        guard status == noErr, tapID != kAudioObjectUnknown else {
-            throw RecorderError.tapCreationFailed(status)
-        }
+        guard status == noErr else { throw RecorderError.tapCreationFailed(status) }
+        guard tapID != kAudioObjectUnknown else { throw RecorderError.invalidTapIdentity }
         fputs("[system-audio] process tap \(tapID) created\n", stderr)
 
         // Create aggregate device referencing the registered tap by UUID.
@@ -432,7 +447,6 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         let generation = activeCaptureGeneration
         let block: AudioDeviceIOBlock = { [weak self] _, inputData, _, _, _ in
             guard let self, self.isRecording, !self.isPaused else { return }
-            self.heartbeatCounter.wrappingIncrement(ordering: .relaxed)
             self.diagnosticsLock.withLock { $0.callbackCount += 1 }
 
             let buffers = Self.copyAudioBuffers(from: inputData)
@@ -737,42 +751,22 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         return false
     }
 
-    /// Look up our process's AudioObjectID from the HAL process object list.
-    /// `CATapDescription` expects these IDs — not raw PIDs.
+    /// Resolve only our own process. Enumerating every client's PID here adds
+    /// system-wide HAL work to the critical path of every meeting start.
     private static func currentProcessAudioObjectID() -> AudioObjectID? {
-        let myPID = ProcessInfo.processInfo.processIdentifier
-        var propertySize: UInt32 = 0
+        var pid = ProcessInfo.processInfo.processIdentifier
+        var objectID = kAudioObjectUnknown
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
         var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        guard AudioObjectGetPropertyDataSize(
-            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &propertySize
-        ) == noErr else { return nil }
-
-        let count = Int(propertySize) / MemoryLayout<AudioObjectID>.size
-        guard count > 0 else { return nil }
-
-        var objects = [AudioObjectID](repeating: 0, count: count)
-        guard AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &propertySize, &objects
-        ) == noErr else { return nil }
-
-        var pidAddr = AudioObjectPropertyAddress(
-            mSelector: kAudioProcessPropertyPID,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address,
+            UInt32(MemoryLayout<pid_t>.size), &pid, &size, &objectID
         )
-        for obj in objects {
-            var objPID: pid_t = 0
-            var pidSize = UInt32(MemoryLayout<pid_t>.size)
-            if AudioObjectGetPropertyData(obj, &pidAddr, 0, nil, &pidSize, &objPID) == noErr,
-               objPID == myPID {
-                return obj
-            }
-        }
-        return nil
+        return status == noErr && objectID != kAudioObjectUnknown ? objectID : nil
     }
 
     private static func audioTapStreamFormat(for tapID: AudioObjectID) throws -> AudioStreamBasicDescription {
@@ -876,8 +870,9 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         guard defaultOutputDeviceListenerBlock == nil else { return }
 
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            self?.processingQueue.async { [weak self] in
-                self?.restartTapForDefaultOutputDeviceChange()
+            self?.routeSignalQueue.async { [weak self] in
+                guard let self, self.isRecording else { return }
+                self.restartTapForDefaultOutputDeviceChange()
             }
         }
         defaultOutputDeviceListenerBlock = block
@@ -887,12 +882,15 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        AudioObjectAddPropertyListenerBlock(
+        let status = AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
             &address,
             nil,
             block
         )
+        if status != noErr {
+            fputs("[system-audio] failed to install default-output listener (status=\(status))\n", stderr)
+        }
     }
 
     private func removeDefaultOutputDeviceListener() {
@@ -938,12 +936,11 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
     /// mix — upstream of any output device — so route changes need NO rebuild
     /// (proven live: the tap rode an AirPods connect/case cycle untouched).
     /// The listener is retained only to timestamp transitions: the watchdog
-    /// and the mic recovery coordinator use it to defer stall diagnosis until
-    /// the daemon has settled, since the old tap's heartbeat gap during a
-    /// transition is expected, not a dead graph.
+    /// and mic recovery coordinator defer recovery until the daemon settles.
     func restartTapForDefaultOutputDeviceChange() {
         guard isRecording else { return }
         lastRouteChangeAtMs.store(Int64(Date().timeIntervalSince1970 * 1000), ordering: .relaxed)
+        onRouteChange?()
         fputs("[system-audio] default output device changed (no rebuild; tap is route-independent)\n", stderr)
     }
 
@@ -1006,10 +1003,8 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         }
     }
 
-    /// Health-driven rebuild entry point (watchdog: IO heartbeat stalled while
-    /// recording). Shares the route-settle gate with the route-change path:
-    /// during a transition the old tap's stall is expected, so the rebuild
-    /// waits for the churn to settle instead of piling onto the daemon.
+    /// Explicit-failure recovery entry point. A confirmed failure waits for
+    /// route churn to settle instead of piling more work onto the daemon.
     @discardableResult
     func rebuildForHealthRecovery(reason: String) -> Bool {
         guard isRecording, !isPaused else { return false }
@@ -1032,6 +1027,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         case fileCreationFailed
         case noDefaultOutputDevice
         case tapCreationFailed(OSStatus)
+        case invalidTapIdentity
         case aggregateDeviceCreationFailed(OSStatus)
         case coreAudioSetupFailed(String, OSStatus)
         case deviceIOProcCreationFailed
@@ -1045,6 +1041,8 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
                 return "Could not create output file"
             case .noDefaultOutputDevice:
                 return "No default audio output device found"
+            case .invalidTapIdentity:
+                return "The audio service returned no usable capture tap. Audio capture could not start."
             case .tapCreationFailed(let s):
                 return "Process tap creation failed (status: \(s))"
             case .aggregateDeviceCreationFailed(let s):
@@ -1108,8 +1106,10 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         isPaused = false
         onPCMSamples = nil
 
-        removeDefaultOutputDeviceListener()
-        teardownTapAndAudioDevice()
+        processingQueue.sync {
+            removeDefaultOutputDeviceListener()
+            teardownTapAndAudioDevice()
+        }
 
         if let file = outputFile {
             file.closeFile()

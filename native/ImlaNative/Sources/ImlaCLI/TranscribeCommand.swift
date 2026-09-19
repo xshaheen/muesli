@@ -1422,8 +1422,22 @@ struct CLISummaryConfig: Decodable {
     static func load(from supportDirectory: URL) -> CLISummaryConfig {
         let url = supportDirectory.appendingPathComponent("config.json")
         guard let data = try? Data(contentsOf: url),
-              let config = try? JSONDecoder().decode(CLISummaryConfig.self, from: data) else {
+              var config = try? JSONDecoder().decode(CLISummaryConfig.self, from: data) else {
             return CLISummaryConfig()
+        }
+        if config.openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            struct StoredOpenRouterCredential: Decodable {
+                let apiKey: String
+
+                enum CodingKeys: String, CodingKey {
+                    case apiKey = "api_key"
+                }
+            }
+            let credentialURL = supportDirectory.appendingPathComponent("openrouter-auth.json")
+            if let credentialData = try? Data(contentsOf: credentialURL),
+               let credential = try? JSONDecoder().decode(StoredOpenRouterCredential.self, from: credentialData) {
+                config.openRouterAPIKey = credential.apiKey
+            }
         }
         return config
     }
@@ -1444,8 +1458,12 @@ enum CLISummaryError: LocalizedError {
 
 enum CLISummaryClient {
     private static let defaultOpenAIModel = "gpt-5.4-mini"
-    private static let defaultOpenRouterModel = "stepfun/step-3.5-flash:free"
+    private static let defaultOpenRouterModel = "openrouter/free"
     private static let defaultSummaryMaxOutputTokens = 2500
+
+    static func resolvedOpenRouterModel(_ configuredModel: String) -> String {
+        configuredModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? defaultOpenRouterModel : configuredModel
+    }
 
     static func summarize(transcript: String, title: String, config: CLISummaryConfig) async throws -> String {
         let backend = config.meetingSummaryBackend.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -1472,7 +1490,7 @@ enum CLISummaryClient {
                 backend: "OpenRouter",
                 url: URL(string: "https://openrouter.ai/api/v1/chat/completions")!,
                 apiKey: key,
-                model: config.openRouterModel.isEmpty ? defaultOpenRouterModel : config.openRouterModel,
+                model: resolvedOpenRouterModel(config.openRouterModel),
                 transcript: transcript,
                 title: title
             )

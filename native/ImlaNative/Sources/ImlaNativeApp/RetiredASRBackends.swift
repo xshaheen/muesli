@@ -8,13 +8,18 @@ import Foundation
 /// catalogue entry is not enough on its own: a config that still names it would fall
 /// through to whatever the resolver happened to pick, which is exactly the silent
 /// model swap the removal plan forbids.
+///
+/// IndicASR went for a different reason — it was superseded rather than outscored —
+/// but a config that still names it has the same problem, so it retires the same way.
 enum RetiredASRBackend: String, CaseIterable, Sendable {
     /// The `BackendOption.backend` identifier the removed model shipped under.
     case qwen3ASR = "qwen"
+    case indicASR = "indicasr"
 
     var label: String {
         switch self {
         case .qwen3ASR: "Qwen3 ASR"
+        case .indicASR: "IndicASR"
         }
     }
 
@@ -23,16 +28,37 @@ enum RetiredASRBackend: String, CaseIterable, Sendable {
         switch self {
         case .qwen3ASR:
             "It was measured against every other model and came last or near-last on every language, including Arabic."
+        case .indicASR:
+            "Bodhan replaces it: the same Indic languages, more of them, and a runtime that is still maintained."
         }
     }
 
-    /// Cache directories the removed backend may still occupy under the shared
-    /// FluidAudio models root. Qwen kept two: FluidAudio's `Repo.folderName` strips the
-    /// `-coreml` suffix (issue #380), so a manual or pre-fix install can sit under the
-    /// longer name while the managed download sits under the shorter one.
+    /// Where a removed backend's weights live, since they did not all download to
+    /// the same place.
+    enum CacheRoot: Equatable, Sendable {
+        /// The shared FluidAudio models root every managed ASR download lands under.
+        case fluidAudioModels
+        /// The app's own model cache. Its directory name changed with the rename,
+        /// and an install from before it was never migrated automatically, so both
+        /// spellings are searched.
+        case appModelCache
+    }
+
+    var cacheRoot: CacheRoot {
+        switch self {
+        case .qwen3ASR: .fluidAudioModels
+        case .indicASR: .appModelCache
+        }
+    }
+
+    /// Cache directories the removed backend may still occupy under its own root.
+    /// Qwen kept two: FluidAudio's `Repo.folderName` strips the `-coreml` suffix
+    /// (issue #380), so a manual or pre-fix install can sit under the longer name
+    /// while the managed download sits under the shorter one.
     var cacheDirectoryNames: [String] {
         switch self {
         case .qwen3ASR: ["qwen3-asr-0.6b", "qwen3-asr-0.6b-coreml"]
+        case .indicASR: ["indic-conformer-rnnt-coreml"]
         }
     }
 
@@ -40,6 +66,7 @@ enum RetiredASRBackend: String, CaseIterable, Sendable {
     var approximateSizeLabel: String {
         switch self {
         case .qwen3ASR: "~1.3 GB"
+        case .indicASR: "~1 GB"
         }
     }
 
@@ -68,23 +95,44 @@ struct RetiredASRBackendCache: Equatable, Sendable {
             .appendingPathComponent("Library/Application Support/FluidAudio/Models", isDirectory: true)
     }
 
+    /// The app's own model cache, under both the current and the pre-rename name.
+    static func appModelCacheRoots(fileManager: FileManager = .default) -> [URL] {
+        ["imla", "muesli"].map {
+            fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent(".cache/\($0)/models", isDirectory: true)
+        }
+    }
+
+    static func roots(
+        for backend: RetiredASRBackend,
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        switch backend.cacheRoot {
+        case .fluidAudioModels: [modelsRoot(fileManager: fileManager)]
+        case .appModelCache: appModelCacheRoots(fileManager: fileManager)
+        }
+    }
+
+    /// `modelsRoot` overrides every backend's root, which is what the tests drive.
     static func detectAll(
         in modelsRoot: URL? = nil,
         fileManager: FileManager = .default
     ) -> [RetiredASRBackendCache] {
-        let root = modelsRoot ?? Self.modelsRoot(fileManager: fileManager)
-        return RetiredASRBackend.allCases.compactMap {
-            detect($0, in: root, fileManager: fileManager)
+        RetiredASRBackend.allCases.compactMap { backend in
+            let roots = modelsRoot.map { [$0] } ?? roots(for: backend, fileManager: fileManager)
+            return detect(backend, in: roots, fileManager: fileManager)
         }
     }
 
     static func detect(
         _ backend: RetiredASRBackend,
-        in modelsRoot: URL,
+        in roots: [URL],
         fileManager: FileManager = .default
     ) -> RetiredASRBackendCache? {
-        let directories = backend.cacheDirectoryNames
-            .map { modelsRoot.appendingPathComponent($0, isDirectory: true) }
+        let directories = roots
+            .flatMap { root in
+                backend.cacheDirectoryNames.map { root.appendingPathComponent($0, isDirectory: true) }
+            }
             .filter { fileManager.fileExists(atPath: $0.path) }
         guard !directories.isEmpty else { return nil }
         return RetiredASRBackendCache(
@@ -153,6 +201,25 @@ struct RetiredASRBackendNotice: Codable, Equatable, Sendable {
 
 /// Resolves what a persisted selection of a removed backend becomes.
 enum RetiredASRBackendMigration {
+    /// A backend that has a direct successor moves to it. Otherwise the choice is
+    /// read off the language profile, because there is no single model that is the
+    /// right answer for every language the removed one covered.
+    static func replacement(
+        for profile: LanguageProfile,
+        retired: RetiredASRBackend? = nil,
+        model: String? = nil
+    ) -> BackendOption {
+        // IndicASR was superseded rather than outscored: Bodhan covers the same
+        // languages and more. Sending these users to the profile-derived answer
+        // would move an Indic speaker to Whisper purely because Indic is not
+        // English, which is a worse model for them and not what happened here.
+        if retired == .indicASR {
+            return BackendOption.all.first { $0.backend == "bodhan" && $0.model == model }
+                ?? .bodhanFlex
+        }
+        return profileDerivedReplacement(for: profile)
+    }
+
     /// KTD2: the replacement is read off the language profile rather than fixed.
     ///
     /// Parakeet v3 won English outright (0.063 WER) and scored 0.005 faithfulness on
@@ -161,7 +228,7 @@ enum RetiredASRBackendMigration {
     /// profile, dominant or merely selected, sends the user to Whisper Large Turbo,
     /// which led both Arabic cohorts. An unset profile indicates nothing, so it takes
     /// the English winner.
-    static func replacement(for profile: LanguageProfile) -> BackendOption {
+    static func profileDerivedReplacement(for profile: LanguageProfile) -> BackendOption {
         indicatesNonEnglish(profile) ? .whisperLargeTurbo : .parakeetMultilingual
     }
 

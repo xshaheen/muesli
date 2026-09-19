@@ -116,7 +116,7 @@ struct MeetingMediaSignalFilterTests {
     }
 
     @Test("Imla dictation mic does not satisfy calendar meeting activity")
-    func muesliDictationMicDoesNotSatisfyCalendarMeetingActivity() {
+    func imlaDictationMicDoesNotSatisfyCalendarMeetingActivity() {
         let media = MeetingMediaSignalFilter.apply(
             deviceMicActive: true,
             cameraActive: false,
@@ -181,7 +181,7 @@ struct MeetingMediaSignalFilterTests {
     }
 
     @Test("Imla camera does not satisfy calendar meeting activity")
-    func muesliCameraDoesNotSatisfyCalendarMeetingActivity() {
+    func imlaCameraDoesNotSatisfyCalendarMeetingActivity() {
         let media = MeetingMediaSignalFilter.apply(
             deviceMicActive: false,
             cameraActive: true,
@@ -235,6 +235,36 @@ struct MeetingMediaSignalFilterTests {
 
         #expect(media.micActive == true)
         #expect(media.audioInputProcesses.isEmpty)
+    }
+
+    @Test("authoritative Imla audio ownership filters a missing sensor attribution")
+    func selfAudioOwnershipFiltersUnattributedDeviceMic() {
+        let media = MeetingMediaSignalFilter.apply(
+            deviceMicActive: true,
+            cameraActive: false,
+            audioInputProcesses: [],
+            sensorAttributions: sensorAttributions(),
+            selfAudioActivityActive: true,
+            selfBundleID: selfBundleID
+        )
+
+        #expect(media.micActive == false)
+        #expect(media.hasMicOrCameraSignal == false)
+    }
+
+    @Test("external attribution survives simultaneous Imla audio ownership")
+    func externalAttributionSurvivesSelfAudioOwnership() {
+        let media = MeetingMediaSignalFilter.apply(
+            deviceMicActive: true,
+            cameraActive: false,
+            audioInputProcesses: [],
+            sensorAttributions: sensorAttributions(micBundleIDs: [selfBundleID, "us.zoom.xos"]),
+            selfAudioActivityActive: true,
+            selfBundleID: selfBundleID
+        )
+
+        #expect(media.micActive == true)
+        #expect(media.hasMicOrCameraSignal == true)
     }
 
     @Test("self helper audio input is treated as Imla")

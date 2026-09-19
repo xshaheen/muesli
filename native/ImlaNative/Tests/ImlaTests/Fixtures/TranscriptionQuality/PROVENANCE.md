@@ -2,7 +2,7 @@
 
 - Capture timestamp (UTC): `14-08-2026_02-32-20`
 - Capture commit: `01350223527973044173d48a6c70687f58176764`
-- Application: `imla-cli` from the exact capture commit
+- Application: `muesli-cli` from the exact capture commit
 - ASR backend/model: WhisperKit `whisper-tiny` (`tiny`)
 - Platform: macOS arm64
 - English synthesis: macOS `say`, voice `Samantha`, rate 170

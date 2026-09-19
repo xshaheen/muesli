@@ -333,11 +333,11 @@ struct DictationStyleSessionTests {
     @Test("cleanup request keeps the recording-start local model")
     func cleanupRequestPinsLocalModel() throws {
         var config = adaptiveConfig()
-        config.activePostProcessorId = PostProcessorOption.finetunedV2.id
+        config.activePostProcessorId = PostProcessorOption.legacyV2.id
         let runtime = DictationCleanupRuntimeSnapshot(
             readiness: .ready,
             backend: .local,
-            option: .finetunedV2,
+            option: .legacyV2,
             config: config
         )
         let snapshot = DictationStyleSessionSnapshot(
@@ -350,9 +350,9 @@ struct DictationStyleSessionTests {
         config.activePostProcessorId = PostProcessorOption.qwen35_0_8b.id
 
         let request = try #require(snapshot.cleanupRequest(context: nil))
-        #expect(request.runtime.modelID == PostProcessorOption.finetunedV2.id)
-        #expect(request.runtime.modelURL == PostProcessorOption.finetunedV2.modelURL)
-        #expect(request.runtime.config.activePostProcessorId == PostProcessorOption.finetunedV2.id)
+        #expect(request.runtime.modelID == PostProcessorOption.legacyV2.id)
+        #expect(request.runtime.modelURL == PostProcessorOption.legacyV2.modelURL)
+        #expect(request.runtime.config.activePostProcessorId == PostProcessorOption.legacyV2.id)
     }
 
     @Test("cleanup request commits the available hostname without waiting for later context")
@@ -366,7 +366,7 @@ struct DictationStyleSessionTests {
         let runtime = DictationCleanupRuntimeSnapshot(
             readiness: .ready,
             backend: .local,
-            option: .finetunedV2,
+            option: .legacyV2,
             config: config
         )
         let snapshot = DictationStyleSessionSnapshot(

@@ -47,6 +47,7 @@ enum ModelsCategory: String, CaseIterable, Identifiable {
     case dictation
     case streaming
     case postProcessing
+    case quill
 
     var id: String { rawValue }
 
@@ -55,6 +56,7 @@ enum ModelsCategory: String, CaseIterable, Identifiable {
         case .dictation: return "Dictation"
         case .streaming: return "Live Meetings"
         case .postProcessing: return "Cleanup"
+        case .quill: return "Quill"
         }
     }
 }
@@ -131,7 +133,15 @@ enum ICloudBridgeState: Equatable {
     case syncing
     case active
     case needsICloud
+    case needsReconnection
+    case needsAccountReplacement
     case error
+}
+
+enum ICloudBridgeCompanionDiscoveryState: Equatable {
+    case idle
+    case waiting
+    case timedOut
 }
 
 struct ActiveMeetingAudioWarning: Equatable {
@@ -165,6 +175,13 @@ struct ActiveMeetingAudioWarningState {
             ActiveMeetingAudioWarning(meetingID: meetingID, message: $0)
         }
     }
+}
+
+enum OpenRouterModelCatalogLoadState: Equatable {
+    case idle
+    case loading
+    case loaded
+    case failed(String)
 }
 
 @MainActor
@@ -202,12 +219,22 @@ final class AppState {
 
     // Config-driven state
     var selectedBackend: BackendOption = .whisper
+    var dictationProvider: DictationProvider = .local
     var selectedMeetingTranscriptionBackend: BackendOption = .whisper
     var selectedMeetingSummaryBackend: MeetingSummaryBackendOption = .chatGPT
     var selectedPostProcessorBackend: TranscriptCleanupBackendOption = .local
     var activePostProcessor: PostProcessorOption = PostProcessorOption.defaultOption
     var config: AppConfig = AppConfig()
     var launchAtLoginRegistrationState: LaunchAtLoginRegistrationState = .disabled
+    var interactionPermissionSnapshot: InteractionPermissionSnapshot?
+
+    // This fork keeps direct Google Calendar sign-in alongside EventKit, which
+    // upstream removed.
+    var isGoogleCalendarAvailable: Bool = false
+    var isGoogleCalendarVerified: Bool = false
+    var isGoogleCalendarAuthenticated: Bool = false
+    var availableGoogleCalendars: [GoogleCalendarSummary] = []
+    var googleCalendarListLoadState: GoogleCalendarListLoadState = .idle
 
     // Live status
     var isMeetingRecording: Bool = false
@@ -224,19 +251,22 @@ final class AppState {
     var dictationState: DictationState = .idle
     var isVoiceNoteRecording: Bool = false
     var isChatGPTAuthenticated: Bool = false
-    var isGoogleCalendarAvailable: Bool = false
-    var isGoogleCalendarVerified: Bool = false
-    var isGoogleCalendarAuthenticated: Bool = false
+    var isOpenRouterAuthenticated: Bool = false
+    var isOpenRouterEnvironmentManaged: Bool = false
+    var hasStoredOpenRouterCredential: Bool = false
+    var openRouterSummaryModels: [SummaryModelPreset] = []
+    var openRouterSummaryCatalogState: OpenRouterModelCatalogLoadState = .idle
+    var openRouterTranscriptionModels: [SummaryModelPreset] = []
+    var openRouterTranscriptionCatalogState: OpenRouterModelCatalogLoadState = .idle
     var upcomingCalendarEvents: [UnifiedCalendarEvent] = []
     var hiddenCalendarEventIDs: Set<String> = []
     var availableEventKitCalendars: [AvailableCalendar] = []
-    var availableGoogleCalendars: [GoogleCalendarSummary] = []
-    var googleCalendarListLoadState: GoogleCalendarListLoadState = .idle
     var sparkleUpdateStatus: SparkleUpdateStatus = .idle
     var sparkleLastCheckedAt: Date?
     var iCloudSyncStatus: String?
     var isICloudSyncInProgress: Bool = false
     var isICloudBridgeActivationPending: Bool = false
+    var iCloudBridgeCompanionDiscoveryState: ICloudBridgeCompanionDiscoveryState = .idle
     var iCloudBridgeState: ICloudBridgeState = .notConfigured
     var iCloudBridgeMessage: String?
     var iCloudBridgeRemoteDeviceName: String?

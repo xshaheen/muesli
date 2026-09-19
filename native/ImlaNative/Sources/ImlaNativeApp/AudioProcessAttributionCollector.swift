@@ -8,6 +8,7 @@ enum AudioProcessAttributionSource: Equatable {
 }
 
 struct AudioProcessActivity: Equatable {
+    let audioObjectID: AudioObjectID?
     let pid: pid_t
     let bundleID: String
     let appName: String
@@ -17,6 +18,7 @@ struct AudioProcessActivity: Equatable {
     let attributionSource: AudioProcessAttributionSource
 
     init(
+        audioObjectID: AudioObjectID? = nil,
         pid: pid_t,
         bundleID: String,
         appName: String,
@@ -25,6 +27,7 @@ struct AudioProcessActivity: Equatable {
         deviceIDs: [AudioObjectID] = [],
         attributionSource: AudioProcessAttributionSource = .coreAudio
     ) {
+        self.audioObjectID = audioObjectID
         self.pid = pid
         self.bundleID = bundleID
         self.appName = appName
@@ -53,12 +56,34 @@ final class AudioProcessAttributionCollector {
                 ?? bundleID
 
             return AudioProcessActivity(
+                audioObjectID: processID,
                 pid: pid,
                 bundleID: bundleID,
                 appName: appName,
                 isRunningInput: true,
                 isRunningOutput: boolProperty(kAudioProcessPropertyIsRunningOutput, objectID: processID),
                 deviceIDs: deviceIDsForInput(processID)
+            )
+        }
+    }
+
+    /// Rechecks only process objects retained by a previous full attribution
+    /// pass. This avoids enumerating every CoreAudio process merely to observe
+    /// an input/output transition on an already identified client.
+    func refreshTrackedProcesses(_ processes: [AudioProcessActivity]) -> [AudioProcessActivity] {
+        processes.compactMap { process in
+            guard let objectID = process.audioObjectID,
+                  pidProperty(objectID: objectID) == process.pid else {
+                return nil
+            }
+            return AudioProcessActivity(
+                audioObjectID: objectID,
+                pid: process.pid,
+                bundleID: process.bundleID,
+                appName: process.appName,
+                isRunningInput: boolProperty(kAudioProcessPropertyIsRunningInput, objectID: objectID),
+                isRunningOutput: boolProperty(kAudioProcessPropertyIsRunningOutput, objectID: objectID),
+                deviceIDs: process.deviceIDs
             )
         }
     }

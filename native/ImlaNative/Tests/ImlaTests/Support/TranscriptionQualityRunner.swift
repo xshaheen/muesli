@@ -102,7 +102,7 @@ enum TranscriptionQualityEligibility {
     /// and throws on anything older. Read off those checks directly rather than inferred from the
     /// model catalogue, because the throw is what the sweep would otherwise record as a failure.
     static let macOS15Backends: Set<String> = [
-        "cohere", "indicasr", "gemma4-litert", "nemotron35",
+        "cohere", "bodhan", "gemma4-litert", "nemotron35",
     ]
 
     static func minimumMacOSMajorVersion(for backend: BackendOption) -> Int? {
@@ -150,13 +150,13 @@ enum TranscriptionQualityEligibility {
     ///
     /// KTD5 asks that no backend be steered by the harness, so every one runs on its shipped
     /// default. For most that default *is* automatic detection; `CohereTranscribeLanguage` and
-    /// `IndicASRLanguage` have no automatic case at all, so their default is a pinned language, and
+    /// `BodhanLanguage` have no automatic case at all, so their default is a pinned language, and
     /// the English-only checkpoints have no language axis at all. Recording it per backend is what
     /// stops the report comparing a pinned model against an auto-detecting one without saying so.
     static func languageConfiguration(for backend: BackendOption) -> String {
         switch backend.backend {
         case "cohere": return "pinned:\(CohereTranscribeLanguage.defaultLanguage.rawValue)"
-        case "indicasr": return "pinned:\(IndicASRLanguage.defaultLanguage.rawValue)"
+        case "bodhan": return "pinned:\(BodhanLanguage.defaultLanguage.rawValue)"
         case "apple-speech": return "pinned:\(hostSpeechLanguageCode)"
         default:
             // `nemotron35`, `sensevoice` and `gemma4-litert` all detect the language

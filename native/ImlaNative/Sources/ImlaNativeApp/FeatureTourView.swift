@@ -84,9 +84,9 @@ struct FeatureTourCalloutLayout {
         switch target {
         case .timelineSidebar, .meetingsSidebar:
             return [.trailing, .leading, .below, .above]
-        case .timelineApplications, .appleSpeechCard, .meetingPeople, .timelineFilters, .modelLibrary, .insightsEntry, .liveCaptionsSetting:
+        case .timelineApplications, .appleSpeechCard, .meetingPeople, .timelineFilters, .modelLibrary, .insightsEntry, .liveCaptionsSetting, .dictationProviderSetting, .parakeetFamilyCard, .bodhanFlexCard:
             return [.below, .above, .trailing, .leading]
-        case .dictionarySuggestions, .cloudCleanupSetting, .streamingModels, .experimentalModels:
+        case .dictionarySuggestions, .cloudCleanupSetting, .streamingModels, .experimentalModels, .quillSettings:
             return [.above, .below, .trailing, .leading]
         }
     }
@@ -175,7 +175,7 @@ extension View {
 struct FeatureTourOverlay: View {
     let tour: FeatureTour
     let stepIndex: Int
-    let spotlightRect: CGRect
+    let spotlightRect: CGRect?
     let containerSize: CGSize
     let onBack: () -> Void
     let onNext: () -> Void
@@ -188,8 +188,8 @@ struct FeatureTourOverlay: View {
         tour.steps[stepIndex]
     }
 
-    private var expandedSpotlight: CGRect {
-        spotlightRect.insetBy(dx: -8, dy: -8)
+    private var expandedSpotlight: CGRect? {
+        spotlightRect?.insetBy(dx: -8, dy: -8)
     }
 
     var body: some View {
@@ -197,19 +197,24 @@ struct FeatureTourOverlay: View {
             Color.clear
                 .contentShape(Rectangle())
 
-            FeatureTourDimmingShape(spotlight: expandedSpotlight, cornerRadius: 10)
-                .fill(
-                    Color.black.opacity(0.72),
-                    style: FillStyle(eoFill: true, antialiased: true)
-                )
-                .allowsHitTesting(false)
+            if let expandedSpotlight {
+                FeatureTourDimmingShape(spotlight: expandedSpotlight, cornerRadius: 10)
+                    .fill(
+                        Color.black.opacity(0.72),
+                        style: FillStyle(eoFill: true, antialiased: true)
+                    )
+                    .allowsHitTesting(false)
 
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(ImlaTheme.accent, lineWidth: 2)
-                .frame(width: expandedSpotlight.width, height: expandedSpotlight.height)
-                .position(x: expandedSpotlight.midX, y: expandedSpotlight.midY)
-                .shadow(color: ImlaTheme.accent.opacity(0.55), radius: 10)
-                .allowsHitTesting(false)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(ImlaTheme.accent, lineWidth: 2)
+                    .frame(width: expandedSpotlight.width, height: expandedSpotlight.height)
+                    .position(x: expandedSpotlight.midX, y: expandedSpotlight.midY)
+                    .shadow(color: ImlaTheme.accent.opacity(0.55), radius: 10)
+                    .allowsHitTesting(false)
+            } else {
+                Color.black.opacity(0.72)
+                    .allowsHitTesting(false)
+            }
 
             callout
                 .frame(width: 380)
@@ -310,11 +315,14 @@ struct FeatureTourOverlay: View {
     }
 
     private var calloutPosition: CGPoint {
-        FeatureTourCalloutLayout.position(
+        guard let expandedSpotlight, let target = step.target else {
+            return CGPoint(x: containerSize.width / 2, y: containerSize.height / 2)
+        }
+        return FeatureTourCalloutLayout.position(
             spotlight: expandedSpotlight,
             containerSize: containerSize,
             calloutSize: calloutSize,
-            target: step.target
+            target: target
         )
     }
 }
@@ -337,7 +345,7 @@ struct FeatureTourInvitationView: View {
                         .frame(width: 26, height: 26)
 
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("MUESLI \(tour.displayVersion)")
+                        Text("IMLA \(tour.displayVersion)")
                             .font(ImlaTheme.font(size: 10, weight: .bold))
                             .foregroundStyle(ImlaTheme.accent)
                         Text("Want a quick tour of what’s new?")

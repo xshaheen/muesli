@@ -701,6 +701,23 @@ actor Gemma4LiteRTTranscriber {
         return (trimmed, rawOutput, elapsed)
     }
 
+    /// Interpret an audio instruction and generate the requested text in one conversation call.
+    func generateFromAudio(
+        wavURL: URL, systemPrompt: String, userPrompt: String,
+        model: Gemma4LiteRTModel, maxOutputTokens: Int32
+    ) async throws -> String {
+        await acquireOperation()
+        defer { releaseOperation() }
+        try Task.checkCancellation()
+        try Self.validateAudioDuration(wavURL: wavURL)
+        try await prepareEngine(model: model)
+        try Task.checkCancellation()
+        return try generateTextPrepared(
+            systemPrompt: systemPrompt, userPrompt: userPrompt,
+            maxOutputTokens: maxOutputTokens, audioURL: wavURL
+        )
+    }
+
     func generateText(
         systemPrompt: String,
         userPrompt: String,
@@ -720,7 +737,8 @@ actor Gemma4LiteRTTranscriber {
     private func generateTextPrepared(
         systemPrompt: String,
         userPrompt: String,
-        maxOutputTokens: Int32
+        maxOutputTokens: Int32,
+        audioURL: URL? = nil
     ) throws -> String {
         guard let engine else { throw TranscriberError.notLoaded }
         guard let sessionConfig = litert_lm_session_config_create() else {
@@ -755,10 +773,7 @@ actor Gemma4LiteRTTranscriber {
             throw TranscriberError.failedToCreateOptionalArgs
         }
         defer { litert_lm_conversation_optional_args_delete(optionalArgs) }
-        let userMessageJSON = try Self.messageJSONString(
-            role: "user",
-            contents: [["type": "text", "text": userPrompt]]
-        )
+        let userMessageJSON = try Self.generationMessageJSONString(userPrompt: userPrompt, audioURL: audioURL)
         guard let jsonResponse = litert_lm_conversation_send_message(
             conversation,
             userMessageJSON,
@@ -926,6 +941,12 @@ actor Gemma4LiteRTTranscriber {
             throw TranscriberError.failedToCreateMessage
         }
         return string
+    }
+
+    static func generationMessageJSONString(userPrompt: String, audioURL: URL?) throws -> String {
+        var contents = [["type": "text", "text": userPrompt]]
+        if let audioURL { contents.append(["type": "audio", "path": audioURL.path]) }
+        return try messageJSONString(role: "user", contents: contents)
     }
 
     static func userMessageJSONString(wavURL: URL) throws -> String {
