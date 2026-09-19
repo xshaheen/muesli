@@ -1781,7 +1781,7 @@ struct OnboardingView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
                     .background(ImlaTheme.success)
-                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall))
+                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
                 } else if isSigningInOpenRouter {
                     HStack(spacing: 8) {
                         ProgressView()
@@ -1813,7 +1813,7 @@ struct OnboardingView: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
                         .background(ImlaTheme.accent)
-                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall))
+                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
                     }
                     .buttonStyle(.plain)
 
@@ -1837,7 +1837,7 @@ struct OnboardingView: View {
                     if let openRouterSignInError {
                         Text(openRouterSignInError)
                             .font(.system(size: 11))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(ImlaTheme.danger)
                             .lineLimit(2)
                     }
                 }

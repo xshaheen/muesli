@@ -90,9 +90,9 @@ private struct ICloudLinkedDeviceRow: View {
         .padding(.horizontal, ImlaTheme.spacing8)
         .padding(.vertical, 6)
         .background(ImlaTheme.success.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall))
+        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall)
+            RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
                 .strokeBorder(ImlaTheme.success.opacity(0.18), lineWidth: 1)
         }
         .accessibilityElement(children: .ignore)
@@ -3732,8 +3732,8 @@ struct SettingsView: View {
         }
         .padding(ImlaTheme.spacing16)
         .background(ImlaTheme.surfacePrimary)
-        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall))
-        .overlay(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall)
+        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
             .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1))
     }
 

@@ -257,6 +257,17 @@ enum ImlaTheme {
             return .linear(duration: duration).repeatForever(autoreverses: autoreverses)
         }
 
+        /// A repeat that eases at both ends, for a control that nudges rather than
+        /// spins: the linear form above reads mechanical when it reverses.
+        static func easedRepeating(
+            _ duration: TimeInterval,
+            autoreverses: Bool,
+            reduceMotion: Bool
+        ) -> Animation? {
+            guard !reduceMotion else { return nil }
+            return .easeInOut(duration: duration).repeatForever(autoreverses: autoreverses)
+        }
+
         static func pulsing(
             _ duration: TimeInterval,
             reduceMotion: Bool
@@ -281,6 +292,13 @@ enum ImlaTheme {
 
         @MainActor static func repeating(_ duration: TimeInterval, autoreverses: Bool) -> Animation? {
             repeating(duration, autoreverses: autoreverses, reduceMotion: reduceMotion)
+        }
+
+        @MainActor static func easedRepeating(
+            _ duration: TimeInterval,
+            autoreverses: Bool
+        ) -> Animation? {
+            easedRepeating(duration, autoreverses: autoreverses, reduceMotion: reduceMotion)
         }
 
         @MainActor static func pulsing(_ duration: TimeInterval) -> Animation? {

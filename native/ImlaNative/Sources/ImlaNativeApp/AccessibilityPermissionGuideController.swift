@@ -585,9 +585,9 @@ private struct CompactAccessibilityPermissionGuideView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: NSColor(red: 0.10, green: 0.12, blue: 0.14, alpha: 0.91)))
-        .clipShape(RoundedRectangle(cornerRadius: model.didAttemptDrop ? 14 : 18))
+        .clipShape(RoundedRectangle(cornerRadius: model.didAttemptDrop ? 14 : 18, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: model.didAttemptDrop ? 14 : 18)
+            RoundedRectangle(cornerRadius: model.didAttemptDrop ? 14 : 18, style: .continuous)
                 .stroke(Color.white.opacity(0.10), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.10), radius: 10, y: 4)
@@ -607,7 +607,7 @@ private struct CompactAccessibilityPermissionGuideView: View {
 
     private func startArrowAnimation() {
         guard !reduceMotion else { return }
-        withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
+        withAnimation(ImlaTheme.Motion.easedRepeating(0.72, autoreverses: true)) {
             arrowIsDisplaced = true
         }
     }
@@ -621,7 +621,7 @@ private struct AccessibilityPermissionDragRowView: View {
         PermissionGuideAppRow(appName: appName, appIcon: appIcon)
             .padding(7)
             .overlay(
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(
                         ImlaTheme.accent,
                         style: StrokeStyle(lineWidth: 2, dash: [7, 5])
@@ -641,7 +641,7 @@ private struct PermissionGuideAppRow: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: 30, height: 30)
-                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
 
             Text(appName)
                 .font(.system(size: 14, weight: .semibold))
@@ -652,9 +652,9 @@ private struct PermissionGuideAppRow: View {
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.white.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.white.opacity(0.15), lineWidth: 1)
         )
     }

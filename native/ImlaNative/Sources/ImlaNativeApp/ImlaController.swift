@@ -1108,24 +1108,20 @@ public final class ImlaController: NSObject {
         meetingRecordingPanel.onOpenNotes = { [weak self] in self?.openActiveMeetingNotes() }
         ComputerUseCursorOverlay.shared.onStop = { [weak self] in
             guard let self else { return }
-            if self.computerUseHotkeyMonitor.isToggleRecording {
-                self.computerUseHotkeyMonitor.stopToggleMode()
-            } else if self.quilHotkeyMonitor.isToggleRecording {
-                self.quilHotkeyMonitor.stopToggleMode()
-            } else if self.quilStartedAt != nil {
-                self.handleQuilStop()
-            } else {
-                self.handleComputerUseStop()
+            switch InteractiveOverlayActionPolicy.stopAction(for: self.interactiveOverlayState) {
+            case .stopComputerUseToggle: self.computerUseHotkeyMonitor.stopToggleMode()
+            case .stopQuilToggle: self.quilHotkeyMonitor.stopToggleMode()
+            case .stopQuil: self.handleQuilStop()
+            default: self.handleComputerUseStop()
             }
         }
         ComputerUseCursorOverlay.shared.onCancel = { [weak self] in
             guard let self else { return }
-            if self.quilHotkeyMonitor.isToggleRecording
-                || self.quilStartedAt != nil
-                || self.quilSelectionSnapshot != nil {
+            switch InteractiveOverlayActionPolicy.cancelAction(for: self.interactiveOverlayState) {
+            case .cancelQuil:
                 self.handleQuilCancel()
                 self.quilHotkeyMonitor.cancelToggleMode()
-            } else {
+            default:
                 self.handleComputerUseCancel()
                 self.computerUseHotkeyMonitor.cancelToggleMode()
             }
@@ -11892,6 +11888,15 @@ public final class ImlaController: NSObject {
             && !isNemotron35Streaming
             && interactiveAudioSessionOwnership.canStart(.computerUse)
             && (dictationState == .idle || dictationState == .preparing)
+    }
+
+    private var interactiveOverlayState: InteractiveOverlayActionPolicy.State {
+        InteractiveOverlayActionPolicy.State(
+            computerUseToggleRecording: computerUseHotkeyMonitor.isToggleRecording,
+            quilToggleRecording: quilHotkeyMonitor.isToggleRecording,
+            quilInFlight: quilStartedAt != nil,
+            quilSelectionPending: quilSelectionSnapshot != nil
+        )
     }
 
     private var interactiveAudioSessionOwnership: InteractiveAudioSessionOwnership {

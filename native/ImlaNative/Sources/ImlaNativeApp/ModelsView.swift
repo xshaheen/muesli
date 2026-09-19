@@ -1348,7 +1348,7 @@ struct ModelsView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(ImlaTheme.surfacePrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                         .help(incompatibilityReason)
                 } else if isActive {
                     Text(activeLabel)

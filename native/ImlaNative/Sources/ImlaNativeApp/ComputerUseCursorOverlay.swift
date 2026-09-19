@@ -220,12 +220,23 @@ final class ComputerUseCursorOverlay: NSObject {
         if clearProvider { powerProvider = nil }
     }
 
+    /// The overlay's two click targets, sized so a moving cursor overlay still
+    /// presents stationary controls: stop sits in the trailing 34pt, cancel in
+    /// the 34pt beside it.
+    enum ClickZone: Equatable { case stop, cancel, none }
+
+    static func clickZone(atX x: CGFloat, width: CGFloat) -> ClickZone {
+        if x >= width - 34 { return .stop }
+        if x >= width - 68 { return .cancel }
+        return .none
+    }
+
     fileprivate func handleClick(at point: CGPoint) {
         guard presentation == .recording, let contentView else { return }
-        if point.x >= contentView.bounds.maxX - 34 {
-            onStop?()
-        } else if point.x >= contentView.bounds.maxX - 68 {
-            onCancel?()
+        switch Self.clickZone(atX: point.x, width: contentView.bounds.maxX) {
+        case .stop: onStop?()
+        case .cancel: onCancel?()
+        case .none: break
         }
     }
 

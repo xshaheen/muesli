@@ -83,7 +83,7 @@ struct DashboardRootView: View {
             controller: controller,
             isCollapsed: sidebarPresentation.isCollapsed,
             onToggleCollapsed: {
-                withAnimation(.easeInOut(duration: 0.22)) {
+                withAnimation(ImlaTheme.Motion.eased(0.22)) {
                     sidebarPresentation.toggle()
                 }
             }

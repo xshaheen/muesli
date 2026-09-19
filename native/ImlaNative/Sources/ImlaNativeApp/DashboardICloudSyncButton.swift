@@ -110,7 +110,7 @@ struct RotatingSyncIcon: View {
     private func updateRotation(animated: Bool) {
         guard isAnimating else {
             if animated {
-                withAnimation(.easeOut(duration: 0.15)) { rotationDegrees = 0 }
+                withAnimation(ImlaTheme.Motion.easedOut(0.15)) { rotationDegrees = 0 }
             } else {
                 rotationDegrees = 0
             }

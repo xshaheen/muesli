@@ -63,9 +63,9 @@ case "${shard}" in
       StandardMenuShortcutTests
       MeetingChunkCollectorTests
       AppConfigTests
-      DictationStyleResolverTests
-      DictationStyleSettingsTests
-      DictationStyleRulesetCodecTests
+      DictationModeResolverTests
+      DictationModesSettingsModelTests
+      DictationModesTests
       CGPointCodableTests
       UpdateFailureGuidanceTests
       SidebarHitAreaTests
@@ -83,6 +83,20 @@ case "${shard}" in
       BodhanLifecycleTests
       DictationBackendPreparationTests
       ContributionMilestoneTests
+      AccentSelectionTests
+      CornerGeometryTests
+      ImlaThemeTokenTests
+      InkLadderTests
+      InteractiveOverlayActionTests
+      InstalledApplicationCatalogTests
+      FloatingSurfaceOwnershipTests
+      MotionTests
+      MotionSourceTests
+      SemanticColorTests
+      SemanticColorSourceTests
+      SemanticStateAccentIndependenceTests
+      TypographyTests
+      WindowMaterialBoundaryTests
     )
     ;;
   dictation-transcription)
@@ -137,7 +151,7 @@ case "${shard}" in
       TranscriptionResultCleanupTests
       DictationTranscriptionStageDiagnosticsTests
       DictationCleanupPolicyTests
-      DictationStyleObservabilityTests
+      DictationModeObservabilityTests
       TranscriptionBackendResidencyPolicyTests
       TranscriptCleanupRequestBodyTests
       PostProcessorIdleUnloadPolicyTests
@@ -155,6 +169,17 @@ case "${shard}" in
       TranscriptionQualityDecisionTests
       TranscriptionQualityReceiptTests
       TranscriptionQualityRunFixtureContractTests
+      AutoEnterDeliveryTests
+      AutoEnterGuardTests
+      BilingualRepairAutoEnableTests
+      CustomInstructionsTests
+      CustomInstructionsConfigTests
+      CustomInstructionsEditorTests
+      DictationModeMigrationTests
+      DictationModePromptCompositionTests
+      DictationModeWebsiteToggleTests
+      DictationRepairCompositionTests
+      MixedLanguageRepairPromptTests
     )
     ;;
   meetings)
@@ -236,6 +261,9 @@ case "${shard}" in
       DisabledCalendarFilterTests
       GoogleCalendarTests
       NaturalTextDirectionTests
+      MeetingCleanupStatusTests
+      MeetingCleanupTransportTests
+      MeetingInstructionsComposerTests
     )
     ;;
   *)
