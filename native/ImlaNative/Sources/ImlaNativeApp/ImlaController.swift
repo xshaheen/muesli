@@ -600,6 +600,7 @@ public final class ImlaController: NSObject {
     private var maraudersMapCountdown: MaraudersMapCountdownController?
 
     private var statusBarController: StatusBarController?
+    private var pendingMeetingLanguageSessionID: ObjectIdentifier?
     private var historyWindowController: RecentHistoryWindowController?
     private var preferencesWindowController: PreferencesWindowController?
     private var onboardingWindowController: OnboardingWindowController?
@@ -7713,6 +7714,34 @@ public final class ImlaController: NSObject {
         activeMeetingSession?.isPaused == true
     }
 
+    var currentMeetingLanguageSession: MeetingSession? {
+        guard let session = activeMeetingSession,
+              session.isRecording, !isStoppingMeetingRecording else { return nil }
+        return session
+    }
+
+    @objc func selectMeetingLanguageFromMenu(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? MeetingLanguageMenuPayload,
+              let session = currentMeetingLanguageSession,
+              ObjectIdentifier(session) == payload.sessionID,
+              !isChangingMeetingLanguage else { return }
+        pendingMeetingLanguageSessionID = payload.sessionID
+        statusBarController?.refreshMeetingLanguageSwitcher()
+        Task { [weak self] in
+            await session.selectRecognitionLanguage(payload.language)
+            guard let self else { return }
+            if self.pendingMeetingLanguageSessionID == payload.sessionID {
+                self.pendingMeetingLanguageSessionID = nil
+            }
+            self.statusBarController?.refreshMeetingLanguageSwitcher()
+        }
+    }
+
+    var isChangingMeetingLanguage: Bool {
+        guard let session = currentMeetingLanguageSession else { return false }
+        return pendingMeetingLanguageSessionID == ObjectIdentifier(session)
+    }
+
     func isMeetingPanelOpen() -> Bool {
         meetingRecordingPanel.isPanelOpen
     }
@@ -8762,9 +8791,10 @@ public final class ImlaController: NSObject {
                         )
                     }
                 }
-                meetingSession.onPartialTranscript = { [weak self] speaker, tail in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
+                meetingSession.onPartialTranscript = { [weak self, weak meetingSession] speaker, tail, languageRevision in
+                    Task { @MainActor [weak self, weak meetingSession] in
+                        guard let self, let meetingSession,
+                              meetingSession.recognitionLanguageRevision == languageRevision else { return }
                         guard self.isCurrentLiveMeetingTranscriptSession(
                             ownerID: meetingID,
                             generation: transcriptGeneration

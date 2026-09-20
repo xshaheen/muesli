@@ -16,12 +16,23 @@ final class CalendarMenuMeetingPayload: NSObject {
     }
 }
 
+final class MeetingLanguageMenuPayload: NSObject {
+    let sessionID: ObjectIdentifier
+    let language: TranscriptionLanguage?
+
+    init(sessionID: ObjectIdentifier, language: TranscriptionLanguage?) {
+        self.sessionID = sessionID
+        self.language = language
+    }
+}
+
 @MainActor
 final class StatusBarController: NSObject, NSMenuDelegate {
     private let controller: ImlaController
     private let runtime: RuntimePaths
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
+    private var meetingLanguageItem: NSStatusItem?
     private var countdownOverride: String?
 
     init(controller: ImlaController, runtime: RuntimePaths) {
@@ -38,10 +49,78 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     func refresh() {
         rebuildMenu()
         updateMenuBarTitle()
+        refreshMeetingLanguageSwitcher()
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        rebuildMenu()
+        if menu === meetingLanguageItem?.menu {
+            refreshMeetingLanguageSwitcher()
+        } else {
+            rebuildMenu()
+        }
+    }
+
+    func refreshMeetingLanguageSwitcher() {
+        guard let session = controller.currentMeetingLanguageSession else {
+            if let meetingLanguageItem { NSStatusBar.system.removeStatusItem(meetingLanguageItem) }
+            meetingLanguageItem = nil
+            return
+        }
+        let switcher = session.recognitionLanguageSwitcher
+        let item = meetingLanguageItem ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        meetingLanguageItem = item
+        item.button?.title = "\(switcher.label) \(controller.isChangingMeetingLanguage ? "…" : "▾")"
+        item.button?.isEnabled = !controller.isChangingMeetingLanguage
+        item.button?.toolTip = "Meeting speech language: \(switcher.label)"
+        item.button?.setAccessibilityLabel("Meeting speech language")
+        item.button?.setAccessibilityValue(switcher.label)
+        let languageMenu = Self.meetingLanguageMenu(
+            switcher: switcher,
+            sessionID: ObjectIdentifier(session),
+            target: controller,
+            canSelect: session.canSelectRecognitionLanguage,
+            updating: item.menu
+        )
+        languageMenu.delegate = self
+        item.menu = languageMenu
+    }
+
+    static func meetingLanguageMenu(
+        switcher: MeetingLanguageSwitcher,
+        sessionID: ObjectIdentifier,
+        target: AnyObject?,
+        canSelect: (TranscriptionLanguage) -> Bool,
+        updating menu: NSMenu? = nil
+    ) -> NSMenu {
+        let menu = menu ?? NSMenu()
+        menu.removeAllItems()
+        menu.autoenablesItems = false
+        let header = NSMenuItem(title: "Meeting Speech Language", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        func add(_ title: String, language: TranscriptionLanguage?, enabled: Bool) {
+            let item = NSMenuItem(
+                title: title,
+                action: #selector(ImlaController.selectMeetingLanguageFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            item.target = target
+            item.representedObject = MeetingLanguageMenuPayload(sessionID: sessionID, language: language)
+            item.state = switcher.selectedLanguage == language ? .on : .off
+            item.isEnabled = enabled
+            if !enabled { item.toolTip = "The current speech models cannot use this language explicitly." }
+            menu.addItem(item)
+        }
+        add("Meeting Default", language: nil, enabled: true)
+        menu.addItem(.separator())
+        for language in switcher.languages {
+            add(language.label, language: language, enabled: canSelect(language))
+        }
+        menu.addItem(.separator())
+        let footer = NSMenuItem(title: "Applies to new speech only", action: nil, keyEquivalent: "")
+        footer.isEnabled = false
+        menu.addItem(footer)
+        return menu
     }
 
     func setCountdownOverride(_ text: String?) {

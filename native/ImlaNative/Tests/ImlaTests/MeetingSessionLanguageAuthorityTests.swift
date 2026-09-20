@@ -7,7 +7,8 @@ import Testing
 struct MeetingSessionLanguageAuthorityTests {
     private func makeSession(
         config: AppConfig,
-        backend: BackendOption = .whisperLargeTurbo
+        backend: BackendOption = .whisperLargeTurbo,
+        liveCaptionAvailability: (MeetingLiveCaptionBackend) -> Bool = { $0.isDownloaded }
     ) -> MeetingSession {
         MeetingSession(
             title: "Language authority",
@@ -21,7 +22,8 @@ struct MeetingSessionLanguageAuthorityTests {
             ),
             config: config,
             templateSnapshot: MeetingTemplates.auto.snapshot,
-            transcriptionCoordinator: TranscriptionCoordinator()
+            transcriptionCoordinator: TranscriptionCoordinator(),
+            liveCaptionAvailability: liveCaptionAvailability
         )
     }
 
@@ -51,6 +53,13 @@ struct MeetingSessionLanguageAuthorityTests {
                 return false
             default:
                 return true
+            }
+        case "cohere-arabic":
+            switch decision {
+            case .pinned(let language), .fixed(let language):
+                return language == .arabic || language == .english
+            default:
+                return false
             }
         case "cohere":
             switch decision {
@@ -116,9 +125,9 @@ struct MeetingSessionLanguageAuthorityTests {
         config.meetingSpokenLanguage = try SpokenLanguageProfile(selectedLanguages: [.arabic])
         let session = makeSession(config: config)
 
-        #expect(session.frozenLanguageSelection.selectedLanguages == [.arabic])
+        #expect(session.recognitionLanguageSwitcher.current.selection.selectedLanguages == [.arabic])
         #expect(MeetingSession.meetingLanguageDecision(
-            selection: session.frozenLanguageSelection,
+            selection: session.recognitionLanguageSwitcher.current.selection,
             backend: .whisperLargeTurbo,
             workload: .meetingFinal
         ) == .pinned(.arabic))
@@ -130,9 +139,9 @@ struct MeetingSessionLanguageAuthorityTests {
             backend: .parakeetMultilingual,
             usesUnifiedNemotronTranscript: false
         )
-        #expect(session.frozenLanguageSelection.selectedLanguages == [.arabic])
+        #expect(session.recognitionLanguageSwitcher.current.selection.selectedLanguages == [.arabic])
         #expect(MeetingSession.meetingLanguageDecision(
-            selection: session.frozenLanguageSelection,
+            selection: session.recognitionLanguageSwitcher.current.selection,
             backend: .parakeetMultilingual,
             workload: .meetingFinal
         ) == .automatic)
@@ -172,7 +181,7 @@ struct MeetingSessionLanguageAuthorityTests {
             usesUnifiedNemotronTranscript: false
         )
         #expect(!session.usesLiveNemotronTranscriptAsFinal())
-        #expect(session.frozenLanguageSelection.selectedLanguages == [.german])
+        #expect(session.recognitionLanguageSwitcher.current.selection.selectedLanguages == [.german])
         #expect(session.frozenMeetingProfile.selectedLanguages == [.german])
     }
 
@@ -203,6 +212,92 @@ struct MeetingSessionLanguageAuthorityTests {
                 }
             }
         }
+    }
+
+    @Test("a switch pins new speech without changing earlier snapshots or meeting defaults")
+    func switchPreservesEarlierSpeech() throws {
+        let profile = try LanguageProfile(selectedLanguages: [.arabic, .english])
+        var switcher = MeetingLanguageSwitcher(defaultProfile: profile, appleSpeechLanguage: "en-US")
+        let before = switcher.current
+        switcher.select(.arabic, systemSampleOffset: 16000)
+        let arabic = switcher.current
+        switcher.select(.english, systemSampleOffset: 32000)
+
+        #expect(before.selection.selectedLanguages == [.arabic, .english])
+        #expect(before.selection.authoritativeLanguage == nil)
+        #expect(arabic.selection.authoritativeLanguage == .arabic)
+        #expect(arabic.profile.resolvedWhisperLanguage == .arabic)
+        #expect(arabic.appleSpeechLanguage == "ar")
+        #expect(switcher.current.selection.authoritativeLanguage == .english)
+        #expect(switcher.defaultProfile == profile)
+
+        let spans = switcher.systemSpans(in: 8000..<40000)
+        #expect(spans.map(\.samples) == [8000..<16000, 16000..<32000, 32000..<40000])
+        #expect(spans.map { $0.snapshot.selection.authoritativeLanguage } == [nil, .arabic, .english])
+    }
+
+    @Test("returning to the meeting default restores its original selection and Apple locale")
+    func restoreDefault() throws {
+        let profile = try LanguageProfile(selectedLanguages: [.arabic, .english])
+        var switcher = MeetingLanguageSwitcher(defaultProfile: profile, appleSpeechLanguage: "en-US")
+        switcher.select(.arabic, systemSampleOffset: 0)
+        switcher.select(nil, systemSampleOffset: 0)
+        #expect(switcher.current.profile == profile)
+        #expect(switcher.current.appleSpeechLanguage == "en-US")
+        #expect(switcher.systemSpans(in: 0..<16000).count == 1)
+        #expect(switcher.systemSpans(in: 0..<0).isEmpty)
+    }
+
+    @Test("the switcher only enables languages the final and live recognizers can honor")
+    func switchRequiresLanguageSupport() {
+        #expect(MeetingLanguageSwitcher.canSelect(.arabic, backend: .whisperLargeTurbo, liveBackend: .nemotron35))
+        #expect(!MeetingLanguageSwitcher.canSelect(.arabic, backend: .parakeetMultilingual, liveBackend: nil))
+        #expect(!MeetingLanguageSwitcher.canSelect(.arabic, backend: .whisperLargeTurbo, liveBackend: .parakeetRealtimeEOU))
+        #expect(!MeetingLanguageSwitcher.canSelect(.dutch, backend: .whisperLargeTurbo, liveBackend: .nemotron35))
+    }
+
+    @Test("unavailable or disabled captions do not restrict the final recognizer's languages")
+    func inactiveCaptionsDoNotRestrictLanguages() {
+        var config = AppConfig()
+        config.enableLiveStreamingPartials = true
+        config.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.parakeetRealtimeEOU.rawValue
+        let unavailable = makeSession(config: config, liveCaptionAvailability: { _ in false })
+        #expect(unavailable.canSelectRecognitionLanguage(.arabic))
+
+        let available = makeSession(config: config, liveCaptionAvailability: { _ in true })
+        #expect(!available.canSelectRecognitionLanguage(.arabic))
+        available.stopStreamingPartials()
+        #expect(available.canSelectRecognitionLanguage(.arabic))
+    }
+
+    @Test("the menu shows only meeting languages, marks the selection and disables unsupported choices")
+    @MainActor
+    func menuReflectsSessionSelection() throws {
+        let profile = try LanguageProfile(selectedLanguages: [.arabic, .english])
+        var switcher = MeetingLanguageSwitcher(defaultProfile: profile, appleSpeechLanguage: "system")
+        switcher.select(.arabic, systemSampleOffset: 0)
+        let session = makeSession(config: AppConfig())
+        let menu = StatusBarController.meetingLanguageMenu(
+            switcher: switcher,
+            sessionID: ObjectIdentifier(session),
+            target: nil,
+            canSelect: { $0 == .arabic }
+        )
+        let choices = menu.items.filter { $0.representedObject is MeetingLanguageMenuPayload }
+        #expect(choices.count == 3)
+        #expect(choices[0].state == .off)
+        #expect(choices[1].state == .on)
+        #expect(choices[1].isEnabled)
+        #expect(!choices[2].isEnabled)
+        #expect((choices[1].representedObject as? MeetingLanguageMenuPayload)?.sessionID == ObjectIdentifier(session))
+        #expect(switcher.label == "AR")
+    }
+
+    @Test("language changes are rejected outside an active recording")
+    func rejectsInactiveSwitch() async {
+        let session = makeSession(config: AppConfig())
+        #expect(await !session.selectRecognitionLanguage(.arabic))
+        #expect(session.recognitionLanguageSwitcher.selectedLanguage == nil)
     }
 
     @Test("live captions take the Nemotron prompt id from the meeting selection")

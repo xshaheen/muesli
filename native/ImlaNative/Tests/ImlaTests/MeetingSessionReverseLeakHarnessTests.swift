@@ -1,4 +1,5 @@
 import Foundation
+import ImlaCore
 import Testing
 @testable import ImlaNativeApp
 
@@ -20,6 +21,42 @@ struct MeetingSessionReverseLeakHarnessTests {
     ]
 
     // MARK: - Pass-through parity
+
+    @Test("language switching rotates old audio and preserves the language across pause and stop")
+    func languageSwitchPreservesAudioBoundaries() async throws {
+        let harness = try await Harness(reverseLeakEnabled: false, backend: .whisperLargeTurbo)
+        defer { harness.tearDown() }
+        let first = [Int16](repeating: 100, count: 4096)
+        let second = [Int16](repeating: 200, count: 4096)
+        let third = [Int16](repeating: 300, count: 4096)
+        harness.systemRecorder.deliver(first)
+        harness.drain()
+        let originalRevision = harness.session.recognitionLanguageRevision
+        #expect(await harness.session.selectRecognitionLanguage(.arabic))
+        var partials: [String] = []
+        harness.session.onPartialTranscript = { _, text, _ in partials.append(text) }
+        harness.session.publishPartial("old caption", speaker: "You", generation: originalRevision)
+        #expect(partials.isEmpty)
+        harness.session.publishPartial("current caption", speaker: "You", generation: harness.session.recognitionLanguageRevision)
+        #expect(partials == ["current caption"])
+        harness.session.onPartialTranscript = nil
+        #expect(harness.chunks.count == 1)
+        #expect(harness.chunks.first?.language.selection.isAutomatic == true)
+        harness.systemRecorder.deliver(second)
+        harness.drain()
+        harness.session.pause()
+        #expect(await harness.session.selectRecognitionLanguage(.english))
+        harness.session.resume()
+        harness.systemRecorder.deliver(third)
+        harness.drain()
+        harness.finish()
+
+        let chunks = harness.chunks.filter { !$0.samples.isEmpty }
+        #expect(chunks.map(\.samples) == [first, second, third])
+        #expect(chunks.map { $0.language.selection.authoritativeLanguage } == [nil, .arabic, .english])
+        #expect(await !harness.session.selectRecognitionLanguage(.arabic))
+        #expect(harness.session.frozenMeetingProfile.selectedLanguages.isEmpty)
+    }
 
     @Test(
         "with suppression disabled the rotated system chunk is byte-identical to the capture",
@@ -459,6 +496,7 @@ struct MeetingSessionReverseLeakHarnessTests {
         struct Chunk {
             let samples: [Int16]
             let timing: MeetingChunkTimingSnapshot
+            let language: MeetingRecognitionSnapshot
         }
 
         let session: MeetingSession
@@ -470,14 +508,14 @@ struct MeetingSessionReverseLeakHarnessTests {
 
         var processedSampleCount: Int { processedSamples.count }
 
-        init(reverseLeakEnabled: Bool) async throws {
+        init(reverseLeakEnabled: Bool, backend: BackendOption = .whisper) async throws {
             var config = AppConfig()
             config.meetingReverseLeakSuppression = reverseLeakEnabled
             config.meetingRecordingSavePolicy = .never
             session = MeetingSession(
                 title: "Reverse leak harness",
                 calendarEventID: nil,
-                backend: .whisper,
+                backend: backend,
                 runtime: RuntimePaths(
                     repoRoot: FileManager.default.temporaryDirectory,
                     menuIcon: nil,
@@ -493,11 +531,11 @@ struct MeetingSessionReverseLeakHarnessTests {
                     preloadedProcessor: PassthroughAecProcessor(name: "localvqe", frameSize: 256)
                 )
             )
-            session.onSystemChunkRotated = { [weak self] url, timing in
+            session.onSystemChunkRotated = { [weak self] url, timing, language in
                 guard let data = try? Data(contentsOf: url), data.count > 44 else { return }
                 let payload = Data(data[44...])
                 let samples = payload.withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
-                self?.chunks.append(Chunk(samples: samples, timing: timing))
+                self?.chunks.append(Chunk(samples: samples, timing: timing, language: language))
             }
             session.onProcessedSystemSamples = { [weak self] samples in
                 self?.processedSamples.append(contentsOf: samples)
