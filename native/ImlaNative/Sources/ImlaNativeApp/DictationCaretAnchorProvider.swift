@@ -6,9 +6,9 @@ import os
 /// Accessibility uses Quartz's top-left coordinate space, so the result is converted
 /// into AppKit's global bottom-left coordinate space before placement.
 ///
-/// Every `AXUIElement*` call here is a synchronous IPC round trip to the focused app and is
-/// thread-safe, so the resolution entry points are nonisolated and may run off the main actor;
-/// only the callers that read `NSScreen` stay on it.
+/// Only external processes may be inspected off the main actor. Same-process accessibility
+/// calls can enter AppKit directly, where background geometry updates throw and can strand
+/// SwiftUI's rendering lock. Each lookup stays bound to the captured external process.
 enum DictationCaretAnchorProvider {
     /// A focused editable text element and its resolved caret anchor.
     /// `AXUIElement` is an immutable CF handle, so the value is safe to hand across threads.
@@ -69,13 +69,14 @@ enum DictationCaretAnchorProvider {
     /// The whole chain shares one `resolutionBudget`; once it is past the result is a miss
     /// flagged `exhaustedBudget` rather than a partially resolved (possibly wrong) anchor.
     static func resolveEditableFocus(
+        processIdentifier: pid_t,
         primaryMaxY: CGFloat?,
         budget: TimeInterval = resolutionBudget
     ) -> Resolution {
         let deadline = Deadline(budget: budget)
         guard AXIsProcessTrusted(),
               let primaryMaxY,
-              let focused = focusedElement()
+              let focused = focusedElement(in: processIdentifier)
         else { return .none }
         guard !deadline.isPast else { return .timedOut }
         AXUIElementSetMessagingTimeout(focused, 0.08)
@@ -230,24 +231,29 @@ enum DictationCaretAnchorProvider {
         return value as? String
     }
 
-    private static func focusedElement() -> AXUIElement? {
-        let systemWide = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(systemWide, 0.08)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedUIElementAttribute as CFString,
-            &value
-        ) == .success,
-        let value,
+    static func focusedElement(
+        in processIdentifier: pid_t,
+        copyAttribute: (AXUIElement, CFString) -> CFTypeRef? = copyFocusAttribute
+    ) -> AXUIElement? {
+        guard processIdentifier > 0,
+              processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
+        let application = AXUIElementCreateApplication(processIdentifier)
+        AXUIElementSetMessagingTimeout(application, 0.08)
+        guard let value = copyAttribute(application, kAXFocusedUIElementAttribute as CFString),
         CFGetTypeID(value) == AXUIElementGetTypeID()
         else { return nil }
         let element = unsafeBitCast(value, to: AXUIElement.self)
         var pid: pid_t = 0
-        if AXUIElementGetPid(element, &pid) == .success {
-            enableManualAccessibility(for: pid)
-        }
+        guard AXUIElementGetPid(element, &pid) == .success,
+              pid == processIdentifier else { return nil }
+        enableManualAccessibility(for: pid)
         return element
+    }
+
+    private static func copyFocusAttribute(_ element: AXUIElement, _ attribute: CFString) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
+        return value
     }
 
     /// Lock-protected because resolution runs on background tasks as well as the main actor.

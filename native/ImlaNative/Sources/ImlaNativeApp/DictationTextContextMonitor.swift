@@ -298,14 +298,16 @@ final class DictationTextContextMonitor {
     /// Kicks off one off-main-actor resolution. Ticks are coalesced while one is in flight and
     /// skipped during the back-off that follows a budget-exhausted sample.
     private func evaluate() {
-        guard isRunning, !isResolving else { return }
+        guard isRunning, !isResolving, let processIdentifier = observedProcessIdentifier else { return }
         guard ProcessInfo.processInfo.systemUptime >= resolutionBackoffUntil else { return }
         // NSScreen is main-actor state; read it here and hand the value to the worker.
         let primaryMaxY = NSScreen.screens.first?.frame.maxY
         let generation = resolutionGeneration
         isResolving = true
         Task.detached(priority: .utility) { [weak self] in
-            let resolution = DictationCaretAnchorProvider.resolveEditableFocus(primaryMaxY: primaryMaxY)
+            let resolution = DictationCaretAnchorProvider.resolveEditableFocus(
+                processIdentifier: processIdentifier, primaryMaxY: primaryMaxY
+            )
             guard let self else { return }
             await MainActor.run { self.publish(resolution, generation: generation) }
         }

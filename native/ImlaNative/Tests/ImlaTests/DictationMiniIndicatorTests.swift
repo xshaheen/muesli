@@ -638,6 +638,40 @@ struct DictationMiniIndicatorTests {
         idle.close()
     }
 
+    @Test("caret lookup rejects this app and invalid processes before reading accessibility controls")
+    func caretLookupRejectsLocalProcess() {
+        for pid: pid_t in [ProcessInfo.processInfo.processIdentifier, 0, -1] {
+            var reads = 0
+            let result = DictationCaretAnchorProvider.focusedElement(in: pid) { _, _ in
+                reads += 1
+                return nil
+            }
+            #expect(result == nil)
+            #expect(reads == 0)
+        }
+    }
+
+    @Test("caret lookup stays bound to the captured external app when global focus changes")
+    func caretLookupUsesCapturedProcess() {
+        let target: pid_t = 2_000_000_000
+        var queriedProcess: pid_t = 0
+        let result = DictationCaretAnchorProvider.focusedElement(in: target) { application, attribute in
+            AXUIElementGetPid(application, &queriedProcess)
+            #expect(attribute as String == kAXFocusedUIElementAttribute as String)
+            return nil
+        }
+        #expect(result == nil)
+        #expect(queriedProcess == target)
+    }
+
+    @Test("caret lookup rejects a focused element belonging to another process")
+    func caretLookupRejectsRetargetedElement() {
+        let result = DictationCaretAnchorProvider.focusedElement(in: 2_000_000_000) { _, _ in
+            AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+        }
+        #expect(result == nil)
+    }
+
     @Test("accessibility caret rectangles convert into AppKit screen coordinates")
     func caretCoordinateConversion() {
         let accessibilityRect = CGRect(x: 120, y: 200, width: 2, height: 20)
