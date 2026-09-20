@@ -6,6 +6,13 @@ import ImlaCore
 struct MeetingRecognitionSnapshot: Equatable, Sendable {
     let profile: LanguageProfile
     let appleSpeechLanguage: String
+    let model: SpeechModelReference?
+
+    init(profile: LanguageProfile, appleSpeechLanguage: String, model: SpeechModelReference? = nil) {
+        self.profile = profile
+        self.appleSpeechLanguage = appleSpeechLanguage
+        self.model = model
+    }
 
     var selection: TranscriptionLanguageSelection {
         (try? TranscriptionLanguageSelection(
@@ -31,14 +38,17 @@ struct MeetingLanguageSwitcher: Sendable {
 
     let defaultProfile: LanguageProfile
     private let defaultAppleSpeechLanguage: String
+    private let defaultModel: SpeechModelReference?
     private(set) var selectedLanguage: TranscriptionLanguage?
     private var systemHistory: [(offset: Int, snapshot: MeetingRecognitionSnapshot)]
 
-    init(defaultProfile: LanguageProfile, appleSpeechLanguage: String) {
+    init(defaultProfile: LanguageProfile, appleSpeechLanguage: String, backend: BackendOption? = nil) {
         self.defaultProfile = defaultProfile
         defaultAppleSpeechLanguage = appleSpeechLanguage
+        defaultModel = backend.map(SpeechModelReference.init)
         systemHistory = [(0, MeetingRecognitionSnapshot(
-            profile: defaultProfile, appleSpeechLanguage: appleSpeechLanguage
+            profile: defaultProfile, appleSpeechLanguage: appleSpeechLanguage,
+            model: backend.map(SpeechModelReference.init)
         ))]
     }
 
@@ -55,13 +65,15 @@ struct MeetingLanguageSwitcher: Sendable {
         return current.selection.isAutomatic ? "Auto" : "Multi"
     }
 
-    mutating func select(_ language: TranscriptionLanguage?, systemSampleOffset: Int) {
-        guard language != selectedLanguage else { return }
+    mutating func select(_ language: TranscriptionLanguage?, systemSampleOffset: Int, backend: BackendOption? = nil) {
+        let model = backend.map(SpeechModelReference.init) ?? defaultModel
+        guard language != selectedLanguage || model != current.model else { return }
         selectedLanguage = language
         let profile = language.flatMap { try? LanguageProfile(selectedLanguages: [$0]) } ?? defaultProfile
         let snapshot = MeetingRecognitionSnapshot(
             profile: profile,
-            appleSpeechLanguage: language?.rawValue ?? defaultAppleSpeechLanguage
+            appleSpeechLanguage: language?.rawValue ?? defaultAppleSpeechLanguage,
+            model: model
         )
         let offset = max(systemSampleOffset, systemHistory.last?.offset ?? 0)
         if systemHistory.last?.offset == offset { systemHistory.removeLast() }

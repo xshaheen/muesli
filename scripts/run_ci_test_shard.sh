@@ -54,6 +54,7 @@ case "${shard}" in
       DictationMiniPlacementTests
       OpenRouterAuthTests
       SettingsPermissionRefreshReasonTests
+      SettingsLayoutTests
       InteractionPermissionMonitorTests
       AccessibilityPermissionGuideTests
       DictationTestLifecycleTests

@@ -419,12 +419,12 @@ struct BackendOptionTests {
         ) == nil)
     }
 
-    @Test("streaming dictation models are excluded from meeting transcription")
-    func streamingDictationModelsAreExcludedFromMeetingTranscription() {
-        #expect(!BackendOption.nemotron35Multilingual.supportsMeetingTranscription)
+    @Test("Nemotron supports recorded meeting chunks as well as live dictation")
+    func nemotronSupportsMeetingTranscription() {
+        #expect(BackendOption.nemotron35Multilingual.supportsMeetingTranscription)
         #expect(BackendOption.parakeetMultilingual.supportsMeetingTranscription)
         #expect(BackendOption.whisperLargeTurbo.supportsMeetingTranscription)
-        #expect(!BackendOption.downloadedMeetingTranscription.contains(.nemotron35Multilingual))
+        #expect(!BackendOption.nemotron35Multilingual.supportsHostedDictationFallback)
     }
 
     @Test("only multilingual Whisper models expose language selection")
@@ -4460,6 +4460,25 @@ struct OpenAIDictationProviderTests {
         let transcription = try #require(input["transcription"] as? [String: Any])
         #expect(transcription["model"] as? String == "gpt-live-transcribe")
         #expect(input["turn_detection"] is NSNull)
+    }
+
+    @Test("keyboard hints use the selected Realtime model's language field")
+    func keyboardLanguageUsesModelSpecificRealtimeField() throws {
+        for model in ["gpt-live-transcribe", "gpt-4o-mini-transcribe"] {
+            let data = Data(try OpenAIRealtimeProtocol.sessionUpdate(model: model, language: "ar").utf8)
+            let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let session = try #require(json["session"] as? [String: Any])
+            let audio = try #require(session["audio"] as? [String: Any])
+            let input = try #require(audio["input"] as? [String: Any])
+            let transcription = try #require(input["transcription"] as? [String: Any])
+            if model == "gpt-live-transcribe" {
+                #expect(transcription["languages"] as? [String] == ["ar"])
+                #expect(transcription["language"] == nil)
+            } else {
+                #expect(transcription["language"] as? String == "ar")
+                #expect(transcription["languages"] == nil)
+            }
+        }
     }
 
     @Test("Realtime PCM encoder resamples and clips")

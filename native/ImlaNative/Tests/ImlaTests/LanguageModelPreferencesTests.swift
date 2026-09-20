@@ -38,13 +38,13 @@ struct LanguageModelPreferencesTests {
         #expect(resolve(.arabic, preferences: preferences, workload: .dictation).backend == .cohereArabic)
     }
 
-    @Test("a streaming-only dictation model uses a compatible meeting fallback")
+    @Test("Nemotron can be inherited for recorded meeting speech")
     func streamingInheritanceFallback() {
         var preferences = LanguageModelPreferences()
         preferences[.arabic] = .init(dictation: .init(.nemotron35Multilingual))
         let result = resolve(.arabic, preferences: preferences, workload: .meeting)
-        #expect(result.backend == .whisperLargeTurbo)
-        #expect(result.usedFallback)
+        #expect(result.backend == .nemotron35Multilingual)
+        #expect(!result.usedFallback)
         #expect(result.isUsable)
     }
 
@@ -85,6 +85,23 @@ struct LanguageModelPreferencesTests {
         #expect(before.dominantLanguage == .arabic)
         #expect(english.spokenProfile().dominantLanguage == .english)
         #expect(before.selectedLanguages == [.arabic, .english])
+    }
+
+    @Test("keyboard configuration captures model and language without changing saved defaults")
+    func keyboardConfigurationSnapshot() {
+        var config = AppConfig()
+        config.sttBackend = BackendOption.parakeetUnified.backend
+        config.sttModel = BackendOption.parakeetUnified.model
+        let keyboard = KeyboardLanguageSnapshot(language: .arabic, enabledLanguages: [.arabic, .english])
+        let captured = keyboard.applying(to: config, backend: .cohereArabic)
+        #expect(captured.sttBackend == BackendOption.cohereArabic.backend)
+        #expect(captured.sttModel == BackendOption.cohereArabic.model)
+        #expect(captured.dictationLanguageProfile.dominantLanguage == .arabic)
+        #expect(captured.appleSpeechLanguage == "ar")
+        #expect(config.sttModel == BackendOption.parakeetUnified.model)
+        let automatic = KeyboardLanguageSnapshot(language: nil, enabledLanguages: [])
+            .applying(to: config, backend: .whisperSmall)
+        #expect(automatic.dictationLanguageProfile == .automatic)
     }
 
     private func resolve(

@@ -24,7 +24,9 @@ struct MeetingSessionReverseLeakHarnessTests {
 
     @Test("language switching rotates old audio and preserves the language across pause and stop")
     func languageSwitchPreservesAudioBoundaries() async throws {
-        let harness = try await Harness(reverseLeakEnabled: false, backend: .whisperLargeTurbo)
+        var preferences = LanguageModelPreferences()
+        preferences[.arabic] = .init(meeting: .init(.whisperSmall))
+        let harness = try await Harness(reverseLeakEnabled: false, backend: .whisperLargeTurbo, languageModels: preferences)
         defer { harness.tearDown() }
         let first = [Int16](repeating: 100, count: 4096)
         let second = [Int16](repeating: 200, count: 4096)
@@ -54,6 +56,7 @@ struct MeetingSessionReverseLeakHarnessTests {
         let chunks = harness.chunks.filter { !$0.samples.isEmpty }
         #expect(chunks.map(\.samples) == [first, second, third])
         #expect(chunks.map { $0.language.selection.authoritativeLanguage } == [nil, .arabic, .english])
+        #expect(chunks.map { $0.language.model?.option } == [.whisperLargeTurbo, .whisperSmall, .whisperLargeTurbo])
         #expect(await !harness.session.selectRecognitionLanguage(.arabic))
         #expect(harness.session.frozenMeetingProfile.selectedLanguages.isEmpty)
     }
@@ -508,8 +511,9 @@ struct MeetingSessionReverseLeakHarnessTests {
 
         var processedSampleCount: Int { processedSamples.count }
 
-        init(reverseLeakEnabled: Bool, backend: BackendOption = .whisper) async throws {
+        init(reverseLeakEnabled: Bool, backend: BackendOption = .whisper, languageModels: LanguageModelPreferences = .init()) async throws {
             var config = AppConfig()
+            config.languageModels = languageModels
             config.meetingReverseLeakSuppression = reverseLeakEnabled
             config.meetingRecordingSavePolicy = .never
             session = MeetingSession(
@@ -524,12 +528,15 @@ struct MeetingSessionReverseLeakHarnessTests {
                 ),
                 config: config,
                 templateSnapshot: MeetingTemplates.auto.snapshot,
-                transcriptionCoordinator: TranscriptionCoordinator(),
+                transcriptionCoordinator: TranscriptionCoordinator(transcriptionOperation: { _, _, _ in
+                    SpeechTranscriptionResult(text: "", segments: [])
+                }),
                 meetingMicRecorder: micRecorder,
                 systemAudioRecorder: systemRecorder,
                 neuralAec: MeetingNeuralAec(
                     preloadedProcessor: PassthroughAecProcessor(name: "localvqe", frameSize: 256)
-                )
+                ),
+                availableLanguageModels: [backend, .whisperSmall]
             )
             session.onSystemChunkRotated = { [weak self] url, timing, language in
                 guard let data = try? Data(contentsOf: url), data.count > 44 else { return }

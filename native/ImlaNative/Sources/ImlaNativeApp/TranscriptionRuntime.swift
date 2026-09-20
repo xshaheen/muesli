@@ -771,10 +771,19 @@ actor TranscriptionCoordinator {
     /// Transcriptions and loads currently running, keyed by backend identifier.
     /// Guards against a reconcile interleaving with an awaited inference.
     private var backendsInFlight: [String: Int] = [:]
+    private let speechModelGates = Dictionary(uniqueKeysWithValues:
+        Set(BackendOption.all.map(\.backend) + ["fluidaudio"]).map { ($0, InferenceGate()) }
+    )
+    private let fallbackSpeechModelGate = InferenceGate()
+    private var preparedSpeechModels: [String: String] = [:]
+    private var speechResidencyTask: Task<Void, Never>?
+    typealias TranscriptionOperation = @Sendable (URL, BackendOption, LanguageRoutingDecision?) async throws -> SpeechTranscriptionResult
+    private let transcriptionOperation: TranscriptionOperation?
     private var backendDesignation = TranscriptionBackendResidencyPolicy.Designation()
     private var memoryPressureSource: DispatchSourceMemoryPressure?
 
     init(
+        transcriptionOperation: TranscriptionOperation? = nil,
         diarizerModelLoader: @escaping DiarizerModelLoader = { policy in
             try await DiarizerModels.download(configuration: policy.modelConfiguration)
         },
@@ -782,6 +791,7 @@ actor TranscriptionCoordinator {
         diarizerLoadOperationTimeout: Duration = TranscriptionCoordinator.defaultDiarizerLoadOperationTimeout,
         diarizerDiagnostics: DiarizerPreloadDiagnostics = DiarizerPreloadDiagnostics()
     ) {
+        self.transcriptionOperation = transcriptionOperation
         self.diarizerModelLoader = diarizerModelLoader
         self.vadLoader = vadLoader
         self.diarizerLoadOperationTimeout = diarizerLoadOperationTimeout
@@ -830,6 +840,7 @@ actor TranscriptionCoordinator {
     }
 
     func unloadNemotron35Transcriber() async {
+        preparedSpeechModels.removeValue(forKey: "nemotron35")
         loadedBackends.remove(BackendOption.nemotron35Multilingual.backend)
         if #available(macOS 15, *), let transcriber = _nemotron35Transcriber as? Nemotron35StreamingTranscriber {
             await transcriber.shutdown()
@@ -837,12 +848,14 @@ actor TranscriptionCoordinator {
     }
 
     func unloadBodhanTranscriber(ifLoadedModelID modelID: String) async {
+        preparedSpeechModels.removeValue(forKey: "bodhan")
         if #available(macOS 15, *), let transcriber = _bodhanTranscriber as? BodhanTranscriber {
             await transcriber.shutdown(ifLoadedModelID: modelID)
         }
     }
 
     func unloadGemma4LiteRTTranscriber() async {
+        preparedSpeechModels.removeValue(forKey: "gemma4-litert")
         loadedBackends.remove(BackendOption.gemma4E2BLiteRT.backend)
         if #available(macOS 15, *), let transcriber = _gemma4LiteRTTranscriber as? Gemma4LiteRTTranscriber {
             await transcriber.shutdown()
@@ -859,19 +872,27 @@ actor TranscriptionCoordinator {
     /// resident one — the deleted files were never mapped by it.
     func unloadTranscriber(for option: BackendOption) async {
         let identifier = Self.residencyIdentifier(for: option)
-        switch identifier {
-        case "whisper":
-            guard await whisperTranscriber.currentLoadedModelName() == option.model else { return }
-        case "fluidaudio":
-            guard let version = await fluidTranscriber.currentLoadedVersion(),
-                  option.model.contains(version == .v2 ? "v2" : "v3") else { return }
-        default:
-            break
+        // Deletion must wait for the current inference even if its UI task was
+        // cancelled; returning early would let files disappear while still mapped.
+        let unloading = Task {
+            try? await withSpeechModelAccess(identifier) {
+                switch identifier {
+                case "whisper":
+                    guard await self.whisperTranscriber.currentLoadedModelName() == option.model else { return }
+                case "fluidaudio":
+                    guard let version = await self.fluidTranscriber.currentLoadedVersion(),
+                          option.model.contains(version == .v2 ? "v2" : "v3") else { return }
+                default:
+                    break
+                }
+                await self.unloadBackend(identifier)
+            }
         }
-        await unloadBackend(identifier)
+        _ = await unloading.value
     }
 
     func unloadParakeetUnifiedTranscriber() async {
+        preparedSpeechModels.removeValue(forKey: "parakeet-unified")
         await parakeetUnifiedTranscriber.shutdown()
     }
 
@@ -886,6 +907,7 @@ actor TranscriptionCoordinator {
     }
 
     func unloadAppleSpeechTranscriber() async {
+        preparedSpeechModels.removeValue(forKey: "apple-speech")
         if #available(macOS 26.0, *) {
             await appleSpeechLifecycle.requestCleanup { [weak self] in
                 await self?.releaseAppleSpeechTranscriber()
@@ -1242,6 +1264,7 @@ actor TranscriptionCoordinator {
         includeMeetingHelpers: Bool = true,
         meetingHelperTrigger: DiarizerPreloadTrigger = .unspecified,
         appleSpeechLanguage: String = AppleSpeechLanguageOption.systemIdentifier,
+        requireInstalled: Bool = false,
         progress: ((Double, String?) -> Void)? = nil,
         progressSnapshot: ModelDownloadProgressHandler? = nil
     ) async throws {
@@ -1252,10 +1275,11 @@ actor TranscriptionCoordinator {
         }
         try Task.checkCancellation()
 
-        try await withBackendInFlight(Self.residencyIdentifier(for: backend)) {
+        try await withBackendInFlight(Self.residencyIdentifier(for: backend), exclusive: true) {
             try await loadBackendModels(
                 backend: backend,
                 appleSpeechLanguage: appleSpeechLanguage,
+                requireInstalled: requireInstalled,
                 progress: progress,
                 progressSnapshot: progressSnapshot
             )
@@ -1268,9 +1292,24 @@ actor TranscriptionCoordinator {
     private func loadBackendModels(
         backend: BackendOption,
         appleSpeechLanguage: String = AppleSpeechLanguageOption.systemIdentifier,
+        requireInstalled: Bool = false,
         progress: ((Double, String?) -> Void)? = nil,
         progressSnapshot: ModelDownloadProgressHandler? = nil
     ) async throws {
+        let identifier = Self.residencyIdentifier(for: backend)
+        let modelKey = backend.backend == "apple-speech" ? "\(backend.model)|\(appleSpeechLanguage)" : backend.model
+        guard preparedSpeechModels[identifier] != modelKey else { return }
+        if requireInstalled, !backend.isDownloaded {
+            throw LanguageRoutingIncompatibility.backendUnavailable(backend.transcriptionBackendID)
+        }
+        if requireInstalled, backend.backend == "apple-speech", #available(macOS 26.0, *) {
+            guard await AppleSpeechLanguageOption.hasInstalledAssets(for: appleSpeechLanguage) else {
+                throw AppleSpeechAnalyzerError.assetUnavailable(appleSpeechLanguage)
+            }
+        }
+        // Loading can replace the recognizer before warmup fails or is cancelled.
+        // Until preparation succeeds, neither the old nor new model is reusable.
+        preparedSpeechModels.removeValue(forKey: identifier)
         switch backend.backend {
         case "fluidaudio":
             let version: AsrModelVersion = backend.model.contains("v2") ? .v2 : .v3
@@ -1366,6 +1405,7 @@ actor TranscriptionCoordinator {
                 NSLocalizedDescriptionKey: "Unknown transcription backend: \(backend.backend)",
             ])
         }
+        preparedSpeechModels[identifier] = modelKey
     }
 
     func preloadMeetingHelpers(trigger: DiarizerPreloadTrigger = .unspecified) async {
@@ -1582,7 +1622,8 @@ actor TranscriptionCoordinator {
             case .gemma4LiteRT:
                 let transcriber = gemma4LiteRTTranscriber
                 let model = Gemma4LiteRTModel.resolved(postProcessorModelId)
-                try await withBackendInFlight(BackendOption.gemma4E2BLiteRT.backend) {
+                try await withBackendInFlight(BackendOption.gemma4E2BLiteRT.backend, exclusive: true) {
+                    preparedSpeechModels.removeValue(forKey: "gemma4-litert")
                     try await transcriber.prepare(model: model)
                 }
             default:
@@ -1643,16 +1684,29 @@ actor TranscriptionCoordinator {
             designation: designation,
             inFlight: Set(backendsInFlight.keys)
         )
+        var unloaded: [String] = []
         for identifier in unloadable {
-            await unloadBackend(identifier)
-            fputs("[coordinator] unloading \(identifier): no longer designated (\(reason))\n", stderr)
+            let didUnload = (try? await withSpeechModelAccess(identifier) {
+                let current = TranscriptionBackendResidencyPolicy.backendsToUnload(
+                    loaded: self.loadedBackends, designation: self.backendDesignation,
+                    inFlight: Set(self.backendsInFlight.keys)
+                )
+                guard current.contains(identifier) else { return false }
+                await self.unloadBackend(identifier)
+                return true
+            }) ?? false
+            if didUnload {
+                unloaded.append(identifier)
+                fputs("[coordinator] unloading \(identifier): no longer designated (\(reason))\n", stderr)
+            }
         }
-        return unloadable
+        return unloaded
     }
 
     /// Every wrapper here releases its models and reloads lazily, so the shared
     /// `let` transcribers are shut down in place rather than discarded.
     private func unloadBackend(_ identifier: String) async {
+        preparedSpeechModels.removeValue(forKey: identifier)
         loadedBackends.remove(identifier)
         switch identifier {
         case "fluidaudio":
@@ -1696,8 +1750,14 @@ actor TranscriptionCoordinator {
     /// in the window where this actor is suspended cannot unload it mid-flight.
     private func withBackendInFlight<T>(
         _ identifier: String,
+        exclusive: Bool = false,
         _ body: () async throws -> T
-    ) async rethrows -> T {
+    ) async throws -> T {
+        if exclusive {
+            return try await withSpeechModelAccess(identifier) {
+                try await self.withBackendInFlight(identifier, body)
+            }
+        }
         loadedBackends.insert(identifier)
         backendsInFlight[identifier, default: 0] += 1
         defer {
@@ -1709,6 +1769,26 @@ actor TranscriptionCoordinator {
             }
         }
         return try await body()
+    }
+
+    /// Variants sharing a wrapper must not replace its model between preparation
+    /// and inference. Separate backend families retain independent concurrency.
+    func withSpeechModelAccess<T>(_ identifier: String, _ operation: () async throws -> T) async throws -> T {
+        let gate = speechModelGates[identifier] ?? fallbackSpeechModelGate
+        try await gate.acquire()
+        do {
+            try Task.checkCancellation()
+            let result = try await operation()
+            await gate.release()
+            return result
+        } catch {
+            await gate.release()
+            throw error
+        }
+    }
+
+    func queuedSpeechModelRequests(_ identifier: String) async -> Int {
+        await (speechModelGates[identifier] ?? fallbackSpeechModelGate).queuedWaiterCount()
     }
 
     // MARK: - Memory pressure
@@ -1879,6 +1959,7 @@ actor TranscriptionCoordinator {
         bodhanLanguage: BodhanLanguage = BodhanLanguage.defaultLanguage,
         nemotron35Language: Nemotron35Language = Nemotron35Language.defaultLanguage,
         whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
+        parakeetLanguage: ParakeetLanguage = .defaultLanguage,
         appleSpeechLanguage: String = AppleSpeechLanguageOption.systemIdentifier,
         enablePostProcessor: Bool = false,
         cleanupPolicy: DictationCleanupPolicy? = nil,
@@ -1896,6 +1977,7 @@ actor TranscriptionCoordinator {
             bodhanLanguage: bodhanLanguage,
             nemotron35Language: nemotron35Language,
             whisperLanguage: whisperLanguage,
+            parakeetLanguage: parakeetLanguage,
             appleSpeechLanguage: appleSpeechLanguage,
             enablePostProcessor: enablePostProcessor,
             cleanupPolicy: cleanupPolicy,
@@ -1915,6 +1997,7 @@ actor TranscriptionCoordinator {
         bodhanLanguage: BodhanLanguage = BodhanLanguage.defaultLanguage,
         nemotron35Language: Nemotron35Language = Nemotron35Language.defaultLanguage,
         whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
+        parakeetLanguage: ParakeetLanguage = .defaultLanguage,
         appleSpeechLanguage: String = AppleSpeechLanguageOption.systemIdentifier,
         enablePostProcessor: Bool = false,
         cleanupPolicy: DictationCleanupPolicy? = nil,
@@ -1980,6 +2063,7 @@ actor TranscriptionCoordinator {
                 bodhanLanguage: bodhanLanguage,
                 nemotron35Language: nemotron35Language,
                 whisperLanguage: whisperLanguage,
+                parakeetLanguage: parakeetLanguage,
                 appleSpeechLanguage: appleSpeechLanguage,
                 vocabulary: AsrVocabularyPrompt.build(customWords: dictionary)
             )
@@ -2221,6 +2305,9 @@ actor TranscriptionCoordinator {
     }
 
     func shutdown() async {
+        speechResidencyTask?.cancel()
+        speechResidencyTask = nil
+        preparedSpeechModels.removeAll()
         cancelIdleUnload()
         memoryPressureSource?.cancel()
         memoryPressureSource = nil
@@ -2433,7 +2520,8 @@ actor TranscriptionCoordinator {
         do {
             let transcriber = gemma4LiteRTTranscriber
             let model = Gemma4LiteRTModel.resolved(postProcessorSnapshot.modelId)
-            let cleanup = try await withBackendInFlight(BackendOption.gemma4E2BLiteRT.backend) {
+            let cleanup = try await withBackendInFlight(BackendOption.gemma4E2BLiteRT.backend, exclusive: true) {
+                preparedSpeechModels.removeValue(forKey: "gemma4-litert")
                 try await transcriber.prepare(model: model)
                 return try await transcriber.cleanTranscript(
                     result.text,
@@ -2665,8 +2753,27 @@ actor TranscriptionCoordinator {
         appleSpeechLanguage: String = AppleSpeechLanguageOption.systemIdentifier,
         vocabulary: AsrVocabularyPrompt? = nil
     ) async throws -> SpeechTranscriptionResult {
-        try await withBackendInFlight(Self.residencyIdentifier(for: backend)) {
-            try await routeToBackend(
+        if case .incompatible(let incompatibility) = languageDecision {
+            throw incompatibility
+        }
+        defer {
+            // Retire old-language weights without holding up delivery of the
+            // transcript. Only the newest pending reconciliation is retained.
+            speechResidencyTask?.cancel()
+            speechResidencyTask = Task { [weak self] in
+                guard !Task.isCancelled else { return }
+                _ = await self?.reconcileBackendResidency(reason: "transcription completed")
+            }
+        }
+        return try await withBackendInFlight(Self.residencyIdentifier(for: backend), exclusive: true) {
+            if let transcriptionOperation { return try await transcriptionOperation(url, backend, languageDecision) }
+            let preparationLanguage: String
+            switch languageDecision {
+            case .pinned(let language), .fixed(let language): preparationLanguage = language.rawValue
+            default: preparationLanguage = appleSpeechLanguage
+            }
+            try await loadBackendModels(backend: backend, appleSpeechLanguage: preparationLanguage, requireInstalled: true)
+            return try await routeToBackend(
                 url: url,
                 backend: backend,
                 languageDecision: languageDecision,

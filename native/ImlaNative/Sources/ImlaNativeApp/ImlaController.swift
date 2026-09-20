@@ -620,11 +620,17 @@ public final class ImlaController: NSObject {
 
     private(set) var config: AppConfig
     private(set) var selectedBackend: BackendOption
+    private let keyboardLanguageMonitor = KeyboardLanguageMonitor()
+    private var routedKeyboardLanguage = KeyboardLanguageSnapshot(language: nil, enabledLanguages: [])
+    private var dictationLanguageModelUnavailable = false
+    private var dictationModelPreparationTask: Task<Void, Never>?
+    private var speechLanguageCatalogTask: Task<Void, Never>?
     private(set) var selectedDictationProvider: DictationProvider
     private(set) var selectedMeetingTranscriptionBackend: BackendOption
     private(set) var selectedMeetingSummaryBackend: MeetingSummaryBackendOption
     private(set) var selectedPostProcessorBackend: TranscriptCleanupBackendOption
     private var activeMeetingSession: MeetingSession?
+    private var preparingMeetingModel: (id: Int64, backend: BackendOption)?
     private var activeMeetingPanelOwnerID: UUID?
     private weak var preparingMeetingSession: MeetingSession?
     private var activeMeetingID: Int64?
@@ -713,7 +719,11 @@ public final class ImlaController: NSObject {
         didSet {
             // The Record pill only holds the spot for the start it launched; any exit from the
             // starting state retires the flag so a later start never renders as "Starting…".
-            if !isStartingMeetingRecording { meetingStartOriginatedFromRecordButton = false }
+            if !isStartingMeetingRecording {
+                meetingStartOriginatedFromRecordButton = false
+                preparingMeetingModel = nil
+                updateDesignatedTranscriptionBackends()
+            }
         }
     }
     /// Set while a start launched from the Record pill is in flight, so the pill can hold its
@@ -933,6 +943,19 @@ public final class ImlaController: NSObject {
 
     func start() {
         hasStarted = true
+        refreshSpeechModelAvailability()
+        keyboardLanguageMonitor.onChange = { [weak self] _ in
+            self?.refreshKeyboardLanguageRouting(prepare: true)
+        }
+        keyboardLanguageMonitor.start()
+        refreshKeyboardLanguageRouting(prepare: false)
+        if #available(macOS 26.0, *) {
+            speechLanguageCatalogTask = Task { [weak self] in
+                _ = await AppleSpeechLanguageOption.supportedOptions()
+                guard !Task.isCancelled else { return }
+                self?.refreshSpeechModelAvailability()
+            }
+        }
         Task.detached(priority: .utility) {
             MeetingSessionDiagnostics.prepareStore()
         }
@@ -1260,7 +1283,7 @@ public final class ImlaController: NSObject {
                 if #available(macOS 15, *) {
                     await self.configureTranscriptCleanupForRuntime(option: ppOption)
                     await self.transcriptionCoordinator.setNemotron35PromptId(
-                        self.config.resolvedNemotron35Language.promptId
+                        self.dictationSessionConfiguration().resolvedNemotron35Language.promptId
                     )
                 }
                 // Designate before preloading so a startup that warms a dictation
@@ -1321,6 +1344,11 @@ public final class ImlaController: NSObject {
     }
 
     func shutdown() async {
+        keyboardLanguageMonitor.stop()
+        dictationModelPreparationTask?.cancel()
+        dictationModelPreparationTask = nil
+        speechLanguageCatalogTask?.cancel()
+        speechLanguageCatalogTask = nil
         systemPermissionGuideController.dismiss()
         await recordingStartupRecoveryTask?.value
         recordingStartupRecoveryTask = nil
@@ -1996,7 +2024,7 @@ public final class ImlaController: NSObject {
         )
         appState.selectedBackend = selectedBackend
         appState.dictationProvider = selectedDictationProvider
-        appState.selectedMeetingTranscriptionBackend = selectedMeetingTranscriptionBackend
+        appState.selectedMeetingTranscriptionBackend = activeMeetingSession?.currentRecognitionBackend ?? selectedMeetingTranscriptionBackend
         appState.selectedMeetingSummaryBackend = selectedMeetingSummaryBackend
         appState.selectedPostProcessorBackend = selectedPostProcessorBackend
         appState.activePostProcessor = PostProcessorOption.resolve(id: config.activePostProcessorId)
@@ -2096,11 +2124,9 @@ public final class ImlaController: NSObject {
         let fallback = dictationBackend.supportsMeetingTranscription ? dictationBackend : nil
         // `resolveDownloaded` deliberately keeps a persisted selection that is merely not
         // downloaded yet: availability is a runtime state, and rewriting the user's choice
-        // over it would lose their model the moment a cache was cleared. Meeting support is
-        // a different kind of fact — a streaming-only backend appends words and never
-        // revises them, so it cannot produce a final meeting transcript however complete
-        // its download is. Passing such a selection through would have it survive the
-        // `meetingOptions` filter it was just excluded from.
+        // over it would lose their model the moment a cache was cleared. Workload
+        // incompatibility is different: a backend that cannot handle meetings must
+        // not survive the meeting-capability filter merely because it was persisted.
         let configured = BackendOption.resolve(
             backend: config.meetingTranscriptionBackend,
             model: config.meetingTranscriptionModel
@@ -2158,7 +2184,7 @@ public final class ImlaController: NSObject {
                 ),
                 dictationBackend: dictationBackend
             )
-            appState.selectedMeetingTranscriptionBackend = selectedMeetingTranscriptionBackend
+            appState.selectedMeetingTranscriptionBackend = activeMeetingSession?.currentRecognitionBackend ?? selectedMeetingTranscriptionBackend
             appState.config = config
             return nil
         }
@@ -2183,6 +2209,7 @@ public final class ImlaController: NSObject {
     }
 
     func refreshMeetingTranscriptionSelectionAfterDeleting(_ option: BackendOption) {
+        refreshSpeechModelAvailability()
         if selectedMeetingTranscriptionBackend == option,
            config.usesNemotronLiveMeetingTranscript,
            !config.useLiveMeetingTranscriptAsFinal {
@@ -2196,6 +2223,7 @@ public final class ImlaController: NSObject {
         iCloudDisableCompletionStatus: String? = nil,
         _ mutate: (inout AppConfig) -> Void
     ) {
+        let previousSelectedBackend = selectedBackend
         let previousMeetingCleanupIdentity = meetingCleanupIdentity(config)
         let wasICloudSyncEnabled = config.iCloudSyncEnabled
         let wasUsingAppleSpeech = selectedBackend.backend == "apple-speech"
@@ -2245,9 +2273,11 @@ public final class ImlaController: NSObject {
             || config.computerUseHotkeyTriggerThresholdMS != previousComputerUseHotkeyTriggerThresholdMS
             || config.meetingRecordingHotkeyTriggerThresholdMS != previousMeetingRecordingHotkeyTriggerThresholdMS
         ImlaTheme.accentOverrideHex = config.accentOverrideHex
-        selectedBackend = BackendOption.all.first(where: {
-            $0.backend == config.sttBackend && $0.model == config.sttModel
-        }) ?? .whisper
+        if !hasActiveSpeechCapture {
+            selectedBackend = BackendOption.all.first(where: {
+                $0.backend == config.sttBackend && $0.model == config.sttModel
+            }) ?? .whisper
+        }
         selectedDictationProvider = config.resolvedDictationProvider
         let configuredPostProcessorBackend = TranscriptCleanupBackendOption.resolved(config.postProcessorBackend)
         let activePostProcessor = PostProcessorOption.resolve(id: config.activePostProcessorId)
@@ -2298,11 +2328,13 @@ public final class ImlaController: NSObject {
                 do {
                     try await AppleSpeechAnalyzerTranscriber.shared.prepareSelectedLanguage(
                         AppleSpeechLanguageOption.requestedLocale(for: language))
+                    self.refreshSpeechModelAvailability()
                 } catch {
                     fputs("[imla-native] Apple Speech selection preparation failed: \(error)\n", stderr)
                 }
             }
         }
+        refreshKeyboardLanguageRouting(prepare: false)
         configStore.save(config)
         meetingRecordingPanel.applyConfiguration(config)
         selectedMeetingSummaryBackend = MeetingSummaryBackendOption.all.first(where: {
@@ -2320,6 +2352,10 @@ public final class ImlaController: NSObject {
                 dictationAudioRoutingController.preferredInputDeviceIDForMeeting(),
                 explicitUserSelection: true
             )
+        }
+        if hasStarted, selectedBackend != previousSelectedBackend,
+           !hasActiveSpeechCapture, !selectedDictationProvider.isHosted {
+            prepareSelectedLocalDictationBackend()
         }
     }
 
@@ -2453,7 +2489,7 @@ public final class ImlaController: NSObject {
         applyAppThemeAppearance()
         appState.selectedBackend = selectedBackend
         appState.dictationProvider = selectedDictationProvider
-        appState.selectedMeetingTranscriptionBackend = selectedMeetingTranscriptionBackend
+        appState.selectedMeetingTranscriptionBackend = activeMeetingSession?.currentRecognitionBackend ?? selectedMeetingTranscriptionBackend
         appState.selectedMeetingSummaryBackend = selectedMeetingSummaryBackend
         appState.selectedPostProcessorBackend = selectedPostProcessorBackend
         appState.config = config
@@ -3600,23 +3636,25 @@ public final class ImlaController: NSObject {
                 }
             }
         }
+        let activeOption = selectedBackend
+        dictationModelPreparationTask?.cancel()
         let preparation = beginDictationBackendPreparation()
         guard !selectedDictationProvider.isHosted else {
             statusBarController?.refresh()
             historyWindowController?.updateBackendLabel()
             return
         }
-        Task { [weak self] in
+        dictationModelPreparationTask = Task { [weak self] in
             guard let self, self.dictationBackendPreparation.owns(preparation) else { return }
             // Push the selected Nemotron 3.5 language before preload so the loaded
             // transcriber is conditioned on the right prompt_id.
-            await self.transcriptionCoordinator.setNemotron35PromptId(self.config.resolvedNemotron35Language.promptId)
+            await self.transcriptionCoordinator.setNemotron35PromptId(self.dictationSessionConfiguration().resolvedNemotron35Language.promptId)
             let ppOption = self.runtimePostProcessorOption()
             await self.configureTranscriptCleanupForRuntime(option: ppOption)
-            let prepared = await self.prepareDictationBackend(option, preparation: preparation)
+            let prepared = await self.prepareDictationBackend(activeOption, preparation: preparation)
             if prepared {
                 await self.preloadOptionalTranscriptionResources(
-                    for: option,
+                    for: activeOption,
                     enablePostProcessor: self.canRunTranscriptCleanup(option: ppOption),
                     includeMeetingHelpers: self.config.resolvedOnboardingUseCase.includesMeetings,
                     meetingHelperTrigger: .backendChange
@@ -3657,11 +3695,12 @@ public final class ImlaController: NSObject {
     }
 
     private func prepareSelectedLocalDictationBackend() {
+        dictationModelPreparationTask?.cancel()
         let preparation = beginDictationBackendPreparation()
         let option = selectedBackend
-        Task { [weak self] in
+        dictationModelPreparationTask = Task { [weak self] in
             guard let self, self.dictationBackendPreparation.owns(preparation) else { return }
-            await self.transcriptionCoordinator.setNemotron35PromptId(self.config.resolvedNemotron35Language.promptId)
+            await self.transcriptionCoordinator.setNemotron35PromptId(self.dictationSessionConfiguration().resolvedNemotron35Language.promptId)
             let prepared = await self.prepareDictationBackend(option, preparation: preparation)
             if prepared {
                 await self.preloadOptionalTranscriptionResources(
@@ -3734,7 +3773,8 @@ public final class ImlaController: NSObject {
                 backend: backend,
                 enablePostProcessor: false,
                 includeMeetingHelpers: false,
-                appleSpeechLanguage: config.resolvedAppleSpeechLanguage
+                appleSpeechLanguage: dictationSessionConfiguration().resolvedAppleSpeechLanguage,
+                requireInstalled: true
             )
             guard dictationBackendPreparation.finish(preparation, succeeded: true) else { return false }
             return true
@@ -3759,15 +3799,17 @@ public final class ImlaController: NSObject {
     }
 
     private func applyDesignatedTranscriptionBackends() async {
-        let includesMeetings = config.resolvedOnboardingUseCase.includesMeetings
+        let includesMeetings = config.resolvedOnboardingUseCase.includesMeetings || activeMeetingSession != nil || isStartingMeetingRecording
         // Parakeet EOU live captions load their own model outside the coordinator,
         // so only a Nemotron selection designates a coordinator-held backend.
         let usesSharedLiveCaptionModel = includesMeetings
             && config.enableLiveStreamingPartials
             && config.resolvedMeetingLiveCaptionBackend == .nemotron35
+        let preparing = preparingMeetingModel?.id == meetingStartMeetingID ? preparingMeetingModel?.backend : nil
+        let meetingBackend = activeMeetingSession?.currentRecognitionBackend ?? preparing ?? selectedMeetingTranscriptionBackend
         await transcriptionCoordinator.setDesignatedBackends(
             dictation: selectedBackend.backend,
-            meetingTranscription: includesMeetings ? selectedMeetingTranscriptionBackend.backend : nil,
+            meetingTranscription: includesMeetings ? meetingBackend.backend : nil,
             meetingLiveCaption: usesSharedLiveCaptionModel
                 ? BackendOption.nemotron35Multilingual.backend
                 : nil
@@ -4093,7 +4135,7 @@ public final class ImlaController: NSObject {
         alert.addButton(withTitle: "Cancel")
         presentAlert(alert, fallbackLogContext: "Quill account setup") { [weak self] response in
             guard response == .alertFirstButtonReturn, let self else { return }
-            self.appState.selectedSettingsPane = .dictation
+            self.appState.selectedSettingsPane = .writingAI
             self.openSettingsTab()
             guard needsChatGPTSignIn || needsOpenRouterSignIn else { return }
             Task { @MainActor in
@@ -7733,6 +7775,10 @@ public final class ImlaController: NSObject {
             if self.pendingMeetingLanguageSessionID == payload.sessionID {
                 self.pendingMeetingLanguageSessionID = nil
             }
+            if self.activeMeetingSession === session {
+                self.appState.selectedMeetingTranscriptionBackend = session.currentRecognitionBackend
+                self.updateDesignatedTranscriptionBackends()
+            }
             self.statusBarController?.refreshMeetingLanguageSwitcher()
         }
     }
@@ -7969,14 +8015,15 @@ public final class ImlaController: NSObject {
         previousMeetingNotes: String? = nil
     ) -> Bool {
         guard !isMeetingRecording(), !isStartingMeetingRecording else { return false }
-        guard let meetingBackend = normalizeMeetingTranscriptionSelectionForAvailability() else {
+        guard let defaultMeetingBackend = normalizeMeetingTranscriptionSelectionForAvailability() else {
             presentErrorAlert(
                 title: "Meeting failed to start",
                 message: "Download a transcription model before recording a meeting."
             )
             return false
         }
-        let meetingConfig = config
+        let meetingConfig = liveMeetingConfiguration()
+        let meetingBackend = liveMeetingModelResolution(meetingConfig, fallback: defaultMeetingBackend).backend
         let meetingStartedAt = Date()
         let sessionTrace = makeMeetingSessionTrace(
             backend: meetingBackend,
@@ -8163,14 +8210,15 @@ public final class ImlaController: NSObject {
     func resumeFinishedMeeting(meetingID: Int64) {
         guard !isMeetingRecording(), !isStartingMeetingRecording else { return }
         guard let meeting = meeting(id: meetingID), canResumeFinishedMeeting(meeting) else { return }
-        guard let meetingBackend = normalizeMeetingTranscriptionSelectionForAvailability() else {
+        guard let defaultMeetingBackend = normalizeMeetingTranscriptionSelectionForAvailability() else {
             presentErrorAlert(
                 title: "Resume failed",
                 message: "Download a transcription model before recording."
             )
             return
         }
-        let meetingConfig = config
+        let meetingConfig = liveMeetingConfiguration()
+        let meetingBackend = liveMeetingModelResolution(meetingConfig, fallback: defaultMeetingBackend).backend
         let sessionTrace = makeMeetingSessionTrace(
             backend: meetingBackend,
             startedAt: Date(),
@@ -8674,12 +8722,16 @@ public final class ImlaController: NSObject {
         statusBarController?.setStatus("Meeting transcription will start shortly.")
         statusBarController?.refresh()
         try Task.checkCancellation()
+        try checkMeetingStartStillCurrent(meetingIdentity)
+        preparingMeetingModel = (meetingIdentity, backend)
+        await applyDesignatedTranscriptionBackends()
         try await transcriptionCoordinator.preloadRequired(
             backend: backend,
             enablePostProcessor: false,
             includeMeetingHelpers: true,
             meetingHelperTrigger: .meetingStart,
-            appleSpeechLanguage: config.resolvedAppleSpeechLanguage
+            appleSpeechLanguage: meetingConfig.resolvedAppleSpeechLanguage,
+            requireInstalled: true
         )
         try Task.checkCancellation()
         try checkMeetingStartStillCurrent(meetingIdentity)
@@ -8701,7 +8753,8 @@ public final class ImlaController: NSObject {
                 templateSnapshot: templateSnapshot,
                 transcriptionCoordinator: transcriptionCoordinator,
                 meetingMicRecorder: meetingMicRecorder,
-                sessionTrace: meetingSessionTraces[meetingID]
+                sessionTrace: meetingSessionTraces[meetingID],
+                availableLanguageModels: appState.availableSpeechModels
             )
             let transcriptGeneration = UUID()
             let captureOwner = ObjectIdentifier(meetingSession)
@@ -10583,6 +10636,7 @@ public final class ImlaController: NSObject {
         case .transcribing: status = "Transcribing"
         }
         statusBarController?.setStatus(status)
+        if state == .idle { refreshKeyboardLanguageRouting(prepare: true) }
     }
 
     /// With eager start the stream can be live before the tap/hold decision; hold the start
@@ -11276,6 +11330,7 @@ public final class ImlaController: NSObject {
 
     private func handleQuilStart() {
         guard canStartQuil else { return }
+        refreshKeyboardLanguageRouting(prepare: true)
         quilStartedAt = Date()
         setState(.preparing)
         quilAudioSessionManager.beginRecording(
@@ -11371,7 +11426,7 @@ public final class ImlaController: NSObject {
             : configuredModel
         let dictationBackend = selectedBackend
         let directAudio = QuilModelPolicy.usesDirectAudio(dictation: dictationBackend, backend: backend, model: model)
-        let configSnapshot = config
+        let configSnapshot = dictationSessionConfiguration()
         let contextCaptureTask = quilContextCaptureTask
         quilTask = Task { [weak self] in
             guard let self else { return }
@@ -11388,9 +11443,12 @@ public final class ImlaController: NSObject {
                     let result = try await self.transcriptionCoordinator.transcribeDictation(
                         at: wavURL,
                         backend: dictationBackend,
+                        languageDecision: Self.dictationLanguageDecision(profile: configSnapshot.languageProfile, backend: dictationBackend),
                         cohereLanguage: configSnapshot.resolvedCohereLanguage,
                         bodhanLanguage: configSnapshot.resolvedBodhanLanguage,
+                        nemotron35Language: configSnapshot.resolvedNemotron35Language,
                         whisperLanguage: configSnapshot.resolvedWhisperLanguage,
+                        parakeetLanguage: configSnapshot.resolvedParakeetLanguage,
                         appleSpeechLanguage: configSnapshot.resolvedAppleSpeechLanguage,
                         enablePostProcessor: false,
                         customWords: self.serializedCustomWords(),
@@ -11710,6 +11768,7 @@ public final class ImlaController: NSObject {
         }
         fputs("[cua] recording start\n", stderr)
         meetingMonitor.suppressWhileActive()
+        refreshKeyboardLanguageRouting(prepare: true)
         computerUseCommandStartedAt = Date()
         ComputerUseCursorOverlay.shared.showAcquiring()
         computerUseAudioSessionManager.beginRecording(
@@ -11800,7 +11859,8 @@ public final class ImlaController: NSObject {
         computerUseCommandTask?.cancel()
         let taskID = UUID()
         let backend = selectedBackend
-        let languageProfile = config.languageProfile
+        let configSnapshot = dictationSessionConfiguration()
+        let languageProfile = configSnapshot.languageProfile
         let customWords = serializedCustomWords()
         computerUseCommandTaskID = taskID
         let task = Task { [weak self] in
@@ -11821,7 +11881,8 @@ public final class ImlaController: NSObject {
                     bodhanLanguage: languageProfile.resolvedBodhanLanguage,
                     nemotron35Language: languageProfile.resolvedNemotron35Language,
                     whisperLanguage: languageProfile.resolvedWhisperLanguage,
-                    appleSpeechLanguage: self.config.resolvedAppleSpeechLanguage,
+                    parakeetLanguage: languageProfile.resolvedParakeetLanguage,
+                    appleSpeechLanguage: configSnapshot.resolvedAppleSpeechLanguage,
                     enablePostProcessor: false,
                     customWords: customWords,
                     appContext: nil
@@ -12242,8 +12303,94 @@ public final class ImlaController: NSObject {
         selectedDictationProvider.usesStreamingBackend(selectedBackend)
     }
 
+    func refreshSpeechModelAvailability(_ downloaded: [BackendOption] = BackendOption.downloaded) {
+        appState.availableSpeechModels = downloaded.filter { $0.backend != "apple-speech" || !AppleSpeechModelLanguages.supported.isEmpty }
+        activeMeetingSession?.updateAvailableLanguageModels(appState.availableSpeechModels)
+        preparingMeetingSession?.updateAvailableLanguageModels(appState.availableSpeechModels)
+        refreshKeyboardLanguageRouting(prepare: true)
+    }
+
+    private var hasActiveSpeechCapture: Bool {
+        dictationAudioSessionManager.hasActiveSession || dictationStartedAt != nil || isNemotron35Streaming
+            || quilStartedAt != nil || computerUseCommandStartedAt != nil
+            || pendingQuilStopSessionID != nil || pendingComputerUseStopSessionID != nil
+    }
+
+    private func refreshKeyboardLanguageRouting(prepare: Bool) {
+        guard hasStarted else { return }
+        let keyboard = keyboardLanguageMonitor.snapshot
+        appState.keyboardLanguage = keyboard.language
+        appState.keyboardLanguages = keyboard.enabledLanguages
+        guard !isDictationTestMode, !hasActiveSpeechCapture else { return }
+        routedKeyboardLanguage = keyboard
+        let fallback = BackendOption.resolve(backend: config.sttBackend, model: config.sttModel) ?? .whisper
+        let available = appState.availableSpeechModels.filter {
+            !selectedDictationProvider.isHosted || $0.supportsHostedDictationFallback
+        }
+        let resolution = LanguageModelRouting.resolve(
+            language: keyboard.language, preferences: config.languageModels,
+            dictationDefault: fallback, meetingDefault: selectedMeetingTranscriptionBackend,
+            available: available, workload: .dictation
+        )
+        dictationLanguageModelUnavailable = !resolution.isUsable
+        if !resolution.isUsable, !AppleSpeechModelLanguages.isLoaded,
+           BackendOption.appleSpeechAnalyzer.isDownloaded {
+            appState.dictationLanguageModelNotice = "Checking system speech languages…"
+        } else if !resolution.isUsable, let language = keyboard.language {
+            appState.dictationLanguageModelNotice = "Download a compatible model for \(language.label) in Models."
+        } else if resolution.usedFallback {
+            appState.dictationLanguageModelNotice = "Using \(resolution.backend.label); the assigned model is unavailable or incompatible."
+        } else {
+            appState.dictationLanguageModelNotice = nil
+        }
+        guard selectedBackend != resolution.backend else { return }
+        selectedBackend = resolution.backend
+        appState.selectedBackend = selectedBackend
+        updateDesignatedTranscriptionBackends()
+        if prepare, resolution.isUsable, !selectedDictationProvider.isHosted {
+            prepareSelectedLocalDictationBackend()
+        }
+        statusBarController?.refresh()
+        historyWindowController?.updateBackendLabel()
+    }
+
+    /// This is a session copy, not a settings write. Keeping language and model
+    /// together also conditions cleanup and hosted fallback on the captured choice.
+    private func dictationSessionConfiguration() -> AppConfig {
+        guard !isDictationTestMode else { return config }
+        return routedKeyboardLanguage.applying(to: config, backend: selectedBackend)
+    }
+
+    private func liveMeetingConfiguration() -> AppConfig {
+        var snapshot = config
+        let keyboard = keyboardLanguageMonitor.snapshot
+        snapshot.meetingSpokenLanguage = keyboard.spokenProfile(additionalLanguages: config.languageModels.languages)
+        let resolution = liveMeetingModelResolution(snapshot, fallback: selectedMeetingTranscriptionBackend)
+        if !resolution.isUsable {
+            // Capture remains available even when this language has no installed
+            // model; the default recognizer must not claim an unsupported pin.
+            snapshot.meetingSpokenLanguage = .automatic
+        }
+        if let language = keyboard.language { snapshot.appleSpeechLanguage = language.rawValue }
+        return snapshot
+    }
+
+    private func liveMeetingModelResolution(_ snapshot: AppConfig, fallback: BackendOption) -> LanguageModelRouting.Resolution {
+        LanguageModelRouting.resolve(
+            language: snapshot.meetingSpokenLanguage.selection.authoritativeLanguage,
+            preferences: snapshot.languageModels,
+            dictationDefault: BackendOption.resolve(backend: snapshot.sttBackend, model: snapshot.sttModel) ?? selectedBackend,
+            meetingDefault: fallback, available: appState.availableSpeechModels, workload: .meeting
+        )
+    }
+
     private func ensureDictationBackendReady() -> Bool {
         guard !isDictationTestMode else { return true }
+        refreshKeyboardLanguageRouting(prepare: true)
+        if !selectedDictationProvider.isHosted, dictationLanguageModelUnavailable {
+            dictationMiniIndicator.showWarning(appState.dictationLanguageModelNotice ?? "Choose a compatible speech model")
+            return false
+        }
         if let message = HostedDictationActivationPolicy.blockingMessage(
             provider: selectedDictationProvider,
             openAIAPIKey: resolvedOpenAIAPIKey(),
@@ -12593,7 +12740,7 @@ public final class ImlaController: NSObject {
                 sessionID: sessionID,
                 isTestMode: isDictationTestMode
             ))
-            let sessionConfig = activeDictationStyleSession?.config ?? config
+            let sessionConfig = activeDictationStyleSession?.config ?? dictationSessionConfiguration()
             let selection = frozenDictationTranscriptionSelection(sessionConfig: sessionConfig)
             frozenDictationTranscriptionSelections[sessionID] = selection
             _ = ensureDictationSessionTrace(
@@ -12612,7 +12759,7 @@ public final class ImlaController: NSObject {
                     isTestMode: isDictationTestMode
                 ))
             }
-            let sessionConfig = activeDictationStyleSession?.config ?? config
+            let sessionConfig = activeDictationStyleSession?.config ?? dictationSessionConfiguration()
             let selection = frozenDictationTranscriptionSelections[sessionID]
                 ?? frozenDictationTranscriptionSelection(sessionConfig: sessionConfig)
             if frozenDictationTranscriptionSelections[sessionID] == nil {
@@ -12933,7 +13080,7 @@ public final class ImlaController: NSObject {
                 ? lastExternalApp
                 : frontmostApplication
         )
-        let sessionConfig = config
+        let sessionConfig = dictationSessionConfiguration()
         let cleanupBackend = TranscriptCleanupBackendOption.resolved(sessionConfig.postProcessorBackend)
         let cleanupOption = runtimePostProcessorOption(config: sessionConfig, backend: cleanupBackend)
         let transcriptionBackend = BackendOption.resolve(
@@ -12999,12 +13146,14 @@ public final class ImlaController: NSObject {
         case .openAI:
             session = OpenAIHostedDictationSession(configuration: OpenAIDictationConfiguration(
                 apiKey: resolvedOpenAIAPIKey(),
-                model: config.openaiDictationModel
+                model: config.openaiDictationModel,
+                language: routedKeyboardLanguage.language?.rawValue
             ))
         case .openRouter:
             session = OpenRouterHostedDictationSession(configuration: OpenRouterDictationConfiguration(
                 apiKey: openRouterAuth.resolvedAPIKey(legacyAPIKey: config.openRouterAPIKey),
-                model: config.openRouterDictationModel
+                model: config.openRouterDictationModel,
+                language: routedKeyboardLanguage.language?.rawValue
             ))
         }
         hostedDictationSession = session
@@ -14538,6 +14687,7 @@ public final class ImlaController: NSObject {
                 bodhanLanguage: job.languageProfile.resolvedBodhanLanguage,
                 nemotron35Language: job.languageProfile.resolvedNemotron35Language,
                 whisperLanguage: job.languageProfile.resolvedWhisperLanguage,
+                parakeetLanguage: job.languageProfile.resolvedParakeetLanguage,
                 enablePostProcessor: cleanupPolicy.readiness == .ready,
                 cleanupRequestSnapshot: job.cleanupRequest,
                 customWords: job.customWords,

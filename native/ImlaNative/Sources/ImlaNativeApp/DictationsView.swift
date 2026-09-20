@@ -311,15 +311,9 @@ struct DictationsView: View {
                 Text(isRecording ? "Stop Voice Note" : "Record Voice Note")
                     .font(ImlaTheme.font(size: 12, weight: .semibold))
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .frame(height: 30)
-            .background(isRecording ? ImlaTheme.recording : ImlaTheme.accent)
-            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ImlaActionButtonStyle(tone: isRecording ? .recording : .primary))
         .disabled(appState.dictationState == .transcribing)
-        .opacity(appState.dictationState == .transcribing ? 0.55 : 1)
     }
 
     @ViewBuilder

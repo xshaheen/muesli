@@ -498,6 +498,58 @@ struct InferenceGateTests {
 
 @Suite("TranscriptionCoordinator routing")
 struct TranscriptionCoordinatorTests {
+    @Test("incompatible language fails before entering the recognizer transaction")
+    func incompatibleLanguageDoesNotLoadRecognizer() async throws {
+        let calls = TranscriptionLifecycleTestCounter()
+        let coordinator = TranscriptionCoordinator(transcriptionOperation: { _, _, _ in
+            await calls.increment()
+            return SpeechTranscriptionResult(text: "", segments: [])
+        })
+        await #expect(throws: LanguageRoutingIncompatibility.self) {
+            try await coordinator.transcribeMeetingWithEvidence(
+                at: URL(fileURLWithPath: "/unused-test-audio.wav"), backend: .parakeetUnified,
+                languageDecision: .incompatible(.languageUnsupported(.arabic))
+            )
+        }
+        #expect(await calls.value == 0)
+        await coordinator.shutdown()
+    }
+
+    @Test("requests sharing a recognizer keep their model transaction while other backends proceed")
+    func speechModelsAreSerializedPerBackend() async throws {
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let independent = TranscriptionLifecycleTestCounter()
+        let coordinator = TranscriptionCoordinator(transcriptionOperation: { _, backend, _ in
+            if backend == .whisperSmall {
+                started.continuation.yield(())
+                for await _ in release.stream { break }
+            } else if backend == .parakeetUnified {
+                await independent.increment()
+            }
+            return SpeechTranscriptionResult(text: backend.model, segments: [])
+        })
+        let url = URL(fileURLWithPath: "/unused-test-audio.wav")
+        let first = Task { try await coordinator.transcribeMeetingWithEvidence(at: url, backend: .whisperSmall) }
+        for await _ in started.stream { break }
+        let second = Task { try await coordinator.transcribeMeetingWithEvidence(at: url, backend: .whisperTiny) }
+        for _ in 0..<200 {
+            if await coordinator.queuedSpeechModelRequests("whisper") > 0 { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await coordinator.queuedSpeechModelRequests("whisper") == 1)
+        let other = Task { try await coordinator.transcribeMeetingWithEvidence(at: url, backend: .parakeetUnified) }
+        for _ in 0..<200 {
+            if await independent.value > 0 { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await independent.value == 1)
+        release.continuation.finish()
+        #expect(try await first.value.raw.text == BackendOption.whisperSmall.model)
+        #expect(try await second.value.raw.text == BackendOption.whisperTiny.model)
+        #expect(try await other.value.raw.text == BackendOption.parakeetUnified.model)
+        await coordinator.shutdown()
+    }
 
     @Test("coordinator initializes without crash")
     func initDoesNotCrash() {

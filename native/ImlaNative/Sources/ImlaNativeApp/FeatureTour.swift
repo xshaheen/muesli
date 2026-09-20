@@ -55,7 +55,9 @@ enum FeatureTourTarget: String, Hashable {
 
     var navigationRoute: FeatureTourNavigationRoute {
         switch self {
-        case .quillSettings, .dictationProviderSetting, .cloudCleanupSetting:
+        case .quillSettings, .cloudCleanupSetting:
+            return .settings(.writingAI)
+        case .dictationProviderSetting:
             return .settings(.dictation)
         case .liveCaptionsSetting:
             return .settings(.meetings)

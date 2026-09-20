@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import ImlaCore
 
-struct BackendOption: Equatable {
+struct BackendOption: Equatable, Sendable {
     struct Catalog {
         let systemManaged: [BackendOption]
         let all: [BackendOption]
@@ -308,7 +308,9 @@ struct BackendOption: Equatable {
     }
 
     var supportsMeetingTranscription: Bool {
-        !isStreamingDictationBackend
+        // Nemotron also transcribes recorded chunks, so it can be a language's
+        // final recognizer independently of whether live captions are enabled.
+        !isStreamingDictationBackend || self == .nemotron35Multilingual
     }
 
     var isSystemManaged: Bool {
@@ -384,7 +386,7 @@ struct BackendOption: Equatable {
         let fixedLanguage: TranscriptionLanguage?
         var fallbackLanguage: TranscriptionLanguage?
 
-        if self == .parakeetEnglish
+        if self == .parakeetUnified || self == .parakeetEnglish
             || (backend == "whisper" && WhisperKitLanguage.isEnglishOnlyModel(model)) {
             supported = [.english]
             supportsAuto = false
@@ -422,6 +424,10 @@ struct BackendOption: Equatable {
                 supportsAuto = false
                 supportsSingle = true
                 fallbackLanguage = .hindi  // BodhanLanguage.defaultLanguage
+            case "apple-speech":
+                supported = AppleSpeechModelLanguages.supported
+                supportsAuto = true
+                supportsSingle = true
             default:
                 supported = Set(TranscriptionLanguage.allCases)
                 supportsAuto = true

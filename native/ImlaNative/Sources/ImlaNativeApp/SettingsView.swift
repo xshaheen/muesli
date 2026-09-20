@@ -141,20 +141,6 @@ private enum OnDeviceCleanupModel: Identifiable {
 }
 
 struct SettingsView: View {
-    private enum FinalTranscriptOption {
-        case liveNemotron
-        case batch(BackendOption)
-
-        var label: String {
-            switch self {
-            case .liveNemotron:
-                return "\(MeetingLiveCaptionBackend.nemotron35.label) (live model)"
-            case .batch(let option):
-                return option.label
-            }
-        }
-    }
-
     private enum PendingDataDestruction {
         case dictations
         case meetings
@@ -261,19 +247,6 @@ struct SettingsView: View {
     private let iOSCompanionURL = IPhoneBridgeLinks.installURL
     private let screenContextGrantIntentTimeout: TimeInterval = 15 * 60
 
-    private var languageProfileEditor: LanguageProfileSettingsModel {
-        appState.languageProfileSettings
-    }
-    private var meetingLanguageProfileEditor: LanguageProfileSettingsModel {
-        appState.meetingLanguageProfileSettings
-    }
-    /// The meeting card repeats the dictation migration banner only while the two
-    /// authorities still hold the same pin-derived copy, so an upgrader who
-    /// resolves it on one card is not left with a stale meeting profile (R5).
-    private var meetingProfileNeedsReview: Bool {
-        appState.config.languageProfileNeedsConfirmation
-            && appState.config.meetingSpokenLanguage == appState.config.dictationLanguageProfile
-    }
     private let meetingDetectionAppOptions: [MeetingDetectionAppOption] = [
         MeetingDetectionAppOption(bundleID: "com.google.Chrome", name: "Chrome", icon: "globe"),
         MeetingDetectionAppOption(bundleID: "company.thebrowser.Browser", name: "Arc", icon: "globe"),
@@ -295,9 +268,10 @@ struct SettingsView: View {
     }
 
     private var displayedDictationBackend: BackendOption? {
-        guard appState.dictationProvider.isHosted else { return appState.selectedBackend }
+        let configured = BackendOption.resolve(backend: appState.config.sttBackend, model: appState.config.sttModel) ?? appState.selectedBackend
+        guard appState.dictationProvider.isHosted else { return configured }
         return BackendOption.resolveHostedDictationFallback(
-            selected: appState.selectedBackend,
+            selected: configured,
             available: dictationBackendOptions
         )
     }
@@ -321,47 +295,23 @@ struct SettingsView: View {
         return selected.settingsLabel
     }
 
-    private var usesNemotronLiveTranscript: Bool {
-        appState.config.usesNemotronLiveMeetingTranscript
-            && downloadedMeetingLiveCaptionBackends.contains(.nemotron35)
-    }
-
-    private var usesUnifiedMeetingTranscript: Bool {
-        downloadedMeetingLiveCaptionBackends.contains(.nemotron35)
-            && appState.config.usesUnifiedNemotronMeetingTranscript
-    }
-
-    private var finalTranscriptOptions: [FinalTranscriptOption] {
-        [.liveNemotron] + meetingBackendOptions.map(FinalTranscriptOption.batch)
-    }
-
-    private var selectedFinalTranscriptLabel: String {
-        if usesUnifiedMeetingTranscript {
-            return FinalTranscriptOption.liveNemotron.label
-        }
-        return selectedMeetingBackendLabel
-    }
-
     private var meetingLiveTranscriptDescription: String {
         let selected = appState.config.resolvedMeetingLiveCaptionBackend
         guard appState.config.enableLiveStreamingPartials,
               downloadedMeetingLiveCaptionBackends.contains(selected) else {
             return "Shows completed transcript segments only."
         }
-        if usesUnifiedMeetingTranscript {
-            return "Creates the live and final transcript."
-        }
-        if usesNemotronLiveTranscript {
-            return "Creates the live transcript; the selected final model transcribes separately."
-        }
-        return "Adds a low-latency preview."
+        return "Shows captions while you speak. Speech Models chooses the recognizer for the final transcript."
     }
 
     private var selectedMeetingBackendLabel: String {
-        if meetingBackendOptions.contains(appState.selectedMeetingTranscriptionBackend) {
-            return appState.selectedMeetingTranscriptionBackend.label
+        let configured = BackendOption.resolve(
+            backend: appState.config.meetingTranscriptionBackend, model: appState.config.meetingTranscriptionModel
+        ) ?? appState.selectedMeetingTranscriptionBackend
+        if meetingBackendOptions.contains(configured) {
+            return configured.label
         }
-        return meetingBackendOptions.first?.label ?? "No downloaded models"
+        return "\(configured.label) (not installed)"
     }
 
     private var cleanupPromptPresets: [TranscriptCleanupPromptPreset] {
@@ -494,14 +444,14 @@ struct SettingsView: View {
                     settingsPanePicker
                     paneContent
                 }
-                .padding(.horizontal, ImlaTheme.spacing32)
-            .padding(.top, ImlaTheme.pageTop)
-            .padding(.bottom, ImlaTheme.spacing32)
+                .frame(maxWidth: ImlaTheme.contentMaxWidth)
+                .padding(.horizontal, ImlaTheme.pageHorizontalInset)
+                .padding(.top, ImlaTheme.pageTop)
+                .padding(.bottom, ImlaTheme.spacing32)
+                .frame(maxWidth: .infinity)
             }
             .background(ImlaTheme.backgroundBase)
             .onAppear {
-                languageProfileEditor.load(using: controller.languageProfileClient())
-                meetingLanguageProfileEditor.load(using: controller.meetingLanguageProfileClient())
                 refreshDownloadedModelOptions()
                 refreshAudioInputDevices()
                 startPermissionMonitoring()
@@ -513,12 +463,6 @@ struct SettingsView: View {
                     loadOpenRouterTranscriptionModelsIfNeeded()
                 }
                 scrollToFeatureTourTarget(activeFeatureTourTarget, using: scrollProxy)
-            }
-            .onChange(of: appState.config.dictationLanguageProfile) { _, profile in
-                languageProfileEditor.synchronize(with: profile)
-            }
-            .onChange(of: appState.config.meetingSpokenLanguage) { _, profile in
-                meetingLanguageProfileEditor.synchronize(with: profile)
             }
             .onDisappear {
                 SoundController.stopMaraudersMapClip()
@@ -658,6 +602,9 @@ struct SettingsView: View {
                 || target == .cloudCleanupSetting
                 || target == .dictationProviderSetting
                 || target == .quillSettings else { return }
+        if target == .cloudCleanupSetting || target == .quillSettings {
+            selectedPane = .writingAI
+        }
         DispatchQueue.main.async {
             withAnimation(ImlaTheme.Motion.eased(0.2)) {
                 proxy.scrollTo(target.rawValue, anchor: .center)
@@ -735,69 +682,38 @@ struct SettingsView: View {
         controlWidth rowControlWidth: CGFloat? = nil
     ) -> some View {
         let width = rowControlWidth ?? controlWidth
-        HStack(alignment: .top, spacing: 20) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title)
-                    .font(ImlaTheme.body())
-                    .foregroundStyle(ImlaTheme.textPrimary)
-                Text(screenContextDescription(includesScreenOCR: includesScreenOCR))
-                    .font(ImlaTheme.caption())
-                    .foregroundStyle(ImlaTheme.textTertiary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .layoutPriority(1)
-
-            Spacer(minLength: 20)
-
-            ZStack(alignment: .trailing) {
-                Color.clear.frame(width: width, height: 1)
-                screenContextControl(width: width)
-            }
+        settingsRow(title, description: screenContextDescription(includesScreenOCR: includesScreenOCR), controlWidth: width) {
+            screenContextControl()
         }
-        .frame(minHeight: 52)
     }
 
     @ViewBuilder
     private var dictationOCRContextRow: some View {
-        let width = controlWidth
-        HStack(alignment: .top, spacing: 20) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Screen OCR context")
-                    .font(ImlaTheme.body())
-                    .foregroundStyle(ImlaTheme.textPrimary)
-                Text(dictationOCRContextDescription)
-                    .font(ImlaTheme.caption())
-                    .foregroundStyle(ImlaTheme.textTertiary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .layoutPriority(1)
-
-            Spacer(minLength: 20)
-
-            ZStack(alignment: .trailing) {
-                Color.clear.frame(width: width, height: 1)
-                dictationOCRContextControl(width: width)
-            }
+        settingsRow("Screen OCR context", description: dictationOCRContextDescription) {
+            dictationOCRContextControl()
         }
-        .frame(minHeight: 52)
     }
 
 
     private var settingsPanePicker: some View {
-        HStack {
-            Spacer()
-            Picker("", selection: $selectedPane) {
-                ForEach(SettingsPane.allCases) { pane in
-                    Text(pane.title).tag(pane)
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: ImlaTheme.spacing8)], spacing: ImlaTheme.spacing8) {
+            ForEach(SettingsPane.allCases) { pane in
+                Button {
+                    selectedPane = pane
+                } label: {
+                    Text(pane.title)
+                        .font(ImlaTheme.captionMedium())
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: ImlaTheme.controlHeight)
+                        .background(selectedPane == pane ? ImlaTheme.accentSubtle : ImlaTheme.surfacePrimary)
+                        .foregroundStyle(selectedPane == pane ? ImlaTheme.accent : ImlaTheme.textSecondary)
+                        .clipShape(ImlaTheme.shape(ImlaTheme.cornerSmall))
                 }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selectedPane == pane ? .isSelected : [])
             }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 760)
-            Spacer()
         }
+        .accessibilityLabel("Settings categories")
     }
 
     @ViewBuilder
@@ -809,6 +725,10 @@ struct SettingsView: View {
             syncSettingsPane
         case .dictation:
             dictationSettingsPane
+        case .speechModels:
+            LanguageModelsSettingsView(appState: appState) { controller.updateConfig($0) }
+        case .writingAI:
+            writingAISettingsPane
         case .computerUse:
             computerUseSettingsPane
         case .meetings:
@@ -1107,7 +1027,7 @@ struct SettingsView: View {
                 openRouterDictationSettingsRows
                 Divider().background(ImlaTheme.surfaceBorder)
             }
-            settingsRow(appState.dictationProvider.isHosted ? "Fallback model" : "Dictation model", controlWidth: meetingControlWidth) {
+            settingsRow(appState.dictationProvider.isHosted ? "Default local fallback" : "Default dictation model", controlWidth: meetingControlWidth) {
                 if let displayedDictationBackend {
                     settingsMenu(
                         selection: displayedDictationBackend.label,
@@ -1134,177 +1054,15 @@ struct SettingsView: View {
                 settingsDescription("Gemma 4 dictation is unavailable while Gemma 4 is the cleanup backend.")
             }
             Divider().background(ImlaTheme.surfaceBorder)
-            // A hosted provider transcribes through its local fallback, so the
-            // profile is explained against the backend that actually runs.
-            settingsDescription(
-                controller.languageProfileClient().presentation(
-                    appState.config.dictationLanguageProfile,
-                    displayedDictationBackend ?? appState.selectedBackend
-                ).explanation
-            )
+            settingsDescription("Dictation uses the keyboard language captured when recording starts. Set a local model for each language in Speech Models.")
         }
-    }
-
-    private var languageProfileSettingsSection: some View {
-        languageProfileSection(
-            title: "Dictation languages",
-            editor: languageProfileEditor,
-            client: controller.languageProfileClient(),
-            spokenLanguagesDescription: "Choose any languages you use. Leave empty for automatic detection.",
-            dominantLanguageDescription: "Pins compatible recognizers. Leave unset to preserve code-switching.",
-            saveTitle: "Save language profile",
-            showsMigrationConfirmation: appState.config.languageProfileNeedsConfirmation,
-            crossReference: "Meetings use their own languages in Meetings › Meeting languages."
-        )
-    }
-
-    /// Both language cards render through here so the meeting card cannot drift
-    /// from the dictation one. Only the copy, the editor, the save seam and the
-    /// banner condition vary; the workload lives in the client's presentation.
-    @ViewBuilder
-    private func languageProfileSection(
-        title: String,
-        editor: LanguageProfileSettingsModel,
-        client: @autoclosure @escaping () -> LanguageProfileClient,
-        spokenLanguagesDescription: String,
-        dominantLanguageDescription: String,
-        saveTitle: String,
-        showsMigrationConfirmation: Bool,
-        crossReference: String,
-        trailingContent: (() -> AnyView)? = nil
-    ) -> some View {
-        settingsSection(title) {
-            if showsMigrationConfirmation {
-                Label(
-                    "Previous model language choices disagreed. Review this profile, then save it.",
-                    systemImage: "exclamationmark.triangle.fill"
-                )
-                .font(ImlaTheme.caption())
-                .foregroundStyle(ImlaTheme.transcribing)
-            }
-
-            settingsRow(
-                "Spoken languages",
-                description: spokenLanguagesDescription,
-                controlWidth: meetingControlWidth
-            ) {
-                Menu {
-                    Button {
-                        editor.useAutomaticDetection()
-                    } label: {
-                        HStack {
-                            Text("Automatic detection")
-                            if editor.selectedLanguages.isEmpty {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                    Divider()
-                    ForEach(TranscriptionLanguage.allCases) { language in
-                        Button {
-                            editor.toggle(language)
-                        } label: {
-                            HStack {
-                                Text(language.label)
-                                if editor.selectedLanguages.contains(language) {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                    }
-                } label: {
-                    Text(languageSelectionSummary(for: editor))
-                        .lineLimit(1)
-                        .frame(width: meetingControlWidth, alignment: .trailing)
-                }
-                .menuStyle(.borderlessButton)
-            }
-
-            Divider().background(ImlaTheme.surfaceBorder)
-            settingsRow(
-                "Dominant language",
-                description: dominantLanguageDescription,
-                controlWidth: meetingControlWidth
-            ) {
-                let options: [TranscriptionLanguage?] = [nil]
-                    + editor.selectedLanguages.map(Optional.some)
-                FixedWidthPopUp(
-                    selection: editor.dominantLanguage?.label ?? "No dominant language",
-                    options: options.map { $0?.label ?? "No dominant language" },
-                    onSelectIndex: { index in
-                        guard options.indices.contains(index) else { return }
-                        editor.setDominant(options[index])
-                    }
-                )
-                .frame(height: 24)
-            }
-
-            if let trailingContent {
-                Divider().background(ImlaTheme.surfaceBorder)
-                trailingContent()
-            }
-
-            Divider().background(ImlaTheme.surfaceBorder)
-            HStack(spacing: ImlaTheme.spacing12) {
-                Button(saveTitle) {
-                    editor.save(using: client())
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!editor.hasUnsavedChanges && !showsMigrationConfirmation)
-
-                if let errorMessage = editor.errorMessage {
-                    Text(errorMessage)
-                        .font(ImlaTheme.caption())
-                        .foregroundStyle(ImlaTheme.danger)
-                } else if editor.didSave {
-                    Label("Saved", systemImage: "checkmark.circle.fill")
-                        .font(ImlaTheme.caption())
-                        .foregroundStyle(ImlaTheme.success)
-                }
-            }
-            settingsDescription(crossReference)
-        }
-    }
-
-    private func languageSelectionSummary(for editor: LanguageProfileSettingsModel) -> String {
-        let selected = editor.selectedLanguages
-        if selected.isEmpty { return "Automatic detection" }
-        if selected.count <= 2 { return selected.map(\.label).joined(separator: ", ") }
-        return "\(selected.count) languages"
-    }
-
-    private var languageSelectionSummary: String {
-        languageSelectionSummary(for: languageProfileEditor)
-    }
-
-    /// Meetings get their own card, directly after Transcription so its footer
-    /// explains the backend chosen just above it (KD1, R5).
-    private var meetingLanguageProfileSettingsSection: some View {
-        languageProfileSection(
-            title: "Meeting languages",
-            editor: meetingLanguageProfileEditor,
-            client: controller.meetingLanguageProfileClient(),
-            spokenLanguagesDescription: meetingSpokenLanguagesDescription,
-            dominantLanguageDescription: "Pins compatible recognizers. Leave unset to preserve code-switching.",
-            saveTitle: "Save meeting languages",
-            showsMigrationConfirmation: meetingProfileNeedsReview,
-            crossReference: "Dictation uses its own languages in Dictation › Dictation languages.",
-            trailingContent: { AnyView(meetingNotesLanguageRow) }
-        )
-    }
-
-    private var meetingSpokenLanguagesDescription: String {
-        appState.isMeetingRecording
-            ? "Choose any languages you use. Applies to the next meeting; the current recording keeps its languages."
-            : "Choose any languages you use. Leave empty for automatic detection."
     }
 
     @ViewBuilder
     private var meetingNotesLanguageRow: some View {
         let policies = MeetingArtifactLanguagePolicy.allCases.filter { $0 != .english }
         let current = appState.config.meetingArtifactLanguagePolicy
-        // A persisted English policy stays persisted but reads as Automatic until
-        // a positive English instruction lands (KD3, Scope Boundaries).
+        // Keep legacy English policies intact while the menu offers the supported output choices.
         let displayed = current == .english ? .automatic : current
         settingsRow(
             "Notes language",
@@ -1324,7 +1082,7 @@ struct SettingsView: View {
                     }
                 }
             )
-            .frame(height: 24)
+            .frame(height: ImlaTheme.compactControlHeight)
         }
         if let notesLanguageErrorMessage {
             Text(notesLanguageErrorMessage)
@@ -1467,7 +1225,7 @@ struct SettingsView: View {
                         loadCachedAudioInputDevices()
                     }
                 )
-                .frame(height: 24)
+                .frame(height: ImlaTheme.compactControlHeight)
             }
             Divider().background(ImlaTheme.surfaceBorder)
             settingsRow(
@@ -1503,24 +1261,8 @@ struct SettingsView: View {
             .id(FeatureTourTarget.liveCaptionsSetting.rawValue)
             .featureTourTarget(.liveCaptionsSetting)
             Divider().background(ImlaTheme.surfaceBorder)
-            settingsRow("Final transcript", controlWidth: meetingControlWidth) {
-                if usesNemotronLiveTranscript {
-                    let options = finalTranscriptOptions
-                    FixedWidthPopUp(
-                        selection: selectedFinalTranscriptLabel,
-                        options: options.map(\.label),
-                        onSelectIndex: { index in
-                            guard options.indices.contains(index) else { return }
-                            switch options[index] {
-                            case .liveNemotron:
-                                controller.selectLiveMeetingTranscriptAsFinal()
-                            case .batch(let option):
-                                controller.selectMeetingFinalTranscriptBackend(option)
-                            }
-                        }
-                    )
-                    .frame(height: 24)
-                } else if meetingBackendOptions.isEmpty {
+            settingsRow("Fallback meeting model", controlWidth: meetingControlWidth) {
+                if meetingBackendOptions.isEmpty {
                     Text("No downloaded models")
                         .font(ImlaTheme.body())
                         .foregroundStyle(ImlaTheme.textTertiary)
@@ -1546,59 +1288,20 @@ struct SettingsView: View {
         }
     }
 
-    /// The meeting selection explained against whichever backend actually
-    /// produces the final transcript: Nemotron under `.meetingLive` when it is
-    /// the unified source, the selected meeting backend under `.meetingFinal`
-    /// otherwise (R7).
     private var meetingLanguageExplanation: String {
-        let backend = usesUnifiedMeetingTranscript
-            ? BackendOption.nemotron35Multilingual
-            : appState.selectedMeetingTranscriptionBackend
-        return controller.meetingLanguageProfileClient().presentation(
-            appState.config.meetingSpokenLanguage,
-            backend
-        ).explanation
+        "Use the meeting language menu for new speech. Speech Models chooses each language's recognizer; the model above is the fallback."
     }
 
-    /// Parakeet Live Captions is not a routable backend, so it cannot follow the
-    /// meeting languages; say so rather than letting the preview look broken (R10).
     private var liveCaptionLanguageNotice: String? {
         guard appState.config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU else { return nil }
-        let selected = appState.config.meetingSpokenLanguage.selectedLanguages
-        guard !(selected.isEmpty || selected == [.english]) else { return nil }
-        return "Live preview does not follow meeting languages."
-    }
-
-    /// Whether repair is actually reaching dictations, and why not when it is not (R8).
-    ///
-    /// A bilingual user is told repair is automatic, so silence here would read as
-    /// "it is working" in exactly the case where it is not.
-    private var mixedLanguageRepairStatus: String? {
-        guard appState.config.dictationLanguageProfile.isBilingual else { return nil }
-        guard appState.config.enablePostProcessor else {
-            return "Mixed-language repair needs AI transcript cleanup switched on."
-        }
-        guard !cleanupModelUsesFixedPrompt else {
-            // S1-mini substitutes its own trained prompt for the composed one, so
-            // the repair block never reaches the model.
-            return "S1-mini uses its own instructions, so mixed-language repair does not apply."
-        }
-        return "Mixed-language repair is on for your selected dictation languages."
+        return "Parakeet live preview supports English only. The final transcript uses the meeting language."
     }
 
     private var dictationCleanupSettingsSection: some View {
         settingsSection("Dictation Cleanup") {
-            if let mixedLanguageRepairStatus {
-                settingsRow("AI transcript cleanup", description: mixedLanguageRepairStatus) {
-                    settingsSwitch(isOn: appState.config.enablePostProcessor) { newValue in
-                        controller.setPostProcessorEnabled(newValue)
-                    }
-                }
-            } else {
-                settingsRow("AI transcript cleanup") {
-                    settingsSwitch(isOn: appState.config.enablePostProcessor) { newValue in
-                        controller.setPostProcessorEnabled(newValue)
-                    }
+            settingsRow("AI transcript cleanup", description: "Rewrite dictated text using your shared instructions and modes.") {
+                settingsSwitch(isOn: appState.config.enablePostProcessor) { newValue in
+                    controller.setPostProcessorEnabled(newValue)
                 }
             }
             if appState.config.enablePostProcessor {
@@ -1647,7 +1350,7 @@ struct SettingsView: View {
                                     }
                                 }
                             )
-                            .frame(height: 24)
+                            .frame(height: ImlaTheme.compactControlHeight)
                         }
                     }
                     if gemmaCleanupIsUnavailable {
@@ -1729,7 +1432,7 @@ struct SettingsView: View {
                                     selectQuilLocalModel(quilLocalModels[index])
                                 }
                             )
-                            .frame(height: 24)
+                            .frame(height: ImlaTheme.compactControlHeight)
                         }
                     }
                 } else {
@@ -2216,8 +1919,6 @@ struct SettingsView: View {
 
     private var dictationSettingsPane: some View {
         VStack(alignment: .leading, spacing: ImlaTheme.spacing24) {
-            languageProfileSettingsSection
-
             dictationModelSettingsSection
 
             settingsSection("Transcription") {
@@ -2235,7 +1936,7 @@ struct SettingsView: View {
                             loadCachedAudioInputDevices()
                         }
                     )
-                    .frame(height: 24)
+                    .frame(height: ImlaTheme.compactControlHeight)
                 }
                 Divider().background(ImlaTheme.surfaceBorder)
                 settingsRow("Save dictation recording") {
@@ -2259,12 +1960,6 @@ struct SettingsView: View {
                 }
             }
 
-            dictationCleanupSettingsSection
-
-            customInstructionsSettingsSection
-
-            quilSettingsSection
-
             settingsSection("Advanced") {
                 settingsRow("Pause media during dictation") {
                     settingsSwitch(isOn: appState.config.pauseMediaDuringDictation) { newValue in
@@ -2282,6 +1977,14 @@ struct SettingsView: View {
                 Divider().background(ImlaTheme.surfaceBorder)
                 dictationOCRContextRow
             }
+        }
+    }
+
+    private var writingAISettingsPane: some View {
+        VStack(alignment: .leading, spacing: ImlaTheme.spacing24) {
+            customInstructionsSettingsSection
+            dictationCleanupSettingsSection
+            quilSettingsSection
         }
     }
 
@@ -2340,8 +2043,6 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: ImlaTheme.spacing24) {
             meetingTranscriptionSettingsSection
 
-            meetingLanguageProfileSettingsSection
-
             settingsSection("Meeting Context") {
                 screenContextRow("Meeting context", includesScreenOCR: true)
             }
@@ -2351,6 +2052,8 @@ struct SettingsView: View {
             meetingTranscriptCleanupSection
 
             settingsSection("Meeting Notes") {
+                meetingNotesLanguageRow
+                Divider().background(ImlaTheme.surfaceBorder)
                 settingsRow("Default template", controlWidth: meetingControlWidth) {
                     meetingTemplateMenu(selectionID: appState.config.defaultMeetingTemplateID) { id in
                         controller.updateDefaultMeetingTemplate(id: id)
@@ -2923,7 +2626,7 @@ struct SettingsView: View {
                             .lineLimit(1)
                     }
                 }
-                .frame(height: 24)
+                .frame(height: ImlaTheme.compactControlHeight)
                 .background(ImlaTheme.surfacePrimary)
                 .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
                 .overlay(
@@ -3409,104 +3112,29 @@ struct SettingsView: View {
         icon: NSImage? = nil,
         @ViewBuilder content: () -> some View
     ) -> some View {
-        VStack(alignment: .leading, spacing: ImlaTheme.spacing8) {
-            HStack(spacing: 5) {
-                if let icon {
-                    Image(nsImage: icon)
-                        .renderingMode(.template)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 12, height: 12)
-                }
-                Text(title)
-                    .font(ImlaTheme.font(size: 11, weight: .semibold))
-                    .textCase(.uppercase)
-            }
-            .foregroundStyle(ImlaTheme.textTertiary)
-            .padding(.leading, 2)
-
-            VStack(alignment: .leading, spacing: 0) {
-                content()
-            }
-            .padding(ImlaTheme.spacing16)
-            .background(ImlaTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerMedium, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: ImlaTheme.cornerMedium, style: .continuous)
-                    .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
-            )
-        }
+        SettingsControls.section(title, icon: icon, content: content)
     }
 
-    /// Standardized row: label on left, control on right.
-    /// Controls share a fixed-width column so they all right-align consistently.
-    @ViewBuilder
     private func settingsRow(_ label: String, controlWidth rowControlWidth: CGFloat? = nil, @ViewBuilder control: () -> some View) -> some View {
-        let width = rowControlWidth ?? controlWidth
-        HStack(alignment: .center) {
-            Text(label)
-                .font(ImlaTheme.body())
-                .foregroundStyle(ImlaTheme.textPrimary)
-                .layoutPriority(1)
-            Spacer(minLength: 20)
-            ZStack(alignment: .trailing) {
-                // Invisible spacer forces the ZStack to exactly controlWidth
-                Color.clear.frame(width: width, height: 1)
-                control()
-                    .frame(maxWidth: width)
-            }
-        }
-        .frame(minHeight: 32)
+        SettingsControls.row(label, controlWidth: rowControlWidth ?? controlWidth, control: control)
     }
 
-    @ViewBuilder
     private func settingsRow(
         _ label: String,
         description: String,
         controlWidth rowControlWidth: CGFloat? = nil,
         @ViewBuilder control: () -> some View
     ) -> some View {
-        let width = rowControlWidth ?? controlWidth
-        HStack(alignment: .center, spacing: 20) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(label)
-                    .font(ImlaTheme.body())
-                    .foregroundStyle(ImlaTheme.textPrimary)
-                Text(description)
-                    .font(ImlaTheme.caption())
-                    .foregroundStyle(ImlaTheme.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .layoutPriority(1)
-
-            Spacer(minLength: 0)
-
-            control()
-                .frame(width: width, alignment: .trailing)
-        }
-        .frame(minHeight: 44)
+        SettingsControls.row(label, description: description, controlWidth: rowControlWidth ?? controlWidth, control: control)
     }
 
     private func settingsDescription(_ text: String) -> some View {
-        Text(text)
-            .font(ImlaTheme.caption())
-            .foregroundStyle(ImlaTheme.textTertiary)
-            .padding(.horizontal, ImlaTheme.spacing16)
-            .padding(.top, -4)
-            .padding(.bottom, ImlaTheme.spacing8)
+        SettingsControls.description(text)
+            .padding(.vertical, ImlaTheme.spacing8)
     }
 
-    // MARK: - Controls
-
-    @ViewBuilder
     private func settingsSwitch(isOn: Bool, onChange: @escaping (Bool) -> Void) -> some View {
-        HStack {
-            Spacer()
-            Toggle("", isOn: Binding(get: { isOn }, set: { onChange($0) }))
-                .toggleStyle(.switch)
-                .tint(ImlaTheme.accent)
-                .labelsHidden()
-        }
+        SettingsControls.settingsSwitch(isOn: isOn, onChange: onChange)
     }
 
     @ViewBuilder
@@ -3522,38 +3150,16 @@ struct SettingsView: View {
             disabledOptions: disabledOptions,
             onChange: onChange
         )
-            .frame(height: 24)
+            .frame(height: ImlaTheme.compactControlHeight)
     }
 
-    @ViewBuilder
     private func compactActionButton(
         _ title: String,
         systemImage: String? = nil,
         role: ButtonRole? = nil,
         action: @escaping () -> Void
     ) -> some View {
-        let isDestructive = role == .destructive
-        Button(action: action) {
-            HStack(spacing: 6) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                Text(title)
-                    .lineLimit(1)
-            }
-            .font(ImlaTheme.font(size: 12, weight: .medium))
-            .foregroundStyle(isDestructive ? ImlaTheme.danger : ImlaTheme.textPrimary)
-            .padding(.horizontal, 10)
-            .frame(height: 26)
-            .background(isDestructive ? ImlaTheme.danger.opacity(0.1) : ImlaTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
-                    .strokeBorder(isDestructive ? ImlaTheme.danger.opacity(0.25) : ImlaTheme.surfaceBorder, lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
+        SettingsControls.compactActionButton(title, systemImage: systemImage, role: role, action: action)
     }
 
     private var mutedMeetingDetectionAppsControl: some View {
@@ -4014,7 +3620,7 @@ struct SettingsView: View {
                 onChange(allItems[index].id)
             }
         )
-        .frame(height: 24)
+        .frame(height: ImlaTheme.compactControlHeight)
     }
 
     @ViewBuilder
@@ -4031,7 +3637,7 @@ struct SettingsView: View {
                 onChange(selectedId == presets.first?.id ? "" : selectedId)
             }
         )
-        .frame(height: 24)
+        .frame(height: ImlaTheme.compactControlHeight)
     }
 
     @ViewBuilder
@@ -4069,7 +3675,7 @@ struct SettingsView: View {
                     .foregroundStyle(ImlaTheme.textSecondary)
                     .frame(width: 80, alignment: .trailing)
             }
-            .frame(height: 24)
+            .frame(height: ImlaTheme.compactControlHeight)
         }
     }
 
@@ -4136,7 +3742,7 @@ struct SettingsView: View {
                         }
                     }
                 )
-                .frame(height: 24)
+                .frame(height: ImlaTheme.compactControlHeight)
                 if case .failed = appState.openRouterSummaryCatalogState {
                     Button("Retry") {
                         controller.loadOpenRouterModels(.text, force: true)
@@ -4197,7 +3803,7 @@ struct SettingsView: View {
                     controller.selectOpenRouterDictationModel(presets[index - 1].id)
                 }
             )
-            .frame(height: 24)
+            .frame(height: ImlaTheme.compactControlHeight)
 
             if case .failed = appState.openRouterTranscriptionCatalogState {
                 Button("Retry") {
@@ -4226,39 +3832,13 @@ struct SettingsView: View {
         .frame(minHeight: 20)
     }
 
-    @ViewBuilder
     private func actionButton(
         _ title: String,
         systemImage: String? = nil,
         role: ButtonRole? = nil,
         action: @escaping () -> Void
     ) -> some View {
-        let isDestructive = role == .destructive
-        Button(action: action) {
-            HStack(spacing: ImlaTheme.spacing8) {
-                Text(title)
-                if let systemImage {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 13, weight: .semibold))
-                        .symbolRenderingMode(.hierarchical)
-                }
-            }
-                .font(ImlaTheme.font(size: 13, weight: .medium))
-                .foregroundStyle(isDestructive ? ImlaTheme.danger : ImlaTheme.textPrimary)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, ImlaTheme.spacing16)
-                .padding(.vertical, ImlaTheme.spacing8)
-                .background(isDestructive ? ImlaTheme.danger.opacity(0.1) : ImlaTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
-                        .strokeBorder(
-                            isDestructive ? ImlaTheme.danger.opacity(0.2) : ImlaTheme.surfaceBorder,
-                            lineWidth: 1
-                        )
-                )
-        }
-        .buttonStyle(.plain)
+        SettingsControls.actionButton(title, systemImage: systemImage, role: role, action: action)
     }
 
     private func recordingSaveLabel(for policy: MeetingRecordingSavePolicy) -> String {

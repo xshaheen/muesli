@@ -23,7 +23,8 @@ struct MeetingSessionLanguageAuthorityTests {
             config: config,
             templateSnapshot: MeetingTemplates.auto.snapshot,
             transcriptionCoordinator: TranscriptionCoordinator(),
-            liveCaptionAvailability: liveCaptionAvailability
+            liveCaptionAvailability: liveCaptionAvailability,
+            availableLanguageModels: [backend, .whisperLargeTurbo, .cohereArabic, .nemotron35Multilingual]
         )
     }
 
@@ -173,7 +174,7 @@ struct MeetingSessionLanguageAuthorityTests {
         config.enableLiveStreamingPartials = true
         config.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
         config.meetingSpokenLanguage = try SpokenLanguageProfile(selectedLanguages: [.german])
-        let session = makeSession(config: config)
+        let session = makeSession(config: config, backend: .nemotron35Multilingual)
 
         #expect(session.usesLiveNemotronTranscriptAsFinal())
         session.updateTranscriptionAuthority(
@@ -265,7 +266,7 @@ struct MeetingSessionLanguageAuthorityTests {
         #expect(unavailable.canSelectRecognitionLanguage(.arabic))
 
         let available = makeSession(config: config, liveCaptionAvailability: { _ in true })
-        #expect(!available.canSelectRecognitionLanguage(.arabic))
+        #expect(available.canSelectRecognitionLanguage(.arabic))
         available.stopStreamingPartials()
         #expect(available.canSelectRecognitionLanguage(.arabic))
     }
@@ -291,6 +292,20 @@ struct MeetingSessionLanguageAuthorityTests {
         #expect(!choices[2].isEnabled)
         #expect((choices[1].representedObject as? MeetingLanguageMenuPayload)?.sessionID == ObjectIdentifier(session))
         #expect(switcher.label == "AR")
+    }
+
+    @Test("a queued chunk retains its model and uses its own language if that model disappears")
+    func queuedModelSnapshot() throws {
+        var config = AppConfig()
+        config.meetingSpokenLanguage = try SpokenLanguageProfile(selectedLanguages: [.arabic])
+        let session = makeSession(config: config)
+        let queued = session.recognitionLanguageSwitcher.current
+        session.updateTranscriptionAuthority(backend: .cohereArabic, usesUnifiedNemotronTranscript: false)
+        #expect(try session.transcriptionBackend(for: queued) == .whisperLargeTurbo)
+        session.updateAvailableLanguageModels([.cohereArabic])
+        #expect(try session.transcriptionBackend(for: queued) == .cohereArabic)
+        session.updateAvailableLanguageModels([.parakeetUnified])
+        #expect(throws: LanguageRoutingIncompatibility.self) { try session.transcriptionBackend(for: queued) }
     }
 
     @Test("language changes are rejected outside an active recording")

@@ -540,6 +540,7 @@ final class MeetingSession {
     let frozenMeetingProfile: LanguageProfile
     /// Confined to chunkRotationQueue, like the audio boundaries it describes.
     private var languageSwitcher: MeetingLanguageSwitcher
+    private let availableLanguageModels = OSAllocatedUnfairLock(initialState: [BackendOption]())
     private let templateSnapshot: MeetingTemplateSnapshot
     private let transcriptionCoordinator: TranscriptionCoordinator
     private let systemAudioRecorder: SystemAudioCapturing
@@ -704,13 +705,14 @@ final class MeetingSession {
         systemAudioRecorder injectedSystemAudioRecorder: SystemAudioCapturing? = nil,
         neuralAec injectedNeuralAec: MeetingNeuralAec? = nil,
         sessionTrace: SessionRunTrace? = nil,
-        liveCaptionAvailability: (MeetingLiveCaptionBackend) -> Bool = { $0.isDownloaded }
+        liveCaptionAvailability: (MeetingLiveCaptionBackend) -> Bool = { $0.isDownloaded },
+        availableLanguageModels: [BackendOption]? = nil
     ) {
         self.title = title
         self.calendarEventID = calendarEventID
         transcriptionAuthorityLock.withLock {
             $0.backend = backend
-            $0.usesUnifiedNemotronTranscript = config.usesUnifiedNemotronMeetingTranscript
+            $0.usesUnifiedNemotronTranscript = config.usesUnifiedNemotronMeetingTranscript && backend == .nemotron35Multilingual
         }
         self.runtime = runtime
         self.config = config
@@ -718,9 +720,11 @@ final class MeetingSession {
         self.liveCaptionBackend = config.enableLiveStreamingPartials && liveCaptionAvailability(requestedLiveBackend)
             ? requestedLiveBackend : nil
         self.frozenMeetingProfile = config.meetingLanguageProfile
+        self.availableLanguageModels.withLock { $0 = availableLanguageModels ?? BackendOption.downloaded }
         self.languageSwitcher = MeetingLanguageSwitcher(
             defaultProfile: config.meetingLanguageProfile,
-            appleSpeechLanguage: config.resolvedAppleSpeechLanguage
+            appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
+            backend: backend
         )
         self.templateSnapshot = templateSnapshot
         self.transcriptionCoordinator = transcriptionCoordinator
@@ -872,11 +876,44 @@ final class MeetingSession {
         partialSessionsStorage.withLock { $0.generation }
     }
 
+    func updateAvailableLanguageModels(_ models: [BackendOption]) {
+        availableLanguageModels.withLock { $0 = models }
+        if let model = recognitionLanguageSwitcher.current.model?.option, !models.contains(model) {
+            transcriptionAuthorityLock.withLock { $0.usesUnifiedNemotronTranscript = false }
+        }
+    }
+
+    private func modelResolution(for language: TranscriptionLanguage?) -> LanguageModelRouting.Resolution {
+        LanguageModelRouting.resolve(
+            language: language, preferences: config.languageModels,
+            dictationDefault: BackendOption.resolve(backend: config.sttBackend, model: config.sttModel) ?? currentBackend(),
+            meetingDefault: BackendOption.resolve(
+                backend: config.meetingTranscriptionBackend, model: config.meetingTranscriptionModel
+            ) ?? currentBackend(),
+            available: availableLanguageModels.withLock { $0 }, workload: .meeting
+        )
+    }
+
+    func transcriptionBackend(for snapshot: MeetingRecognitionSnapshot) throws -> BackendOption {
+        if let frozen = snapshot.model?.option,
+           availableLanguageModels.withLock({ $0.contains(frozen) }) { return frozen }
+        let replacement = modelResolution(for: snapshot.selection.authoritativeLanguage)
+        guard replacement.isUsable else {
+            throw LanguageRoutingIncompatibility.backendUnavailable(replacement.backend.transcriptionBackendID)
+        }
+        return replacement.backend
+    }
+
+    var currentRecognitionBackend: BackendOption {
+        (try? transcriptionBackend(for: recognitionLanguageSwitcher.current)) ?? currentBackend()
+    }
+
     func canSelectRecognitionLanguage(_ language: TranscriptionLanguage) -> Bool {
-        MeetingLanguageSwitcher.canSelect(
+        let resolution = modelResolution(for: language)
+        return resolution.isUsable && MeetingLanguageSwitcher.canSelect(
             language,
-            backend: currentBackend(),
-            liveBackend: partialSessionsStorage.withLock { $0.isShutDown } ? nil : liveCaptionBackend
+            backend: resolution.backend,
+            liveBackend: nil
         )
     }
 
@@ -903,7 +940,9 @@ final class MeetingSession {
                 canSelectRecognitionLanguage(language)
             else { return false }
         }
-        guard languageSwitcher.selectedLanguage != language else { return false }
+        let resolution = modelResolution(for: language ?? languageSwitcher.defaultProfile.authoritativeLanguage)
+        guard resolution.isUsable else { return false }
+        guard languageSwitcher.selectedLanguage != language || languageSwitcher.current.model?.option != resolution.backend else { return false }
         // Finish both old-language chunks before publishing the new selection.
         // Capture continues on this queue; no samples can straddle the change.
         if !isPaused {
@@ -911,7 +950,13 @@ final class MeetingSession {
             rotateChunkOnQueue()
             rotateSystemChunkOnQueue()
         }
-        languageSwitcher.select(language, systemSampleOffset: systemArrivalSampleCount)
+        languageSwitcher.select(language, systemSampleOffset: systemArrivalSampleCount, backend: resolution.backend)
+        transcriptionAuthorityLock.withLock {
+            $0.backend = resolution.backend
+            // A selected final model is authoritative even if captions come
+            // from a separate streaming model.
+            $0.usesUnifiedNemotronTranscript = config.usesUnifiedNemotronMeetingTranscript && resolution.backend == .nemotron35Multilingual
+        }
         let previous = partialSessionsStorage.withLock { storage in
             storage.generation = UUID()
             storage.setupTask?.cancel()
@@ -1073,6 +1118,10 @@ final class MeetingSession {
         let (snapshot, generation) = chunkRotationQueue.sync {
             (languageSwitcher.current, recognitionLanguageRevision)
         }
+        if let language = snapshot.selection.authoritativeLanguage,
+           !MeetingLanguageSwitcher.canSelect(language, backend: snapshot.model?.option ?? currentBackend(), liveBackend: backend) {
+            return
+        }
         partialSessionsStorage.withLock { storage in
             guard !storage.isShutDown, storage.generation == generation,
                 storage.setupTask == nil
@@ -1080,6 +1129,12 @@ final class MeetingSession {
             storage.setupTask = Task { [weak self] in
                 guard let self else { return }
                 do {
+                    if backend == .appleSpeech, #available(macOS 26.0, *) {
+                        guard await AppleSpeechLanguageOption.hasInstalledAssets(for: snapshot.appleSpeechLanguage) else {
+                            throw AppleSpeechAnalyzerError.assetUnavailable(snapshot.appleSpeechLanguage)
+                        }
+                        try Task.checkCancellation()
+                    }
                     let engines: (mic: MeetingStreamingPartialEngine, system: MeetingStreamingPartialEngine)
                     if backend == .nemotron35, #available(macOS 15, *) {
                         // Borrow the coordinator's transcriber rather than loading a
@@ -1174,12 +1229,12 @@ final class MeetingSession {
         _ segments: [SpeechSegment],
         partialSession: MeetingStreamingPartialSession?,
         segmentID: UUID,
+        prefersStreamingTranscript: Bool,
         start: TimeInterval,
         end: TimeInterval
     ) async -> [SpeechSegment] {
         // Apple chunks already chose their authoritative result before any batch work.
         guard config.resolvedMeetingLiveCaptionBackend != .appleSpeech else { return segments }
-        let prefersStreamingTranscript = usesLiveNemotronTranscriptAsFinal()
         return MeetingStreamingTranscriptResolver.resolve(
             durableSegments: segments,
             authoritativeStreamingText: await partialSession?.finalizedSegmentText(id: segmentID),
@@ -1189,8 +1244,9 @@ final class MeetingSession {
         )
     }
 
-    private func appleStreamingText(session: MeetingStreamingPartialSession?, id: UUID) async -> String? {
+    private func appleStreamingText(session: MeetingStreamingPartialSession?, id: UUID, language: MeetingRecognitionSnapshot) async -> String? {
         guard config.enableLiveStreamingPartials,
+              language.model?.option == .appleSpeechAnalyzer,
               config.resolvedMeetingLiveCaptionBackend == .appleSpeech else { return nil }
         return await session?.finalizedSegmentText(id: id)
     }
@@ -1369,7 +1425,7 @@ final class MeetingSession {
         var fallbackReasons: Set<MeetingSessionFallbackReason> = []
         let usesUnifiedNemotronTranscript = usesLiveNemotronTranscriptAsFinal()
         let usesStreamingFinalTranscript = usesUnifiedNemotronTranscript
-            || config.resolvedMeetingLiveCaptionBackend == .appleSpeech
+            || (config.resolvedMeetingLiveCaptionBackend == .appleSpeech && currentRecognitionBackend == .appleSpeechAnalyzer)
 
         // Stop VAD controller
         if !usesStreamingFinalTranscript {
@@ -1465,7 +1521,7 @@ final class MeetingSession {
             if !systemTailFinalized {
                 fputs("[meeting] transcribing final system chunk (offset=\(String(format: "%.0f", chunkOffset))s)\n", stderr)
                 do {
-                    let backend = currentBackend()
+                    let backend = try transcriptionBackend(for: finalLanguage)
                     let evidence = try await transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                         at: lastSystemChunkURL,
                         backend: backend,
@@ -1524,12 +1580,12 @@ final class MeetingSession {
         }
 
         if let systemAudioURL,
-           Self.shouldAttemptSystemRecovery(
+           (recognitionLanguageSwitcher.requiresSystemSplitting || Self.shouldAttemptSystemRecovery(
                usesStreamingFinalTranscript: usesStreamingFinalTranscript,
                hasSystemSegments: !systemSegments.isEmpty,
                hasCompleteStreamingCoverage: config.resolvedMeetingLiveCaptionBackend == .appleSpeech
                    && systemStreamingCoverageIsComplete.withLock { $0 }
-           ) {
+           )) {
             let systemRecovery = await repairSystemSegmentsIfNeeded(
                 existingSystemSegments: systemSegments,
                 systemAudioURL: systemAudioURL,
@@ -1900,6 +1956,7 @@ final class MeetingSession {
         let segmentID = UUID()
         let partialSession = micPartialSession()
         let language = languageSwitcher.current
+        let prefersStreaming = usesLiveNemotronTranscriptAsFinal()
         partialSession?.markSegmentBoundary(id: segmentID)
         let task = Task { [weak self] () -> [SpeechSegment] in
             defer {
@@ -1907,7 +1964,7 @@ final class MeetingSession {
             }
             guard let self else { return [] }
             return await Self.resolveChunkTranscript(timing: chunkTiming, finalizedText: {
-                await self.appleStreamingText(session: partialSession, id: segmentID)
+                await self.appleStreamingText(session: partialSession, id: segmentID, language: language)
             }, recordedAudio: {
                 await self.transcribeMicChunk(rawURL: rawChunkURL, chunkTiming: chunkTiming, language: language, isFinalChunk: false)
             })
@@ -1923,6 +1980,7 @@ final class MeetingSession {
                     segments,
                     partialSession: partialSession,
                     segmentID: retireID,
+                    prefersStreamingTranscript: prefersStreaming,
                     start: chunkOffset,
                     end: chunkOffset + max(chunkTiming.durationSeconds, 0.1)
                 )
@@ -1960,6 +2018,7 @@ final class MeetingSession {
         fputs("[meeting] rotating system chunk at offset=\(String(format: "%.0f", chunkOffset))s\n", stderr)
         let segmentID = UUID()
         let partialSession = systemPartialSession()
+        let prefersStreaming = usesLiveNemotronTranscriptAsFinal()
         partialSession?.markSegmentBoundary(id: segmentID)
         let task = Task { [weak self] () -> [SpeechSegment] in
             defer {
@@ -1967,11 +2026,11 @@ final class MeetingSession {
             }
             guard let self else { return [] }
             return await Self.resolveChunkTranscript(timing: chunkTiming, finalizedText: {
-                await self.appleStreamingText(session: partialSession, id: segmentID)
+                await self.appleStreamingText(session: partialSession, id: segmentID, language: language)
             }, recordedAudio: {
                 self.systemStreamingCoverageIsComplete.withLock { $0 = false }
                 do {
-                    let backend = self.currentBackend()
+                    let backend = try self.transcriptionBackend(for: language)
                     let evidence = try await self.transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                         at: chunkURL,
                         backend: backend,
@@ -2018,6 +2077,7 @@ final class MeetingSession {
                     segments,
                     partialSession: partialSession,
                     segmentID: retireID,
+                    prefersStreamingTranscript: prefersStreaming,
                     start: chunkOffset,
                     end: chunkOffset + max(chunkDuration, 0.1)
                 )
@@ -2499,7 +2559,7 @@ final class MeetingSession {
     ) async -> [SpeechSegment]? {
         fputs("\(logPrefix) (offset=\(String(format: "%.0f", chunkOffset))s, source=raw)\n", stderr)
         do {
-            let backend = currentBackend()
+            let backend = try transcriptionBackend(for: language)
             let evidence = try await transcriptionCoordinator.transcribeMeetingChunkWithEvidence(
                 at: url,
                 backend: backend,
@@ -2687,7 +2747,7 @@ final class MeetingSession {
                 return try await transcribeSystemRecovery(samples: samples, range: samples.indices)
             }
             let language = switcher.current
-            let backend = currentBackend()
+            let backend = try transcriptionBackend(for: language)
             let evidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
                 at: transcriptionURL,
                 backend: backend,
@@ -2715,7 +2775,7 @@ final class MeetingSession {
                 samples: Array(samples[span.samples]), directoryName: "imla-meeting-system-repair"
             )
             defer { try? FileManager.default.removeItem(at: url) }
-            let backend = currentBackend()
+            let backend = try transcriptionBackend(for: span.snapshot)
             let evidence = try await transcriptionCoordinator.transcribeMeetingWithEvidence(
                 at: url,
                 backend: backend,

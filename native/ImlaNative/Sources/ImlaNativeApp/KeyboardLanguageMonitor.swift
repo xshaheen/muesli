@@ -21,6 +21,15 @@ struct KeyboardLanguageSnapshot: Equatable, Sendable {
             dominantLanguage: language
         )) ?? .automatic
     }
+
+    func applying(to base: AppConfig, backend: BackendOption) -> AppConfig {
+        var snapshot = base
+        snapshot.sttBackend = backend.backend
+        snapshot.sttModel = backend.model
+        snapshot.dictationLanguageProfile = spokenProfile(additionalLanguages: base.languageModels.languages)
+        if let language { snapshot.appleSpeechLanguage = language.rawValue }
+        return snapshot
+    }
 }
 
 /// Input-source notifications keep the language cached. Dictation reads a value
@@ -74,7 +83,10 @@ final class KeyboardLanguageMonitor {
     private static func readSnapshot() -> KeyboardLanguageSnapshot {
         let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue()
         let language = current.flatMap { KeyboardLanguageSnapshot.resolve(languageIdentifiers($0)) }
-        let filter = [kTISPropertyInputSourceIsEnabled as String: true] as CFDictionary
+        let filter = [
+            kTISPropertyInputSourceIsEnabled as String: true,
+            kTISPropertyInputSourceCategory as String: kTISCategoryKeyboardInputSource as String,
+        ] as [String: Any] as CFDictionary
         let sources = TISCreateInputSourceList(filter, false)?.takeRetainedValue() as? [TISInputSource] ?? []
         let enabled = Set(sources.compactMap { KeyboardLanguageSnapshot.resolve(languageIdentifiers($0)) })
             .union(language.map { [$0] } ?? [])

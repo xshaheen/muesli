@@ -3,6 +3,13 @@ import Foundation
 struct OpenAIDictationConfiguration: Sendable {
     let apiKey: String
     let model: String
+    let language: String?
+
+    init(apiKey: String, model: String, language: String? = nil) {
+        self.apiKey = apiKey
+        self.model = model
+        self.language = language
+    }
 }
 
 enum OpenAITranscriptionError: LocalizedError, @unchecked Sendable {
@@ -43,8 +50,18 @@ enum OpenAIRealtimeProtocol {
         return request
     }
 
-    static func sessionUpdate(model: String) throws -> String {
+    static func sessionUpdate(model: String, language: String? = nil) throws -> String {
         let normalized = OpenAITranscriptionClient.normalizeModel(model)
+        var transcription: [String: Any] = ["model": normalized]
+        if let language, !language.isEmpty {
+            // The live model uses an array; the legacy transcription schema uses
+            // a singular field. Sending both makes the session update invalid.
+            if normalized.hasPrefix("gpt-live-transcribe") {
+                transcription["languages"] = [language]
+            } else {
+                transcription["language"] = language
+            }
+        }
         return try encode([
             "type": "session.update",
             "session": [
@@ -52,7 +69,7 @@ enum OpenAIRealtimeProtocol {
                 "audio": [
                     "input": [
                         "format": ["type": "audio/pcm", "rate": 24_000],
-                        "transcription": ["model": normalized],
+                        "transcription": transcription,
                         "turn_detection": NSNull(),
                     ] as [String: Any],
                 ],
@@ -244,7 +261,7 @@ actor OpenAIRealtimeTranscriptionSession {
         switch event.type {
         case "session.created":
             guard let socket else { return }
-            try await socket.send(.string(try OpenAIRealtimeProtocol.sessionUpdate(model: configuration.model)))
+            try await socket.send(.string(try OpenAIRealtimeProtocol.sessionUpdate(model: configuration.model, language: configuration.language)))
         case "session.updated":
             isReady = true
             readyTimeoutTask?.cancel()

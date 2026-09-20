@@ -1201,7 +1201,7 @@ struct ModelsView: View {
         isActive: Bool,
         isDownloaded: Bool,
         isDownloading: Bool,
-        actionTitle: String = "Set Active",
+        actionTitle: String = "Set Default",
         activationDisabledReason: String? = nil,
         incompatibilityReason: String? = nil,
         onSetActive: (() -> Void)? = nil
@@ -1257,12 +1257,13 @@ struct ModelsView: View {
         isActive activeOverride: Bool? = nil,
         onSetActive: (() -> Void)? = nil,
         description: String? = nil,
-        activeLabel: String = "Active",
+        activeLabel: String = "Default",
         downloadedLabel: String = "Downloaded",
-        actionTitle: String = "Set Active",
+        actionTitle: String = "Set Default",
         activationDisabledReason: String? = nil
     ) -> some View {
-        let isActive = activeOverride ?? (appState.selectedBackend == option)
+        let defaultBackend = BackendOption.resolve(backend: appState.config.sttBackend, model: appState.config.sttModel)
+        let isActive = activeOverride ?? (defaultBackend == option)
         let isDownloaded = downloadedModels.contains(option.model)
         let isDownloading = downloadingModels.contains(option.model)
         let progress = downloadProgress[option.model] ?? 0
@@ -1759,6 +1760,7 @@ struct ModelsView: View {
                         downloadGenerations.removeValue(forKey: option.model)
                         downloadTasks.removeValue(forKey: option.model)
                     }
+                    controller.refreshSpeechModelAvailability()
                 }
             } catch {
                 let isCancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
@@ -1928,11 +1930,9 @@ struct ModelsView: View {
     // MARK: - Check Downloaded Status
 
     private func checkDownloadedModels() {
-        for option in BackendOption.all {
-            if option.isDownloaded {
-                downloadedModels.insert(option.model)
-            }
-        }
+        let downloaded = BackendOption.downloaded
+        downloadedModels = Set(downloaded.map(\.model))
+        controller.refreshSpeechModelAvailability(downloaded)
     }
 
     /// Background check: does FluidInference's repo have a newer commit than what's
