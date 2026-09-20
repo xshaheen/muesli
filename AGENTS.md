@@ -111,6 +111,10 @@ a decode test, because old configs must keep loading.
 `make help` lists the targets and is the source of truth; the Makefile is a thin wrapper over
 `scripts/`, so it cannot drift from them. What the commands do not tell you:
 
+- **Build target follows the user's request.** "Build the test/dev version" means
+  `/Applications/ImlaDev.app`; "build the real/production app" means
+  `/Applications/Imla.app`. Use `ImlaDevA`, `ImlaDevB`, `ImlaDevC`, or another named
+  lane only when the user explicitly requests that lane, including during parallel work.
 - **Signing.** Release identity is resolved at recipe time: explicit `SIGN_IDENTITY=` wins, then
   the configured identity, then the keychain's first codesigning identity. Entitlements follow —
   a non-Developer-ID cert cannot back the iCloud/CloudKit entitlements without a provisioning
