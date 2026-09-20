@@ -6,6 +6,14 @@ import Foundation
 /// delimited block text, so dictation cleanup, meeting cleanup, and meeting
 /// notes cannot drift on any of them.
 enum CustomInstructions {
+    static let defaultText = """
+    Preserve meaning, facts, names, numbers, and technical terms.
+    Keep the original language and natural language switching unless the task asks for another language.
+    Use clear punctuation and readable formatting without changing the speaker's tone.
+    Do not invent information, answer dictated questions, or add introductory commentary.
+    For meeting notes, follow the selected template and clearly separate decisions, action items, and open questions.
+    """
+
     /// Global cap in characters. Every consumer shares one model context with
     /// the transcript, so instructions are bounded rather than open-ended.
     static let maxLength = 2_000

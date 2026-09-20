@@ -2156,9 +2156,8 @@ struct MeetingBrowserLogicTests {
 /// The resolver that decides which model produces a meeting's final transcript.
 ///
 /// Its answer is persisted, so a wrong one does not merely mis-route a single meeting —
-/// it overwrites the user's stored selection. These cover the streaming-only branch,
-/// which is the one that bypasses `resolveDownloaded`'s no-rewrite rule and therefore
-/// has to reimplement its download gating rather than skip it.
+/// it overwrites the user's stored selection. Explicit compatible choices survive
+/// a missing download; an unconfigured selection prefers an installed model.
 @MainActor
 @Suite("Meeting transcription availability")
 struct MeetingTranscriptionAvailabilityTests {
@@ -2170,15 +2169,15 @@ struct MeetingTranscriptionAvailabilityTests {
         return config
     }
 
-    @Test("a streaming-only selection is replaced by a downloaded meeting-capable model")
-    func streamingOnlySelectionIsReplaced() throws {
+    @Test("a downloaded Nemotron selection is retained for recorded meeting speech")
+    func nemotronSelectionIsRetained() throws {
         let resolved = try #require(ImlaController.availableMeetingTranscriptionBackend(
             config: config(meeting: .nemotron35Multilingual),
             dictationBackend: .nemotron35Multilingual,
             downloadedOptions: [.nemotron35Multilingual, .parakeetMultilingual]
         ))
         #expect(resolved.supportsMeetingTranscription)
-        #expect(resolved == .parakeetMultilingual)
+        #expect(resolved == .nemotron35Multilingual)
     }
 
     /// The regression this branch was fixed for: the dictation backend is meeting-capable
@@ -2186,35 +2185,41 @@ struct MeetingTranscriptionAvailabilityTests {
     /// dictation backend here would persist a model that cannot run.
     @Test("an undownloaded dictation backend loses to a downloaded meeting model")
     func undownloadedDictationFallbackIsNotPreferred() throws {
+        var unconfigured = AppConfig()
+        unconfigured.meetingTranscriptionBackend = ""
+        unconfigured.meetingTranscriptionModel = ""
         let resolved = try #require(ImlaController.availableMeetingTranscriptionBackend(
-            config: config(meeting: .nemotron35Multilingual),
+            config: unconfigured,
             dictationBackend: .whisperLargeTurbo,
-            downloadedOptions: [.nemotron35Multilingual, .parakeetMultilingual]
+            downloadedOptions: [.parakeetMultilingual]
         ))
         #expect(resolved == .parakeetMultilingual, "picked a model that is not downloaded")
     }
 
     @Test("a downloaded dictation backend is preferred over other meeting models")
     func downloadedDictationFallbackWins() throws {
+        var unconfigured = AppConfig()
+        unconfigured.meetingTranscriptionBackend = ""
+        unconfigured.meetingTranscriptionModel = ""
         let resolved = try #require(ImlaController.availableMeetingTranscriptionBackend(
-            config: config(meeting: .nemotron35Multilingual),
+            config: unconfigured,
             dictationBackend: .whisperLargeTurbo,
             downloadedOptions: [.whisperLargeTurbo, .parakeetMultilingual]
         ))
         #expect(resolved == .whisperLargeTurbo)
     }
 
-    /// Nothing meeting-capable is downloaded at all. Returning the streaming-only
-    /// selection would be worse than returning nil: callers treat nil as "fall back to a
-    /// known-good default", and that path only ever yields a meeting-capable option.
-    @Test("no downloaded meeting model yields no resolution rather than a streaming one")
+    @Test("an unconfigured meeting with no downloaded model yields no resolution")
     func noMeetingCapableDownloadYieldsNil() {
+        var unconfigured = AppConfig()
+        unconfigured.meetingTranscriptionBackend = ""
+        unconfigured.meetingTranscriptionModel = ""
         let resolved = ImlaController.availableMeetingTranscriptionBackend(
-            config: config(meeting: .nemotron35Multilingual),
+            config: unconfigured,
             dictationBackend: .nemotron35Multilingual,
-            downloadedOptions: [.nemotron35Multilingual]
+            downloadedOptions: []
         )
-        #expect(resolved?.supportsMeetingTranscription ?? true)
+        #expect(resolved == nil)
     }
 
     @Test("a meeting-capable selection is kept even when it is not downloaded")

@@ -488,8 +488,8 @@ struct MeetingDetailView: View {
                 transcriptCTA
             }
         }
-        .frame(maxWidth: 980, alignment: .leading)
-        .padding(.horizontal, 40)
+        .frame(maxWidth: ImlaTheme.contentMaxWidth, alignment: .leading)
+        .padding(.horizontal, ImlaTheme.pageHorizontalInset)
         .padding(.top, ImlaTheme.spacing16)
         .padding(.bottom, 24)
         .frame(maxWidth: .infinity, alignment: .center)
@@ -754,7 +754,7 @@ struct MeetingDetailView: View {
         for meeting: MeetingRecord,
         appliedTemplate: MeetingTemplateSnapshot
     ) -> some View {
-        VStack(alignment: .leading, spacing: ImlaTheme.spacing8) {
+        VStack(alignment: .leading, spacing: ImlaTheme.spacing16) {
             if let onBack {
                 MeetingDetailHeaderBarLayout(spacing: ImlaTheme.spacing8) {
                     Button(action: onBack) {
@@ -766,7 +766,7 @@ struct MeetingDetailView: View {
                         }
                         .foregroundStyle(ImlaTheme.textSecondary)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ImlaActionButtonStyle(tone: .quiet, compact: true))
 
                     headerUtilityBand(for: meeting, appliedTemplate: appliedTemplate)
                 }
@@ -774,6 +774,7 @@ struct MeetingDetailView: View {
                 headerUtilityBand(for: meeting, appliedTemplate: appliedTemplate)
             }
             headerTitleContent(for: meeting, appliedTemplate: appliedTemplate)
+                .fixedSize(horizontal: false, vertical: true)
             threadBreadcrumb
         }
     }
@@ -850,15 +851,15 @@ struct MeetingDetailView: View {
                     recordingModePicker
                     Spacer()
                 }
-                .frame(maxWidth: 980, alignment: .leading)
-                .padding(.horizontal, 40)
+                .frame(maxWidth: ImlaTheme.contentMaxWidth, alignment: .leading)
+                .padding(.horizontal, ImlaTheme.pageHorizontalInset)
                 .padding(.top, 12)
 
                 ZStack {
                     VStack(alignment: .leading, spacing: ImlaTheme.spacing12) {
                         if hasPersistedNotes {
                             MeetingNotesView(markdown: persistedNotes)
-                                .frame(maxWidth: 980, maxHeight: .infinity, alignment: .topLeading)
+                                .frame(maxWidth: ImlaTheme.contentMaxWidth, maxHeight: .infinity, alignment: .topLeading)
                                 .background(ImlaTheme.backgroundBase)
                                 .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
                                 .overlay(
@@ -886,9 +887,9 @@ struct MeetingDetailView: View {
                             .manualNotesEditorChrome(compact: usesCompactQuickNotes)
                             .frame(maxHeight: hasPersistedNotes ? 260 : .infinity)
                         }
-                        .frame(maxWidth: 980, maxHeight: hasPersistedNotes ? nil : .infinity, alignment: .topLeading)
+                        .frame(maxWidth: ImlaTheme.contentMaxWidth, maxHeight: hasPersistedNotes ? nil : .infinity, alignment: .topLeading)
                     }
-                    .padding(.horizontal, usesCompactQuickNotes ? 24 : 40)
+                    .padding(.horizontal, ImlaTheme.pageHorizontalInset)
                     .padding(.top, usesCompactQuickNotes ? 0 : 12)
                     .padding(.bottom, 24)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -934,11 +935,11 @@ struct MeetingDetailView: View {
                             saveManualNotes(meetingID: meeting.id, notes: notes)
                         }
                     )
-                    .frame(maxWidth: 980, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: ImlaTheme.contentMaxWidth, maxHeight: .infinity, alignment: .topLeading)
                     .background(ImlaTheme.backgroundBase)
                     .manualNotesEditorChrome(compact: usesCompactQuickNotes)
                 }
-                .padding(.horizontal, usesCompactQuickNotes ? 24 : 40)
+                .padding(.horizontal, ImlaTheme.pageHorizontalInset)
                 .padding(.top, usesCompactQuickNotes ? 0 : 12)
                 .padding(.bottom, 24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -953,12 +954,12 @@ struct MeetingDetailView: View {
                     .scrollContentBackground(.hidden)
                     .padding(ImlaTheme.spacing24)
                     .background(ImlaTheme.backgroundBase)
-                    .frame(maxWidth: 980, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: ImlaTheme.contentMaxWidth, maxHeight: .infinity, alignment: .topLeading)
                     .onChange(of: editableNotes) { _, _ in
                         debounceSaveNotes(meetingID: meeting.id)
                     }
             }
-            .padding(.horizontal, 40)
+            .padding(.horizontal, ImlaTheme.pageHorizontalInset)
             .padding(.top, 12)
             .padding(.bottom, 24)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -972,12 +973,12 @@ struct MeetingDetailView: View {
                     .scrollContentBackground(.hidden)
                     .padding(ImlaTheme.spacing24)
                     .background(ImlaTheme.backgroundBase)
-                    .frame(maxWidth: 980, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: ImlaTheme.contentMaxWidth, maxHeight: .infinity, alignment: .topLeading)
                     .onChange(of: editableTranscript) { _, _ in
                         debounceSaveTranscript(meetingID: meeting.id)
                     }
             }
-            .padding(.horizontal, 40)
+            .padding(.horizontal, ImlaTheme.pageHorizontalInset)
             .padding(.top, 12)
             .padding(.bottom, 24)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -988,8 +989,8 @@ struct MeetingDetailView: View {
                 readOnlyDocumentContent(for: meeting)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .frame(maxWidth: 1080, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, 40)
+            .frame(maxWidth: ImlaTheme.contentMaxWidth, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.horizontal, ImlaTheme.pageHorizontalInset)
             .padding(.top, 12)
             .padding(.bottom, 24)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -1118,10 +1119,11 @@ struct MeetingDetailView: View {
     private func actionRailContainer<Content: View>(
         @ViewBuilder content: () -> Content
     ) -> some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 2) {
             content()
         }
         .fixedSize()
+        .padding(2)
         .background(ImlaTheme.surfacePrimary)
         .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
         .overlay(
@@ -1141,7 +1143,7 @@ struct MeetingDetailView: View {
         if isSummarizing {
             ProgressView()
                 .controlSize(.small)
-                .frame(width: 34, height: 30)
+                .frame(width: 36, height: ImlaTheme.controlHeight)
                 .accessibilityLabel("Summarizing meeting")
                 .help("Summarizing meeting")
         } else {
@@ -1186,7 +1188,7 @@ struct MeetingDetailView: View {
                 Image(systemName: "sparkles")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(ImlaTheme.textSecondary)
-                    .frame(width: 34, height: 30)
+                    .frame(width: 36, height: ImlaTheme.controlHeight)
                     .contentShape(Rectangle())
             } primaryAction: {
                 beginSummary(for: meeting)
@@ -1282,7 +1284,7 @@ struct MeetingDetailView: View {
             Image(systemName: systemImage)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(ImlaTheme.textSecondary)
-                .frame(width: 34, height: 30)
+                .frame(width: 36, height: ImlaTheme.controlHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1407,11 +1409,11 @@ struct MeetingDetailView: View {
             }
             .foregroundStyle(ImlaTheme.textSecondary)
             .padding(.horizontal, 10)
-            .frame(height: 30)
+            .frame(height: ImlaTheme.controlHeight)
             .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
-        .frame(height: 30)
+        .frame(height: ImlaTheme.controlHeight)
         .menuIndicator(.hidden)
         .fixedSize()
         .accessibilityLabel(templateAccessibilityLabel)
@@ -1452,7 +1454,7 @@ struct MeetingDetailView: View {
         }
         // Matches the content container's cap. At 980 the toolbar stopped 100pt short of the
         // content's right edge, so Copy floated inward instead of aligning with it.
-        .frame(maxWidth: 1080, alignment: .leading)
+        .frame(maxWidth: ImlaTheme.contentMaxWidth, alignment: .leading)
     }
 
     @ViewBuilder
@@ -1479,7 +1481,7 @@ struct MeetingDetailView: View {
                 manualEditorCommand = MarkdownEditorCommand(kind: .checkbox)
             }
         }
-        .frame(maxWidth: 980, alignment: .leading)
+        .frame(maxWidth: ImlaTheme.contentMaxWidth, alignment: .leading)
     }
 
     @ViewBuilder
@@ -1580,16 +1582,9 @@ struct MeetingDetailView: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(ImlaTheme.textSecondary)
-            .frame(width: 34, height: 30)
-            .background(ImlaTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
-                    .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
-            )
+                .frame(width: 14)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ImlaActionButtonStyle(compact: true))
         .help(label)
         .accessibilityLabel(label)
     }
@@ -1613,11 +1608,11 @@ struct MeetingDetailView: View {
             Image(systemName: "square.and.arrow.up")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(ImlaTheme.textSecondary)
-                .frame(width: 34, height: 30)
+                .frame(width: 36, height: ImlaTheme.controlHeight)
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
-        .frame(height: 30)
+        .frame(height: ImlaTheme.controlHeight)
         .menuIndicator(.hidden)
         .fixedSize()
         .disabled(isEditingNotes || isEditingTranscript)
@@ -1644,7 +1639,7 @@ struct MeetingDetailView: View {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(ImlaTheme.textSecondary)
-                    .frame(width: 34, height: 30)
+                    .frame(width: 36, height: ImlaTheme.controlHeight)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
@@ -1666,26 +1661,15 @@ struct MeetingDetailView: View {
     @ViewBuilder
     private func iconButton(_ systemImage: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 4) {
+            HStack(spacing: ImlaTheme.spacing8) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 10))
+                    .font(.system(size: 12))
                 Text(label)
-                    .font(ImlaTheme.font(size: 11, weight: .medium))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            .fixedSize(horizontal: true, vertical: false)
-            .foregroundStyle(ImlaTheme.textSecondary)
-            .padding(.horizontal, ImlaTheme.spacing8)
-            .padding(.vertical, 5)
-            .background(ImlaTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
-                    .strokeBorder(ImlaTheme.surfaceBorder, lineWidth: 1)
-            )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ImlaActionButtonStyle(compact: true))
     }
 
     private var deleteButton: some View {
@@ -1767,7 +1751,7 @@ struct MeetingDetailView: View {
                 }
                 .foregroundStyle(Color.white)
                 .padding(.horizontal, ImlaTheme.spacing12)
-                .frame(height: 30)
+                .frame(height: ImlaTheme.controlHeight)
                 .background(ImlaTheme.accent)
                 .contentShape(Rectangle())
             }
@@ -1789,7 +1773,7 @@ struct MeetingDetailView: View {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(Color.white)
-                    .frame(width: 28, height: 30)
+                    .frame(width: 28, height: ImlaTheme.controlHeight)
                     .background(ImlaTheme.accent)
                     .overlay(alignment: .leading) {
                         Rectangle()
@@ -1942,7 +1926,7 @@ struct MeetingDetailView: View {
             }
             .foregroundStyle(hasFolder ? ImlaTheme.accent : ImlaTheme.textSecondary)
             .padding(.horizontal, ImlaTheme.spacing8)
-            .frame(height: 30)
+            .frame(height: ImlaTheme.controlHeight)
             .background(hasFolder ? ImlaTheme.accentSubtle : ImlaTheme.backgroundRaised)
             .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
             .overlay(
@@ -2451,7 +2435,7 @@ private struct MarqueeTitleTextField: View {
         }
         .frame(
             maxWidth: .infinity,
-            minHeight: 38,
+            minHeight: max(38, ceil(titleSize * 1.5)),
             alignment: direction.frameAlignment
         )
         .clipped()

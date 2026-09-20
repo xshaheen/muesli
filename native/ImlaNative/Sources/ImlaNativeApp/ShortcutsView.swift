@@ -34,7 +34,7 @@ struct ShortcutsView: View {
 
                 resetButton
             }
-            .padding(.horizontal, ImlaTheme.spacing32)
+            .padding(.horizontal, ImlaTheme.pageHorizontalInset)
             .padding(.top, ImlaTheme.pageTop)
             .padding(.bottom, ImlaTheme.spacing32)
             .frame(maxWidth: .infinity, alignment: .leading)

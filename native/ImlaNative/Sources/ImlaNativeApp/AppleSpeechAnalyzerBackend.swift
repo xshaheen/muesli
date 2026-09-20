@@ -256,7 +256,14 @@ extension AppleSpeechLanguageOption {
             }
             .values
             .sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
+        let installed = await SpeechTranscriber.installedLocales
+        AppleSpeechModelLanguages.update(localeOptions.map(\.id), installed: installed.map(\.identifier))
         return [.system] + localeOptions
+    }
+
+    static func hasInstalledAssets(for identifier: String) async -> Bool {
+        guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: requestedLocale(for: identifier)) else { return false }
+        return await SpeechTranscriber.installedLocales.contains(locale)
     }
 }
 
@@ -406,6 +413,7 @@ actor AppleSpeechAnalyzerTranscriber {
         }
         await analyzer.cancelAndFinishNow()
         preparedLocale = locale
+        AppleSpeechModelLanguages.markInstalled(locale)
         fputs("[imla-native] Apple Speech ready for \(locale.identifier(.bcp47))\n", stderr)
     }
 

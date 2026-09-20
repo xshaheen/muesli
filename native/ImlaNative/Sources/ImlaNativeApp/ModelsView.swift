@@ -100,10 +100,11 @@ struct ModelsView: View {
 
                     selectedCategoryContent
                 }
-                .padding(.horizontal, ImlaTheme.spacing32)
-            .padding(.top, ImlaTheme.pageTop)
-            .padding(.bottom, ImlaTheme.spacing32)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: ImlaTheme.contentMaxWidth, alignment: .leading)
+                .padding(.horizontal, ImlaTheme.pageHorizontalInset)
+                .padding(.top, ImlaTheme.pageTop)
+                .padding(.bottom, ImlaTheme.spacing32)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
             .onAppear {
                 revealFeatureTourTargetIfNeeded(using: proxy)
@@ -533,13 +534,7 @@ struct ModelsView: View {
                                 $0.enableLiveStreamingPartials = true
                             }
                         }
-                        .buttonStyle(.plain)
-                        .font(ImlaTheme.font(size: 12, weight: .medium))
-                        .foregroundStyle(ImlaTheme.accent)
-                        .padding(.horizontal, ImlaTheme.spacing12)
-                        .padding(.vertical, 4)
-                        .background(ImlaTheme.accentSubtle)
-                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                        .buttonStyle(ImlaActionButtonStyle(compact: true))
                     }
 
                     Button {
@@ -556,13 +551,7 @@ struct ModelsView: View {
                     Button("Download") {
                         startLiveCaptionModelDownload()
                     }
-                    .buttonStyle(.plain)
-                    .font(ImlaTheme.font(size: 12, weight: .medium))
-                    .foregroundStyle(ImlaTheme.accent)
-                    .padding(.horizontal, ImlaTheme.spacing12)
-                    .padding(.vertical, 4)
-                    .background(ImlaTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                    .buttonStyle(ImlaActionButtonStyle(compact: true))
                 }
             }
         }
@@ -888,13 +877,7 @@ struct ModelsView: View {
                                 controller.selectPostProcessor(option)
                             }
                         }
-                        .buttonStyle(.plain)
-                        .font(ImlaTheme.font(size: 12, weight: .medium))
-                        .foregroundStyle(ImlaTheme.accent)
-                        .padding(.horizontal, ImlaTheme.spacing12)
-                        .padding(.vertical, 4)
-                        .background(ImlaTheme.accentSubtle)
-                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                        .buttonStyle(ImlaActionButtonStyle(compact: true))
                     }
 
                     Button {
@@ -910,13 +893,7 @@ struct ModelsView: View {
                     Button("Download") {
                         startPostProcDownload(option, forQuill: forQuill)
                     }
-                    .buttonStyle(.plain)
-                    .font(ImlaTheme.font(size: 12, weight: .medium))
-                    .foregroundStyle(ImlaTheme.accent)
-                    .padding(.horizontal, ImlaTheme.spacing12)
-                    .padding(.vertical, 4)
-                    .background(ImlaTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                    .buttonStyle(ImlaActionButtonStyle(compact: true))
                 } else {
                     Text("No longer available")
                         .font(ImlaTheme.caption())
@@ -1224,7 +1201,7 @@ struct ModelsView: View {
         isActive: Bool,
         isDownloaded: Bool,
         isDownloading: Bool,
-        actionTitle: String = "Set Active",
+        actionTitle: String = "Set Default",
         activationDisabledReason: String? = nil,
         incompatibilityReason: String? = nil,
         onSetActive: (() -> Void)? = nil
@@ -1234,13 +1211,7 @@ struct ModelsView: View {
                 Button("Pause") {
                     cancelDownload(option)
                 }
-                .buttonStyle(.plain)
-                .font(ImlaTheme.font(size: 12, weight: .medium))
-                .foregroundStyle(ImlaTheme.textSecondary)
-                .padding(.horizontal, ImlaTheme.spacing12)
-                .padding(.vertical, 4)
-                .background(ImlaTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                .buttonStyle(ImlaActionButtonStyle(compact: true))
             } else if isDownloaded {
                 if !isActive {
                     let disabledReason = incompatibilityReason ?? activationDisabledReason
@@ -1251,13 +1222,7 @@ struct ModelsView: View {
                             controller.selectBackend(option)
                         }
                     }
-                    .buttonStyle(.plain)
-                    .font(ImlaTheme.font(size: 12, weight: .medium))
-                    .foregroundStyle(disabledReason == nil ? ImlaTheme.accent : ImlaTheme.textTertiary)
-                    .padding(.horizontal, ImlaTheme.spacing12)
-                    .padding(.vertical, 4)
-                    .background(disabledReason == nil ? ImlaTheme.accentSubtle : ImlaTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                    .buttonStyle(ImlaActionButtonStyle(compact: true))
                     .disabled(disabledReason != nil)
                     .help(disabledReason ?? actionTitle)
                 }
@@ -1277,13 +1242,7 @@ struct ModelsView: View {
                 Button("Download") {
                     startDownload(option)
                 }
-                .buttonStyle(.plain)
-                .font(ImlaTheme.font(size: 12, weight: .medium))
-                .foregroundStyle(incompatibilityReason == nil ? ImlaTheme.accent : ImlaTheme.textTertiary)
-                .padding(.horizontal, ImlaTheme.spacing12)
-                .padding(.vertical, 4)
-                .background(incompatibilityReason == nil ? ImlaTheme.accentSubtle : ImlaTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                .buttonStyle(ImlaActionButtonStyle(tone: .primary, compact: true))
                 .disabled(incompatibilityReason != nil)
                 .help(incompatibilityReason ?? "Download")
             }
@@ -1298,12 +1257,13 @@ struct ModelsView: View {
         isActive activeOverride: Bool? = nil,
         onSetActive: (() -> Void)? = nil,
         description: String? = nil,
-        activeLabel: String = "Active",
+        activeLabel: String = "Default",
         downloadedLabel: String = "Downloaded",
-        actionTitle: String = "Set Active",
+        actionTitle: String = "Set Default",
         activationDisabledReason: String? = nil
     ) -> some View {
-        let isActive = activeOverride ?? (appState.selectedBackend == option)
+        let defaultBackend = BackendOption.resolve(backend: appState.config.sttBackend, model: appState.config.sttModel)
+        let isActive = activeOverride ?? (defaultBackend == option)
         let isDownloaded = downloadedModels.contains(option.model)
         let isDownloading = downloadingModels.contains(option.model)
         let progress = downloadProgress[option.model] ?? 0
@@ -1800,6 +1760,7 @@ struct ModelsView: View {
                         downloadGenerations.removeValue(forKey: option.model)
                         downloadTasks.removeValue(forKey: option.model)
                     }
+                    controller.refreshSpeechModelAvailability()
                 }
             } catch {
                 let isCancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
@@ -1969,11 +1930,9 @@ struct ModelsView: View {
     // MARK: - Check Downloaded Status
 
     private func checkDownloadedModels() {
-        for option in BackendOption.all {
-            if option.isDownloaded {
-                downloadedModels.insert(option.model)
-            }
-        }
+        let downloaded = BackendOption.downloaded
+        downloadedModels = Set(downloaded.map(\.model))
+        controller.refreshSpeechModelAvailability(downloaded)
     }
 
     /// Background check: does FluidInference's repo have a newer commit than what's

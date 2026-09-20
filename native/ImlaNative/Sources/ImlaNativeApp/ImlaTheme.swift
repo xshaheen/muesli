@@ -199,6 +199,10 @@ enum ImlaTheme {
     /// Top padding for page content and for the sidebar header, so a page's heading lines up
     /// with the app name in the sidebar.
     static let pageTop: CGFloat = 8
+    static let pageHorizontalInset: CGFloat = 24
+    static let contentMaxWidth: CGFloat = 1080
+    static let controlHeight: CGFloat = 32
+    static let compactControlHeight: CGFloat = 28
 
     static let spacing4: CGFloat = 4
     static let spacing8: CGFloat = 8

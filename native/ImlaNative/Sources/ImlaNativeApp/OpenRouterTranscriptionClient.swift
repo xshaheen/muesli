@@ -3,6 +3,13 @@ import Foundation
 struct OpenRouterDictationConfiguration: Sendable {
     let apiKey: String
     let model: String
+    let language: String?
+
+    init(apiKey: String, model: String, language: String? = nil) {
+        self.apiKey = apiKey
+        self.model = model
+        self.language = language
+    }
 }
 
 struct OpenRouterTranscriptionResult: Equatable, Sendable {
@@ -116,6 +123,7 @@ struct OpenRouterTranscriptionClient: Sendable {
         request.setValue(AppIdentity.displayName, forHTTPHeaderField: "X-OpenRouter-Title")
         request.httpBody = try JSONEncoder().encode(RequestPayload(
             model: model,
+            language: configuration.language,
             inputAudio: InputAudio(data: audioData.base64EncodedString(), format: "wav")
         ))
         return request
@@ -140,10 +148,12 @@ struct OpenRouterTranscriptionClient: Sendable {
 
     private struct RequestPayload: Encodable {
         let model: String
+        let language: String?
         let inputAudio: InputAudio
 
         enum CodingKeys: String, CodingKey {
             case model
+            case language
             case inputAudio = "input_audio"
         }
     }

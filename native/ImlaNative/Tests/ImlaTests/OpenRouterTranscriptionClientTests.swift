@@ -27,9 +27,20 @@ struct OpenRouterTranscriptionClientTests {
             JSONSerialization.jsonObject(with: httpBody) as? [String: Any]
         )
         #expect(body["model"] as? String == "provider/transcribe")
+        #expect(body["language"] == nil)
         let inputAudio = try #require(body["input_audio"] as? [String: Any])
         #expect(inputAudio["format"] as? String == "wav")
         #expect(inputAudio["data"] as? String == audio.base64EncodedString())
+    }
+
+    @Test("keyboard language is supplied as the documented language field")
+    func keyboardLanguage() throws {
+        let request = try OpenRouterTranscriptionClient.request(
+            audioData: Data([0x52, 0x49]), configuration: .init(apiKey: "test", model: "provider/model", language: "ar")
+        )
+        let data = try #require(request.httpBody)
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(body["language"] as? String == "ar")
     }
 
     @Test("request requires both a credential and an explicit model")

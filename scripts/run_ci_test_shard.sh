@@ -19,6 +19,7 @@ case "${shard}" in
     filters=(
       ConfigStoreTests
       LanguageProfileSettingsModelTests
+      LanguageModelPreferencesTests
       LanguageProfileTests
       LanguageSelectionPresentationTests
       FluidAudioUpgradeCharacterizationTests
@@ -53,6 +54,7 @@ case "${shard}" in
       DictationMiniPlacementTests
       OpenRouterAuthTests
       SettingsPermissionRefreshReasonTests
+      SettingsLayoutTests
       InteractionPermissionMonitorTests
       AccessibilityPermissionGuideTests
       DictationTestLifecycleTests

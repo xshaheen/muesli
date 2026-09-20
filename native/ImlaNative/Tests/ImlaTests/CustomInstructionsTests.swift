@@ -4,6 +4,14 @@ import Testing
 
 @Suite("Custom instructions normalization and block")
 struct CustomInstructionsTests {
+    @Test("default instructions fit the smallest consumer budget without truncation")
+    func defaultInstructionsFitOnDeviceBudget() {
+        #expect(!CustomInstructions.defaultText.isEmpty)
+        #expect(CustomInstructions.normalized(CustomInstructions.defaultText) == CustomInstructions.defaultText)
+        #expect(CustomInstructions.defaultText.count <= DictationCleanupPromptComposer.onDeviceCustomInstructionsLimit)
+        #expect(CustomInstructions.reservedSequences.allSatisfy { !CustomInstructions.defaultText.contains($0) })
+    }
+
 
     @Test("normalization trims the ends and keeps interior newlines")
     func normalizationTrimsEnds() {
@@ -91,17 +99,27 @@ struct CustomInstructionsConfigTests {
         #expect(decoded.customInstructions == "Use British English.")
     }
 
-    @Test("a missing key decodes to empty instructions")
+    @Test("a missing key receives the shared default instructions")
     func missingKeyDecodesEmpty() throws {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
 
-        #expect(decoded.customInstructions == "")
+        #expect(decoded.customInstructions == CustomInstructions.defaultText)
     }
 
-    @Test("a non-string value decodes to empty instructions")
+    @Test("a corrupt instruction value receives the shared defaults")
     func nonStringValueDecodesEmpty() throws {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"custom_instructions": 42}"#.utf8))
 
-        #expect(decoded.customInstructions == "")
+        #expect(decoded.customInstructions == CustomInstructions.defaultText)
+    }
+
+    @Test("legacy empty instructions are populated once; clearing them later persists")
+    func defaultsAreAppliedOnce() throws {
+        var config = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"custom_instructions":""}"#.utf8))
+        #expect(config.customInstructions == CustomInstructions.defaultText)
+        #expect(config.customInstructionsDefaultApplied)
+        config.customInstructions = ""
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(decoded.customInstructions.isEmpty)
     }
 }

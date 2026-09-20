@@ -143,7 +143,7 @@ struct AboutView: View {
 
                 Spacer(minLength: ImlaTheme.spacing32)
             }
-            .padding(.horizontal, ImlaTheme.spacing32)
+            .padding(.horizontal, ImlaTheme.pageHorizontalInset)
             .padding(.top, ImlaTheme.pageTop)
             .padding(.bottom, ImlaTheme.spacing32)
         }

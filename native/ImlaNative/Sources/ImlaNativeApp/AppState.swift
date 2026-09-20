@@ -23,10 +23,12 @@ enum InsightsSection: String, CaseIterable, Sendable {
 
 enum SettingsPane: String, CaseIterable, Identifiable {
     case general
-    case sync
+    case speechModels
     case dictation
-    case computerUse
     case meetings
+    case writingAI
+    case computerUse
+    case sync
     case appearance
 
     var id: String { rawValue }
@@ -36,6 +38,8 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: return "General"
         case .sync: return "Sync"
         case .dictation: return "Dictation"
+        case .speechModels: return "Speech Models"
+        case .writingAI: return "Writing & AI"
         case .computerUse: return "Computer Use"
         case .meetings: return "Meetings"
         case .appearance: return "Appearance"
@@ -219,6 +223,10 @@ final class AppState {
 
     // Config-driven state
     var selectedBackend: BackendOption = .whisper
+    var keyboardLanguage: TranscriptionLanguage?
+    var keyboardLanguages: [TranscriptionLanguage] = []
+    var availableSpeechModels: [BackendOption] = []
+    var dictationLanguageModelNotice: String?
     var dictationProvider: DictationProvider = .local
     var selectedMeetingTranscriptionBackend: BackendOption = .whisper
     var selectedMeetingSummaryBackend: MeetingSummaryBackendOption = .chatGPT

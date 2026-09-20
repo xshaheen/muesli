@@ -50,14 +50,8 @@ struct CustomInstructionsEditor: View {
                     .font(ImlaTheme.body())
                     .scrollContentBackground(.hidden)
                     .focused($isFocused)
-                    .frame(minHeight: 96)
-                    .padding(ImlaTheme.spacing8)
-                    .background(ImlaTheme.backgroundBase)
-                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
-                            .strokeBorder(ImlaTheme.surfaceBorder)
-                    )
+                    .frame(height: 160)
+                    .modifier(ImlaEditorSurface(isFocused: isFocused))
                     .accessibilityLabel("Custom instructions")
                     .accessibilityHint("Standing preferences applied to dictation cleanup, meeting transcript cleanup, and meeting notes")
 
@@ -65,14 +59,21 @@ struct CustomInstructionsEditor: View {
                     Text(Self.placeholder)
                         .font(ImlaTheme.body())
                         .foregroundStyle(ImlaTheme.textTertiary)
-                        .padding(.horizontal, ImlaTheme.spacing8 + 5)
-                        .padding(.vertical, ImlaTheme.spacing8 + 8)
+                        .padding(.horizontal, ImlaTheme.spacing12 + 5)
+                        .padding(.vertical, ImlaTheme.spacing12 + 8)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
             }
 
-            HStack {
+            HStack(spacing: ImlaTheme.spacing12) {
+                Button("Restore Default") {
+                    draft = CustomInstructions.defaultText
+                    onCommit(CustomInstructions.defaultText)
+                }
+                .buttonStyle(ImlaActionButtonStyle(tone: .quiet, compact: true))
+                .disabled(CustomInstructions.normalized(draft) == CustomInstructions.defaultText)
+                .help("Replace these instructions with the built-in defaults")
                 Spacer()
                 Text("\(characterCount) / \(CustomInstructions.maxLength)")
                     .font(ImlaTheme.caption())
