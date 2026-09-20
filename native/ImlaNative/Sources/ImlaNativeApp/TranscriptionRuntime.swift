@@ -737,7 +737,7 @@ actor TranscriptionCoordinator {
     private static let defaultDiarizerLoadOperationTimeout: Duration = .seconds(300)
 
     static let explicitlyRoutedBackendIdentifiers: Set<String> = [
-        "whisper", "nemotron35", "parakeet-unified", "cohere", "bodhan", "sensevoice", "gemma4-litert", "apple-speech",
+        "whisper", "nemotron35", "parakeet-unified", "cohere", "cohere-arabic", "bodhan", "sensevoice", "gemma4-litert", "apple-speech",
     ]
 
     private let fluidTranscriber = FluidAudioTranscriber()
@@ -745,6 +745,7 @@ actor TranscriptionCoordinator {
     private let whisperTranscriber = WhisperKitTranscriber()
     private var _qwen3PostProcessor: Any?
     private var _cohereTranscriber: Any?
+    private let cohereArabicTranscriber = CohereArabicTranscriber()
     private var _bodhanTranscriber: Any?
     private var _gemma4LiteRTTranscriber: Any?
     private var _appleSpeechTranscriber: Any?
@@ -1315,6 +1316,8 @@ actor TranscriptionCoordinator {
                     NSLocalizedDescriptionKey: "Nemotron 3.5 requires macOS 15 or later.",
                 ])
             }
+        case "cohere-arabic":
+            try await cohereArabicTranscriber.prepare(progress: progress, progressSnapshot: progressSnapshot)
         case "cohere":
             if #available(macOS 15, *) {
                 try await cohereTranscriber.prepare(progress: progress, progressSnapshot: progressSnapshot)
@@ -1666,6 +1669,8 @@ actor TranscriptionCoordinator {
             await unloadParakeetUnifiedTranscriber()
         case "apple-speech":
             await unloadAppleSpeechTranscriber()
+        case "cohere-arabic":
+            await cohereArabicTranscriber.shutdown()
         case "cohere":
             if #available(macOS 15, *), let transcriber = _cohereTranscriber as? CohereTranscribeTranscriber {
                 await transcriber.shutdown()
@@ -1927,7 +1932,7 @@ actor TranscriptionCoordinator {
         let speechRecognitionStartedAt = Date()
         // Qwen3 post-processing is intentionally dictation-only. Meeting transcription should keep raw backend/Parakeet output.
         // Cohere decodes hallucinated text from silence — skip if VAD detects no speech
-        if backend.backend == "cohere", let vadManager {
+        if ["cohere", "cohere-arabic"].contains(backend.backend), let vadManager {
             do {
                 let vadResults = try await vadManager.process(url)
                 let hasSpeech = vadResults.contains { $0.probability > 0.5 }
@@ -2224,6 +2229,7 @@ actor TranscriptionCoordinator {
         await parakeetUnifiedTranscriber.shutdown()
         await whisperTranscriber.shutdown()
         await senseVoiceTranscriber.shutdown()
+        await cohereArabicTranscriber.shutdown()
         if #available(macOS 15, *) {
             if let nemotron35 = _nemotron35Transcriber as? Nemotron35StreamingTranscriber {
                 await nemotron35.shutdown()
@@ -2751,6 +2757,26 @@ actor TranscriptionCoordinator {
                 throw LanguageRoutingIncompatibility.languageUnsupported(language)
             }
             return try await transcribeWithParakeetUnified(url: url)
+        case "cohere-arabic":
+            let language: TranscriptionLanguage
+            switch languageDecision {
+            case .pinned(let selected), .fixed(let selected):
+                language = selected
+            case .automatic:
+                throw LanguageRoutingIncompatibility.automaticDetectionUnsupported
+            case .constrainedCandidates:
+                throw LanguageRoutingIncompatibility.constrainedCandidatesUnsupported
+            case .incompatible:
+                preconditionFailure("handled before backend routing")
+            case nil:
+                language = .arabic
+            }
+            let result = try await cohereArabicTranscriber.transcribe(wavURL: url, language: language)
+            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return SpeechTranscriptionResult(
+                text: text,
+                segments: text.isEmpty ? [] : [SpeechSegment(start: 0, end: 0, text: text)]
+            )
         case "cohere":
             let language: CohereTranscribeLanguage
             if let languageDecision {

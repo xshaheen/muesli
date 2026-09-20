@@ -116,6 +116,15 @@ struct BackendOption: Equatable {
         recommended: false
     )
 
+    static let cohereArabic = BackendOption(
+        backend: "cohere-arabic",
+        model: CohereArabicModelStore.repository,
+        label: "Cohere Transcribe Arabic",
+        sizeLabel: "~2.4 GB",
+        description: "Local transcription for Arabic dialects and Arabic–English speech. Choose Arabic or English; automatic selection uses Arabic. Results appear after you stop speaking. Also supports meeting recordings.",
+        recommended: false
+    )
+
     static let bodhanCore = BackendOption(
         backend: "bodhan", model: BodhanModel.core.rawValue,
         label: "Bodhan Core FP16", sizeLabel: "~2.46 GB FP16",
@@ -211,7 +220,7 @@ struct BackendOption: Equatable {
         let all = systemManaged
             + parakeetFamily
             + whisperFamily
-            + [.cohereTranscribe]
+            + [.cohereTranscribe, .cohereArabic]
             + streaming
             + bodhanFamily
             + experimental
@@ -394,6 +403,11 @@ struct BackendOption: Equatable {
                 })
                 supportsAuto = true
                 supportsSingle = true
+            case "cohere-arabic":
+                supported = [.arabic, .english]
+                supportsAuto = false
+                supportsSingle = true
+                fallbackLanguage = .arabic
             case "cohere":
                 supported = Set(TranscriptionLanguage.allCases.filter {
                     CohereTranscribeLanguage(rawValue: $0.rawValue) != nil
@@ -479,6 +493,8 @@ struct BackendOption: Equatable {
             return Nemotron35ModelStore.isModelDownloaded(fileManager: fm)
         case "cohere":
             return CohereTranscribeModelStore.isAvailableLocally()
+        case "cohere-arabic":
+            return CohereArabicModelStore.isAvailable()
         case "bodhan":
             return BodhanModel(rawValue: model)?.isDownloaded ?? false
         case "sensevoice":
@@ -1124,6 +1140,18 @@ struct LanguageProfile: Codable, Equatable, Sendable {
                     effectiveLanguage: nil,
                     explanation: "This model cannot pin \(language.label), so it will detect the language automatically."
                 )
+            case "cohere-arabic" where language == .arabic || language == .english:
+                return .init(
+                    kind: .pinned,
+                    effectiveLanguage: language,
+                    explanation: "Transcription is pinned to \(language.label)."
+                )
+            case "cohere-arabic":
+                return .init(
+                    kind: .providerFallback,
+                    effectiveLanguage: .arabic,
+                    explanation: "Cohere Transcribe Arabic does not support \(language.label); it will use Arabic."
+                )
             case "cohere" where CohereTranscribeLanguage(rawValue: language.rawValue) != nil:
                 return .init(
                     kind: .pinned,
@@ -1153,6 +1181,13 @@ struct LanguageProfile: Codable, Equatable, Sendable {
             }
         }
 
+        if backend.backend == "cohere-arabic" {
+            return .init(
+                kind: .providerFallback,
+                effectiveLanguage: .arabic,
+                explanation: "Cohere Transcribe Arabic cannot auto-detect this profile, so it will use Arabic."
+            )
+        }
         if backend.backend == "cohere" {
             return .init(
                 kind: .providerFallback,

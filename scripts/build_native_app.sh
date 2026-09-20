@@ -363,6 +363,9 @@ cp "$ROOT/assets/Slack_icon_2019.svg.png" "$STAGED_APP_DIR/Contents/Resources/sl
 cp "$ROOT/assets/Nvidia_logo.svg.png" "$STAGED_APP_DIR/Contents/Resources/nvidia-logo.png"
 cp "$ROOT/assets/OpenAI_Logo.svg.png" "$STAGED_APP_DIR/Contents/Resources/openai-logo.png"
 cp "$ROOT/assets/cohere.png" "$STAGED_APP_DIR/Contents/Resources/cohere-logo.png"
+# SwiftPM embeds the framework but not the notices at the xcframework root.
+mkdir -p "$STAGED_APP_DIR/Contents/Resources/Licenses"
+ditto "$ROOT/assets/licenses/transcribe.cpp" "$STAGED_APP_DIR/Contents/Resources/Licenses/transcribe.cpp"
 cp "$ROOT/assets/Qwen_logo.svg.png" "$STAGED_APP_DIR/Contents/Resources/qwen-logo.png"
 cp "$ROOT/assets/superwhisper-logo.png" "$STAGED_APP_DIR/Contents/Resources/superwhisper-logo.png"
 cp "$ROOT/assets/bodhan-logo.png" "$STAGED_APP_DIR/Contents/Resources/bodhan-logo.png"

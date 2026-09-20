@@ -410,6 +410,7 @@ struct TranscriptionQualityRunnerTests {
             "medium.en": "pinned:en",
             "large-v3-v20240930_626MB": "automatic",
             "phequals/cohere-transcribe-coreml-mixed-precision": "pinned:en",
+            "handy-computer/cohere-transcribe-arabic-07-2026-gguf": "pinned:ar",
             "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML": "automatic",
             "FluidInference/sensevoice-small-coreml": "automatic",
             "phequals/indic-transcribe-core-coreml": "pinned:hi",
