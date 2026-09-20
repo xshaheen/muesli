@@ -28,7 +28,7 @@ enum SettingsControls {
                     .font(ImlaTheme.font(size: 11, weight: .semibold))
                     .textCase(.uppercase)
             }
-            .foregroundStyle(ImlaTheme.textTertiary)
+            .foregroundStyle(ImlaTheme.textSecondary)
             .padding(.leading, 2)
 
             VStack(alignment: .leading, spacing: 0) {
@@ -67,9 +67,8 @@ enum SettingsControls {
         role: ButtonRole? = nil,
         action: @escaping () -> Void
     ) -> some View {
-        let isDestructive = role == .destructive
-        Button(action: action) {
-            HStack(spacing: 6) {
+        Button(role: role, action: action) {
+            HStack(spacing: ImlaTheme.spacing8) {
                 if let systemImage {
                     Image(systemName: systemImage)
                         .font(.system(size: 11, weight: .semibold))
@@ -77,21 +76,8 @@ enum SettingsControls {
                 Text(title)
                     .lineLimit(1)
             }
-            .font(ImlaTheme.font(size: 12, weight: .medium))
-            .foregroundStyle(isDestructive ? ImlaTheme.danger : ImlaTheme.textPrimary)
-            .padding(.horizontal, 10)
-            .frame(height: 26)
-            .background(isDestructive ? ImlaTheme.danger.opacity(0.1) : ImlaTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
-                    .strokeBorder(
-                        isDestructive ? ImlaTheme.danger.opacity(0.25) : ImlaTheme.surfaceBorder,
-                        lineWidth: 1
-                    )
-            )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ImlaActionButtonStyle(compact: true))
     }
 
     @ViewBuilder
@@ -106,7 +92,7 @@ enum SettingsControls {
     static func description(_ text: String) -> some View {
         Text(text)
             .font(ImlaTheme.caption())
-            .foregroundStyle(ImlaTheme.textTertiary)
+            .foregroundStyle(ImlaTheme.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }

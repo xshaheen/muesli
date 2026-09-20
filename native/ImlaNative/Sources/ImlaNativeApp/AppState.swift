@@ -219,6 +219,10 @@ final class AppState {
 
     // Config-driven state
     var selectedBackend: BackendOption = .whisper
+    var keyboardLanguage: TranscriptionLanguage?
+    var keyboardLanguages: [TranscriptionLanguage] = []
+    var availableSpeechModels: [BackendOption] = []
+    var dictationLanguageModelNotice: String?
     var dictationProvider: DictationProvider = .local
     var selectedMeetingTranscriptionBackend: BackendOption = .whisper
     var selectedMeetingSummaryBackend: MeetingSummaryBackendOption = .chatGPT

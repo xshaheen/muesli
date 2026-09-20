@@ -304,8 +304,8 @@ struct MeetingsView: View {
                     }
                 }
             }
-            .frame(maxWidth: 960, alignment: .leading)
-            .padding(.horizontal, 40)
+            .frame(maxWidth: ImlaTheme.contentMaxWidth, alignment: .leading)
+            .padding(.horizontal, ImlaTheme.pageHorizontalInset)
             .padding(.top, ImlaTheme.pageTop)
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity, alignment: .center)

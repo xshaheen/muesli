@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 private enum DictionaryRowMetrics {
     static let arrowWidth: CGFloat = 14
     static let thresholdWidth: CGFloat = 76
-    static let actionButtonSize: CGFloat = 24
+    static let actionButtonSize: CGFloat = ImlaTheme.compactControlHeight
     static let actionsWidth: CGFloat = actionButtonSize * 2 + ImlaTheme.spacing8
     static let suggestionPageSize = 10
 }
@@ -32,7 +32,7 @@ struct DictionaryView: View {
                 }
                 wordList
             }
-            .padding(.horizontal, ImlaTheme.spacing32)
+            .padding(.horizontal, ImlaTheme.pageHorizontalInset)
             .padding(.top, ImlaTheme.pageTop)
             .padding(.bottom, ImlaTheme.spacing32)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -379,6 +379,7 @@ struct DictionaryView: View {
         HStack(spacing: ImlaTheme.spacing8) {
             TextField("Word", text: $newWord)
                 .textFieldStyle(.roundedBorder)
+                .controlSize(.large)
                 .frame(maxWidth: .infinity)
             Image(systemName: "arrow.right")
                 .font(.system(size: 10, weight: .semibold))
@@ -386,6 +387,7 @@ struct DictionaryView: View {
                 .frame(width: DictionaryRowMetrics.arrowWidth)
             TextField("Replace with", text: $newReplacement)
                 .textFieldStyle(.roundedBorder)
+                .controlSize(.large)
                 .frame(maxWidth: .infinity)
             ThresholdEditor(value: $newThreshold)
             DictionaryIconButton(
@@ -513,6 +515,7 @@ private struct DictionaryWordEditorRow: View {
         HStack(spacing: ImlaTheme.spacing8) {
             TextField("Word", text: $draftWord)
                 .textFieldStyle(.roundedBorder)
+                .controlSize(.large)
                 .frame(maxWidth: .infinity)
             Image(systemName: "arrow.right")
                 .font(.system(size: 10, weight: .semibold))
@@ -520,6 +523,7 @@ private struct DictionaryWordEditorRow: View {
                 .frame(width: DictionaryRowMetrics.arrowWidth)
             TextField("Replace with", text: $draftReplacement)
                 .textFieldStyle(.roundedBorder)
+                .controlSize(.large)
                 .frame(maxWidth: .infinity)
             ThresholdEditor(value: $draftThreshold)
             DictionaryIconButton(

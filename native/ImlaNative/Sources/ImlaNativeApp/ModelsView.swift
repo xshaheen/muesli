@@ -100,10 +100,11 @@ struct ModelsView: View {
 
                     selectedCategoryContent
                 }
-                .padding(.horizontal, ImlaTheme.spacing32)
-            .padding(.top, ImlaTheme.pageTop)
-            .padding(.bottom, ImlaTheme.spacing32)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: ImlaTheme.contentMaxWidth, alignment: .leading)
+                .padding(.horizontal, ImlaTheme.pageHorizontalInset)
+                .padding(.top, ImlaTheme.pageTop)
+                .padding(.bottom, ImlaTheme.spacing32)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
             .onAppear {
                 revealFeatureTourTargetIfNeeded(using: proxy)
@@ -533,13 +534,7 @@ struct ModelsView: View {
                                 $0.enableLiveStreamingPartials = true
                             }
                         }
-                        .buttonStyle(.plain)
-                        .font(ImlaTheme.font(size: 12, weight: .medium))
-                        .foregroundStyle(ImlaTheme.accent)
-                        .padding(.horizontal, ImlaTheme.spacing12)
-                        .padding(.vertical, 4)
-                        .background(ImlaTheme.accentSubtle)
-                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                        .buttonStyle(ImlaActionButtonStyle(compact: true))
                     }
 
                     Button {
@@ -556,13 +551,7 @@ struct ModelsView: View {
                     Button("Download") {
                         startLiveCaptionModelDownload()
                     }
-                    .buttonStyle(.plain)
-                    .font(ImlaTheme.font(size: 12, weight: .medium))
-                    .foregroundStyle(ImlaTheme.accent)
-                    .padding(.horizontal, ImlaTheme.spacing12)
-                    .padding(.vertical, 4)
-                    .background(ImlaTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                    .buttonStyle(ImlaActionButtonStyle(compact: true))
                 }
             }
         }
@@ -888,13 +877,7 @@ struct ModelsView: View {
                                 controller.selectPostProcessor(option)
                             }
                         }
-                        .buttonStyle(.plain)
-                        .font(ImlaTheme.font(size: 12, weight: .medium))
-                        .foregroundStyle(ImlaTheme.accent)
-                        .padding(.horizontal, ImlaTheme.spacing12)
-                        .padding(.vertical, 4)
-                        .background(ImlaTheme.accentSubtle)
-                        .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                        .buttonStyle(ImlaActionButtonStyle(compact: true))
                     }
 
                     Button {
@@ -910,13 +893,7 @@ struct ModelsView: View {
                     Button("Download") {
                         startPostProcDownload(option, forQuill: forQuill)
                     }
-                    .buttonStyle(.plain)
-                    .font(ImlaTheme.font(size: 12, weight: .medium))
-                    .foregroundStyle(ImlaTheme.accent)
-                    .padding(.horizontal, ImlaTheme.spacing12)
-                    .padding(.vertical, 4)
-                    .background(ImlaTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                    .buttonStyle(ImlaActionButtonStyle(compact: true))
                 } else {
                     Text("No longer available")
                         .font(ImlaTheme.caption())
@@ -1234,13 +1211,7 @@ struct ModelsView: View {
                 Button("Pause") {
                     cancelDownload(option)
                 }
-                .buttonStyle(.plain)
-                .font(ImlaTheme.font(size: 12, weight: .medium))
-                .foregroundStyle(ImlaTheme.textSecondary)
-                .padding(.horizontal, ImlaTheme.spacing12)
-                .padding(.vertical, 4)
-                .background(ImlaTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                .buttonStyle(ImlaActionButtonStyle(compact: true))
             } else if isDownloaded {
                 if !isActive {
                     let disabledReason = incompatibilityReason ?? activationDisabledReason
@@ -1251,13 +1222,7 @@ struct ModelsView: View {
                             controller.selectBackend(option)
                         }
                     }
-                    .buttonStyle(.plain)
-                    .font(ImlaTheme.font(size: 12, weight: .medium))
-                    .foregroundStyle(disabledReason == nil ? ImlaTheme.accent : ImlaTheme.textTertiary)
-                    .padding(.horizontal, ImlaTheme.spacing12)
-                    .padding(.vertical, 4)
-                    .background(disabledReason == nil ? ImlaTheme.accentSubtle : ImlaTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                    .buttonStyle(ImlaActionButtonStyle(compact: true))
                     .disabled(disabledReason != nil)
                     .help(disabledReason ?? actionTitle)
                 }
@@ -1277,13 +1242,7 @@ struct ModelsView: View {
                 Button("Download") {
                     startDownload(option)
                 }
-                .buttonStyle(.plain)
-                .font(ImlaTheme.font(size: 12, weight: .medium))
-                .foregroundStyle(incompatibilityReason == nil ? ImlaTheme.accent : ImlaTheme.textTertiary)
-                .padding(.horizontal, ImlaTheme.spacing12)
-                .padding(.vertical, 4)
-                .background(incompatibilityReason == nil ? ImlaTheme.accentSubtle : ImlaTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous))
+                .buttonStyle(ImlaActionButtonStyle(tone: .primary, compact: true))
                 .disabled(incompatibilityReason != nil)
                 .help(incompatibilityReason ?? "Download")
             }

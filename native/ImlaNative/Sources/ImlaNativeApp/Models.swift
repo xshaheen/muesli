@@ -2755,6 +2755,7 @@ struct AppConfig: Codable {
     var computerUseTimeoutSeconds: Int = 120
     var sttBackend: String = BackendOption.parakeetUnified.backend
     var sttModel: String = BackendOption.parakeetUnified.model
+    var languageModels = LanguageModelPreferences()
     var dictationProvider: String = DictationProvider.defaultProvider.rawValue
     var openaiDictationModel: String = OpenAITranscriptionClient.defaultModel
     var openRouterDictationModel: String = ""
@@ -2882,7 +2883,8 @@ struct AppConfig: Codable {
     /// The user's standing preferences for every LLM rewrite of their words:
     /// dictation cleanup, meeting transcript cleanup, and meeting notes.
     /// Stored trimmed; `CustomInstructions` owns the cap and the prompt block.
-    var customInstructions: String = ""
+    var customInstructions: String = CustomInstructions.defaultText
+    var customInstructionsDefaultApplied: Bool = true
     /// Whether finalized meeting transcripts get an AI cleanup pass.
     ///
     /// Off by default: it costs a model pass per meeting, and depending on the
@@ -2992,6 +2994,7 @@ struct AppConfig: Codable {
         case computerUseTimeoutSeconds = "computer_use_timeout_seconds"
         case sttBackend = "stt_backend"
         case sttModel = "stt_model"
+        case languageModels = "language_models"
         case dictationProvider = "dictation_provider"
         case openaiDictationModel = "openai_dictation_model"
         case openRouterDictationModel = "openrouter_dictation_model"
@@ -3089,6 +3092,7 @@ struct AppConfig: Codable {
         case enablePostProcessor = "enable_post_processor"
         case bilingualRepairAutoEnableApplied = "bilingual_repair_auto_enable_applied"
         case customInstructions = "custom_instructions"
+        case customInstructionsDefaultApplied = "custom_instructions_default_applied"
         case quilBackend = "quil_backend"
         case quilModel = "quil_model"
         case postProcessorBackend = "post_processor_backend"
@@ -3286,6 +3290,7 @@ struct AppConfig: Codable {
         computerUseTimeoutSeconds = (try? c.decode(Int.self, forKey: .computerUseTimeoutSeconds)) ?? defaults.computerUseTimeoutSeconds
         sttBackend = (try? c.decode(String.self, forKey: .sttBackend)) ?? defaults.sttBackend
         sttModel = (try? c.decode(String.self, forKey: .sttModel)) ?? defaults.sttModel
+        languageModels = (try? c.decode(LanguageModelPreferences.self, forKey: .languageModels)) ?? defaults.languageModels
         dictationProvider = DictationProvider.resolved(try? c.decode(String.self, forKey: .dictationProvider)).rawValue
         openaiDictationModel = (try? c.decode(String.self, forKey: .openaiDictationModel)) ?? defaults.openaiDictationModel
         openRouterDictationModel = (try? c.decode(String.self, forKey: .openRouterDictationModel))
@@ -3520,6 +3525,12 @@ struct AppConfig: Codable {
         bilingualRepairAutoEnableApplied = (try? c.decode(Bool.self, forKey: .bilingualRepairAutoEnableApplied))
             ?? defaults.bilingualRepairAutoEnableApplied
         customInstructions = (try? c.decode(String.self, forKey: .customInstructions)) ?? defaults.customInstructions
+        let hadInstructionDefaults = (try? c.decode(Bool.self, forKey: .customInstructionsDefaultApplied)) ?? false
+        if !hadInstructionDefaults, CustomInstructions.normalized(customInstructions).isEmpty {
+            customInstructions = CustomInstructions.defaultText
+        }
+        // Migration runs once, so deliberately clearing the field remains possible.
+        customInstructionsDefaultApplied = true
         quilBackend = TranscriptCleanupBackendOption
             .resolved(try? c.decode(String.self, forKey: .quilBackend))
             .backend

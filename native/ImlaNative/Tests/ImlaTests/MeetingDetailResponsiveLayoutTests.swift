@@ -30,7 +30,7 @@ struct MeetingDetailResponsiveLayoutTests {
                 < index(of: "headerTitleContent(for: meeting", in: header)
         )
         #expect(outerHeader.contains(".padding(.top, ImlaTheme.spacing16)"))
-        #expect(folderPill.contains(".frame(height: 30)"))
+        #expect(folderPill.contains(".frame(height: ImlaTheme.controlHeight)"))
     }
 
     @Test("folder and meeting controls share one responsive row")
@@ -86,13 +86,14 @@ struct MeetingDetailResponsiveLayoutTests {
         #expect(!utilityBand.contains("extremeNarrowActionRail"))
         #expect(utilityBand.contains("templateAndExportActionRailContent(for: meeting"))
         #expect(utilityBand.contains("utilityActionRail(for: meeting)"))
-        #expect(railContainer.contains("HStack(spacing: 0)"))
+        #expect(railContainer.contains("HStack(spacing: 2)"))
+        #expect(railContainer.contains(".padding(2)"))
         #expect(railContainer.contains(".clipShape(RoundedRectangle"))
         #expect(iconButton.contains(".accessibilityLabel(label)"))
         #expect(iconButton.contains(".help(label)"))
         #expect(templateMenu.contains(".truncationMode(.tail)"))
         #expect(templateMenu.contains(".frame(maxWidth: 120"))
-        #expect(templateMenu.contains(".menuStyle(.borderlessButton)\n        .frame(height: 30)"))
+        #expect(templateMenu.contains(".menuStyle(.borderlessButton)\n        .frame(height: ImlaTheme.controlHeight)"))
         #expect(templateMenu.contains(".accessibilityLabel(templateAccessibilityLabel"))
     }
 
@@ -153,7 +154,7 @@ struct MeetingDetailResponsiveLayoutTests {
 
         #expect(exportMenu.contains("Image(systemName: \"square.and.arrow.up\")"))
         #expect(!exportMenu.contains("Text(\"Export\")"))
-        #expect(exportMenu.contains(".menuStyle(.borderlessButton)\n        .frame(height: 30)"))
+        #expect(exportMenu.contains(".menuStyle(.borderlessButton)\n        .frame(height: ImlaTheme.controlHeight)"))
         #expect(exportMenu.contains(".accessibilityLabel(\"Export meeting\")"))
         #expect(exportMenu.contains(".help(\"Export meeting\")"))
     }

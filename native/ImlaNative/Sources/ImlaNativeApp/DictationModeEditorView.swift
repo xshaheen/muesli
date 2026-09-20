@@ -40,6 +40,7 @@ struct DictationModeEditorView: View {
                 .foregroundStyle(ImlaTheme.textTertiary)
             TextField("Mode name", text: $draft.name)
                 .textFieldStyle(.roundedBorder)
+                .controlSize(.large)
 
             activationApps
             activationWebsites
@@ -53,13 +54,14 @@ struct DictationModeEditorView: View {
                     .foregroundStyle(ImlaTheme.danger)
             }
 
-            HStack {
+            HStack(spacing: ImlaTheme.spacing8) {
                 Spacer()
                 Button("Cancel", role: .cancel) { onCancel() }
                     .keyboardShortcut(.cancelAction)
+                    .buttonStyle(ImlaActionButtonStyle())
                 Button("Save") { onSave(draft) }
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(ImlaActionButtonStyle(tone: .primary))
                     .disabled(validationMessage != nil)
             }
         }
