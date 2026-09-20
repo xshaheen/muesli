@@ -1,4 +1,23 @@
 import Foundation
+import ImlaCore
+
+enum DictationRecoveryAction {
+    case copy, open
+
+    /// Resolve at click time so deletion cannot copy stale text or open an unrelated record.
+    @MainActor
+    func perform(
+        dictationID: Int64, store: DictationStore,
+        copy: (String) -> Void, open: (Int64) -> Void
+    ) -> Bool {
+        guard let record = try? store.dictation(id: dictationID) else { return false }
+        switch self {
+        case .copy: copy(record.rawText)
+        case .open: open(record.id)
+        }
+        return true
+    }
+}
 
 /// Resolves one coherent visual and audible lifecycle for each dictation session.
 /// The controller owns effects; this value owns ordering, deduplication, and foreground arbitration.
@@ -15,7 +34,7 @@ struct DictationLifecycleFeedback {
 
     enum Recovery: Equatable {
         case unavailable
-        case targetChangedWithRetainedHistory
+        case targetChangedWithRetainedHistory(dictationID: Int64)
     }
 
     enum Cue: Equatable {
@@ -37,7 +56,7 @@ struct DictationLifecycleFeedback {
     enum Action: Equatable {
         case cue(Cue)
         case mini(sessionID: UUID, MiniPresentation)
-        case showTargetChangedWithRetainedHistoryRecovery
+        case showTargetChangedWithRetainedHistoryRecovery(dictationID: Int64)
     }
 
     private struct Session {
@@ -115,8 +134,8 @@ struct DictationLifecycleFeedback {
                 cue: .failure,
                 soundAllowed: soundAllowed
             )
-            if recovery == .targetChangedWithRetainedHistory {
-                failureActions.append(.showTargetChangedWithRetainedHistoryRecovery)
+            if case let .targetChangedWithRetainedHistory(dictationID) = recovery {
+                failureActions.append(.showTargetChangedWithRetainedHistoryRecovery(dictationID: dictationID))
             }
             actions = failureActions
         case .neutral:

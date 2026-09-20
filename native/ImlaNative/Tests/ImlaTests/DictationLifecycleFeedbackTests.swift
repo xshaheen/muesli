@@ -85,7 +85,7 @@ struct DictationLifecycleFeedbackTests {
         ])
     }
 
-    @Test("recoverable failure keeps the existing history affordance")
+    @Test("recoverable failure carries the exact saved dictation")
     func recoverableFailure() {
         var feedback = DictationLifecycleFeedback()
         let sessionID = UUID()
@@ -93,13 +93,27 @@ struct DictationLifecycleFeedbackTests {
 
         #expect(feedback.finish(
             sessionID: sessionID,
-            outcome: .failure(recovery: .targetChangedWithRetainedHistory),
+            outcome: .failure(recovery: .targetChangedWithRetainedHistory(dictationID: 42)),
             soundAllowed: true
         ) == [
             .mini(sessionID: sessionID, .failure),
             .cue(.failure),
-            .showTargetChangedWithRetainedHistoryRecovery,
+            .showTargetChangedWithRetainedHistoryRecovery(dictationID: 42),
         ])
+    }
+
+    @Test("an older failed session cannot offer recovery over a new recording")
+    func staleRecovery() {
+        var feedback = DictationLifecycleFeedback()
+        let old = UUID()
+        let current = UUID()
+        _ = feedback.begin(sessionID: old, isTestMode: false)
+        _ = feedback.begin(sessionID: current, isTestMode: false)
+        #expect(feedback.finish(
+            sessionID: old, outcome: .failure(recovery: .targetChangedWithRetainedHistory(dictationID: 42)),
+            soundAllowed: true
+        ).isEmpty)
+        #expect(feedback.foregroundSessionID == current)
     }
 
     @Test("unavailable failure emits only the terminal failure feedback")

@@ -1,6 +1,6 @@
 import CoreGraphics
 
-/// Pure AppKit-coordinate placement for the caret-contextual dictation Mini.
+/// Pure AppKit-coordinate placement for idle text context and active mouse feedback.
 struct DictationMiniPlacement {
     struct Screen: Equatable {
         let frame: CGRect
@@ -29,6 +29,28 @@ struct DictationMiniPlacement {
     /// The follower sits a touch left of the caret so it reads as "under the insertion point",
     /// not under the next character (measured against the reference follower).
     static let caretHorizontalBias: CGFloat = -4
+    static let pointerGap: CGFloat = 12
+
+    /// Offset from the arrow so the signal never covers the point the user is clicking.
+    /// Prefer below/right, then flip around the pointer before clamping at display edges.
+    static func placeNearPointer(_ pointer: CGPoint, size: CGSize, screens: [Screen]) -> Result? {
+        guard size.width > 0, size.height > 0,
+              let screen = selectedScreen(containingOrNearestTo: pointer, screens: screens) else { return nil }
+        let visible = insetVisibleFrame(screen.visibleFrame, by: screenEdgeInset)
+        let right = pointer.x + pointerGap
+        let left = pointer.x - pointerGap - size.width
+        let below = pointer.y - pointerGap - size.height
+        let above = pointer.y + pointerGap
+        let candidates: [(CGPoint, Quadrant)] = [
+            (CGPoint(x: right, y: below), .below), (CGPoint(x: left, y: below), .below),
+            (CGPoint(x: right, y: above), .above), (CGPoint(x: left, y: above), .above),
+        ]
+        for (origin, quadrant) in candidates {
+            let frame = CGRect(origin: origin, size: size)
+            if visible.contains(frame) { return Result(frame: frame, quadrant: quadrant, screen: screen) }
+        }
+        return Result(frame: clamped(CGRect(x: right, y: below, width: size.width, height: size.height), to: visible), quadrant: .below, screen: screen)
+    }
 
     /// Places the Mini centred directly under a caret anchor (the caret's bottom-centre point),
     /// flipping above it when the screen runs out, and clamping as a last resort.

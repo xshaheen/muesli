@@ -197,12 +197,23 @@ struct DictationsView: View {
             }
         }
         .task {
+            openPendingDictation()
             await reloadAudioOnlyDictations()
+        }
+        .onChange(of: appState.pendingDictationDetailID) { _, _ in
+            openPendingDictation()
         }
         .onChange(of: appState.dictationState) { _, state in
             guard state == .idle else { return }
             Task { await reloadAudioOnlyDictations() }
         }
+    }
+
+    private func openPendingDictation() {
+        guard let id = appState.pendingDictationDetailID else { return }
+        appState.pendingDictationDetailID = nil
+        selectedAudioOnlySessionID = nil
+        selectedDictation = controller.dictationRecord(id: id)
     }
 
     private var selectedAudioOnlyRecord: DictationAudioHistoryRecord? {

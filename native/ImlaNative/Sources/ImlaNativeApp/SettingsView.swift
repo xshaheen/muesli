@@ -2605,6 +2605,15 @@ struct SettingsView: View {
                     }
                 }
                 settingsDescription("Keep the Mini's dot near your text context when you're not dictating. It hides while you type or scroll; press Escape to hide it until you move to another field. Turn off to only show the Mini while recording or processing.")
+                ForEach(appState.config.dictationIdleDotExcludedApps, id: \.self) { bundleID in
+                    settingsRow(NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)?
+                        .deletingPathExtension().lastPathComponent ?? bundleID) {
+                        Button("Show idle dot") {
+                            controller.updateConfig { $0.dictationIdleDotExcludedApps.removeAll { $0 == bundleID } }
+                        }
+                        .help("Restore the idle dot in this app. Recording feedback is always available.")
+                    }
+                }
                 Divider().background(ImlaTheme.surfaceBorder)
                 settingsRow("Show next meeting in menu bar") {
                     settingsSwitch(isOn: appState.config.showNextMeetingInMenuBar) { newValue in

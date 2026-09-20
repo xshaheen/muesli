@@ -322,6 +322,7 @@ final class AppState {
     var isSearchActive: Bool { !searchQuery.isEmpty }
 
     // Navigation
+    var pendingDictationDetailID: Int64?
     var selectedTab: DashboardTab = .timeline
     var insightsReturnTab: DashboardTab = .timeline
     var insightsBackLabel: String {

@@ -1086,6 +1086,13 @@ public final class ImlaController: NSObject {
         dictationMiniIndicator.hotkeyLabelProvider = { [weak self] in
             self?.config.dictationHotkey.label ?? "the hotkey"
         }
+        dictationMiniIndicator.idleApplicationProvider = { [weak self] in
+            guard let self, self.config.dictationIdleDotExcludedApps.count < 128,
+                  let app = NSWorkspace.shared.frontmostApplication,
+                  app != NSRunningApplication.current,
+                  let bundleID = app.bundleIdentifier, !bundleID.isEmpty else { return nil }
+            return bundleID
+        }
         dictationMiniIndicator.onIdleMenuAction = { [weak self] action in
             guard let self else { return }
             switch action {
@@ -1093,6 +1100,8 @@ public final class ImlaController: NSObject {
                 self.updateConfig { $0.showDictationIdleDot = false }
             case .openSettings:
                 self.openSettingsTab()
+            case .hideForApplication(let bundleID):
+                self.updateConfig { $0.dictationIdleDotExcludedApps.append(bundleID) }
             case .hideUntilFieldChanges, .hideForHour:
                 break
             }
@@ -1159,6 +1168,10 @@ public final class ImlaController: NSObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.lastExternalApp = app
+                self.syncDictationIdleDot()
+                self.dictationMiniIndicator.destinationApplicationChanged(
+                    processID: app.processIdentifier, bundleID: app.bundleIdentifier ?? ""
+                )
             }
         }
         dataDidChangeObserver = DistributedNotificationCenter.default().addObserver(
@@ -1650,6 +1663,10 @@ public final class ImlaController: NSObject {
 
     private func activeSessionTraces() -> [SessionRunTrace] {
         Array(sessionTraceRegistry.values)
+    }
+
+    func dictationRecord(id: Int64) -> DictationRecord? {
+        try? dictationStore.dictation(id: id)
     }
 
     func recentDictations() -> [DictationRecord] {
@@ -4781,7 +4798,7 @@ public final class ImlaController: NSObject {
     private func syncDictationIdleDot() {
         let idleAllowed = dictationIdleDotAllowed
             && config.resolvedOnboardingUseCase.includesPushToTalk
-            && config.showDictationIdleDot
+            && config.allowsDictationIdleDot(in: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
             && !isMeetingRecording()
             && !isStartingMeetingRecording
         dictationMiniIndicator.isIdleDotAllowed = idleAllowed
@@ -10594,7 +10611,9 @@ public final class ImlaController: NSObject {
             case let .mini(_, presentation):
                 switch presentation {
                 case .preparing:
-                    dictationMiniGeneration = dictationMiniIndicator.beginPreparing()
+                    let destination = activeDictationStyleSession?.mode == .standard
+                        ? activeDictationStyleSession?.target : nil
+                    dictationMiniGeneration = dictationMiniIndicator.beginPreparing(destination: destination)
                 case .recording:
                     guard let generation = dictationMiniGeneration else { continue }
                     dictationMiniIndicator.showRecording(generation: generation) { [weak self] in
@@ -10616,10 +10635,21 @@ public final class ImlaController: NSObject {
                     dictationMiniIndicator.dismiss(generation: generation)
                     dictationMiniGeneration = nil
                 }
-            case .showTargetChangedWithRetainedHistoryRecovery:
-                dictationMiniIndicator.showRecoveryWarningAfterFailure(
-                    "Saved in Recent Dictations — target changed"
-                )
+            case .showTargetChangedWithRetainedHistoryRecovery(let dictationID):
+                dictationMiniIndicator.showSavedDictationRecovery(dictationID: dictationID) { [weak self] id, action in
+                    guard let self else { return }
+                    let performed = action.perform(
+                        dictationID: id, store: self.dictationStore,
+                        copy: self.copyToClipboard,
+                        open: { id in
+                            self.appState.pendingDictationDetailID = id
+                            self.openHistoryWindow(tab: .dictations)
+                        }
+                    )
+                    if !performed {
+                        self.dictationMiniIndicator.showWarning("Dictation is no longer in history")
+                    }
+                }
             }
         }
     }
@@ -12929,6 +12959,13 @@ public final class ImlaController: NSObject {
                 : (currentDictationOutputMode == .voiceNote ? .voiceNote : mode),
             cleanupRuntime: cleanupRuntime
         )
+        // Hotkey arming can present the Mini before the authoritative paste target exists.
+        if let generation = dictationMiniGeneration {
+            dictationMiniIndicator.setDestination(
+                activeDictationStyleSession?.mode == .standard ? target : nil,
+                generation: generation
+            )
+        }
         activeDictationContextResult = nil
         activeDictationIdentity = nil
         stoppedDictationStyleSession = nil
@@ -14716,7 +14753,7 @@ public final class ImlaController: NSObject {
                     applyDictationLifecycleActions(dictationLifecycleFeedback.finish(
                         sessionID: job.id,
                         outcome: .failure(
-                            recovery: dictationID == nil ? .unavailable : .targetChangedWithRetainedHistory
+                            recovery: dictationID.map { .targetChangedWithRetainedHistory(dictationID: $0) } ?? .unavailable
                         ),
                         soundAllowed: shouldPlayDictationLifecycleSounds
                     ))

@@ -2809,6 +2809,26 @@ struct AppConfig: Codable {
     var showFloatingIndicator: Bool = true
     /// Keeps the Dictation Mini's idle dot near the focused text context while not dictating.
     var showDictationIdleDot: Bool = true
+    var dictationIdleDotExcludedApps: [String] = [] {
+        didSet { dictationIdleDotExcludedApps = Self.normalizedIdleDotExcludedApps(dictationIdleDotExcludedApps) }
+    }
+
+    static func normalizedIdleDotExcludedApps(_ apps: [String]) -> [String] {
+        // Preferences are user-controlled input; cap both collection and identifier sizes.
+        var seen = Set<String>()
+        var result: [String] = []
+        for raw in apps {
+            let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty, id.count <= 255, seen.insert(id).inserted else { continue }
+            result.append(id)
+            if result.count == 128 { break }
+        }
+        return result
+    }
+
+    func allowsDictationIdleDot(in bundleID: String?) -> Bool {
+        showDictationIdleDot && !dictationIdleDotExcludedApps.contains(bundleID ?? "")
+    }
     /// Floating Record pill shown while a meeting app is active (requires meeting detection).
     var showMeetingRecordButton: Bool = true
     var showHotkeyOnFloatingIndicator: Bool = false
@@ -3036,6 +3056,7 @@ struct AppConfig: Codable {
         case openDashboardOnLaunch = "open_dashboard_on_launch"
         case showFloatingIndicator = "show_floating_indicator"
         case showDictationIdleDot = "show_dictation_idle_dot"
+        case dictationIdleDotExcludedApps = "dictation_idle_dot_excluded_apps"
         case showMeetingRecordButton = "show_meeting_record_button"
         case showHotkeyOnFloatingIndicator = "show_hotkey_on_floating_indicator"
         case indicatorHoverStyle = "indicator_hover_style"
@@ -3421,6 +3442,9 @@ struct AppConfig: Codable {
             (try? c.decode(Bool.self, forKey: .showDictationIdleDot))
             ?? (try? legacy.decode(Bool.self, forKey: .showDictationFocusReminder))
             ?? defaults.showDictationIdleDot
+        dictationIdleDotExcludedApps = Self.normalizedIdleDotExcludedApps(
+            (try? c.decode([String].self, forKey: .dictationIdleDotExcludedApps)) ?? []
+        )
         showMeetingRecordButton =
             (try? c.decode(Bool.self, forKey: .showMeetingRecordButton))
             ?? defaults.showMeetingRecordButton

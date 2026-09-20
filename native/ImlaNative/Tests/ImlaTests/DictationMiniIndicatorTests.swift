@@ -1,5 +1,6 @@
 import AppKit
 import Testing
+import ImlaCore
 @testable import ImlaNativeApp
 
 @MainActor
@@ -38,7 +39,7 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniPalette.accentHighlightHex == 0xFFB04D)
         #expect(DictationMiniPalette.successHex == 0x48E57B)
         #expect(DictationMiniPalette.successHighlightHex == 0xB6FFCF)
-        #expect(DictationMiniRendering.successGlassTintAlpha == 0.82)
+        #expect(DictationMiniRendering.successGlassTintAlpha == 0.18)
         #expect(DictationMiniRendering.successCheckLineWidth == 1.8)
         #expect(DictationMiniPalette.failureHex == 0xFF6961)
         #expect(DictationMiniRendering.glassTintAlpha == 0.44)
@@ -152,16 +153,41 @@ struct DictationMiniIndicatorTests {
         #expect(DictationMiniRendering.pixelAligned(5.4, scale: 0) == 5.4)
     }
 
-    @Test("recording follows the caret and processing freezes the recording anchor")
+    @Test("recording follows the mouse without editable focus and survives app deactivation")
+    func recordingFollowsMouseWithoutFocus() throws {
+        var pointer = CGPoint(x: 300, y: 250)
+        let controller = DictationMiniIndicatorController(
+            screenProvider: { [screen] }, pointerPollingInterval: 60,
+            pointerProvider: { pointer }
+        )
+        defer { controller.close() }
+        let token = controller.beginPreparing()
+        controller.showRecording(generation: token, powerProvider: { -30 })
+        pointer = CGPoint(x: 600, y: 400)
+        controller.refreshPointerForTesting()
+        controller.setIdleActivity(DictationFollowerActivity(isTyping: true, isScrolling: true, isWindowMoving: true, isSwitchingSpace: true))
+        controller.clearIdleContext()
+        #expect(controller.presentation == .recording)
+        #expect(controller.currentFrame?.minX == pointer.x + 12)
+        #expect(controller.isVisibleForTesting)
+        let panel = try #require(controller.surfaceViewForTesting?.window)
+        #expect(!panel.hidesOnDeactivate)
+        #expect(panel.collectionBehavior.contains(.canJoinAllSpaces))
+        panel.orderOut(nil)
+        controller.restoreActiveVisibilityForTesting()
+        #expect(controller.isVisibleForTesting)
+    }
+
+    @Test("recording follows the mouse and processing holds its last position")
     func frozenProcessingAnchor() {
         var caret = CGPoint(x: 220, y: 320)
-        let controller = makeController(caret: { caret })
+        let controller = makeController(pointer: { caret })
         let token = controller.beginPreparing()
         controller.showRecording(generation: token) { -24 }
         let initialCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
 
         caret = CGPoint(x: 245, y: 320)
-        controller.refreshCaretAnchorForTesting()
+        controller.refreshPointerForTesting()
         let recordingCenter = controller.currentFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
         #expect(recordingCenter != initialCenter)
 
@@ -172,44 +198,42 @@ struct DictationMiniIndicatorTests {
 
         #expect(controller.presentation == .processing)
         #expect(controller.isMouseTransparentForTesting)
-        #expect(!controller.isFollowingCaretForTesting)
-        // Processing hangs under the same caret anchor as the recording capsule did (shared
-        // centre line and top edge), and ignores the caret that moved after recording ended.
-        #expect(processingFrame?.midX == recordingFrame?.midX)
+        #expect(!controller.isFollowingPointerForTesting)
+        // The top-left stays anchored beside the mouse as the waveform shrinks to a signal.
+        #expect(processingFrame?.minX == recordingFrame?.minX)
         #expect(processingFrame?.maxY == recordingFrame?.maxY)
-        #expect(recordingFrame?.midX == 245 + DictationMiniPlacement.caretHorizontalBias)
+        #expect(recordingFrame?.minX == 245 + DictationMiniPlacement.pointerGap)
         #expect(processingFrame?.size == CGSize(width: 20, height: 20))
         controller.close()
     }
 
-    @Test("without caret or pointer the Mini homes to the screen bottom, then snaps to the caret once it resolves")
+    @Test("without a pointer sample the Mini stays visible, then follows the next mouse sample")
     func fallsBackThenSnapsToCaret() {
         var caret: CGPoint?
-        let controller = makeController(caret: { caret })
+        let controller = makeController(pointer: { caret })
         let token = controller.beginPreparing()
 
         #expect(controller.presentation == .preparing)
         #expect(controller.isVisibleForTesting)
-        #expect(controller.isFollowingCaretForTesting)
+        #expect(controller.isFollowingPointerForTesting)
         let fallbackFrame = controller.currentFrame
         #expect((fallbackFrame?.minY ?? 999) < 100)
 
         caret = CGPoint(x: 220, y: 320)
-        controller.refreshCaretAnchorForTesting()
+        controller.refreshPointerForTesting()
 
         #expect(controller.isVisibleForTesting)
         #expect(controller.currentFrame != fallbackFrame)
-        // Under the caret (with the follower's small leftward bias); the seed's visible top keeps the gap.
-        #expect(controller.currentFrame?.midX == 220 + DictationMiniPlacement.caretHorizontalBias)
-        #expect(controller.currentFrame?.maxY == 320 - DictationMiniPlacement.caretGap)
+        #expect(controller.currentFrame?.minX == 220 + DictationMiniPlacement.pointerGap)
+        #expect(controller.currentFrame?.maxY == 320 - DictationMiniPlacement.pointerGap)
         controller.dismiss(generation: token)
         controller.close()
     }
 
-    @Test("terminal feedback holds the session anchor instead of chasing the post-insertion caret")
+    @Test("terminal feedback holds the last recording position instead of chasing the mouse")
     func terminalHoldsSessionAnchor() {
         var caret = CGPoint(x: 220, y: 320)
-        let controller = makeController(caret: { caret })
+        let controller = makeController(pointer: { caret })
         let token = controller.beginPreparing()
         let preparingFrame = controller.currentFrame
         controller.showRecording(generation: token) { -24 }
@@ -220,12 +244,12 @@ struct DictationMiniIndicatorTests {
         controller.showSuccess(generation: token, duration: 10)
         let successFrame = controller.currentFrame
 
-        // Same caret anchor, same centre line and top edge; the moved caret is ignored.
+        // The same corner stays anchored while the terminal signal is visible.
         #expect(preparingFrame != nil)
-        #expect(processingFrame?.midX == preparingFrame?.midX)
+        #expect(processingFrame?.minX == preparingFrame?.minX)
         #expect(processingFrame?.maxY == preparingFrame?.maxY)
         #expect(successFrame == processingFrame)
-        #expect(!controller.isFollowingCaretForTesting)
+        #expect(!controller.isFollowingPointerForTesting)
         controller.close()
     }
 
@@ -268,25 +292,6 @@ struct DictationMiniIndicatorTests {
         #expect(announcements == ["Model warming"])
 
         try? await Task.sleep(for: .milliseconds(30))
-        #expect(controller.presentation == .hidden)
-        controller.close()
-    }
-
-    @Test("recoverable failure keeps the failure mark before showing history guidance")
-    func failureRecoveryGuidance() async {
-        let controller = makeController()
-        let token = controller.beginPreparing()
-        controller.showFailure(generation: token, duration: 1)
-        controller.showRecoveryWarningAfterFailure(
-            "Saved in Recent Dictations — target changed",
-            failureDuration: 0.01,
-            warningDuration: 0.04
-        )
-
-        #expect(controller.presentation == .failure)
-        try? await Task.sleep(for: .milliseconds(25))
-        #expect(controller.presentation == .warning("Saved in Recent Dictations — target changed"))
-        try? await Task.sleep(for: .milliseconds(50))
         #expect(controller.presentation == .hidden)
         controller.close()
     }
@@ -362,6 +367,170 @@ struct DictationMiniIndicatorTests {
         controller.close()
     }
 
+    @Test("app exclusions hide idle feedback without hiding an explicit recording")
+    func excludedAppStillRecords() {
+        let controller = makeController()
+        defer { controller.close() }
+        var config = AppConfig()
+        config.dictationIdleDotExcludedApps = ["app.hidden"]
+        let sample = DictationTextContextSample(
+            anchor: CGPoint(x: 220, y: 320), processIdentifier: 42, hasSelection: false,
+            element: AXElementToken(element: AXUIElementCreateSystemWide())
+        )
+        controller.isIdleDotAllowed = config.allowsDictationIdleDot(in: "app.visible")
+        controller.updateIdleContext(sample)
+        #expect(controller.presentation == .idle)
+        controller.isIdleDotAllowed = config.allowsDictationIdleDot(in: "app.hidden")
+        #expect(controller.presentation == .hidden)
+        let session = controller.beginPreparing()
+        controller.showRecording(generation: session, powerProvider: { -30 })
+        #expect(controller.presentation == .recording)
+        controller.dismiss(generation: session)
+        config.dictationIdleDotExcludedApps.removeAll()
+        controller.isIdleDotAllowed = config.allowsDictationIdleDot(in: "app.hidden")
+        controller.updateIdleContext(sample)
+        #expect(controller.presentation == .idle)
+    }
+
+    @Test("destination hints are deduplicated, clear on return, and respect other toast ownership")
+    func destinationHints() {
+        let controller = makeController()
+        defer { controller.close() }
+        let destination = DictationSessionTarget(processID: 1, appName: "Notes", bundleID: "app.notes")
+        let session = controller.beginPreparing(destination: destination)
+        controller.destinationApplicationChanged(processID: 1, bundleID: "app.notes")
+        #expect(controller.hintTextForTesting == nil)
+        controller.destinationApplicationChanged(processID: 2, bundleID: "app.other")
+        #expect(controller.hintTextForTesting == "Return to Notes to paste")
+        controller.showToast("Hands-free")
+        controller.destinationApplicationChanged(processID: 3, bundleID: "app.third")
+        #expect(controller.hintTextForTesting == "Hands-free")
+        controller.destinationApplicationChanged(processID: 1, bundleID: "app.notes")
+        #expect(controller.hintTextForTesting == "Hands-free")
+        controller.destinationApplicationChanged(processID: 2, bundleID: "app.other")
+        #expect(controller.hintTextForTesting == "Return to Notes to paste")
+        controller.showProcessing(generation: session)
+        #expect(controller.hintTextForTesting == nil)
+        controller.destinationApplicationChanged(processID: 1, bundleID: "app.notes")
+        controller.destinationApplicationChanged(processID: 2, bundleID: "app.other")
+        #expect(controller.hintTextForTesting == nil)
+        _ = controller.beginPreparing()
+        controller.destinationApplicationChanged(processID: 2, bundleID: "app.other")
+        #expect(controller.hintTextForTesting == nil)
+    }
+
+    @Test("a target captured after hotkey arming only attaches to that Mini session")
+    func destinationAfterArming() {
+        let controller = makeController()
+        defer { controller.close() }
+        let target = DictationSessionTarget(processID: 1, appName: "Notes", bundleID: "app.notes")
+        let first = controller.beginPreparing()
+        controller.setDestination(target, generation: first)
+        controller.showRecording(generation: first, powerProvider: { -30 })
+        controller.destinationApplicationChanged(processID: 2, bundleID: "app.other")
+        #expect(controller.hintTextForTesting == "Return to Notes to paste")
+        _ = controller.beginPreparing()
+        controller.setDestination(target, generation: first)
+        controller.destinationApplicationChanged(processID: 2, bundleID: "app.other")
+        #expect(controller.hintTextForTesting == nil)
+    }
+
+    @Test("recovery buttons deliver the exact retained record once and expire with their session")
+    func savedRecoveryActions() throws {
+        let controller = makeController()
+        defer { controller.close() }
+        var calls: [(Int64, DictationRecoveryAction)] = []
+        func recover(_ id: Int64) {
+            let session = controller.beginPreparing()
+            controller.showFailure(generation: session)
+            controller.showSavedDictationRecovery(dictationID: id) { calls.append(($0, $1)) }
+        }
+        recover(42)
+        #expect(!controller.hintIsMouseTransparentForTesting)
+        let copy = try #require(controller.hintButtonsForTesting.first { $0.title == "Copy" })
+        let content = try #require(copy.superview)
+        #expect(copy.window?.styleMask.contains(.nonactivatingPanel) == true)
+        let label = try #require(controller.hintLabelForTesting)
+        #expect(label.frame.width >= label.fittingSize.width)
+        #expect(content.bounds.width < 300)
+        #expect(controller.surfaceViewForTesting?.accessibilityLabel() == "Dictation saved to history; automatic paste unavailable")
+        for button in controller.hintButtonsForTesting {
+            #expect(content.bounds.contains(button.frame))
+            #expect(!button.acceptsFirstResponder)
+        }
+        try exportRecoveryPreview(controller: controller, content: content)
+        try sendButtonAction(copy)
+        try sendButtonAction(copy)
+        #expect(calls.count == 1)
+        #expect(calls.first?.0 == 42 && calls.first?.1 == .copy)
+        #expect(controller.presentation == .hidden)
+        recover(43)
+        let open = try #require(controller.hintButtonsForTesting.first { $0.accessibilityLabel() == "Open dictation" })
+        try sendButtonAction(open)
+        #expect(calls.count == 2)
+        #expect(calls.last?.0 == 43 && calls.last?.1 == .open)
+        recover(44)
+        let stale = try #require(controller.hintButtonsForTesting.first)
+        _ = controller.beginPreparing()
+        try sendButtonAction(stale)
+        #expect(calls.count == 2)
+        #expect(controller.hintTextForTesting == nil)
+        recover(45)
+        let dismiss = try #require(controller.hintButtonsForTesting.first { $0.accessibilityLabel() == "Dismiss" })
+        let discarded = try #require(controller.hintButtonsForTesting.first)
+        try sendButtonAction(dismiss)
+        try sendButtonAction(discarded)
+        #expect(calls.count == 2)
+        recover(46)
+        let closed = try #require(controller.hintButtonsForTesting.first)
+        controller.close()
+        try sendButtonAction(closed)
+        #expect(calls.count == 2)
+    }
+
+    @Test("recovery looks up the requested history record and does not substitute another after deletion")
+    func recoveryRecordLookup() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = DictationStore(databaseURL: directory.appendingPathComponent("test.db"))
+        try store.migrateIfNeeded()
+        let retained = try store.insertDictation(text: "Retained fixture", durationSeconds: 1, startedAt: Date(), endedAt: Date())
+        _ = try store.insertDictation(text: "Newer fixture", durationSeconds: 1, startedAt: Date(), endedAt: Date())
+        var copied: [String] = []
+        var opened: [Int64] = []
+        for action in [DictationRecoveryAction.copy, .open] {
+            #expect(action.perform(dictationID: retained, store: store, copy: { copied.append($0) }, open: { opened.append($0) }))
+        }
+        #expect(copied == ["Retained fixture"])
+        #expect(opened == [retained])
+        _ = try store.deleteDictation(id: retained)
+        for action in [DictationRecoveryAction.copy, .open] {
+            #expect(!action.perform(dictationID: retained, store: store, copy: { copied.append($0) }, open: { opened.append($0) }))
+        }
+        #expect(copied == ["Retained fixture"])
+        #expect(opened == [retained])
+    }
+
+    @Test("recovery expires and ordinary hints stay mouse-transparent")
+    func recoveryTimeout() async throws {
+        let controller = makeController()
+        defer { controller.close() }
+        var acted = false
+        let session = controller.beginPreparing()
+        controller.showFailure(generation: session)
+        controller.showSavedDictationRecovery(dictationID: 42, duration: 0.01) { _, _ in acted = true }
+        let oldButton = try #require(controller.hintButtonsForTesting.first)
+        try await Task.sleep(for: .milliseconds(80))
+        try sendButtonAction(oldButton)
+        #expect(!acted)
+        #expect(controller.presentation == .hidden)
+        _ = controller.beginPreparing()
+        controller.showToast("Hands-free")
+        #expect(controller.hintIsMouseTransparentForTesting)
+        #expect(controller.hintButtonsForTesting.isEmpty)
+    }
+
     @Test("the idle dot shows hover keycaps, a selection hint, and toasts")
     func idleExtras() async {
         let controller = makeController()
@@ -382,6 +551,8 @@ struct DictationMiniIndicatorTests {
         #expect(controller.hintTextForTesting == "Hold Right Cmd to replace the selection")
 
         controller.showToast("Hands-free — tap Right Cmd to stop", duration: 10)
+        #expect(controller.hintTextForTesting == "Hands-free — tap Right Cmd to stop")
+        _ = controller.beginPreparing()
         #expect(controller.hintTextForTesting == "Hands-free — tap Right Cmd to stop")
 
         // A toast with no visible Mini waits for the next presentation.
@@ -440,27 +611,25 @@ struct DictationMiniIndicatorTests {
         var pointer: CGPoint? = CGPoint(x: 400, y: 100)
         let controller = DictationMiniIndicatorController(
             screenProvider: { [screen] },
-            caretAnchorProvider: { nil },
-            caretPollingInterval: 60,
+            pointerPollingInterval: 60,
             pointerProvider: { pointer }
         )
         let token = controller.beginPreparing()
         #expect(controller.isVisibleForTesting)
         let pointerFrame = controller.currentFrame
-        #expect(pointerFrame?.midX == 400 + DictationMiniPlacement.caretHorizontalBias)
+        #expect(pointerFrame?.minX == 400 + DictationMiniPlacement.pointerGap)
         controller.dismiss(generation: token)
 
         pointer = nil
         _ = controller.beginPreparing()
         #expect(controller.isVisibleForTesting)
-        #expect(controller.currentFrame?.midX == 400 + DictationMiniPlacement.caretHorizontalBias)
+        #expect(controller.currentFrame?.minX == 400 + DictationMiniPlacement.pointerGap)
         #expect(controller.currentFrame?.minY ?? 0 < 100)
         controller.close()
 
         let idle = DictationMiniIndicatorController(
             screenProvider: { [screen] },
-            caretAnchorProvider: { nil },
-            caretPollingInterval: 60,
+            pointerPollingInterval: 60,
             pointerProvider: { CGPoint(x: 400, y: 100) }
         )
         idle.isIdleDotAllowed = true
@@ -488,14 +657,126 @@ struct DictationMiniIndicatorTests {
         #expect(DictationCaretAnchorProvider.firstLineAnchor(inAppKitRect: field) == CGPoint(x: 18, y: 282))
     }
 
+    @Test("recovery preserves label space and stacks actions on narrow displays")
+    func recoveryLayout() {
+        for width: CGFloat in [180, 220, 360] {
+            for textWidth: CGFloat in [90, 110] {
+                let layout = DictationMiniHintPanel.layout(
+                    textSize: NSSize(width: textWidth, height: 14), buttonWidths: [60, 46, 24], maximumWidth: width
+                )
+                let bounds = NSRect(origin: .zero, size: layout.size)
+                #expect(bounds.contains(layout.label))
+                #expect(layout.label.width >= textWidth)
+                for frame in layout.buttons {
+                    #expect(bounds.contains(frame))
+                    #expect(!frame.intersects(layout.label))
+                }
+                #expect(layout.size.width <= width)
+                if width == 180 { #expect(layout.size.height == 62) }
+            }
+        }
+    }
+
+    @Test("pointer placement stays inside each display and clear of the click target")
+    func pointerDisplayEdges() throws {
+        let secondary = DictationMiniPlacement.Screen(
+            frame: CGRect(x: -800, y: 0, width: 800, height: 600),
+            visibleFrame: CGRect(x: -800, y: 24, width: 800, height: 576)
+        )
+        for display in [screen, secondary] {
+            for point in [
+                CGPoint(x: display.frame.minX + 2, y: 30),
+                CGPoint(x: display.frame.maxX - 2, y: 30),
+                CGPoint(x: display.frame.minX + 2, y: 595),
+                CGPoint(x: display.frame.maxX - 2, y: 595),
+            ] {
+                let result = try #require(DictationMiniPlacement.placeNearPointer(
+                    point, size: CGSize(width: 58, height: 22), screens: [screen, secondary]
+                ))
+                #expect(result.screen == display)
+                #expect(display.visibleFrame.insetBy(dx: 4, dy: 4).contains(result.frame))
+                #expect(!result.frame.contains(point))
+            }
+        }
+    }
+
+    @Test("pointer tracking crosses displays and stops after capture or teardown")
+    func pointerTrackingLifetime() {
+        let secondary = DictationMiniPlacement.Screen(
+            frame: CGRect(x: -800, y: 0, width: 800, height: 600),
+            visibleFrame: CGRect(x: -800, y: 24, width: 800, height: 576)
+        )
+        var pointer = CGPoint(x: 300, y: 300)
+        let controller = DictationMiniIndicatorController(
+            screenProvider: { [screen, secondary] }, pointerPollingInterval: 60,
+            pointerProvider: { pointer }
+        )
+        defer { controller.close() }
+        let token = controller.beginPreparing()
+        controller.showRecording(generation: token, powerProvider: { -30 })
+        #expect(controller.hasPointerTrackingActivityForTesting)
+        pointer = CGPoint(x: -300, y: 300)
+        controller.refreshPointerForTesting()
+        #expect(controller.currentFrame.map { secondary.visibleFrame.contains($0) } == true)
+        controller.showProcessing(generation: token)
+        let frozen = controller.currentFrame
+        pointer = CGPoint(x: 600, y: 500)
+        controller.refreshPointerForTesting()
+        #expect(controller.currentFrame == frozen)
+        #expect(!controller.isFollowingPointerForTesting)
+        #expect(!controller.hasPointerTrackingActivityForTesting)
+        controller.close()
+        controller.refreshPointerForTesting()
+        #expect(controller.currentFrame == nil)
+        #expect(!controller.isFollowingPointerForTesting)
+        #expect(!controller.hasPointerTrackingActivityForTesting)
+    }
+
+    private func exportRecoveryPreview(controller: DictationMiniIndicatorController, content: NSView) throws {
+        guard let directory = ProcessInfo.processInfo.environment["IMLA_MINI_PREVIEW_DIR"] else { return }
+        let surface = try #require(controller.surfaceViewForTesting)
+        let views = [surface, content]
+        let image = NSImage(size: NSSize(width: content.bounds.width + 56, height: 68))
+        image.lockFocus()
+        NSColor(calibratedWhite: 0.94, alpha: 1).setFill()
+        NSRect(origin: .zero, size: image.size).fill()
+        var x: CGFloat = 12
+        for view in views {
+            view.layoutSubtreeIfNeeded()
+            view.displayIfNeeded()
+            let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            let target = NSRect(x: x, y: (68 - view.bounds.height) / 2, width: view.bounds.width, height: view.bounds.height)
+            NSGraphicsContext.saveGraphicsState()
+            let radius = view.layer?.cornerRadius ?? 0
+            NSBezierPath(roundedRect: target, xRadius: radius, yRadius: radius).addClip()
+            bitmap.draw(in: target)
+            NSGraphicsContext.restoreGraphicsState()
+            x += view.bounds.width + 8
+        }
+        image.unlockFocus()
+        let tiff = try #require(image.tiffRepresentation)
+        let bitmap = try #require(NSBitmapImageRep(data: tiff))
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("recovery.png"))
+    }
+
+    private func sendButtonAction(_ button: NSButton) throws {
+        // Stale callbacks must be harmless even after the view is detached. A synthetic mouse
+        // click on a closed AppKit window can terminate the command-line test host.
+        let target = try #require(button.target as? NSObject)
+        let action = try #require(button.action)
+        _ = target.perform(action, with: button)
+    }
+
     private func makeController(
-        caret: @escaping () -> CGPoint? = { CGPoint(x: 220, y: 320) },
+        pointer: @escaping () -> CGPoint? = { CGPoint(x: 220, y: 320) },
         accessibilitySink: @escaping DictationMiniIndicatorController.AccessibilitySink = { _ in }
     ) -> DictationMiniIndicatorController {
         DictationMiniIndicatorController(
             screenProvider: { [screen] },
-            caretAnchorProvider: caret,
-            caretPollingInterval: 60,
+            pointerPollingInterval: 60,
+            pointerProvider: pointer,
             accessibilitySink: accessibilitySink
         )
     }

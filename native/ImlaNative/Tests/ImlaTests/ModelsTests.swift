@@ -1395,6 +1395,31 @@ struct MeetingSummaryBackendTests {
 @Suite("AppConfig")
 struct AppConfigTests {
 
+    @Test("idle dot exclusions decode safely and round-trip using snake_case")
+    func idleDotExclusions() throws {
+        for json in ["{}", #"{"dictation_idle_dot_excluded_apps":null}"#, #"{"dictation_idle_dot_excluded_apps":42}"#] {
+            let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+            #expect(config.dictationIdleDotExcludedApps.isEmpty)
+        }
+        var config = try JSONDecoder().decode(AppConfig.self, from: Data(
+            #"{"dictation_idle_dot_excluded_apps":[" com.apple.Notes ","","com.apple.Notes"]}"#.utf8
+        ))
+        #expect(config.dictationIdleDotExcludedApps == ["com.apple.Notes"])
+        #expect(!config.allowsDictationIdleDot(in: "com.apple.Notes"))
+        #expect(config.allowsDictationIdleDot(in: "com.apple.TextEdit"))
+        let encoded = try JSONEncoder().encode(config)
+        let fields = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(fields["dictation_idle_dot_excluded_apps"] as? [String] == ["com.apple.Notes"])
+        #expect(fields["dictationIdleDotExcludedApps"] == nil)
+        #expect(try JSONDecoder().decode(AppConfig.self, from: encoded).dictationIdleDotExcludedApps == config.dictationIdleDotExcludedApps)
+        config.dictationIdleDotExcludedApps.removeAll()
+        #expect(config.allowsDictationIdleDot(in: "com.apple.Notes"))
+        config.dictationIdleDotExcludedApps = (0..<200).map { "app.\($0)" }
+        #expect(config.dictationIdleDotExcludedApps.count == 128)
+        config.showDictationIdleDot = false
+        #expect(!config.allowsDictationIdleDot(in: nil))
+    }
+
     @Test("default values")
     func defaults() {
         let config = AppConfig()

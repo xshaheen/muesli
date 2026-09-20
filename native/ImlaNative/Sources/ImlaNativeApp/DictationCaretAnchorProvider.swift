@@ -165,25 +165,6 @@ enum DictationCaretAnchorProvider {
         return value as? Bool
     }
 
-    @MainActor
-    static func currentAnchor() -> CGPoint? {
-        guard AXIsProcessTrusted(),
-              let primaryMaxY = NSScreen.screens.first?.frame.maxY,
-              let element = focusedElement()
-        else { return nil }
-
-        AXUIElementSetMessagingTimeout(element, 0.08)
-        let selectedRange = copiedRange(element, attribute: kAXSelectedTextRangeAttribute)
-        if let accessibilityRect = caretRect(for: element, selectedRange: selectedRange, deadline: Deadline()) {
-            return appKitAnchor(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
-        }
-        guard copiedInt(element, attribute: kAXNumberOfCharactersAttribute) == 0,
-              let accessibilityRect = elementRect(element)
-        else { return nil }
-        let converted = appKitRect(fromAccessibilityRect: accessibilityRect, primaryMaxY: primaryMaxY)
-        return firstLineAnchor(inAppKitRect: converted)
-    }
-
     static func appKitRect(fromAccessibilityRect rect: CGRect, primaryMaxY: CGFloat) -> CGRect {
         CGRect(
             x: rect.minX,
