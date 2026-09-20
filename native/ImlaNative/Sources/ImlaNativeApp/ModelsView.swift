@@ -228,6 +228,7 @@ struct ModelsView: View {
             )
 
             modelCard(option: .cohereTranscribe, logo: "cohere-logo")
+            modelCard(option: .cohereArabic, logo: "cohere-logo")
             bodhanCard(selection: $selectedBodhanCoreModel, isCore: true)
             bodhanCard(selection: $selectedBodhanFlexModel, isCore: false)
                 .id(FeatureTourTarget.bodhanFlexCard.rawValue)
@@ -1207,7 +1208,7 @@ struct ModelsView: View {
         case "fluidaudio": return "nvidia-logo"
         case "parakeet-unified": return "nvidia-logo"
         case "whisper": return "openai-logo"
-        case "cohere": return "cohere-logo"
+        case "cohere", "cohere-arabic": return "cohere-logo"
         case "nemotron35": return "nvidia-logo"
         case "bodhan": return "bodhan-logo"
         case "sensevoice": return "qwen-logo"

@@ -59,6 +59,8 @@ enum ModelDeletionPlan: Sendable, Equatable {
                 at: CohereTranscribeModelStore.cacheDirectory(),
                 fileManager: fileManager
             )
+        case "cohere-arabic":
+            try removeItemIfPresent(at: CohereArabicModelStore.cacheDirectory, fileManager: fileManager)
         case "bodhan":
             // A local override points at weights the user manages themselves, so
             // deleting the model must not remove them.

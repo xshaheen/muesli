@@ -104,6 +104,7 @@ case "${shard}" in
       FluidAudioTranscriberTests
       AppleSpeechAnalyzerBackendTests
       BackendCoverageTests
+      CohereArabicBackendTests
       FillerWordFilterTests
       JaroWinklerTests
       CustomWordMatcherApplyTests

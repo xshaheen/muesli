@@ -156,6 +156,7 @@ enum TranscriptionQualityEligibility {
     static func languageConfiguration(for backend: BackendOption) -> String {
         switch backend.backend {
         case "cohere": return "pinned:\(CohereTranscribeLanguage.defaultLanguage.rawValue)"
+        case "cohere-arabic": return "pinned:ar"
         case "bodhan": return "pinned:\(BodhanLanguage.defaultLanguage.rawValue)"
         case "apple-speech": return "pinned:\(hostSpeechLanguageCode)"
         default:
