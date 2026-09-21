@@ -95,16 +95,12 @@ final class RecentHistoryWindowController: NSObject, NSWindowDelegate {
         applyAppearance(to: window)
         controller.syncAppState()
         apply(presentation, to: window)
-        if !window.isVisible {
-            controller.noteWindowOpened()
-        }
+        let policyJustBecameRegular = controller.noteWindowOpened(window)
 
         if let readyAction {
             run(presentationReadiness.enqueue(readyAction))
         }
-        window.makeKeyAndOrderFront(nil)
-        window.orderFrontRegardless()
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        MenuBarWindowPresenter.present(window, policyJustBecameRegular: policyJustBecameRegular)
         scheduleInitialOrderedLayoutIfNeeded(for: window)
     }
 
@@ -170,8 +166,11 @@ final class RecentHistoryWindowController: NSObject, NSWindowDelegate {
             NSEvent.removeMonitor(keyMonitor)
             self.keyMonitor = nil
         }
-        controller.noteWindowClosed()
-        releaseWindowAfterClose(notification.object as? NSWindow)
+        let closing = notification.object as? NSWindow
+        if let closing {
+            controller.noteWindowClosed(closing)
+        }
+        releaseWindowAfterClose(closing)
     }
 
     /// Same contract as the settings window: with `isReleasedWhenClosed` off, the

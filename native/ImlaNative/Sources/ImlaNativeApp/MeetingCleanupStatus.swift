@@ -1,41 +1,26 @@
 import Foundation
 import ImlaCore
 
-/// The Meetings pane's read-only account of mixed-language repair (R11).
+/// The disclosure the Meetings pane shows when mixed-language repair will run.
 ///
-/// Pure, so the wording is testable without a view, and so "on" can never be
+/// Repair has no switch of its own: selecting two or more meeting languages on a
+/// configured cleanup backend turns it on, and it then sends every finished meeting's
+/// full transcript to that backend. That is a network path the user never toggled
+/// explicitly, so the pane must say where the transcript goes — and must say nothing
+/// when repair would be skipped, because a "sent to" line for a path that is not
+/// taken is as misleading as silence for one that is.
+///
+/// Pure, so the wording is testable without a view, and so the line can never be
 /// shown for a configuration that would skip cleanup.
 enum MeetingCleanupStatus {
-
-    struct Description: Equatable {
-        let state: String
-        let detail: String
-    }
-
-    static func describe(config: AppConfig, isChatGPTAuthenticated: Bool) -> Description {
+    static func activeDisclosure(config: AppConfig, isChatGPTAuthenticated: Bool) -> String? {
         let backend = MeetingCleanupTransport.backend(for: config)
-
-        guard config.meetingSpokenLanguage.isBilingual else {
-            return Description(
-                state: "Off",
-                detail: "Select two or more meeting languages to repair mixed-language transcripts."
-            )
-        }
-        if let reason = MeetingTranscriptCleanupPolicy.ineligibilityReason(backend) {
-            return Description(state: "Off", detail: reason)
-        }
-        guard MeetingCleanupTransport.isConfigured(
+        guard MeetingTranscriptCleanup.isEnabled(
             config: config,
+            backend: backend,
             isChatGPTAuthenticated: isChatGPTAuthenticated
-        ) else {
-            return Description(
-                state: "Off",
-                detail: "Configure the meeting notes backend to repair mixed-language transcripts."
-            )
-        }
-        return Description(
-            state: "On",
-            detail: MeetingTranscriptCleanupPolicy.disclosure(for: backend, config: config)
-        )
+        ) else { return nil }
+        return "Mixed-language transcripts are repaired after each meeting. "
+            + MeetingTranscriptCleanupPolicy.disclosure(for: backend, config: config)
     }
 }

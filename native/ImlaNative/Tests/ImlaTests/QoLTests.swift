@@ -105,19 +105,19 @@ struct LegacyIndicatorConfigurationTests {
         #expect(config.showFloatingIndicator == false)
     }
 
-    @Test("floating hotkey defaults off while menu bar hotkey defaults on")
+    @Test("hotkey labels default off on both the floating indicator and the menu bar")
     func hotkeyVisibilityRoundTrip() throws {
         var config = AppConfig()
         #expect(!config.showHotkeyOnFloatingIndicator)
-        #expect(config.showHotkeyInMenuBar)
+        #expect(!config.showHotkeyInMenuBar)
 
         config.showHotkeyOnFloatingIndicator = true
-        config.showHotkeyInMenuBar = false
+        config.showHotkeyInMenuBar = true
         let data = try JSONEncoder().encode(config)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
 
         #expect(decoded.showHotkeyOnFloatingIndicator)
-        #expect(!decoded.showHotkeyInMenuBar)
+        #expect(decoded.showHotkeyInMenuBar)
     }
 
     @Test("missing hotkey visibility preferences use fresh-install defaults")
@@ -125,16 +125,17 @@ struct LegacyIndicatorConfigurationTests {
         let config = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
 
         #expect(!config.showHotkeyOnFloatingIndicator)
-        #expect(config.showHotkeyInMenuBar)
+        #expect(!config.showHotkeyInMenuBar)
     }
 
     @Test("hotkey visibility controls decode from snake_case JSON")
     func hotkeyVisibilitySnakeCaseDecode() throws {
-        let json = #"{"show_hotkey_on_floating_indicator": false, "show_hotkey_in_menu_bar": false}"#
+        // Both keys set to the opposite of their defaults, so a key that is ignored fails.
+        let json = #"{"show_hotkey_on_floating_indicator": true, "show_hotkey_in_menu_bar": true}"#
         let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
 
-        #expect(!config.showHotkeyOnFloatingIndicator)
-        #expect(!config.showHotkeyInMenuBar)
+        #expect(config.showHotkeyOnFloatingIndicator)
+        #expect(config.showHotkeyInMenuBar)
     }
 
     @Test("post processor defaults to disabled")

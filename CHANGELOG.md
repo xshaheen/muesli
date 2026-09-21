@@ -41,6 +41,7 @@ upstream `main`.
 
 - Removed the "Mixed-Language Repair (Arabic + English)" dictation preset. A config still naming it loads onto the default cleanup prompt with everything else untouched.
 - Removed the "Repair mixed-language transcripts" meeting toggle and its per-endpoint consent fingerprint, replaced by a read-only status line in Settings › Meetings. The retired `enable_meeting_transcript_cleanup` and `meeting_transcript_cleanup_consent_fingerprint` keys still decode and are no longer written.
+- Removed that status line and its "Meeting Transcript Cleanup" section in turn. Repair still follows the meeting language selection; the only thing the section carried that matters — where the full transcript is sent — now appears as a caption under Meeting Transcription, and only when repair will actually run.
 
 ### Custom instructions
 
