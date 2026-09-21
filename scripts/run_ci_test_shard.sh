@@ -158,6 +158,7 @@ case "${shard}" in
       TranscriptionBackendResidencyPolicyTests
       TranscriptCleanupRequestBodyTests
       PostProcessorIdleUnloadPolicyTests
+      SpeechModelIdleUnloadPolicyTests
       ModelDeletionExecutorTests
       Nemotron35ModelStoreTests
       HostedDictationCleanupDeadlineTests

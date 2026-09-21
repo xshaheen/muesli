@@ -263,7 +263,13 @@ enum RecordingWaveformCacheFiles {
 private actor RecordingWaveformCache {
     static let shared = RecordingWaveformCache()
 
+    /// The in-memory map is only a fast path over the on-disk cache, so it is
+    /// bounded to the recordings a session plausibly flips between; older
+    /// entries fall back to the file and are re-read on demand.
+    private static let memoryEntryLimit = 64
+
     private var memory: [String: RecordingWaveformData] = [:]
+    private var memoryOrder: [String] = []
     private let fileManager = FileManager.default
 
     func waveform(for url: URL) throws -> RecordingWaveformData {
@@ -275,12 +281,12 @@ private actor RecordingWaveformCache {
 
         if let data = try? Data(contentsOf: cacheURL),
            let cached = RecordingWaveformData.decodeCacheData(data) {
-            memory[cacheKey] = cached
+            remember(cached, for: cacheKey)
             return cached
         }
 
         let waveform = try RecordingWaveformData.load(from: url)
-        memory[cacheKey] = waveform
+        remember(waveform, for: cacheKey)
         persist(waveform, to: cacheURL)
         return waveform
     }
@@ -292,6 +298,15 @@ private actor RecordingWaveformCache {
             createDirectory: false
         )
         memory[cacheURL.path] = nil
+        memoryOrder.removeAll { $0 == cacheURL.path }
+    }
+
+    private func remember(_ waveform: RecordingWaveformData, for cacheKey: String) {
+        memory[cacheKey] = waveform
+        memoryOrder.append(cacheKey)
+        while memoryOrder.count > Self.memoryEntryLimit {
+            memory[memoryOrder.removeFirst()] = nil
+        }
     }
 
     private func persist(_ waveform: RecordingWaveformData, to cacheURL: URL) {

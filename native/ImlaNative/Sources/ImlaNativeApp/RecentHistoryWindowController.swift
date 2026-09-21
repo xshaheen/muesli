@@ -67,6 +67,8 @@ final class RecentHistoryWindowController: NSObject, NSWindowDelegate {
         .fullSizeContentView,
     ]
 
+    private static let frameAutosaveName = "DashboardWindow"
+
     private let store: DictationStore
     private let controller: ImlaController
     private var window: NSWindow?
@@ -169,6 +171,22 @@ final class RecentHistoryWindowController: NSObject, NSWindowDelegate {
             self.keyMonitor = nil
         }
         controller.noteWindowClosed()
+        releaseWindowAfterClose(notification.object as? NSWindow)
+    }
+
+    /// Same contract as the settings window: with `isReleasedWhenClosed` off, the
+    /// hosting view and every mounted dashboard view (the meeting detail, the
+    /// recording player and its 10 Hz timer) lived on after a close for the
+    /// life of the process. Deferred a turn so AppKit finishes unwinding the
+    /// close before the content view is dropped. Position and size survive via
+    /// the frame autosave name set in `buildWindow`.
+    private func releaseWindowAfterClose(_ closing: NSWindow?) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window, window === closing, !window.isVisible else { return }
+            window.contentView = nil
+            window.delegate = nil
+            self.window = nil
+        }
     }
 
     private func buildWindow() {
@@ -202,6 +220,11 @@ final class RecentHistoryWindowController: NSObject, NSWindowDelegate {
         let hostingView = NSHostingView(rootView: rootView)
         hostingView.sizingOptions = []
         window.contentView = hostingView
+        // The window used to keep its frame only because it was never released;
+        // now that a close rebuilds it, the frame has to be persisted explicitly.
+        // The default contentRect above still applies on first launch.
+        _ = window.setFrameUsingName(Self.frameAutosaveName)
+        window.setFrameAutosaveName(Self.frameAutosaveName)
 
         self.window = window
 

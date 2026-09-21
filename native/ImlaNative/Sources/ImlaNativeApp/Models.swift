@@ -2925,6 +2925,10 @@ struct AppConfig: Codable {
     /// Minutes of dictation-cleanup inactivity before an on-device cleanup model is
     /// released from memory. 0 keeps it resident for the life of the process.
     var postProcessorIdleUnloadMinutes: Int = PostProcessorIdleUnloadPolicy.defaultIdleMinutes
+    /// Minutes without dictation, meeting, or import activity before the loaded
+    /// speech-recognition models are released from memory. 0 keeps them resident
+    /// for the life of the process; the next dictation reloads them.
+    var speechModelIdleUnloadMinutes: Int = SpeechModelIdleUnloadPolicy.defaultIdleMinutes
     var postProcessorGemmaModel: String = Gemma4LiteRTModel.e2b.repoID
     var activePostProcessorId: String = PostProcessorOption.defaultOption.id
     var postProcessorChatGPTModel: String = ""
@@ -3124,6 +3128,7 @@ struct AppConfig: Codable {
         case quilModel = "quil_model"
         case postProcessorBackend = "post_processor_backend"
         case postProcessorIdleUnloadMinutes = "post_processor_idle_unload_minutes"
+        case speechModelIdleUnloadMinutes = "speech_model_idle_unload_minutes"
         case postProcessorGemmaModel = "post_processor_gemma_model"
         case activePostProcessorId = "active_post_processor_id"
         case postProcessorChatGPTModel = "post_processor_chatgpt_model"
@@ -3574,6 +3579,9 @@ struct AppConfig: Codable {
             .backend
         postProcessorIdleUnloadMinutes = PostProcessorIdleUnloadPolicy.resolvedIdleMinutes(
             (try? c.decode(Int.self, forKey: .postProcessorIdleUnloadMinutes)) ?? defaults.postProcessorIdleUnloadMinutes
+        )
+        speechModelIdleUnloadMinutes = SpeechModelIdleUnloadPolicy.resolvedIdleMinutes(
+            (try? c.decode(Int.self, forKey: .speechModelIdleUnloadMinutes)) ?? defaults.speechModelIdleUnloadMinutes
         )
         postProcessorGemmaModel = Gemma4LiteRTModel
             .resolved(try? c.decode(String.self, forKey: .postProcessorGemmaModel))
