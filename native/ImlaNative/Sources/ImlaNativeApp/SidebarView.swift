@@ -1,6 +1,130 @@
 import SwiftUI
 import ImlaCore
 
+/// The accent-filled "Update"/"Ready" pill shown on a sidebar row while a
+/// Sparkle update is waiting. Shared by the dashboard sidebar and the settings
+/// window's sidebar so the two cannot drift apart.
+struct SidebarUpdateCTA: Equatable {
+    let label: String
+    let icon: String
+    let foreground: Color
+    let accessibilityLabel: String
+    let tooltip: String
+
+    static func pending(
+        status: SparkleUpdateStatus,
+        accentOverrideHex: String?,
+        colorScheme: ColorScheme
+    ) -> SidebarUpdateCTA? {
+        let foreground = foregroundColor(accentOverrideHex: accentOverrideHex, colorScheme: colorScheme)
+        switch status {
+        case .available:
+            return SidebarUpdateCTA(
+                label: "Update",
+                icon: "arrow.down",
+                foreground: foreground,
+                accessibilityLabel: "Update available",
+                tooltip: "Open About for update instructions"
+            )
+        case .downloaded:
+            return SidebarUpdateCTA(
+                label: "Ready",
+                icon: "arrow.clockwise",
+                foreground: foreground,
+                accessibilityLabel: "Update ready to install",
+                tooltip: "Open About for update instructions"
+            )
+        case .idle, .checking, .busy, .installing, .upToDate, .disabled, .failed:
+            return nil
+        }
+    }
+
+    private static func foregroundColor(accentOverrideHex: String?, colorScheme: ColorScheme) -> Color {
+        let defaultAccentHex = colorScheme == .dark
+            ? ImlaTheme.defaultAccentDarkHex
+            : ImlaTheme.defaultAccentLightHex
+
+        guard let override = accentOverrideHex else {
+            return foregroundColor(forAccentHex: UInt64(defaultAccentHex))
+        }
+
+        let accentHex = override
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "#", with: "")
+            .lowercased()
+
+        guard accentHex.count == 6, let parsedValue = UInt64(accentHex, radix: 16) else {
+            return foregroundColor(forAccentHex: UInt64(defaultAccentHex))
+        }
+
+        return foregroundColor(forAccentHex: parsedValue)
+    }
+
+    private static func foregroundColor(forAccentHex value: UInt64) -> Color {
+        let red = Double((value >> 16) & 0xFF) / 255.0
+        let green = Double((value >> 8) & 0xFF) / 255.0
+        let blue = Double(value & 0xFF) / 255.0
+        // 0.45 on raw sRGB approximates the WCAG 0.18 threshold on linearized luminance.
+        let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        return luminance > 0.45 ? Color.black.opacity(0.88) : Color.white
+    }
+}
+
+/// One navigation row: icon column, title, optional update pill, and the
+/// selected-state background. Callers wrap it in a `Button`.
+struct SidebarRowLabel: View {
+    static let iconColumnWidth: CGFloat = 20
+    /// Matches the dashboard search field's inner padding so row icons line up
+    /// under the magnifier.
+    static let horizontalPadding: CGFloat = 10
+
+    let icon: String
+    let label: String
+    let isSelected: Bool
+    var updateCTA: SidebarUpdateCTA? = nil
+
+    var body: some View {
+        HStack(spacing: ImlaTheme.spacing12) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(isSelected ? ImlaTheme.accent : ImlaTheme.textSecondary)
+                .frame(width: Self.iconColumnWidth, height: Self.iconColumnWidth, alignment: .center)
+            Text(label)
+                .font(ImlaTheme.headline())
+                .foregroundStyle(isSelected ? ImlaTheme.textPrimary : ImlaTheme.textSecondary)
+                .lineLimit(1)
+                .layoutPriority(1)
+            Spacer()
+            if let updateCTA {
+                HStack(spacing: 4) {
+                    Image(systemName: updateCTA.icon)
+                        .font(.system(size: 9, weight: .bold))
+                    Text(updateCTA.label)
+                        .font(ImlaTheme.font(size: 11, weight: .bold))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(updateCTA.foreground)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(ImlaTheme.accent)
+                .clipShape(Capsule())
+                .shadow(color: ImlaTheme.accent.opacity(0.35), radius: 8, x: 0, y: 2)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(updateCTA.accessibilityLabel)
+                .help(updateCTA.tooltip)
+            }
+        }
+        .padding(.horizontal, Self.horizontalPadding)
+        .padding(.vertical, ImlaTheme.spacing8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
+                .fill(isSelected ? ImlaTheme.surfaceSelected : Color.clear)
+        )
+        .contentShape(Rectangle())
+    }
+}
+
 struct SidebarToggleButton: View {
     static let accessibilityIdentifier = "dashboard.sidebar.toggle"
 
@@ -29,7 +153,7 @@ struct SidebarToggleButton: View {
 }
 
 struct SidebarView: View {
-    private let sidebarIconColumnWidth: CGFloat = 20
+    private let sidebarIconColumnWidth = SidebarRowLabel.iconColumnWidth
     /// Square so the selected cell reads as a deliberate pill rather than a
     /// squat rectangle, and wide enough to centre inside the 60pt rail.
     private let collapsedItemSize: CGFloat = 40
@@ -38,9 +162,7 @@ struct SidebarView: View {
     /// standard titlebar height so nothing sits under them.
     private static let titlebarHeight: CGFloat = 28
     private let meetingsTrailingColumnWidth: CGFloat = 24
-    /// Matches the search field's inner padding so the row icon column sits
-    /// exactly under the magnifier instead of 6pt to its right.
-    private let sidebarRowHorizontalPadding: CGFloat = 10
+    private let sidebarRowHorizontalPadding = SidebarRowLabel.horizontalPadding
     private let sidebarRowOuterPadding: CGFloat = 8
     /// Indent for nested Meetings section rows. The sidebar is narrow (260pt by
     /// default), so show nesting by indent, but economically.
@@ -77,65 +199,12 @@ struct SidebarView: View {
         appState.config.userName
     }
 
-    private struct UpdateCTA {
-        let label: String
-        let icon: String
-        let foreground: Color
-        let accessibilityLabel: String
-        let tooltip: String
-    }
-
-    private var pendingUpdateCTA: UpdateCTA? {
-        switch appState.sparkleUpdateStatus {
-        case .available:
-            return UpdateCTA(
-                label: "Update",
-                icon: "arrow.down",
-                foreground: updateCTAForeground,
-                accessibilityLabel: "Update available",
-                tooltip: "Open About for update instructions"
-            )
-        case .downloaded:
-            return UpdateCTA(
-                label: "Ready",
-                icon: "arrow.clockwise",
-                foreground: updateCTAForeground,
-                accessibilityLabel: "Update ready to install",
-                tooltip: "Open About for update instructions"
-            )
-        case .idle, .checking, .busy, .installing, .upToDate, .disabled, .failed:
-            return nil
-        }
-    }
-
-    private var updateCTAForeground: Color {
-        let defaultAccentHex = colorScheme == .dark
-            ? ImlaTheme.defaultAccentDarkHex
-            : ImlaTheme.defaultAccentLightHex
-
-        guard let override = appState.config.accentOverrideHex else {
-            return foregroundColor(forAccentHex: UInt64(defaultAccentHex))
-        }
-
-        let accentHex = override
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "#", with: "")
-            .lowercased()
-
-        guard accentHex.count == 6, let parsedValue = UInt64(accentHex, radix: 16) else {
-            return foregroundColor(forAccentHex: UInt64(defaultAccentHex))
-        }
-
-        return foregroundColor(forAccentHex: parsedValue)
-    }
-
-    private func foregroundColor(forAccentHex value: UInt64) -> Color {
-        let red = Double((value >> 16) & 0xFF) / 255.0
-        let green = Double((value >> 8) & 0xFF) / 255.0
-        let blue = Double(value & 0xFF) / 255.0
-        // 0.45 on raw sRGB approximates the WCAG 0.18 threshold on linearized luminance.
-        let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-        return luminance > 0.45 ? Color.black.opacity(0.88) : Color.white
+    private var pendingUpdateCTA: SidebarUpdateCTA? {
+        SidebarUpdateCTA.pending(
+            status: appState.sparkleUpdateStatus,
+            accentOverrideHex: appState.config.accentOverrideHex,
+            colorScheme: colorScheme
+        )
     }
 
     var body: some View {
@@ -160,14 +229,36 @@ struct SidebarView: View {
 
             Spacer(minLength: ImlaTheme.spacing16)
 
-            collapsedItem(tab: .models, icon: "cpu", label: "Models")
-            collapsedItem(tab: .shortcuts, icon: "command", label: "Shortcuts")
-            collapsedItem(tab: .settings, icon: "gearshape", label: "Settings")
-            collapsedItem(tab: .about, icon: "info.circle", label: "About")
+            collapsedSettingsLauncher
                 .padding(.bottom, ImlaTheme.spacing12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ImlaTheme.backgroundDeep)
+    }
+
+    /// Settings, Models, Shortcuts, and About live in their own window, so the
+    /// rail offers a single launcher rather than four rows that could never
+    /// read as selected here.
+    private var collapsedSettingsLauncher: some View {
+        Button {
+            controller.openSettingsWindow()
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(ImlaTheme.textSecondary)
+                .frame(width: collapsedItemSize, height: collapsedItemSize)
+                .overlay(alignment: .topTrailing) {
+                    if pendingUpdateCTA != nil {
+                        Circle()
+                            .fill(ImlaTheme.accent)
+                            .frame(width: 8, height: 8)
+                            .offset(x: -6, y: 6)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .help(pendingUpdateCTA?.tooltip ?? "Settings")
+        .accessibilityLabel(pendingUpdateCTA?.accessibilityLabel ?? "Settings")
     }
 
     private var sidebarToggleButton: some View {
@@ -234,10 +325,7 @@ struct SidebarView: View {
             Spacer()
 
             modelPreparationStatus
-            sidebarItem(tab: .models, icon: "cpu", label: "Models")
-            sidebarItem(tab: .shortcuts, icon: "command", label: "Shortcuts")
-            sidebarItem(tab: .settings, icon: "gearshape", label: "Settings")
-            sidebarItem(tab: .about, icon: "info.circle", label: "About", updateCTA: pendingUpdateCTA)
+            settingsLauncher
                 .padding(.bottom, ImlaTheme.spacing16)
         }
         .frame(maxHeight: .infinity)
@@ -542,8 +630,7 @@ struct SidebarView: View {
     }
 
     @ViewBuilder
-    private func sidebarItem(tab: DashboardTab, icon: String, label: String, updateCTA: UpdateCTA? = nil) -> some View {
-        let isSelected = appState.selectedTab == tab
+    private func sidebarItem(tab: DashboardTab, icon: String, label: String) -> some View {
         Button {
             withAnimation(ImlaTheme.Motion.eased(0.15)) {
                 if tab == .timeline {
@@ -553,48 +640,28 @@ struct SidebarView: View {
                 }
             }
         } label: {
-            HStack(spacing: ImlaTheme.spacing12) {
-                Image(systemName: icon)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(isSelected ? ImlaTheme.accent : ImlaTheme.textSecondary)
-                    .frame(width: sidebarIconColumnWidth, height: sidebarIconColumnWidth, alignment: .center)
-                Text(label)
-                    .font(ImlaTheme.headline())
-                    .foregroundStyle(isSelected ? ImlaTheme.textPrimary : ImlaTheme.textSecondary)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                Spacer()
-                if let updateCTA {
-                    HStack(spacing: 4) {
-                        Image(systemName: updateCTA.icon)
-                            .font(.system(size: 9, weight: .bold))
-                        Text(updateCTA.label)
-                            .font(ImlaTheme.font(size: 11, weight: .bold))
-                            .lineLimit(1)
-                    }
-                    .foregroundStyle(updateCTA.foreground)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(ImlaTheme.accent)
-                    .clipShape(Capsule())
-                    .shadow(color: ImlaTheme.accent.opacity(0.35), radius: 8, x: 0, y: 2)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(updateCTA.accessibilityLabel)
-                    .help(updateCTA.tooltip)
-                }
-            }
-            .padding(.horizontal, sidebarRowHorizontalPadding)
-            .padding(.vertical, ImlaTheme.spacing8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: ImlaTheme.cornerSmall, style: .continuous)
-                    .fill(isSelected ? ImlaTheme.surfaceSelected : Color.clear)
-            )
-            .contentShape(Rectangle())
+            SidebarRowLabel(icon: icon, label: label, isSelected: appState.selectedTab == tab)
         }
         .buttonStyle(.plain)
         .padding(.horizontal, sidebarRowOuterPadding)
         .featureTourTarget(tab == .timeline ? .timelineSidebar : nil)
+    }
+
+    /// Opens the settings window. Never drawn as selected: the dashboard keeps
+    /// showing whichever tab is behind the settings window.
+    private var settingsLauncher: some View {
+        Button {
+            controller.openSettingsWindow()
+        } label: {
+            SidebarRowLabel(
+                icon: "gearshape",
+                label: "Settings",
+                isSelected: false,
+                updateCTA: pendingUpdateCTA
+            )
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, sidebarRowOuterPadding)
     }
 
     @ViewBuilder

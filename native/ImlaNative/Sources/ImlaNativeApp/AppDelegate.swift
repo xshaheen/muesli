@@ -100,7 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc func openPreferences(_ sender: Any?) {
-        controller?.openSettingsTab()
+        controller?.openSettingsWindow()
     }
 
     @objc func focusSearch(_ sender: Any?) {

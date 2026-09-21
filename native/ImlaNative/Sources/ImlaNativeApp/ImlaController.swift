@@ -554,7 +554,7 @@ public final class ImlaController: NSObject {
             self?.config.enableAutomaticDiagnosticIssuePrompts ?? false
         },
         onPrompt: { [weak self] _ in
-            self?.presentHistoryWindow(tab: .about)
+            self?.presentSettingsWindow(section: .about)
         }
     )
     private let dictationLatencyTimestampFormatter = ISO8601DateFormatter()
@@ -602,7 +602,7 @@ public final class ImlaController: NSObject {
     private var statusBarController: StatusBarController?
     private var pendingMeetingLanguageSessionID: ObjectIdentifier?
     private var historyWindowController: RecentHistoryWindowController?
-    private var preferencesWindowController: PreferencesWindowController?
+    private var settingsWindowController: SettingsWindowController?
     private var onboardingWindowController: OnboardingWindowController?
     private lazy var systemPermissionGuideController: AccessibilityPermissionGuideController = {
         let guide = AccessibilityPermissionGuideController()
@@ -1123,7 +1123,7 @@ public final class ImlaController: NSObject {
             case .turnOff:
                 self.updateConfig { $0.showDictationIdleDot = false }
             case .openSettings:
-                self.openSettingsTab()
+                self.openSettingsWindow()
             case .hideForApplication(let bundleID):
                 self.updateConfig { $0.dictationIdleDotExcludedApps.append(bundleID) }
             case .hideUntilFieldChanges, .hideForHour:
@@ -1212,7 +1212,7 @@ public final class ImlaController: NSObject {
         installICloudPersistentSyncObservers()
 
         statusBarController = StatusBarController(controller: self, runtime: runtime)
-        preferencesWindowController = PreferencesWindowController(controller: self)
+        settingsWindowController = SettingsWindowController(controller: self)
         historyWindowController = RecentHistoryWindowController(store: dictationStore, controller: self)
         let latestFeatureTour = latestFeatureTour()
         let automaticFeatureTour = featureTourStore.automaticTour(
@@ -1788,11 +1788,13 @@ public final class ImlaController: NSObject {
     }
 
     func showModels(category: ModelsCategory) {
-        if appState.isSearchActive {
-            clearSearch()
-        }
         appState.selectedModelsCategory = category
-        appState.selectedTab = .models
+        openSettingsWindow(section: .models)
+    }
+
+    func showSettingsPane(_ pane: SettingsPane) {
+        appState.selectedSettingsPane = pane
+        appState.selectedSettingsSection = .settings
     }
 
     @objc func showWhatsNew() {
@@ -1926,15 +1928,14 @@ public final class ImlaController: NSObject {
         if appState.isSearchActive {
             clearSearch()
         }
-        guard let target = step.target else { return }
-        switch target.navigationRoute {
+        switch step.target?.navigationRoute {
         case let .settings(pane):
-            appState.selectedSettingsPane = pane
-            appState.selectedTab = .settings
+            showSettingsPane(pane)
         case let .tab(tab):
             appState.selectedTab = tab
         case let .models(category):
-            showModels(category: category)
+            appState.selectedModelsCategory = category
+            appState.selectedSettingsSection = .models
         case .timelineApplications:
             guard (try? dictationStore.dictationTargetApplications().isEmpty) == false else {
                 completeFeatureTour()
@@ -1952,6 +1953,17 @@ public final class ImlaController: NSObject {
                 return
             }
             showMeetingDocument(id: meetingID)
+        case nil:
+            break
+        }
+        // The step's overlay is drawn by the window that hosts its target, so
+        // that window has to be in front when the step changes. The tour began
+        // behind the dashboard's permission gate, so neither raise re-checks it.
+        switch step.hostWindow {
+        case .dashboard:
+            historyWindowController?.show()
+        case .settings:
+            presentSettingsWindow()
         }
     }
 
@@ -1979,7 +1991,7 @@ public final class ImlaController: NSObject {
         historyWindowController?.updateBackendLabel()
         historyWindowController?.applyThemeAppearance()
         historyWindowController?.reload()
-        preferencesWindowController?.refresh()
+        settingsWindowController?.applyThemeAppearance()
         syncAppState()
     }
 
@@ -2486,6 +2498,7 @@ public final class ImlaController: NSObject {
             )
         }
         historyWindowController?.applyThemeAppearance()
+        settingsWindowController?.applyThemeAppearance()
     }
 
     private func applyConfigRuntimeSideEffects(
@@ -4152,8 +4165,8 @@ public final class ImlaController: NSObject {
         alert.addButton(withTitle: "Cancel")
         presentAlert(alert, fallbackLogContext: "Quill account setup") { [weak self] response in
             guard response == .alertFirstButtonReturn, let self else { return }
-            self.appState.selectedSettingsPane = .writingAI
-            self.openSettingsTab()
+            self.showSettingsPane(.writingAI)
+            self.openSettingsWindow()
             guard needsChatGPTSignIn || needsOpenRouterSignIn else { return }
             Task { @MainActor in
                 let error = needsChatGPTSignIn
@@ -6491,11 +6504,24 @@ public final class ImlaController: NSObject {
     }
 
     @objc func openPreferences() {
-        openHistoryWindow(tab: .settings)
+        openSettingsWindow()
     }
 
-    @objc func openSettingsTab() {
-        openHistoryWindow(tab: .settings)
+    /// Opens the settings window at `section`, or at whatever it last showed.
+    /// Behind the same permission gate as the dashboard: with startup
+    /// permissions missing, the onboarding repair flow is the right screen.
+    func openSettingsWindow(section: SettingsWindowSection? = nil) {
+        guard ensureBasicDictationPermissionsBeforeDashboard() else { return }
+        presentSettingsWindow(section: section)
+    }
+
+    /// Ungated: for callers that already passed the permission gate (the feature
+    /// tour) or must surface regardless of it (the diagnostic incident prompt).
+    private func presentSettingsWindow(section: SettingsWindowSection? = nil) {
+        if let section {
+            appState.selectedSettingsSection = section
+        }
+        settingsWindowController?.show()
     }
 
     @objc func focusSearchField() {
@@ -10552,6 +10578,14 @@ public final class ImlaController: NSObject {
 
     @MainActor
     private func alertPresentationWindow(showHistoryIfNeeded: Bool = true) -> NSWindow? {
+        // A sheet raised from a Settings control belongs on the settings window
+        // the user is looking at, not on the dashboard behind it.
+        if let window = settingsWindowController?.presentationWindow,
+           window.isKeyWindow,
+           isUsableSheetHost(window, allowPanel: false) {
+            return window
+        }
+
         if let window = historyWindowController?.presentationWindow,
            isUsableSheetHost(window, allowPanel: false) {
             return window

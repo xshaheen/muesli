@@ -1437,7 +1437,7 @@ struct MeetingsNavigationTests {
     func showMeetingTemplatesManagerPresentsManager() {
         let controller = makeController()
 
-        controller.appState.selectedTab = .settings
+        controller.appState.selectedTab = .dictations
         controller.appState.meetingsNavigationState = .document(404)
         controller.appState.isMeetingTemplatesManagerPresented = false
 
@@ -1446,6 +1446,21 @@ struct MeetingsNavigationTests {
         #expect(controller.appState.selectedTab == .meetings)
         #expect(controller.appState.meetingsNavigationState == .document(404))
         #expect(controller.appState.isMeetingTemplatesManagerPresented == true)
+    }
+
+    @Test("showSettingsPane selects the pane and returns the settings window to the Settings section")
+    func showSettingsPaneSelectsPaneAndSection() {
+        let controller = makeController()
+
+        controller.appState.selectedSettingsSection = .models
+        controller.appState.selectedTab = .meetings
+
+        controller.showSettingsPane(.sync)
+
+        #expect(controller.appState.selectedSettingsSection == .settings)
+        #expect(controller.appState.selectedSettingsPane == .sync)
+        // The dashboard keeps its own tab; settings no longer live there.
+        #expect(controller.appState.selectedTab == .meetings)
     }
 
     @Test("deleteCustomMeetingTemplate resets default template when deleting the active default")

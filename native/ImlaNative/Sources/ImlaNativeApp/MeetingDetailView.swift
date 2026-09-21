@@ -2009,7 +2009,8 @@ struct MeetingDetailView: View {
                     .foregroundStyle(ImlaTheme.textSecondary)
                 Spacer()
                 Button("Open Settings") {
-                    controller.openHistoryWindow(tab: .settings)
+                    controller.showSettingsPane(.meetings)
+                    controller.openSettingsWindow()
                 }
                 .font(ImlaTheme.font(size: 12, weight: .medium))
                 .foregroundStyle(ImlaTheme.accent)

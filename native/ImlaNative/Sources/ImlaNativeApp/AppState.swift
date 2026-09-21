@@ -8,10 +8,25 @@ enum DashboardTab: String, CaseIterable {
     case insights
     case meetings
     case dictionary
+}
+
+/// Top-level sections of the settings window. Settings panes share one
+/// section and are selected through `AppState.selectedSettingsPane`, so the
+/// existing "set the pane, then open settings" call sites keep working.
+enum SettingsWindowSection: String, CaseIterable {
+    case settings
     case models
     case shortcuts
-    case settings
     case about
+
+    var title: String {
+        switch self {
+        case .settings: return "Settings"
+        case .models: return "Models"
+        case .shortcuts: return "Shortcuts"
+        case .about: return "About"
+        }
+    }
 }
 
 enum InsightsSection: String, CaseIterable, Sendable {
@@ -337,6 +352,7 @@ final class AppState {
         insightsReturnTab == .dictations ? "Back to Dictations" : "Back to Timeline"
     }
     var insightsInitialSection: InsightsSection = .words
+    var selectedSettingsSection: SettingsWindowSection = .settings
     var selectedSettingsPane: SettingsPane = .general
     var selectedModelsCategory: ModelsCategory = .dictation
     var pendingFeatureTourInvitation: FeatureTour?

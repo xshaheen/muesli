@@ -170,6 +170,101 @@ extension View {
             self
         }
     }
+
+    /// Draws the tour invitation and step overlay for the steps that live in
+    /// `window`. Each window collects target frames from its own view tree, so a
+    /// step spotlighting a Settings control is drawn by the settings window and
+    /// never by the dashboard behind it.
+    func featureTourHost(
+        _ window: FeatureTourHostWindow,
+        appState: AppState,
+        controller: ImlaController
+    ) -> some View {
+        modifier(FeatureTourHostModifier(window: window, appState: appState, controller: controller))
+    }
+}
+
+/// Which app window a tour step is spotlighted in. Settings and Models moved
+/// out of the dashboard, so the tour has to raise the right window per step.
+enum FeatureTourHostWindow: Equatable {
+    case dashboard
+    case settings
+}
+
+extension FeatureTourNavigationRoute {
+    var hostWindow: FeatureTourHostWindow {
+        switch self {
+        case .settings, .models:
+            return .settings
+        case .tab, .timelineApplications, .meetingsBrowser, .meetingPeople:
+            return .dashboard
+        }
+    }
+}
+
+extension FeatureTourStep {
+    /// Steps without a target are narrative and stay on the dashboard.
+    var hostWindow: FeatureTourHostWindow {
+        target?.navigationRoute.hostWindow ?? .dashboard
+    }
+}
+
+private struct FeatureTourHostModifier: ViewModifier {
+    let window: FeatureTourHostWindow
+    let appState: AppState
+    let controller: ImlaController
+    @State private var targetFrames: [FeatureTourTarget: CGRect] = [:]
+
+    func body(content: Content) -> some View {
+        content
+            .onPreferenceChange(FeatureTourTargetPreferenceKey.self) { frames in
+                // An unconditional write from a preference callback invalidates
+                // layout on every pass, which has spun this app to 100% CPU before.
+                guard FeatureTourFrameTracking.hasMeaningfulChange(
+                    from: targetFrames,
+                    to: frames
+                ) else { return }
+                targetFrames = frames
+            }
+            .overlay {
+                GeometryReader { proxy in
+                    if window == .dashboard, let invitation = appState.pendingFeatureTourInvitation {
+                        FeatureTourInvitationView(
+                            tour: invitation,
+                            onAccept: { controller.acceptFeatureTourInvitation() },
+                            onSkip: { controller.skipFeatureTourInvitation() }
+                        )
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .zIndex(101)
+                    } else if let tour = appState.activeFeatureTour,
+                              tour.steps.indices.contains(appState.featureTourStepIndex),
+                              tour.steps[appState.featureTourStepIndex].hostWindow == window {
+                        let step = tour.steps[appState.featureTourStepIndex]
+                        let globalRootFrame = proxy.frame(in: .global)
+                        let targetFrame = step.target
+                            .flatMap { targetFrames[$0] }
+                            .map {
+                                $0.offsetBy(
+                                    dx: -globalRootFrame.minX,
+                                    dy: -globalRootFrame.minY
+                                )
+                            }
+                        if step.target == nil || targetFrame != nil {
+                            FeatureTourOverlay(
+                                tour: tour,
+                                stepIndex: appState.featureTourStepIndex,
+                                spotlightRect: targetFrame,
+                                containerSize: proxy.size,
+                                onBack: { controller.showPreviousFeatureTourStep() },
+                                onNext: { controller.showNextFeatureTourStep() },
+                                onDismiss: { controller.dismissFeatureTour() }
+                            )
+                            .zIndex(100)
+                        }
+                    }
+                }
+            }
+    }
 }
 
 struct FeatureTourOverlay: View {

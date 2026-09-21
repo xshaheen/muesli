@@ -218,6 +218,26 @@ struct FeatureTourTests {
         #expect(FeatureTourTarget.experimentalModels.navigationRoute == .models(.dictation))
     }
 
+    @Test("settings and models steps are hosted by the settings window, everything else by the dashboard")
+    func stepHostWindows() {
+        #expect(FeatureTourNavigationRoute.settings(.dictation).hostWindow == .settings)
+        #expect(FeatureTourNavigationRoute.models(.streaming).hostWindow == .settings)
+        #expect(FeatureTourNavigationRoute.tab(.timeline).hostWindow == .dashboard)
+        #expect(FeatureTourNavigationRoute.timelineApplications.hostWindow == .dashboard)
+        #expect(FeatureTourNavigationRoute.meetingsBrowser.hostWindow == .dashboard)
+        #expect(FeatureTourNavigationRoute.meetingPeople.hostWindow == .dashboard)
+
+        let narrative = FeatureTourStep(
+            id: "narrative", eyebrow: "", title: "", message: "", systemImage: "sparkles", target: nil
+        )
+        #expect(narrative.hostWindow == .dashboard)
+
+        let quill = FeatureTourStep(
+            id: "quill", eyebrow: "", title: "", message: "", systemImage: "sparkles", target: .quillSettings
+        )
+        #expect(quill.hostWindow == .settings)
+    }
+
     @Test("store suppresses fresh installs and presents a legacy upgrade only once")
     func storeLifecycle() throws {
         let suiteName = "FeatureTourTests.storeLifecycle.\(UUID().uuidString)"

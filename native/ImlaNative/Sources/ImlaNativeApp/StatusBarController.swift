@@ -32,7 +32,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let runtime: RuntimePaths
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
-    private var meetingLanguageItem: NSStatusItem?
     private var countdownOverride: String?
 
     init(controller: ImlaController, runtime: RuntimePaths) {
@@ -49,55 +48,51 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     func refresh() {
         rebuildMenu()
         updateMenuBarTitle()
-        refreshMeetingLanguageSwitcher()
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        if menu === meetingLanguageItem?.menu {
-            refreshMeetingLanguageSwitcher()
-        } else {
-            rebuildMenu()
-        }
+        rebuildMenu()
     }
 
+    /// The language submenu is part of the main menu, so a selection or its
+    /// completion refreshes the whole menu rather than a separate status item.
     func refreshMeetingLanguageSwitcher() {
-        guard let session = controller.currentMeetingLanguageSession else {
-            if let meetingLanguageItem { NSStatusBar.system.removeStatusItem(meetingLanguageItem) }
-            meetingLanguageItem = nil
-            return
-        }
+        rebuildMenu()
+    }
+
+    /// The submenu item for the meeting section, or nil when no recording is
+    /// taking speech. The title carries the current language so the state is
+    /// readable without opening the submenu.
+    private func meetingLanguageMenuItem() -> NSMenuItem? {
+        guard let session = controller.currentMeetingLanguageSession else { return nil }
         let switcher = session.recognitionLanguageSwitcher
-        let item = meetingLanguageItem ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        meetingLanguageItem = item
-        item.button?.title = "\(switcher.label) \(controller.isChangingMeetingLanguage ? "…" : "▾")"
-        item.button?.isEnabled = !controller.isChangingMeetingLanguage
-        item.button?.toolTip = "Meeting speech language: \(switcher.label)"
-        item.button?.setAccessibilityLabel("Meeting speech language")
-        item.button?.setAccessibilityValue(switcher.label)
-        let languageMenu = Self.meetingLanguageMenu(
+        let isChanging = controller.isChangingMeetingLanguage
+        let item = NSMenuItem(
+            title: "Meeting Speech Language: \(switcher.label)\(isChanging ? "…" : "")",
+            action: nil,
+            keyEquivalent: ""
+        )
+        item.toolTip = "Meeting speech language: \(switcher.label)"
+        // The main menu auto-enables its items, so the way to grey this one out
+        // while a switch is in flight is to give it neither action nor submenu.
+        guard !isChanging else { return item }
+        item.submenu = Self.meetingLanguageMenu(
             switcher: switcher,
             sessionID: ObjectIdentifier(session),
             target: controller,
-            canSelect: session.canSelectRecognitionLanguage,
-            updating: item.menu
+            canSelect: session.canSelectRecognitionLanguage
         )
-        languageMenu.delegate = self
-        item.menu = languageMenu
+        return item
     }
 
     static func meetingLanguageMenu(
         switcher: MeetingLanguageSwitcher,
         sessionID: ObjectIdentifier,
         target: AnyObject?,
-        canSelect: (TranscriptionLanguage) -> Bool,
-        updating menu: NSMenu? = nil
+        canSelect: (TranscriptionLanguage) -> Bool
     ) -> NSMenu {
-        let menu = menu ?? NSMenu()
-        menu.removeAllItems()
+        let menu = NSMenu()
         menu.autoenablesItems = false
-        let header = NSMenuItem(title: "Meeting Speech Language", action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
         func add(_ title: String, language: TranscriptionLanguage?, enabled: Bool) {
             let item = NSMenuItem(
                 title: title,
@@ -199,6 +194,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 ? "Minimize Meeting Panel"
                 : "Open Meeting Panel"
             menu.addItem(actionItem(title: panelTitle, action: #selector(ImlaController.toggleMeetingTranscriptPanel)))
+            if let languageItem = meetingLanguageMenuItem() {
+                menu.addItem(languageItem)
+            }
             menu.addItem(actionItem(title: "Stop Meeting Recording", action: #selector(ImlaController.toggleMeetingRecording)))
             menu.addItem(actionItem(title: "Discard Meeting Recording...", action: #selector(ImlaController.discardMeetingWithConfirmation)))
         } else {

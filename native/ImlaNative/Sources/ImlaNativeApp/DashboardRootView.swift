@@ -64,7 +64,6 @@ struct DashboardRootView: View {
 
     let appState: AppState
     let controller: ImlaController
-    @State private var featureTourTargetFrames: [FeatureTourTarget: CGRect] = [:]
     @State private var sidebarPresentation: DashboardSidebarPresentation
 
     init(
@@ -100,10 +99,6 @@ struct DashboardRootView: View {
         case .insights: "Insights"
         case .meetings: "Meetings"
         case .dictionary: "Dictionary"
-        case .models: "Models"
-        case .shortcuts: "Shortcuts"
-        case .settings: "Settings"
-        case .about: "About"
         }
     }
 
@@ -185,50 +180,7 @@ struct DashboardRootView: View {
 
         .frame(minWidth: 640, minHeight: 480)
         .preferredColorScheme(appState.config.darkMode ? .dark : .light)
-        .onPreferenceChange(FeatureTourTargetPreferenceKey.self) { frames in
-            guard FeatureTourFrameTracking.hasMeaningfulChange(
-                from: featureTourTargetFrames,
-                to: frames
-            ) else { return }
-            featureTourTargetFrames = frames
-        }
-        .overlay {
-            GeometryReader { proxy in
-                if let invitation = appState.pendingFeatureTourInvitation {
-                    FeatureTourInvitationView(
-                        tour: invitation,
-                        onAccept: { controller.acceptFeatureTourInvitation() },
-                        onSkip: { controller.skipFeatureTourInvitation() }
-                    )
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .zIndex(101)
-                } else if let tour = appState.activeFeatureTour,
-                          tour.steps.indices.contains(appState.featureTourStepIndex) {
-                    let step = tour.steps[appState.featureTourStepIndex]
-                    let globalRootFrame = proxy.frame(in: .global)
-                    let targetFrame = step.target
-                        .flatMap { featureTourTargetFrames[$0] }
-                        .map {
-                            $0.offsetBy(
-                                dx: -globalRootFrame.minX,
-                                dy: -globalRootFrame.minY
-                            )
-                        }
-                    if step.target == nil || targetFrame != nil {
-                        FeatureTourOverlay(
-                            tour: tour,
-                            stepIndex: appState.featureTourStepIndex,
-                            spotlightRect: targetFrame,
-                            containerSize: proxy.size,
-                            onBack: { controller.showPreviousFeatureTourStep() },
-                            onNext: { controller.showNextFeatureTourStep() },
-                            onDismiss: { controller.dismissFeatureTour() }
-                        )
-                        .zIndex(100)
-                    }
-                }
-            }
-        }
+        .featureTourHost(.dashboard, appState: appState, controller: controller)
         .alert(
             appState.contributionMilestonePrompt?.title ?? "Imla milestone",
             isPresented: Binding(
@@ -267,18 +219,6 @@ struct DashboardRootView: View {
         }
         .onChange(of: appState.contributionMilestonePrompt?.id) { _, _ in
             controller.recordContributionMilestonePromptSeen()
-        }
-        .sheet(
-            item: Binding<DiagnosticIncident?>(
-                get: { appState.pendingDiagnosticIncident },
-                set: { if $0 == nil { controller.dismissDiagnosticIncidentPrompt() } }
-            )
-        ) { incident in
-            DiagnosticIncidentReportView(
-                incident: incident,
-                onOpenIssue: { controller.openDiagnosticIncidentIssue(incident) },
-                onDismiss: { controller.dismissDiagnosticIncidentPrompt() }
-            )
         }
     }
 
@@ -335,18 +275,6 @@ struct DashboardRootView: View {
                 MeetingsView(appState: appState, controller: controller)
             case .dictionary:
                 DictionaryView(appState: appState, controller: controller)
-            case .models:
-                ModelsView(appState: appState, controller: controller)
-            case .shortcuts:
-                ShortcutsView(appState: appState, controller: controller)
-            case .settings:
-                SettingsView(appState: appState, controller: controller)
-            case .about:
-                AboutView(
-                    appState: appState,
-                    onOpenManualDiagnosticReport: { controller.openManualDiagnosticReport() },
-                    onSetAutomaticDiagnosticIssuePrompts: { controller.setAutomaticDiagnosticIssuePrompts($0) }
-                )
             }
         }
     }

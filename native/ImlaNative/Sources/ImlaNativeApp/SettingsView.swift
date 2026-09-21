@@ -22,7 +22,6 @@ private struct MicrophoneOption: Identifiable {
 enum SettingsPermissionRefreshReason {
     case initialDisplay
     case permissionRequested
-    case settingsSelected
     case appActivated
 
     var refreshesLaunchAtLogin: Bool {
@@ -31,7 +30,7 @@ enum SettingsPermissionRefreshReason {
 
     var refreshesSystemAudio: Bool {
         switch self {
-        case .initialDisplay, .settingsSelected, .appActivated:
+        case .initialDisplay, .appActivated:
             true
         case .permissionRequested:
             false
@@ -192,7 +191,6 @@ struct SettingsView: View {
     @State private var pendingDataDestruction: PendingDataDestruction?
     @State private var isShowingDictionaryAccessibilityPrompt = false
     @State private var isPreviewingClip = false
-    @State private var selectedPane: SettingsPane
     @State private var downloadedBackendOptions: [BackendOption] = []
     @State private var downloadedPostProcOptions: [PostProcessorOption] = []
     @State private var downloadedMeetingLiveCaptionBackends: [MeetingLiveCaptionBackend] = []
@@ -221,7 +219,12 @@ struct SettingsView: View {
     init(appState: AppState, controller: ImlaController) {
         self.appState = appState
         self.controller = controller
-        _selectedPane = State(initialValue: appState.selectedSettingsPane)
+    }
+
+    /// Pane selection lives in `AppState` so the settings window's sidebar,
+    /// deep links, and the feature tour all drive the same value.
+    private var selectedPane: SettingsPane {
+        appState.selectedSettingsPane
     }
 
     private var micGranted: Bool {
@@ -439,16 +442,7 @@ struct SettingsView: View {
     var body: some View {
         ScrollViewReader { scrollProxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: ImlaTheme.spacing24) {
-
-                    settingsPanePicker
-                    paneContent
-                }
-                .frame(maxWidth: ImlaTheme.contentMaxWidth)
-                .padding(.horizontal, ImlaTheme.pageHorizontalInset)
-                .padding(.top, ImlaTheme.pageTop)
-                .padding(.bottom, ImlaTheme.spacing32)
-                .frame(maxWidth: .infinity)
+                paneScrollContent
             }
             .background(ImlaTheme.backgroundBase)
             .onAppear {
@@ -471,19 +465,7 @@ struct SettingsView: View {
                 audioInputDeviceRefreshTask = nil
                 stopPermissionMonitoring()
             }
-            .onChange(of: appState.selectedTab) { _, tab in
-                if tab == .settings {
-                    selectedPane = appState.selectedSettingsPane
-                    refreshDownloadedModelOptions()
-                    refreshAudioInputDevices()
-                    refreshPermissionStatuses(for: .settingsSelected)
-                }
-            }
             .onChange(of: appState.selectedSettingsPane) { _, pane in
-                selectedPane = pane
-            }
-            .onChange(of: selectedPane) { _, pane in
-                appState.selectedSettingsPane = pane
                 if pane == .dictation || pane == .meetings {
                     loadCachedAudioInputDevices()
                 }
@@ -493,7 +475,7 @@ struct SettingsView: View {
                 scrollToFeatureTourTarget(target, using: scrollProxy)
             }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-                guard appState.selectedTab == .settings else { return }
+                guard appState.selectedSettingsSection == .settings else { return }
                 refreshAudioInputDevices()
                 refreshPermissionStatuses(for: .appActivated)
                 if selectedPane == .meetings {
@@ -603,7 +585,7 @@ struct SettingsView: View {
                 || target == .dictationProviderSetting
                 || target == .quillSettings else { return }
         if target == .cloudCleanupSetting || target == .quillSettings {
-            selectedPane = .writingAI
+            appState.selectedSettingsPane = .writingAI
         }
         DispatchQueue.main.async {
             withAnimation(ImlaTheme.Motion.eased(0.2)) {
@@ -694,26 +676,15 @@ struct SettingsView: View {
         }
     }
 
-
-    private var settingsPanePicker: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: ImlaTheme.spacing8)], spacing: ImlaTheme.spacing8) {
-            ForEach(SettingsPane.allCases) { pane in
-                Button {
-                    selectedPane = pane
-                } label: {
-                    Text(pane.title)
-                        .font(ImlaTheme.captionMedium())
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: ImlaTheme.controlHeight)
-                        .background(selectedPane == pane ? ImlaTheme.accentSubtle : ImlaTheme.surfacePrimary)
-                        .foregroundStyle(selectedPane == pane ? ImlaTheme.accent : ImlaTheme.textSecondary)
-                        .clipShape(ImlaTheme.shape(ImlaTheme.cornerSmall))
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(selectedPane == pane ? .isSelected : [])
-            }
-        }
-        .accessibilityLabel("Settings categories")
+    /// Opaque on purpose: `body` carries a long modifier chain, and inlining the
+    /// pane switch into it pushed the type checker past its time limit.
+    private var paneScrollContent: some View {
+        paneContent
+            .frame(maxWidth: ImlaTheme.contentMaxWidth)
+            .padding(.horizontal, ImlaTheme.pageHorizontalInset)
+            .padding(.top, ImlaTheme.pageTop)
+            .padding(.bottom, ImlaTheme.spacing32)
+            .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder
