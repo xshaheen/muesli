@@ -30,11 +30,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         guard let window else { return }
         applyAppearance(to: window)
         controller.syncAppState()
-        if !window.isVisible {
-            controller.noteWindowOpened()
-        }
-        window.makeKeyAndOrderFront(nil)
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        let policyJustBecameRegular = controller.noteWindowOpened(window)
+        MenuBarWindowPresenter.present(window, policyJustBecameRegular: policyJustBecameRegular)
     }
 
     func close() {
@@ -49,8 +46,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        controller.noteWindowClosed()
-        releaseWindowAfterClose(notification.object as? NSWindow)
+        let closing = notification.object as? NSWindow
+        if let closing {
+            controller.noteWindowClosed(closing)
+        }
+        releaseWindowAfterClose(closing)
     }
 
     /// Drops the window and its SwiftUI tree once AppKit has finished closing.

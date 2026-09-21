@@ -172,6 +172,65 @@ struct WindowAppearanceTests {
         return lifecycle.appearanceCount > 0
     }
 
+    @Test("regular windows are tracked by identity so a reopen cannot strand the Dock icon")
+    func openWindowTrackingReturnsToAccessoryAfterLastClose() {
+        var registry = RegularWindowRegistry()
+        // Kept alive for the whole test: a freed object's address, and so its identifier,
+        // is reused by the next allocation.
+        let dashboardObject = NSObject()
+        let settingsObject = NSObject()
+        let dashboard = ObjectIdentifier(dashboardObject)
+        let settings = ObjectIdentifier(settingsObject)
+        var mustBecomeRegular: Bool
+        var mustBecomeAccessory: Bool
+
+        // Only the call that flips the policy reports it: that is the one whose activation
+        // must wait a run-loop turn.
+        mustBecomeRegular = registry.noteOpened(dashboard, isRegular: false)
+        #expect(mustBecomeRegular)
+        mustBecomeRegular = registry.noteOpened(dashboard, isRegular: true)
+        #expect(!mustBecomeRegular)
+        mustBecomeRegular = registry.noteOpened(settings, isRegular: true)
+        #expect(!mustBecomeRegular)
+
+        // Reopening the same window (a miniaturized one reports itself as not visible)
+        // must not need two closes to undo.
+        mustBecomeRegular = registry.noteOpened(dashboard, isRegular: true)
+        #expect(!mustBecomeRegular)
+        mustBecomeAccessory = registry.noteClosed(dashboard)
+        #expect(!mustBecomeAccessory)
+        mustBecomeAccessory = registry.noteClosed(settings)
+        #expect(mustBecomeAccessory)
+        #expect(registry.isEmpty)
+
+        // Closing a window that is not open changes nothing.
+        mustBecomeAccessory = registry.noteClosed(dashboard)
+        #expect(mustBecomeAccessory)
+        mustBecomeRegular = registry.noteOpened(settings, isRegular: false)
+        #expect(mustBecomeRegular)
+    }
+
+    @Test("dashboard and settings windows never force themselves front while the app may be inactive")
+    func regularWindowsDoNotOrderFrontRegardless() throws {
+        for file in ["RecentHistoryWindowController.swift", "SettingsWindowController.swift"] {
+            let source = try appSource(file)
+            #expect(!source.contains("orderFrontRegardless()"), "\(file) orders front regardless")
+            #expect(source.contains("MenuBarWindowPresenter.present("), "\(file) bypasses the presenter")
+        }
+    }
+
+    private func appSource(_ fileName: String) throws -> String {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let url = packageRoot
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("ImlaNativeApp")
+            .appendingPathComponent(fileName)
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
     @Test("dashboard wires the production sidebar toggle and compact meeting header")
     func dashboardWiresProductionSidebarAndCompactMeetingComposition() {
         let supportDirectory = FileManager.default.temporaryDirectory

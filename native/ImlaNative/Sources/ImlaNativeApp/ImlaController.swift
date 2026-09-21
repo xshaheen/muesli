@@ -701,7 +701,7 @@ public final class ImlaController: NSObject {
     private var nemotron35StreamingSessionID: UUID?
     private var nemotron35StreamingRecordingSavePolicy: DictationRecordingSavePolicy = .never
     private var previousStreamText = ""
-    private var openWindowCount = 0
+    private var regularWindows = RegularWindowRegistry()
     private var lastExternalApp: NSRunningApplication?
     private var activeDictationStyleSession: DictationStyleSessionSnapshot?
     private var activeDictationContextResult: DictationSessionContextResult?
@@ -10664,17 +10664,21 @@ public final class ImlaController: NSObject {
         pasteboard.setString(text, forType: .string)
     }
 
-    func noteWindowOpened() {
-        openWindowCount += 1
-        if NSApplication.shared.activationPolicy() != .regular {
-            NSApplication.shared.setActivationPolicy(.regular)
+    /// Registers a regular window as open and makes the app a regular (Dock) app while any
+    /// such window exists. Returns whether the policy changed on this call; the caller must
+    /// not activate in the same run-loop turn when it did — see `MenuBarWindowPresenter`.
+    @discardableResult
+    func noteWindowOpened(_ window: NSWindow) -> Bool {
+        let isRegular = NSApplication.shared.activationPolicy() == .regular
+        guard regularWindows.noteOpened(ObjectIdentifier(window), isRegular: isRegular) else {
+            return false
         }
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        NSApplication.shared.setActivationPolicy(.regular)
+        return true
     }
 
-    func noteWindowClosed() {
-        openWindowCount = max(0, openWindowCount - 1)
-        if openWindowCount == 0 {
+    func noteWindowClosed(_ window: NSWindow) {
+        if regularWindows.noteClosed(ObjectIdentifier(window)) {
             NSApplication.shared.setActivationPolicy(.accessory)
         }
     }
