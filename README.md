@@ -78,7 +78,7 @@ Live transcription is off by default. Choose Apple Speech, or download Parakeet 
 - **Camera-based meeting detection** — Detects when your webcam + mic activate in a recognized meeting app (Zoom, Chrome, Teams, FaceTime, Slack, WhatsApp). Camera alone (e.g. Photo Booth) won't trigger false positives.
 - **Join & Transcribe** — Extracts meeting URLs from calendar events (Zoom, Google Meet, Teams, Webex, Chime, FaceTime). Split-button notification: "Join & Transcribe" opens the meeting + starts transcription, "Join Only" opens without transcribing, "Transcribe Only" starts transcription without joining. Platform icons (Zoom, Meet) in the notification panel.
 - **macOS Calendar integration** — See upcoming meetings from calendars connected to your Mac, including iCloud, Google, and Exchange, in the Coming Up section and status bar. Choose whether Imla watches today, two days, or three days of upcoming events. Event-driven notifications via `EKEventStoreChangedNotification` for instant calendar change detection. Pre-meeting countdowns via Marauder's Map easter egg.
-- **Import Audio** — Import m4a, mp4, wav, or mp3 files for offline transcription, speaker diarization, title generation, summaries, and saved meeting history.
+- **Import Audio** — Import recordings and voice notes (m4a, mp4, wav, mp3, opus, ogg, caf, flac, aiff, 3gp, amr, …) for offline transcription, speaker diarization, title generation, summaries, and saved meeting history.
 - **Meeting export** — Export meeting notes or transcripts as PDF (paginated US Letter) or Markdown. Format picker in the save panel, auto-opens the exported file.
 - **Meeting templates** — Built-in and custom templates for meeting notes. Choose a template before or after recording — re-summarize any meeting with a different template.
 - **Dismiss calendar events** — Hide irrelevant events from Coming Up, status bar, and menu bar. Dismissed events are pruned automatically.
@@ -186,7 +186,7 @@ The CLI is designed for coding agents such as Codex and Claude Code. It exposes 
 
 ### Audio transcription
 
-Supported input files: `.mp3`, `.mp4`, `.m4a`, and `.wav`.
+Supported input files: anything macOS can decode — `.wav`, `.aiff`, `.caf`, `.flac`, `.mp3`, `.aac`, `.m4a`, `.mp4`, `.mov`, plus voice notes as `.opus` (WhatsApp), `.ogg` (Telegram, Discord), `.3gp` and `.amr` (Android). Matroska (`.webm`, `.mkv`) and `.wma` are rejected with an `ffmpeg` conversion hint.
 
 Default output is transcript text only:
 

@@ -187,7 +187,7 @@ struct TranscribeCommand: AsyncParsableCommand {
     )
 
     @OptionGroup var global: GlobalOptions
-    @Argument(help: "Audio file to transcribe. Supported extensions: mp3, mp4, m4a, wav.")
+    @Argument(help: "Audio file to transcribe: a recording, export, or voice note. Supported extensions: \(ImportableAudioFormat.sortedExtensions.joined(separator: ", ")).")
     var file: String
     @Option(name: .long, help: "Output format: text, json, or markdown.")
     var format: TranscribeOutputFormat = .text
@@ -213,7 +213,7 @@ struct TranscribeCommand: AsyncParsableCommand {
     mutating func validate() throws {
         let url = URL(fileURLWithPath: file)
         guard ImlaAudioFilePreparer.isSupportedFileURL(url) else {
-            throw ValidationError("Unsupported audio file extension. Supported extensions: mp3, mp4, m4a, wav.")
+            throw ValidationError(ImportableAudioFormat.rejectionMessage(for: url))
         }
         _ = try Self.parseLanguageSelection(language)
     }
@@ -222,7 +222,7 @@ struct TranscribeCommand: AsyncParsableCommand {
         let context = CLIContext(options: global)
         let sourceURL = URL(fileURLWithPath: file).standardizedFileURL
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {
-            throw CLIError.notFound("Audio file does not exist: \(sourceURL.path)", fix: "Pass a local .mp3, .mp4, .m4a, or .wav file path.")
+            throw CLIError.notFound("Audio file does not exist: \(sourceURL.path)", fix: "Pass a local audio file path (\(ImportableAudioFormat.sortedExtensions.joined(separator: ", "))).")
         }
 
         let pipeline = ImlaAudioTranscriptionPipeline()
@@ -504,11 +504,19 @@ struct ImlaAudioTranscriptionPipeline {
                     legacyMeetingRootURL: context.supportDirectory.appendingPathComponent("meeting-recordings", isDirectory: true)
                 )
                 recordingStore = store
+                // The artifact table only admits a few containers. Keep the
+                // original when it is one of them; otherwise retain the 16 kHz
+                // WAV already decoded for transcription, as the app's importer
+                // does, rather than losing the audio to a warning.
+                let keepOriginal = RecordingArtifactStore.canStore(fileExtension: request.sourceURL.pathExtension)
                 let savedPath = try persistRecording(
-                    sourceURL: request.sourceURL,
+                    sourceURL: keepOriginal ? request.sourceURL : prepared.wavURL,
                     title: title,
                     supportDirectory: context.supportDirectory
                 )
+                if !keepOriginal {
+                    fputs("[imla-cli] saved a 16 kHz WAV copy; .\(request.sourceURL.pathExtension.lowercased()) is not a retained recording container\n", stderr)
+                }
                 let savedURL = URL(fileURLWithPath: savedPath)
                 stagedLegacyURL = savedURL
                 let artifact = try store.adoptCapture(
@@ -656,22 +664,20 @@ struct ImlaAudioTranscriptionPipeline {
 }
 
 struct ImlaAudioFilePreparer: AudioPreparing {
-    static let supportedExtensions: Set<String> = ["m4a", "mp4", "wav", "mp3"]
-
     static func isSupportedFileURL(_ url: URL) -> Bool {
-        supportedExtensions.contains(url.pathExtension.lowercased())
+        ImportableAudioFormat.isSupported(url)
     }
 
     enum PreparationError: Error, LocalizedError {
-        case unsupportedFormat
+        case unsupportedFormat(URL)
         case conversionFailed(String)
         case noAudioTracks
         case readError(String)
 
         var errorDescription: String? {
             switch self {
-            case .unsupportedFormat:
-                return "This audio file format is not supported."
+            case .unsupportedFormat(let url):
+                return ImportableAudioFormat.rejectionMessage(for: url)
             case .conversionFailed(let detail):
                 return "Could not convert the audio file. \(detail)"
             case .noAudioTracks:
@@ -684,7 +690,7 @@ struct ImlaAudioFilePreparer: AudioPreparing {
 
     func prepareAudio(sourceURL: URL) async throws -> PreparedAudioFile {
         guard Self.isSupportedFileURL(sourceURL) else {
-            throw PreparationError.unsupportedFormat
+            throw PreparationError.unsupportedFormat(sourceURL)
         }
         try Task.checkCancellation()
 

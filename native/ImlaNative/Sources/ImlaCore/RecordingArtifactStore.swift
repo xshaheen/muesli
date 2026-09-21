@@ -33,7 +33,16 @@ public enum RecordingArtifactStoreError: Error, LocalizedError, Equatable {
 /// Files are named only from opaque UUIDs. Diagnostics may reference an artifact but
 /// never own it; normal history and audio-only dictation history are the owners.
 public final class RecordingArtifactStore: @unchecked Sendable {
+    /// Mirrors the `recording_artifacts.file_extension` CHECK constraint in
+    /// `DictationStore`. Widening it means a table rebuild migration, so importers
+    /// that accept other containers re-encode to WAV before adopting (see
+    /// `RecordingArtifactStore.canStore(fileExtension:)`).
     private static let supportedExtensions: Set<String> = ["wav", "m4a", "caf", "aiff", "aif", "mp3"]
+
+    /// Whether a file with this extension can be adopted as-is, without re-encoding.
+    public static func canStore(fileExtension: String) -> Bool {
+        supportedExtensions.contains(fileExtension.lowercased())
+    }
     private let lifecycleLock = NSRecursiveLock()
 
     public let databaseURL: URL

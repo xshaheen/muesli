@@ -93,7 +93,12 @@ struct AudioFileImportControllerTests {
     func supportedFileURLValidation() {
         #expect(AudioFileImportController.isSupportedFileURL(URL(fileURLWithPath: "/tmp/test.wav")))
         #expect(AudioFileImportController.isSupportedFileURL(URL(fileURLWithPath: "/tmp/test.MP3")))
+        // Voice notes share the CLI's list, so the app and imla-cli never disagree.
+        #expect(AudioFileImportController.isSupportedFileURL(URL(fileURLWithPath: "/tmp/PTT-20260921-WA0001.opus")))
+        #expect(AudioFileImportController.isSupportedFileURL(URL(fileURLWithPath: "/tmp/audio.ogg")))
+        #expect(AudioFileImportController.supportedExtensions == ImportableAudioFormat.supportedExtensions)
         #expect(!AudioFileImportController.isSupportedFileURL(URL(fileURLWithPath: "/tmp/test.txt")))
+        #expect(!AudioFileImportController.isSupportedFileURL(URL(fileURLWithPath: "/tmp/test.webm")))
     }
 
     @Test("fallback summary aggregates all import fallback reasons")

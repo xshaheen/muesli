@@ -68,6 +68,28 @@ struct RecordingArtifactStoreTests {
         #expect(artifact.lifecycleState == .retained)
     }
 
+    @Test("storable containers match the schema CHECK; other imports must re-encode first")
+    func storableExtensionsMatchSchema() throws {
+        // `imla-cli transcribe --save-meeting` and the app importer both rely on this
+        // to decide between keeping the original file and adopting a WAV copy.
+        for ext in ["wav", "m4a", "caf", "aiff", "aif", "mp3", "M4A"] {
+            #expect(RecordingArtifactStore.canStore(fileExtension: ext), "\(ext) should be storable")
+        }
+        for ext in ["opus", "ogg", "3gp", "amr", "flac", "mp4", "txt"] {
+            #expect(!RecordingArtifactStore.canStore(fileExtension: ext), "\(ext) should need re-encoding")
+        }
+        let fixture = try makeFixture()
+        let source = try writeSource(in: fixture.root, name: "note.opus")
+        #expect(throws: RecordingArtifactStoreError.self) {
+            try fixture.store.adoptCapture(
+                at: source,
+                sessionID: UUID(),
+                captureKind: .meeting,
+                savePolicy: .always
+            )
+        }
+    }
+
     @Test("history insertion and artifact ownership commit or roll back together")
     func historyAndOwnershipAreAtomic() throws {
         let fixture = try makeFixture()

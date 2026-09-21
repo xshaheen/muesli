@@ -88,11 +88,11 @@ Transcribe JSON data includes:
 - `savedMeetingID`
 - `title`
 
-Supported transcribe inputs:
-- `.mp3`
-- `.mp4`
-- `.m4a`
-- `.wav`
+Supported transcribe inputs (anything AVFoundation can decode; the list lives in
+`ImlaCore/ImportableAudioFormat.swift`):
+- recordings and exports: `.wav`, `.aiff`/`.aif`, `.caf`, `.flac`, `.mp3`, `.aac`, `.m4a`, `.mp4`, `.mov`
+- voice notes: `.opus` (WhatsApp), `.ogg`/`.oga` (Telegram, Discord), `.3gp`, `.amr` (Android)
+- rejected with a conversion hint: `.webm`, `.mkv`, `.mka`, `.wma` (macOS has no Matroska/WMA decoder; `ffmpeg -i in.webm -c:a aac out.m4a`)
 
 Supported transcribe models:
 - `parakeet-v3` (default)
@@ -104,7 +104,7 @@ Transcribe behavior:
 - `--format json` includes warnings in both `data.warnings` and `meta.warnings`
 - `--summarize` preserves the transcript if summary generation fails and returns a warning
 - `--summarize` uses configured OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM settings when available; the app's ChatGPT session backend is not driven from headless CLI mode
-- `--save-meeting` stores the meeting as `source = audio_import`
+- `--save-meeting` stores the meeting as `source = audio_import`; the retained audio is the original file for `.wav`, `.m4a`, `.caf`, `.aiff`/`.aif`, and `.mp3`, and the decoded 16 kHz mono WAV for every other container (a stderr line says so)
 - `--output <path>` writes the selected output format to a file and keeps stdout clean
 
 ## Expected agent pattern

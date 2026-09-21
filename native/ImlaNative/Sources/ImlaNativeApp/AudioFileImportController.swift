@@ -5,26 +5,19 @@ import Foundation
 import ImlaCore
 import UniformTypeIdentifiers
 
-/// Handles importing audio files (m4a, mp4, wav, mp3) for offline transcription.
+/// Handles importing audio files and voice notes for offline transcription.
 /// Converts the source file to 16kHz mono WAV, transcribes it, optionally runs
 /// speaker diarization, and creates a meeting record with the result.
 enum AudioFileImportController {
-    static let supportedExtensions: Set<String> = ["m4a", "mp4", "wav", "mp3"]
+    static let supportedExtensions = ImportableAudioFormat.supportedExtensions
 
-    private static let allowedTypes: [UTType] = {
-        var types: [UTType] = [
-            .wav,
-            .mp3,
-            .mpeg4Audio,
-            .appleProtectedMPEG4Audio,
-        ]
-        if let m4a = UTType(filenameExtension: "m4a") { types.append(m4a) }
-        if let mp4 = UTType(filenameExtension: "mp4") { types.append(mp4) }
-        return types
-    }()
+    /// Derived from the extension list so the open panel can never disagree with
+    /// drag-and-drop or the CLI about what is importable.
+    private static let allowedTypes: [UTType] = ImportableAudioFormat.sortedExtensions
+        .compactMap { UTType(filenameExtension: $0, conformingTo: .audiovisualContent) }
 
     static func isSupportedFileURL(_ url: URL) -> Bool {
-        supportedExtensions.contains(url.pathExtension.lowercased())
+        ImportableAudioFormat.isSupported(url)
     }
 
     // MARK: - File Selection
@@ -35,7 +28,7 @@ enum AudioFileImportController {
             DispatchQueue.main.async {
                 let panel = NSOpenPanel()
                 panel.title = "Import Audio File for Transcription"
-                panel.message = "Choose an audio file (m4a, mp4, wav, mp3)"
+                panel.message = "Choose an audio file or voice note (\(ImportableAudioFormat.sortedExtensions.joined(separator: ", ")))"
                 panel.allowedContentTypes = allowedTypes
                 panel.allowsMultipleSelection = false
                 panel.canChooseDirectories = false

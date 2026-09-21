@@ -334,11 +334,84 @@ struct ImlaCLITests {
         }
     }
 
-    @Test("transcribe validation rejects unsupported file extensions")
+    @Test("transcribe validation rejects undecodable extensions and names the fix for known ones")
     func transcribeRejectsUnsupportedExtension() {
         #expect(throws: Error.self) {
-            _ = try TranscribeCommand.parse(["recording.aiff"])
+            _ = try TranscribeCommand.parse(["notes.txt"])
         }
+        do {
+            _ = try TranscribeCommand.parse(["standup.webm"])
+            Issue.record("webm should be rejected: AVFoundation cannot open Matroska")
+        } catch {
+            let message = TranscribeCommand.message(for: error)
+            #expect(message.contains("ffmpeg"), "webm rejection should carry a conversion hint, got: \(message)")
+        }
+    }
+
+    @Test("transcribe validation accepts every voice-note container macOS can decode")
+    func transcribeAcceptsVoiceNoteExtensions() throws {
+        for name in [
+            "PTT-20260921-WA0001.opus",  // WhatsApp
+            "audio_2026-09-21.ogg",      // Telegram / Discord
+            "Memo.M4A",                  // Apple Voice Memos, uppercase from a case-insensitive volume
+            "rec.3gp", "rec.amr",        // Android recorders
+            "message.caf",               // iMessage
+            "take.aiff", "take.flac", "clip.mov",
+        ] {
+            let command = try TranscribeCommand.parse([name])
+            #expect(command.file == name)
+        }
+        #expect(ImlaAudioFilePreparer.isSupportedFileURL(URL(fileURLWithPath: "/tmp/x.OGG")))
+    }
+
+    @Test("prepareAudio decodes an Opus voice note to Imla's 16 kHz mono WAV")
+    func prepareAudioDecodesOpusVoiceNote() async throws {
+        // Opus inside CAF is what Apple's own encoder writes; WhatsApp and Telegram
+        // wrap the same codec in Ogg, which the same AudioToolbox decoder reads.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("imla-cli-opus-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let sourceURL = directory.appendingPathComponent("voice-note.caf")
+        let seconds = 1.5
+        try Self.writeOpusFixture(to: sourceURL, seconds: seconds)
+
+        let prepared = try await ImlaAudioFilePreparer().prepareAudio(sourceURL: sourceURL)
+        defer { try? FileManager.default.removeItem(at: prepared.wavURL) }
+
+        let wav = try AVAudioFile(forReading: prepared.wavURL)
+        #expect(wav.fileFormat.sampleRate == 16_000)
+        #expect(wav.fileFormat.channelCount == 1)
+        #expect(wav.fileFormat.commonFormat == .pcmFormatInt16)
+        // Opus adds encoder pre-skip, so allow a frame of slack rather than exact equality.
+        #expect(abs(prepared.durationSeconds - seconds) < 0.1)
+        #expect(abs(Double(wav.length) / 16_000 - seconds) < 0.1)
+    }
+
+    /// Kept in its own function so the `AVAudioFile` writer is released, and the
+    /// CAF header finalized, before anything reads the file back.
+    private static func writeOpusFixture(to url: URL, seconds: Double) throws {
+        let sampleRate = 48_000.0
+        let pcm = try #require(AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1))
+        let writer = try AVAudioFile(
+            forWriting: url,
+            settings: [
+                AVFormatIDKey: kAudioFormatOpus,
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: 1,
+            ],
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        let frameCount = AVAudioFrameCount(sampleRate * seconds)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: pcm, frameCapacity: frameCount))
+        buffer.frameLength = frameCount
+        let channel = try #require(buffer.floatChannelData?[0])
+        for index in 0..<Int(frameCount) {
+            channel[index] = 0.25 * sinf(2 * .pi * 440 * Float(index) / Float(sampleRate))
+        }
+        try writer.write(from: buffer)
     }
 
     @Test("transcribe enums accept documented model and format values")
@@ -846,6 +919,46 @@ struct ImlaCLITests {
         let savedRecordingURL = try artifactStore.playableURL(id: artifactID)
         #expect(savedRecordingURL.pathExtension == fixture.sourceURL.pathExtension)
         #expect(posted == 1)
+    }
+
+    @Test("transcribe save meeting retains a WAV copy when the source container is not storable")
+    func transcribeSaveMeetingFallsBackToWAVForVoiceNotes() async throws {
+        let fixture = try TranscribeFixture()
+        // The preparer is faked, so only the name has to look like a WhatsApp note;
+        // what matters is that the artifact table would reject `.opus`.
+        let opusURL = fixture.directory.appendingPathComponent("PTT-20260921-WA0001.opus")
+        try FileManager.default.copyItem(at: fixture.sourceURL, to: opusURL)
+        let pipeline = ImlaAudioTranscriptionPipeline(
+            audioPreparer: FakeAudioPreparer(wavURL: fixture.wavURL, durationSeconds: 1),
+            transcriber: FakeTranscriber(text: "voice note transcript"),
+            summarizer: SuccessfulSummarizer(notes: "unused"),
+            dataChangePoster: {}
+        )
+
+        let result = try await pipeline.run(
+            request: ImlaAudioTranscriptionRequest(
+                sourceURL: opusURL,
+                model: .parakeetV3,
+                title: nil,
+                summarize: false,
+                saveMeeting: true
+            ),
+            context: fixture.context
+        )
+
+        #expect(result.warnings.isEmpty, "audio copy must not degrade to a warning: \(result.warnings)")
+        let id = try #require(result.savedMeetingID)
+        let artifactStore = try RecordingArtifactStore(
+            databaseURL: fixture.context.databaseURL,
+            recordingsRootURL: fixture.context.supportDirectory.appendingPathComponent("recordings", isDirectory: true),
+            legacyMeetingRootURL: fixture.context.supportDirectory.appendingPathComponent("meeting-recordings", isDirectory: true)
+        )
+        let reference = try #require(try artifactStore.recordingForMeeting(id: id))
+        let artifactID = try #require(reference.artifactID)
+        let savedRecordingURL = try artifactStore.playableURL(id: artifactID)
+        #expect(savedRecordingURL.pathExtension == "wav")
+        #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path))
+        #expect(FileManager.default.fileExists(atPath: fixture.wavURL.path), "the prepared WAV is copied, not moved")
     }
 
     @Test("summary config decodes the snake_case keys the app writes")
