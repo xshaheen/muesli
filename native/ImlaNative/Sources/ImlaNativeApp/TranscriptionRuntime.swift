@@ -937,6 +937,15 @@ actor TranscriptionCoordinator {
     private var postProcessorInvocationsInFlight = 0
     private var idleUnloadTask: Task<Void, Never>?
 
+    private var speechModelIdleUnloadMinutes = SpeechModelIdleUnloadPolicy.defaultIdleMinutes
+    private var isDictationActive = false
+    /// Highest dictation-activity sequence applied. The controller reports state
+    /// transitions from the main actor through separate Tasks, which may reach
+    /// this actor out of order; an `active=false` overtaking the `true` before it
+    /// would arm the countdown under a live streaming session.
+    private var dictationActivitySequence: UInt64 = 0
+    private var speechIdleUnloadTask: Task<Void, Never>?
+
     private struct PostProcessorSnapshot {
         let backend: TranscriptCleanupBackendOption
         let modelURL: URL
@@ -1760,6 +1769,7 @@ actor TranscriptionCoordinator {
         }
         loadedBackends.insert(identifier)
         backendsInFlight[identifier, default: 0] += 1
+        cancelSpeechIdleUnload()
         defer {
             let remaining = (backendsInFlight[identifier] ?? 1) - 1
             if remaining > 0 {
@@ -1767,6 +1777,9 @@ actor TranscriptionCoordinator {
             } else {
                 backendsInFlight.removeValue(forKey: identifier)
             }
+            // A preload that is never dictated into must age out like any other
+            // use, so the countdown restarts from the end of every load or run.
+            scheduleSpeechIdleUnload()
         }
         return try await body()
     }
@@ -1817,7 +1830,13 @@ actor TranscriptionCoordinator {
         let unloadedCleanup = await unloadIdlePostProcessorModels(
             reason: "under memory pressure (\(level))"
         )
-        let freed = unloadedBackends + unloadedCleanup
+        // Warning-level pressure is routine on 8–16 GB machines and would turn
+        // the designated model into reload churn; critical means the OS is about
+        // to swap or kill, so the idle countdown is not worth waiting out.
+        let unloadedIdleSpeech = event.contains(.critical)
+            ? await unloadIdleSpeechBackends(reason: "under memory pressure (\(level))")
+            : []
+        let freed = unloadedBackends + unloadedCleanup + unloadedIdleSpeech
         if freed.isEmpty {
             fputs("[coordinator] memory pressure \(level): nothing releasable\n", stderr)
         } else {
@@ -1837,11 +1856,104 @@ actor TranscriptionCoordinator {
         isMeetingActive = active
         if active {
             cancelIdleUnload()
+            cancelSpeechIdleUnload()
             fputs("[postproc] idle unload suspended while a meeting is active\n", stderr)
         } else {
             fputs("[postproc] meeting finished; idle unload countdown restarted\n", stderr)
             scheduleIdleUnload()
+            scheduleSpeechIdleUnload()
         }
+    }
+
+    // MARK: - Speech model idle unload
+
+    func setSpeechModelIdleUnloadMinutes(_ minutes: Int) {
+        let resolved = SpeechModelIdleUnloadPolicy.resolvedIdleMinutes(minutes)
+        guard resolved != speechModelIdleUnloadMinutes else { return }
+        speechModelIdleUnloadMinutes = resolved
+        // A settings change restarts the countdown against the new value; zero
+        // cancels a pending one so models stay resident as asked.
+        scheduleSpeechIdleUnload()
+    }
+
+    /// Pins every loaded ASR model from hotkey press until the transcript is
+    /// delivered. The controller reports each dictation state transition with a
+    /// monotonically increasing sequence; a stale report is dropped rather than
+    /// applied, since the transitions arrive through independent Tasks.
+    func setDictationActive(_ active: Bool, sequence: UInt64) {
+        guard sequence > dictationActivitySequence else { return }
+        dictationActivitySequence = sequence
+        guard isDictationActive != active else { return }
+        isDictationActive = active
+        if active {
+            cancelSpeechIdleUnload()
+        } else {
+            scheduleSpeechIdleUnload()
+        }
+    }
+
+    private func cancelSpeechIdleUnload() {
+        speechIdleUnloadTask?.cancel()
+        speechIdleUnloadTask = nil
+    }
+
+    /// Same App Nap caveat as the cleanup model's timer: a late unload only holds
+    /// memory longer than asked, which is the state the app was already in.
+    private func scheduleSpeechIdleUnload() {
+        cancelSpeechIdleUnload()
+        guard backendsInFlight.isEmpty, !loadedBackends.isEmpty else { return }
+        guard let delay = SpeechModelIdleUnloadPolicy.unloadDelaySeconds(
+            idleMinutes: speechModelIdleUnloadMinutes,
+            isDictationActive: isDictationActive,
+            isMeetingActive: isMeetingActive
+        ) else { return }
+        speechIdleUnloadTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                // Cancelled by a hotkey press, a meeting start, a new load, or a config change.
+                return
+            }
+            await self?.unloadIdleSpeechBackends()
+        }
+    }
+
+    /// Releases every loaded ASR model that is not mid-load or mid-inference,
+    /// designated or not. Each wrapper reloads lazily on its next use, and the
+    /// controller starts that reload on hotkey press so it overlaps the recording.
+    /// - Parameter reason: Log suffix; the memory pressure handler passes its own
+    ///   so the log does not claim a countdown that never elapsed.
+    @discardableResult
+    private func unloadIdleSpeechBackends(reason: String? = nil) async -> [String] {
+        guard SpeechModelIdleUnloadPolicy.mayUnload(
+            isDictationActive: isDictationActive,
+            isMeetingActive: isMeetingActive
+        ) else { return [] }
+        let context = reason ?? "after \(speechModelIdleUnloadMinutes) idle min"
+        var unloaded: [String] = []
+        let candidates = SpeechModelIdleUnloadPolicy.backendsToUnload(
+            loaded: loadedBackends,
+            inFlight: Set(backendsInFlight.keys)
+        )
+        for identifier in candidates {
+            // Re-checked under the gate: a dictation can start while this actor is
+            // suspended, and the guard above is only as fresh as the last await.
+            let didUnload = (try? await withSpeechModelAccess(identifier) {
+                guard SpeechModelIdleUnloadPolicy.mayUnload(
+                    isDictationActive: self.isDictationActive,
+                    isMeetingActive: self.isMeetingActive
+                ), self.backendsInFlight[identifier] == nil, self.loadedBackends.contains(identifier) else {
+                    return false
+                }
+                await self.unloadBackend(identifier)
+                return true
+            }) ?? false
+            if didUnload {
+                unloaded.append(identifier)
+                fputs("[coordinator] unloading \(identifier): idle (\(context))\n", stderr)
+            }
+        }
+        return unloaded
     }
 
     private var isPostProcessorIdle: Bool {
@@ -2309,6 +2421,7 @@ actor TranscriptionCoordinator {
         speechResidencyTask = nil
         preparedSpeechModels.removeAll()
         cancelIdleUnload()
+        cancelSpeechIdleUnload()
         memoryPressureSource?.cancel()
         memoryPressureSource = nil
         loadedBackends.removeAll()

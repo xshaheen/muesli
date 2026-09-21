@@ -3844,6 +3844,9 @@ public final class ImlaController: NSObject {
                 ? BackendOption.nemotron35Multilingual.backend
                 : nil
         )
+        // Rides the same every-config-change path: designation says which models
+        // may stay, the idle window says for how long once nothing uses them.
+        await transcriptionCoordinator.setSpeechModelIdleUnloadMinutes(config.speechModelIdleUnloadMinutes)
     }
 
     private func preloadOptionalTranscriptionResources(
@@ -10677,6 +10680,7 @@ public final class ImlaController: NSObject {
     }
 
     private func setState(_ state: DictationState) {
+        let wasIdle = dictationState == .idle
         dictationState = state
         appState.dictationState = state
         let status: String
@@ -10688,6 +10692,42 @@ public final class ImlaController: NSObject {
         }
         statusBarController?.setStatus(status)
         if state == .idle { refreshKeyboardLanguageRouting(prepare: true) }
+        if wasIdle != (state == .idle) {
+            reportDictationActivity(active: state != .idle)
+        }
+    }
+
+    private var dictationActivitySequence: UInt64 = 0
+
+    /// Pins the ASR models for the whole dictation and, on the way in, starts
+    /// reloading whatever the idle unload released. The load overlaps the user's
+    /// own speaking time, so the hotkey→paste path only pays for it when the
+    /// utterance is shorter than the load. Streaming backends load themselves at
+    /// stream start; warming them here would interleave a silent chunk with the
+    /// live stream.
+    private func reportDictationActivity(active: Bool) {
+        dictationActivitySequence += 1
+        let sequence = dictationActivitySequence
+        let shouldReload = active
+            && !isDictationTestMode
+            && !selectedDictationProvider.isHosted
+            && !isStreamingDictationBackend
+            && dictationBackendReadiness.allowsDictation
+        let backend = selectedBackend
+        let ppOption = runtimePostProcessorOption()
+        let enablePostProcessor = canRunTranscriptCleanup(option: ppOption)
+        let appleSpeechLanguage = dictationSessionConfiguration().resolvedAppleSpeechLanguage
+        Task { [weak self] in
+            guard let self else { return }
+            await self.transcriptionCoordinator.setDictationActive(active, sequence: sequence)
+            guard shouldReload else { return }
+            await self.transcriptionCoordinator.preload(
+                backend: backend,
+                enablePostProcessor: enablePostProcessor,
+                includeMeetingHelpers: false,
+                appleSpeechLanguage: appleSpeechLanguage
+            )
+        }
     }
 
     /// With eager start the stream can be live before the tap/hold decision; hold the start

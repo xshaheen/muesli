@@ -19,9 +19,11 @@ DURATION=${1:-180}
 INTERVAL=${2:-15}
 
 # ── Find process ─────────────────────────────────────────────────────────────
+# Every lane's executable is named Imla; only the bundle differs, so match on
+# the bundle path rather than the process name.
 PID=""
-for NAME in ImlaDev Imla; do
-    PID=$(pgrep -x "$NAME" 2>/dev/null | head -1)
+for NAME in ImlaDev ImlaDevA ImlaDevB ImlaDevC Imla; do
+    PID=$(pgrep -f "/Applications/${NAME}.app/Contents/MacOS/Imla$" 2>/dev/null | head -1)
     [[ -n "$PID" ]] && break
 done
 
