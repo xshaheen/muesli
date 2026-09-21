@@ -14852,9 +14852,12 @@ public final class ImlaController: NSObject {
                     ]
                 )
                 if didWin {
+                    // A hold that captured speech but produced no text is a failed dictation
+                    // to the user, not a non-event: hiding the pill silently reads as the
+                    // indicator vanishing. Only a hold with no detected speech ends quietly.
                     applyDictationLifecycleActions(dictationLifecycleFeedback.finish(
                         sessionID: job.id,
-                        outcome: .neutral,
+                        outcome: job.detectedSpeech ? .failure(recovery: .unavailable) : .neutral,
                         soundAllowed: shouldPlayDictationLifecycleSounds
                     ))
                 }
