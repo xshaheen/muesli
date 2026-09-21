@@ -28,7 +28,7 @@ enum MenuBarIconRenderer {
     /// Returns the configured menu bar/floating indicator icon. The Imla mark
     /// is drawn as a resolution-independent template so its narrow waveform
     /// gaps stay crisp at menu-bar scale.
-    static func make(choice: String = "imla") -> NSImage? {
+    static func make(choice: String = "waveform") -> NSImage? {
         if choice == "imla" {
             return makeImlaMark()
         }

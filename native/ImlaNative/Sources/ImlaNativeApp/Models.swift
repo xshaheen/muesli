@@ -2891,8 +2891,8 @@ struct AppConfig: Codable {
     /// One-time gate for the `1e1e2e` migration below. Without it the migration re-fires on
     /// every launch and erases a Dark selection made after the upgrade.
     var accentSelectionMigrated: Bool = false
-    var menuBarIcon: String = "imla"
-    var showHotkeyInMenuBar: Bool = true
+    var menuBarIcon: String = "waveform"
+    var showHotkeyInMenuBar: Bool = false
     var showNextMeetingInMenuBar: Bool = true
     var maraudersMapUnlocked: Bool = false
     var maraudersMapAudioClip: String = "bbc_world_news"

@@ -1395,6 +1395,16 @@ struct MeetingSummaryBackendTests {
 @Suite("AppConfig")
 struct AppConfigTests {
 
+    @Test("the menu bar icon defaults to the waveform and an explicit choice survives")
+    func menuBarIconDefault() throws {
+        let fresh = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        #expect(fresh.menuBarIcon == "waveform")
+        #expect(MenuBarIconRenderer.options.contains { $0.id == fresh.menuBarIcon })
+
+        let chosen = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"menu_bar_icon":"sparkles"}"#.utf8))
+        #expect(chosen.menuBarIcon == "sparkles")
+    }
+
     @Test("idle dot exclusions decode safely and round-trip using snake_case")
     func idleDotExclusions() throws {
         for json in ["{}", #"{"dictation_idle_dot_excluded_apps":null}"#, #"{"dictation_idle_dot_excluded_apps":42}"#] {
