@@ -1256,6 +1256,12 @@ struct SettingsView: View {
             if let liveCaptionLanguageNotice {
                 settingsDescription(liveCaptionLanguageNotice)
             }
+            if let repairDisclosure = MeetingCleanupStatus.activeDisclosure(
+                config: appState.config,
+                isChatGPTAuthenticated: appState.isChatGPTAuthenticated
+            ) {
+                settingsDescription(repairDisclosure)
+            }
         }
     }
 
@@ -1677,27 +1683,6 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
-    /// Read-only: meeting repair follows the meeting language selection, so there
-    /// is nothing to toggle here (R11).
-    private var meetingTranscriptCleanupSection: some View {
-        let status = MeetingCleanupStatus.describe(
-            config: appState.config,
-            isChatGPTAuthenticated: appState.isChatGPTAuthenticated
-        )
-        return settingsSection("Meeting Transcript Cleanup") {
-            settingsRow(
-                "Repair mixed-language transcripts",
-                description: status.detail,
-                controlWidth: meetingControlWidth
-            ) {
-                Text(status.state)
-                    .font(ImlaTheme.body())
-                    .foregroundStyle(ImlaTheme.textSecondary)
-            }
-        }
-    }
-
     private var fixedCleanupPromptNotice: some View {
         settingsRow(
             "Cleanup prompt",
@@ -2019,8 +2004,6 @@ struct SettingsView: View {
             }
 
             meetingSummarySettingsSection
-
-            meetingTranscriptCleanupSection
 
             settingsSection("Meeting Notes") {
                 meetingNotesLanguageRow
