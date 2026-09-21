@@ -4,7 +4,14 @@ import ImlaCore
 
 @MainActor
 enum TargetApplicationIconResolver {
-    private static let cache = NSCache<NSString, NSImage>()
+    // One entry per app ever dictated into. NSCache only evicts under system
+    // pressure, so without a limit a long-running process holds every icon at
+    // every representation; 64 covers far more apps than a day touches.
+    private static let cache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 64
+        return cache
+    }()
 
     static func icon(bundleIdentifier: String?) -> NSImage? {
         guard let bundleIdentifier = bundleIdentifier?

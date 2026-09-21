@@ -50,6 +50,25 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         controller.noteWindowClosed()
+        releaseWindowAfterClose(notification.object as? NSWindow)
+    }
+
+    /// Drops the window and its SwiftUI tree once AppKit has finished closing.
+    ///
+    /// `isReleasedWhenClosed` is off so a close never frees an NSWindow AppKit is
+    /// still unwinding, which means this controller is what decides when the
+    /// hosting view goes. Keeping it around cost the whole settings hierarchy
+    /// (`ModelsView` included) for the life of the process after one visit;
+    /// rebuilding on the next `show()` is cheap and the frame is autosaved. A
+    /// section switch already unmounts the previous section's view, so closing
+    /// loses nothing that switching did not.
+    private func releaseWindowAfterClose(_ closing: NSWindow?) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window, window === closing, !window.isVisible else { return }
+            window.contentView = nil
+            window.delegate = nil
+            self.window = nil
+        }
     }
 
     /// Same reasoning as the dashboard window: AppKit chrome resolves against the
