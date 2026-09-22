@@ -361,6 +361,50 @@ struct RecordingArtifactStoreTests {
         #expect(throws: RecordingArtifactStoreError.self) { try fixture.store.artifact(id: artifact.id) }
     }
 
+    @Test("retention expires only retained recordings of the requested kind that ended before the cutoff")
+    func retentionExpiresByKindAndAge() throws {
+        let fixture = try makeFixture()
+        let historyStore = DictationStore(databaseURL: fixture.database)
+        let day: TimeInterval = 86_400
+        let now = Date(timeIntervalSince1970: 100 * day)
+        func insertMeeting(_ title: String) throws -> Int64 {
+            try historyStore.insertMeeting(
+                title: title, calendarEventID: nil, startTime: now, endTime: now,
+                rawTranscript: "", formattedNotes: "", micAudioPath: nil, systemAudioPath: nil
+            )
+        }
+        let oldMeetingID = try insertMeeting("Old")
+        let recentMeetingID = try insertMeeting("Recent")
+        let oldMeeting = try fixture.store.adoptCapture(
+            at: try writeSource(in: fixture.root, name: "old-meeting.wav"), sessionID: UUID(),
+            captureKind: .meeting, savePolicy: .always, terminalAt: now.addingTimeInterval(-40 * day), now: now
+        )
+        let recentMeeting = try fixture.store.adoptCapture(
+            at: try writeSource(in: fixture.root, name: "recent-meeting.wav"), sessionID: UUID(),
+            captureKind: .meeting, savePolicy: .always, terminalAt: now.addingTimeInterval(-2 * day), now: now
+        )
+        let oldDictation = try fixture.store.adoptCapture(
+            at: try writeSource(in: fixture.root, name: "old-dictation.wav"), sessionID: UUID(),
+            captureKind: .dictation, savePolicy: .always, terminalAt: now.addingTimeInterval(-40 * day), now: now
+        )
+        try fixture.store.attachMeeting(meetingID: oldMeetingID, artifactID: oldMeeting.id, availability: .available, now: now)
+        try fixture.store.attachMeeting(meetingID: recentMeetingID, artifactID: recentMeeting.id, availability: .available, now: now)
+        let oldMeetingURL = try fixture.store.playableURL(id: oldMeeting.id)
+
+        let expired = try fixture.store.expireRetainedArtifacts(
+            captureKind: .meeting, endedBefore: now.addingTimeInterval(-30 * day), now: now
+        )
+
+        #expect(expired == [oldMeeting.id])
+        #expect(throws: RecordingArtifactStoreError.self) { try fixture.store.artifact(id: oldMeeting.id) }
+        #expect(!FileManager.default.fileExists(atPath: oldMeetingURL.path))
+        #expect(try fixture.store.recordingForMeeting(id: oldMeetingID)?.availability == .expired)
+        #expect(try fixture.store.recordingForMeeting(id: oldMeetingID)?.artifactID == nil)
+        #expect(try fixture.store.recordingForMeeting(id: recentMeetingID)?.artifactID == recentMeeting.id)
+        #expect(try fixture.store.artifact(id: recentMeeting.id).lifecycleState == .retained)
+        #expect(try fixture.store.artifact(id: oldDictation.id).lifecycleState == .retained)
+    }
+
     @Test("crash-staged files recover before orphan aging begins")
     func crashStagingRecovers() throws {
         let fixture = try makeFixture()

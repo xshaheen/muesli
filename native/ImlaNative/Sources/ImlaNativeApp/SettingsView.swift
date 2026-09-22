@@ -1904,6 +1904,19 @@ struct SettingsView: View {
                         controller.updateConfig { $0.dictationRecordingSavePolicy = policy }
                     }
                 }
+                if appState.config.dictationRecordingSavePolicy != .never {
+                    Divider().background(ImlaTheme.surfaceBorder)
+                    settingsRow("Keep dictation recordings") {
+                        settingsMenu(
+                            selection: RecordingRetentionOption.label(forDays: appState.config.dictationRecordingRetentionDays),
+                            options: RecordingRetentionOption.allCases.map(\.displayName)
+                        ) { label in
+                            guard let option = recordingRetentionOption(for: label) else { return }
+                            controller.updateConfig { $0.dictationRecordingRetentionDays = option.rawValue }
+                        }
+                    }
+                    settingsDescription("Older saved recordings are deleted automatically. Dictation history and text are kept.")
+                }
                 Divider().background(ImlaTheme.surfaceBorder)
                 settingsRow(
                     "Dictionary suggestions",
@@ -2075,6 +2088,17 @@ struct SettingsView: View {
                         }
                     }
                     settingsDescription("M4A is recommended for smaller files. WAV is lossless and uses more storage.")
+                    Divider().background(ImlaTheme.surfaceBorder)
+                    settingsRow("Keep meeting recordings") {
+                        settingsMenu(
+                            selection: RecordingRetentionOption.label(forDays: appState.config.meetingRecordingRetentionDays),
+                            options: RecordingRetentionOption.allCases.map(\.displayName)
+                        ) { label in
+                            guard let option = recordingRetentionOption(for: label) else { return }
+                            controller.updateConfig { $0.meetingRecordingRetentionDays = option.rawValue }
+                        }
+                    }
+                    settingsDescription("Older saved recordings are deleted automatically. Meetings, transcripts, and notes are kept.")
                 }
             }
 
@@ -3846,6 +3870,14 @@ struct SettingsView: View {
 
     private func recordingFileFormatLabel(for format: MeetingRecordingFileFormat) -> String {
         format.displayName
+    }
+
+    private func recordingRetentionOption(for label: String) -> RecordingRetentionOption? {
+        let option = RecordingRetentionOption.allCases.first { $0.displayName == label }
+        if option == nil {
+            assertionFailure("Unexpected recording retention label: \(label)")
+        }
+        return option
     }
 
     private func recordingFileFormat(for label: String) -> MeetingRecordingFileFormat? {

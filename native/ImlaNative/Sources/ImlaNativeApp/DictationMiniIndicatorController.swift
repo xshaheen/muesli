@@ -5,6 +5,10 @@ import OSLog
 @MainActor
 final class DictationMiniIndicatorController: NSObject {
     private static let idleLogger = Logger(subsystem: "com.xshaheen.imla", category: "MiniIdle")
+    /// Window-server placement of the shared panel. "Presented but nobody saw it" on a
+    /// full-screen Space cannot be reproduced on demand, so every order-in and every occlusion
+    /// change leaves a metadata trail: state names, booleans, and a screen index only.
+    private static let panelLogger = Logger(subsystem: "com.xshaheen.imla", category: "MiniPanel")
     struct Generation: Hashable, Sendable {
         fileprivate let rawValue: UInt64
     }
@@ -60,6 +64,7 @@ final class DictationMiniIndicatorController: NSObject {
     private var pointerTrackingActivity: NSObjectProtocol?
     private var accessibilityObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
+    private var occlusionObserver: NSObjectProtocol?
     private var workspaceObservers: [NSObjectProtocol] = []
 
     override convenience init() {
@@ -463,6 +468,10 @@ final class DictationMiniIndicatorController: NSObject {
     func close() {
         hide(invalidateGeneration: true)
         hintPanel.close()
+        if let occlusionObserver {
+            NotificationCenter.default.removeObserver(occlusionObserver)
+            self.occlusionObserver = nil
+        }
         panel?.close()
         panel = nil
         contentView = nil
@@ -605,6 +614,7 @@ final class DictationMiniIndicatorController: NSObject {
                 )
             }
             panel.orderFrontRegardless()
+            logPanelPlacement("present", panel: panel)
             if let pendingToast {
                 self.pendingToast = nil
                 hintPanel.show(pendingToast.text, beside: currentFrame, on: screenProvider().map(\.visibleFrame), duration: pendingToast.duration)
@@ -694,6 +704,19 @@ final class DictationMiniIndicatorController: NSObject {
         panel.contentView = view
         self.panel = panel
         contentView = view
+        // Occlusion changes arrive through NotificationCenter, which keeps delivering under
+        // App Nap when timers do not, so this is the record of when the window server actually
+        // showed or dropped the panel.
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, let panel = self.panel else { return }
+                self.logPanelPlacement("occlusion", panel: panel)
+            }
+        }
         return panel
     }
 
@@ -731,6 +754,13 @@ final class DictationMiniIndicatorController: NSObject {
         guard presentation == .preparing || presentation == .recording else { return }
         refreshPointerIfNeeded()
         panel?.orderFrontRegardless()
+        if let panel { logPanelPlacement("restore", panel: panel) }
+    }
+
+    private func logPanelPlacement(_ event: String, panel: NSPanel) {
+        let screens = screenProvider()
+        let screenIndex = currentFrame.flatMap { frame in screens.firstIndex { $0.frame.intersects(frame) } } ?? -1
+        Self.panelLogger.notice("panel event=\(event, privacy: .public) presentation=\(String(describing: self.presentation), privacy: .public) visible=\(panel.isVisible, privacy: .public) activeSpace=\(panel.isOnActiveSpace, privacy: .public) occluded=\(!panel.occlusionState.contains(.visible), privacy: .public) screen=\(screenIndex, privacy: .public) screens=\(screens.count, privacy: .public) policy=\(NSApplication.shared.activationPolicy().rawValue, privacy: .public)")
     }
 
     private func applyPointerAnchor(_ anchor: CGPoint) {

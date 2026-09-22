@@ -2734,6 +2734,32 @@ enum DictationRecordingSavePolicy: String, Codable, CaseIterable {
     }
 }
 
+/// How long a saved recording stays on disk before the maintenance sweep deletes it.
+/// The raw value is the day count; zero means the recording is kept until the user
+/// deletes it, which is also what every config written before the setting existed decodes to.
+enum RecordingRetentionOption: Int, CaseIterable {
+    case forever = 0
+    case week = 7
+    case month = 30
+    case quarter = 90
+    case year = 365
+
+    var displayName: String {
+        switch self {
+        case .forever: return "Until I delete them"
+        case .week: return "7 days"
+        case .month: return "30 days"
+        case .quarter: return "90 days"
+        case .year: return "1 year"
+        }
+    }
+
+    /// A day count from disk that is not one of the menu options still needs a label.
+    static func label(forDays days: Int) -> String {
+        RecordingRetentionOption(rawValue: days)?.displayName ?? "\(max(days, 0)) days"
+    }
+}
+
 struct AppConfig: Codable {
     /// Stored in `recording_color_hex` to mean "use the product default accent". Deliberately
     /// not a hex value so it can never collide with a selectable preset.
@@ -2801,6 +2827,11 @@ struct AppConfig: Codable {
     var dictationRecordingSavePolicy: DictationRecordingSavePolicy = .never
     var meetingRecordingSavePolicy: MeetingRecordingSavePolicy = .never
     var meetingRecordingFileFormat: String = MeetingRecordingFileFormat.m4a.rawValue
+    /// Days a saved recording is kept before the maintenance sweep deletes the audio; 0 keeps
+    /// it until the user deletes it. Only the file goes: the dictation or meeting row, its
+    /// transcript, and its notes are untouched.
+    var dictationRecordingRetentionDays: Int = 0
+    var meetingRecordingRetentionDays: Int = 0
     var waveformCacheOrphanCleanupMigrationApplied: Bool = false
     var darkMode: Bool = true
     var enableDoubleTapDictation: Bool = true
@@ -3057,6 +3088,8 @@ struct AppConfig: Codable {
         case mutedMeetingDetectionAppBundleIDs = "muted_meeting_detection_app_bundle_ids"
         case dictationRecordingSavePolicy = "dictation_recording_save_policy"
         case meetingRecordingSavePolicy = "meeting_recording_save_policy"
+        case dictationRecordingRetentionDays = "dictation_recording_retention_days"
+        case meetingRecordingRetentionDays = "meeting_recording_retention_days"
         case meetingRecordingFileFormat = "meeting_recording_file_format"
         case waveformCacheOrphanCleanupMigrationApplied = "waveform_cache_orphan_cleanup_migration_applied"
         case darkMode = "dark_mode"
@@ -3427,6 +3460,14 @@ struct AppConfig: Codable {
             (try? c.decode(DictationRecordingSavePolicy.self, forKey: .dictationRecordingSavePolicy))
             ?? defaults.dictationRecordingSavePolicy
         meetingRecordingSavePolicy = (try? c.decode(MeetingRecordingSavePolicy.self, forKey: .meetingRecordingSavePolicy)) ?? defaults.meetingRecordingSavePolicy
+        dictationRecordingRetentionDays = max(
+            0,
+            (try? c.decode(Int.self, forKey: .dictationRecordingRetentionDays)) ?? defaults.dictationRecordingRetentionDays
+        )
+        meetingRecordingRetentionDays = max(
+            0,
+            (try? c.decode(Int.self, forKey: .meetingRecordingRetentionDays)) ?? defaults.meetingRecordingRetentionDays
+        )
         let decodedMeetingRecordingFileFormat = (try? c.decode(String.self, forKey: .meetingRecordingFileFormat))
             ?? defaults.meetingRecordingFileFormat
         meetingRecordingFileFormat = MeetingRecordingFileFormat(rawValue: decodedMeetingRecordingFileFormat)?.rawValue

@@ -657,6 +657,28 @@ struct LanguageProfileTests {
         #expect(behavior.explanation.contains("English-only"))
     }
 
+    @Test("recording retention defaults to forever, clamps negatives, and round-trips per kind")
+    func recordingRetentionDecoding() throws {
+        let empty = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        #expect(empty.dictationRecordingRetentionDays == 0)
+        #expect(empty.meetingRecordingRetentionDays == 0)
+
+        let configured = try JSONDecoder().decode(AppConfig.self, from: Data("""
+        {"dictation_recording_retention_days": 7, "meeting_recording_retention_days": -3}
+        """.utf8))
+        #expect(configured.dictationRecordingRetentionDays == 7)
+        #expect(configured.meetingRecordingRetentionDays == 0)
+
+        var config = AppConfig()
+        config.meetingRecordingRetentionDays = 90
+        let roundTrip = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(roundTrip.meetingRecordingRetentionDays == 90)
+        #expect(roundTrip.dictationRecordingRetentionDays == 0)
+        #expect(RecordingRetentionOption.label(forDays: 90) == "90 days")
+        #expect(RecordingRetentionOption.label(forDays: 12) == "12 days")
+        #expect(RecordingRetentionOption.label(forDays: 0) == RecordingRetentionOption.forever.displayName)
+    }
+
     @Test("AppConfig migrates legacy pins once and encodes split authorities")
     func appConfigMigratesLegacyPinsOnce() throws {
         let empty = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
@@ -2221,6 +2243,8 @@ struct AppConfigTests {
         #expect(json["default_meeting_template_id"] != nil)
         #expect(json["meeting_recording_save_policy"] != nil)
         #expect(json["meeting_recording_file_format"] != nil)
+        #expect(json["dictation_recording_retention_days"] != nil)
+        #expect(json["meeting_recording_retention_days"] != nil)
         #expect(json["show_scheduled_meeting_notifications"] != nil)
         #expect(json["show_dictation_idle_dot"] != nil)
         #expect(json["show_meeting_record_button"] != nil)
