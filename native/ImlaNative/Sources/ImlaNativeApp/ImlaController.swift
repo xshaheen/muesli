@@ -329,6 +329,7 @@ enum MeetingRetranscriptionError: Error, LocalizedError {
 
 enum MeetingLifecycleError: Error, LocalizedError {
     case failedToSaveRecording(underlying: Error)
+    case failedToMergeResumedRecording(underlying: Error)
     case failedToDeleteRecording(underlying: Error)
     case failedToDeleteMeeting(underlying: Error)
 
@@ -336,6 +337,8 @@ enum MeetingLifecycleError: Error, LocalizedError {
         switch self {
         case .failedToSaveRecording(let underlying):
             return "The meeting finished transcribing, but the recording could not be saved. \(underlying.localizedDescription)"
+        case .failedToMergeResumedRecording(let underlying):
+            return "The meeting finished transcribing, but the resumed audio could not be joined to the earlier recording, so the earlier recording was kept on its own. \(underlying.localizedDescription)"
         case .failedToDeleteRecording(let underlying):
             return "The saved meeting recording could not be deleted, so the meeting was left in place. \(underlying.localizedDescription)"
         case .failedToDeleteMeeting(let underlying):
@@ -366,15 +369,20 @@ enum MeetingRecordingSavePlan {
 
 struct PreparedMeetingRecordingSave {
     let path: String?
+    /// Set when `recording` is a merge of a resumed meeting's earlier recording and the new
+    /// segment. The earlier artifact is deleted only once the merged one is durably owned.
+    let supersededArtifactID: RecordingArtifactID?
     let error: MeetingLifecycleError?
     let recording: RecordingArtifactReference?
 
     init(
         path: String?,
+        supersededArtifactID: RecordingArtifactID? = nil,
         error: MeetingLifecycleError?,
         recording: RecordingArtifactReference? = nil
     ) {
         self.path = path
+        self.supersededArtifactID = supersededArtifactID
         self.error = error
         self.recording = recording
     }
@@ -962,6 +970,7 @@ public final class ImlaController: NSObject {
         configureRecordingArtifactPlayback()
         if let recordingArtifactStore {
             let historyStore = dictationStore
+            let startupRetention = recordingRetentionWindows()
             recordingStartupRecoveryTask?.cancel()
             recordingStartupRecoveryTask = Task { [weak self] in
                 do {
@@ -972,6 +981,7 @@ public final class ImlaController: NSObject {
                         )
                         try recordingArtifactStore.discardPendingArtifacts()
                         try recordingArtifactStore.recoverAndPrune()
+                        Self.applyRecordingRetention(startupRetention, store: recordingArtifactStore)
                     }.value
                 } catch {
                     fputs("[recordings] startup recovery failed: \(error)\n", stderr)
@@ -985,8 +995,10 @@ public final class ImlaController: NSObject {
                     while !Task.isCancelled {
                         try? await Task.sleep(for: .seconds(60))
                         guard !Task.isCancelled, let self else { return }
+                        let retention = self.recordingRetentionWindows()
                         try? await Task.detached(priority: .utility) {
                             try recordingArtifactStore.recoverAndPrune()
+                            Self.applyRecordingRetention(retention, store: recordingArtifactStore)
                         }.value
                         await RecordingArtifactPlaybackCoordinator.shared.refreshAllCachedOwners()
                         self.historyWindowController?.reload()
@@ -9727,17 +9739,21 @@ public final class ImlaController: NSObject {
                     self.setMeetingProcessingStatus("Finalizing", panelOwnerID: meetingPanelOwnerID)
                 }
                 let recordingSaveDecision = await self.recordingSaveDecision(for: result)
-                let preparedRecordingSave = await self.prepareMeetingRecordingSave(
-                    for: result,
-                    saveDecision: recordingSaveDecision,
-                    sessionID: sessionTrace?.sessionID ?? UUID()
-                )
-                provisionalRecordingSave = preparedRecordingSave
                 if let liveMeetingID {
                     provisionalPriorMeetingRecord = try self.dictationStore.meeting(id: liveMeetingID)
                     provisionalPriorMeetingRecording = try self.recordingArtifactStore?
                         .recordingForMeeting(id: liveMeetingID)
                 }
+                let priorRecordingToMerge = liveMeetingID.flatMap {
+                    self.priorRecordingToMergeOnResume(meetingID: $0, prior: provisionalPriorMeetingRecording)
+                }
+                let preparedRecordingSave = await self.prepareMeetingRecordingSave(
+                    for: result,
+                    saveDecision: recordingSaveDecision,
+                    sessionID: sessionTrace?.sessionID ?? UUID(),
+                    mergingPrior: priorRecordingToMerge
+                )
+                provisionalRecordingSave = preparedRecordingSave
                 let persistenceResult = try await MainActor.run {
                     try self.persistCompletedMeetingResult(
                         result,
@@ -9772,6 +9788,19 @@ public final class ImlaController: NSObject {
                     provisionalPriorMeetingRecording = nil
                     completedMeetingID = persistenceResult.meetingID
                     didComplete = true
+                    if let supersededArtifactID = preparedRecordingSave.supersededArtifactID,
+                       let store = self.recordingArtifactStore {
+                        // The merged recording now owns the meeting; the earlier file is a
+                        // duplicate of its first half. If this fails the orphan sweep removes
+                        // it after the grace period, so the failure is only logged.
+                        do {
+                            try await Task.detached(priority: .utility) {
+                                try store.deleteArtifact(id: supersededArtifactID)
+                            }.value
+                        } catch {
+                            fputs("[recordings] superseded resume recording not deleted: \(error)\n", stderr)
+                        }
+                    }
                     await MainActor.run {
                         self.publishCompletedMeetingResult(
                             result,
@@ -10395,18 +10424,72 @@ public final class ImlaController: NSObject {
         ))
     }
 
+    /// The earlier recording a resumed session's segment must be joined to, or nil when this
+    /// stop is not a resume or the meeting has no playable recording to preserve.
+    private func priorRecordingToMergeOnResume(
+        meetingID: Int64,
+        prior: RecordingArtifactReference?
+    ) -> PriorMeetingRecording? {
+        guard pendingResumePriorTranscript[meetingID] != nil,
+              let prior, prior.availability == .available,
+              let artifactID = prior.artifactID,
+              let store = recordingArtifactStore else { return nil }
+        do {
+            return PriorMeetingRecording(artifactID: artifactID, url: try store.playableURL(id: artifactID))
+        } catch {
+            fputs("[recordings] earlier recording of resumed meeting \(meetingID) is not playable: \(error)\n", stderr)
+            return nil
+        }
+    }
+
+    struct PriorMeetingRecording {
+        let artifactID: RecordingArtifactID
+        let url: URL
+    }
+
     func prepareMeetingRecordingSave(
         for result: MeetingSessionResult,
         saveDecision: Bool? = nil,
-        sessionID: UUID = UUID()
+        sessionID: UUID = UUID(),
+        mergingPrior prior: PriorMeetingRecording? = nil
     ) async -> PreparedMeetingRecordingSave {
         let plan = meetingRecordingSavePlan(for: result, saveDecision: saveDecision)
         let prepared = await Self.prepareMeetingRecordingSave(plan)
-        guard let path = prepared.path,
+        guard let segmentPath = prepared.path,
               let store = recordingArtifactStore else { return prepared }
         let frozenSavePolicy: RecordingSavePolicySnapshot = switch result.recordingSavePolicy {
         case .prompt: .prompt
         case .always, .never: .always
+        }
+        var path = segmentPath
+        if let prior {
+            // A meeting owns one recording, so the segment must be joined to the earlier
+            // audio before adoption; adopting the segment alone would replace the earlier
+            // recording and later retranscription would rewrite the whole transcript from it.
+            let segmentURL = URL(fileURLWithPath: segmentPath)
+            let mergedURL = segmentURL.deletingPathExtension()
+                .appendingPathExtension("resumed")
+                .appendingPathExtension(segmentURL.pathExtension)
+            let format = result.recordingFileFormat
+            do {
+                try await Task.detached(priority: .utility) {
+                    try MeetingRecordingConcatenator.concatenate(
+                        prior: prior.url, segment: segmentURL, to: mergedURL, format: format
+                    )
+                }.value
+                try? FileManager.default.removeItem(at: segmentURL)
+                path = mergedURL.path
+            } catch {
+                try? FileManager.default.removeItem(at: segmentURL)
+                try? FileManager.default.removeItem(at: mergedURL)
+                // No recording reference: completion leaves the meeting's existing link alone,
+                // so the earlier recording survives and the error names what was lost.
+                return PreparedMeetingRecordingSave(
+                    path: nil,
+                    error: .failedToMergeResumedRecording(underlying: error),
+                    recording: nil
+                )
+            }
         }
         do {
             let artifact = try await Task.detached(priority: .utility) {
@@ -10427,6 +10510,7 @@ public final class ImlaController: NSObject {
             }.value
             return PreparedMeetingRecordingSave(
                 path: nil,
+                supersededArtifactID: prior?.artifactID,
                 error: prepared.error,
                 recording: RecordingArtifactReference(
                     artifactID: artifact.id,
@@ -10469,6 +10553,39 @@ public final class ImlaController: NSObject {
                     path: nil,
                     error: .failedToSaveRecording(underlying: error)
                 )
+            }
+        }
+    }
+
+    /// Retention windows per capture kind, in days; a kind with no window is absent.
+    private func recordingRetentionWindows() -> [RecordingCaptureKind: Int] {
+        var windows: [RecordingCaptureKind: Int] = [:]
+        if config.meetingRecordingRetentionDays > 0 {
+            windows[.meeting] = config.meetingRecordingRetentionDays
+        }
+        if config.dictationRecordingRetentionDays > 0 {
+            windows[.dictation] = config.dictationRecordingRetentionDays
+        }
+        return windows
+    }
+
+    /// Runs with the other recording maintenance, so like the orphan sweep it fires at
+    /// launch and on the maintenance cadence rather than on a schedule of its own. Failures
+    /// are logged and retried on the next pass; a missed sweep only delays deletion.
+    private nonisolated static func applyRecordingRetention(
+        _ windows: [RecordingCaptureKind: Int],
+        store: RecordingArtifactStore,
+        now: Date = Date()
+    ) {
+        for (kind, days) in windows {
+            let cutoff = now.addingTimeInterval(-TimeInterval(days) * 86_400)
+            do {
+                let expired = try store.expireRetainedArtifacts(captureKind: kind, endedBefore: cutoff, now: now)
+                if !expired.isEmpty {
+                    fputs("[recordings] retention removed \(expired.count) \(kind.rawValue) recording(s) older than \(days) days\n", stderr)
+                }
+            } catch {
+                fputs("[recordings] retention sweep failed for \(kind.rawValue): \(error)\n", stderr)
             }
         }
     }

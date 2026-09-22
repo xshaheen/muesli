@@ -548,6 +548,48 @@ public final class RecordingArtifactStore: @unchecked Sendable {
         }
     }
 
+    /// Deletes retained recordings of one capture kind whose session ended before `cutoff`.
+    /// Owners keep their history rows and read `expired`, the same outcome as a lapsed Ask
+    /// lease, so a recording removed by the retention setting stays distinguishable from one
+    /// the user deleted. Imports are never eligible: they are the user's own files.
+    @discardableResult
+    public func expireRetainedArtifacts(
+        captureKind: RecordingCaptureKind,
+        endedBefore cutoff: Date,
+        now: Date = Date()
+    ) throws -> [RecordingArtifactID] {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        let db = try openDatabase()
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "SELECT artifact_uuid FROM recording_artifacts WHERE lifecycle_state='retained' AND capture_kind=? AND COALESCE(terminal_at, created_at) <= ?",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK else {
+            let error = lastError(db)
+            sqlite3_close(db)
+            throw error
+        }
+        bind(captureKind.rawValue, at: 1, to: statement)
+        sqlite3_bind_double(statement, 2, cutoff.timeIntervalSince1970)
+        var expired: [RecordingArtifactID] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let id = RecordingArtifactID(storedValue: text(statement, 0)) {
+                expired.append(id)
+            }
+        }
+        sqlite3_finalize(statement)
+        sqlite3_close(db)
+        try requestDeletion(ids: expired, availability: .expired, now: now)
+        for id in expired {
+            try? deleteFileAndMetadataIfPossible(id: id)
+        }
+        return expired
+    }
+
     /// Enforces the global Ask-recording cap after the history owner has been
     /// committed, so a newly adopted oversized recording becomes an explicit
     /// expired history entry instead of an ambiguous save failure.
