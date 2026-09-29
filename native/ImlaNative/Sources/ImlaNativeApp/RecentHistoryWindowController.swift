@@ -84,9 +84,13 @@ final class RecentHistoryWindowController: NSObject, NSWindowDelegate {
         self.controller = controller
     }
 
+    /// `whenOrderedFront` runs once the window is actually on screen, which is a turn later
+    /// than this call when the app had to become a regular app first; `whenReady` runs after
+    /// the first layout pass on top of that.
     func show(
         whenReady readyAction: ReadyAction? = nil,
-        presentation: DashboardWindowPresentation = .restored
+        presentation: DashboardWindowPresentation = .restored,
+        whenOrderedFront: (() -> Void)? = nil
     ) {
         if window == nil {
             buildWindow()
@@ -100,8 +104,11 @@ final class RecentHistoryWindowController: NSObject, NSWindowDelegate {
         if let readyAction {
             run(presentationReadiness.enqueue(readyAction))
         }
-        MenuBarWindowPresenter.present(window, policyJustBecameRegular: policyJustBecameRegular)
-        scheduleInitialOrderedLayoutIfNeeded(for: window)
+        MenuBarWindowPresenter.present(window, policyJustBecameRegular: policyJustBecameRegular) { [weak self, weak window] in
+            guard let self, let window, self.window === window else { return }
+            self.scheduleInitialOrderedLayoutIfNeeded(for: window)
+            whenOrderedFront?()
+        }
     }
 
     private func apply(_ presentation: DashboardWindowPresentation, to window: NSWindow) {

@@ -7896,7 +7896,13 @@ public final class ImlaController: NSObject {
         alert.addButton(withTitle: "Quit Anyway")
 
         isPresentingMeetingTerminationConfirmation = true
-        let didPresent = presentAlert(alert, fallbackLogContext: "meeting termination confirmation") { [weak self] response in
+        presentAlert(
+            alert,
+            fallbackLogContext: "meeting termination confirmation",
+            onUnavailable: { [weak self] in
+                self?.isPresentingMeetingTerminationConfirmation = false
+            }
+        ) { [weak self] response in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.isPresentingMeetingTerminationConfirmation = false
@@ -7905,9 +7911,6 @@ public final class ImlaController: NSObject {
                 self.isTerminatingAfterMeetingConfirmation = true
                 NSApp.terminate(nil)
             }
-        }
-        if !didPresent {
-            isPresentingMeetingTerminationConfirmation = false
         }
 
         return false
@@ -10684,7 +10687,7 @@ public final class ImlaController: NSObject {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Save Recording")
         alert.addButton(withTitle: "Don't Save")
-        guard let window = alertPresentationWindow(showHistoryIfNeeded: true) else {
+        guard let window = await alertPresentationWindow() else {
             fputs("[imla-native] no window available for recording save prompt; saving recording by default\n", stderr)
             return true
         }
@@ -10696,23 +10699,15 @@ public final class ImlaController: NSObject {
         }
     }
 
+    /// A window that can host a sheet right now, or nil when none is on screen.
     @MainActor
-    private func alertPresentationWindow(showHistoryIfNeeded: Bool = true) -> NSWindow? {
+    private func currentAlertPresentationWindow() -> NSWindow? {
         // A sheet raised from a Settings control belongs on the settings window
         // the user is looking at, not on the dashboard behind it.
         if let window = settingsWindowController?.presentationWindow,
            window.isKeyWindow,
            isUsableSheetHost(window, allowPanel: false) {
             return window
-        }
-
-        if let window = historyWindowController?.presentationWindow,
-           isUsableSheetHost(window, allowPanel: false) {
-            return window
-        }
-
-        if showHistoryIfNeeded {
-            historyWindowController?.show()
         }
 
         if let window = historyWindowController?.presentationWindow,
@@ -10727,28 +10722,58 @@ public final class ImlaController: NSObject {
         }
     }
 
-    @discardableResult
+    /// Finds a sheet host, opening the dashboard when nothing is on screen. Opening the
+    /// dashboard can take a run-loop turn (the app may have to become a regular app first),
+    /// so the host is delivered through `completion`: synchronously when one already exists,
+    /// otherwise once the dashboard has been ordered in.
+    @MainActor
+    private func alertPresentationWindow(completion: @escaping @MainActor (NSWindow?) -> Void) {
+        if let window = currentAlertPresentationWindow() {
+            completion(window)
+            return
+        }
+        guard let historyWindowController else {
+            completion(nil)
+            return
+        }
+        historyWindowController.show(whenOrderedFront: { [weak self] in
+            completion(self?.currentAlertPresentationWindow())
+        })
+    }
+
+    @MainActor
+    private func alertPresentationWindow() async -> NSWindow? {
+        await withCheckedContinuation { continuation in
+            alertPresentationWindow { window in continuation.resume(returning: window) }
+        }
+    }
+
+    /// Presents `alert` as a sheet on the best available window, opening the dashboard if
+    /// there is none. `onUnavailable` runs instead of `completion` when no window could be
+    /// found even then; the alert's text goes to the status bar so it is not lost.
     private func presentAlert(
         _ alert: NSAlert,
         fallbackLogContext: String,
+        onUnavailable: (() -> Void)? = nil,
         completion: ((NSApplication.ModalResponse) -> Void)? = nil
-    ) -> Bool {
+    ) {
         NSApp.activate(ignoringOtherApps: true)
-        guard let window = alertPresentationWindow(showHistoryIfNeeded: true) else {
-            fputs(
-                "[imla-native] unable to present \(fallbackLogContext) alert: \(alert.messageText) - \(alert.informativeText)\n",
-                stderr
-            )
-            statusBarController?.setStatus(alert.messageText)
-            statusBarController?.refresh()
-            NSSound.beep()
-            return false
+        alertPresentationWindow { [weak self] window in
+            guard let window else {
+                fputs(
+                    "[imla-native] unable to present \(fallbackLogContext) alert: \(alert.messageText) - \(alert.informativeText)\n",
+                    stderr
+                )
+                self?.statusBarController?.setStatus(alert.messageText)
+                self?.statusBarController?.refresh()
+                NSSound.beep()
+                onUnavailable?()
+                return
+            }
+            alert.beginSheetModal(for: window) { response in
+                completion?(response)
+            }
         }
-
-        alert.beginSheetModal(for: window) { response in
-            completion?(response)
-        }
-        return true
     }
 
     private func presentMeetingStartFailureAlert(error: Error) {
@@ -14706,7 +14731,7 @@ public final class ImlaController: NSObject {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Save Recording")
         alert.addButton(withTitle: "Delete Recording")
-        guard let window = alertPresentationWindow(showHistoryIfNeeded: true) else {
+        guard let window = await alertPresentationWindow() else {
             return false
         }
         return await withCheckedContinuation { continuation in
