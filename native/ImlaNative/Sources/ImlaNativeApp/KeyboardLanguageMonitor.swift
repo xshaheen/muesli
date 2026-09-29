@@ -6,12 +6,14 @@ struct KeyboardLanguageSnapshot: Equatable, Sendable {
     let language: TranscriptionLanguage?
     let enabledLanguages: [TranscriptionLanguage]
 
+    /// Only the first entry names the language the source is intended for; the
+    /// rest are languages it can merely type. Latin layouts (ABC, U.S., Colemak)
+    /// list about a hundred, so treating the list as a set left every English
+    /// keyboard ambiguous and switching to it never pinned English.
     static func resolve(_ identifiers: [String]) -> TranscriptionLanguage? {
-        let languages = Set(identifiers.compactMap { identifier in
-            guard let code = Locale(identifier: identifier).language.languageCode?.identifier else { return nil as TranscriptionLanguage? }
-            return TranscriptionLanguage(rawValue: code)
-        })
-        return languages.count == 1 ? languages.first : nil
+        guard let primary = identifiers.first,
+              let code = Locale(identifier: primary).language.languageCode?.identifier else { return nil }
+        return TranscriptionLanguage(rawValue: code)
     }
 
     func spokenProfile(additionalLanguages: [TranscriptionLanguage] = []) -> SpokenLanguageProfile {

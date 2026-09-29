@@ -67,12 +67,15 @@ struct LanguageModelPreferencesTests {
         #expect(!unavailable.isUsable)
     }
 
-    @Test("keyboard locales normalize to one language and ambiguous sources detect automatically")
+    @Test("keyboard sources resolve to their intended language, the first one they list")
     func keyboardLanguageResolution() {
         #expect(KeyboardLanguageSnapshot.resolve(["en-US"]) == .english)
         #expect(KeyboardLanguageSnapshot.resolve(["ar-EG"]) == .arabic)
         #expect(KeyboardLanguageSnapshot.resolve(["en-US", "en-GB"]) == .english)
-        #expect(KeyboardLanguageSnapshot.resolve(["en", "ar"]) == nil)
+        #expect(KeyboardLanguageSnapshot.resolve(["en", "ar"]) == .english)
+        // Latin layouts report their intended language first, then every language they can type.
+        #expect(KeyboardLanguageSnapshot.resolve(["en", "af", "de", "es", "fr", "it", "pt"]) == .english)
+        #expect(KeyboardLanguageSnapshot.resolve(["", "en"]) == nil)
         #expect(KeyboardLanguageSnapshot.resolve([]) == nil)
         #expect(KeyboardLanguageSnapshot.resolve(["zz"]) == nil)
     }
