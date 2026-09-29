@@ -406,7 +406,7 @@ final class DictationMiniIndicatorController: NSObject {
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 panel.animator().setFrame(currentFrame, display: true)
             }
-            panel.orderFrontRegardless()
+            panel.orderFrontOnEverySpace()
             if hintPanel.isVisible { hintPanel.move(beside: currentFrame, on: screens.map(\.visibleFrame)) }
         }
     }
@@ -613,7 +613,7 @@ final class DictationMiniIndicatorController: NSObject {
                         || newPresentation == .idle
                 )
             }
-            panel.orderFrontRegardless()
+            panel.orderFrontOnEverySpace()
             logPanelPlacement("present", panel: panel)
             if let pendingToast {
                 self.pendingToast = nil
@@ -753,7 +753,7 @@ final class DictationMiniIndicatorController: NSObject {
     private func restoreActiveVisibility() {
         guard presentation == .preparing || presentation == .recording else { return }
         refreshPointerIfNeeded()
-        panel?.orderFrontRegardless()
+        panel?.orderFrontOnEverySpace()
         if let panel { logPanelPlacement("restore", panel: panel) }
     }
 
@@ -786,7 +786,7 @@ final class DictationMiniIndicatorController: NSObject {
         if let currentFrame {
             panel?.setFrame(currentFrame, display: true)
             hintPanel.move(beside: currentFrame, on: screenProvider().map(\.visibleFrame))
-            panel?.orderFrontRegardless()
+            panel?.orderFrontOnEverySpace()
         }
     }
 

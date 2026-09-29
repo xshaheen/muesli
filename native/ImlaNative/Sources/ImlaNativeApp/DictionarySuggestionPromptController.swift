@@ -106,7 +106,7 @@ final class DictionarySuggestionPromptController: NSObject {
 
         self.panel = panel
         self.onDismiss = onDismiss
-        panel.orderFrontRegardless()
+        panel.orderFrontOnEverySpace()
         startDismissCountdown(duration: Self.dismissDuration)
     }
 
