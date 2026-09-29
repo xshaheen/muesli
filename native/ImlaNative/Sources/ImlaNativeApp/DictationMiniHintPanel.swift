@@ -95,7 +95,7 @@ final class DictationMiniHintPanel {
         tintLayer.cornerRadius = actions.isEmpty ? 11 : 12
         applyChrome()
         panel.alphaValue = 0
-        panel.orderFrontRegardless()
+        panel.orderFrontOnEverySpace()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.14
             panel.animator().alphaValue = 1

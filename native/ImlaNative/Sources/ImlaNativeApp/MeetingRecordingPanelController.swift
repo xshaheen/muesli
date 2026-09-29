@@ -427,7 +427,7 @@ final class MeetingRecordingPanelController: NSObject {
         heldCorner = Self.heldCorner(for: pill, in: Self.screenFrame(containing: anchorCenter ?? .zero, screens: screens))
         updateFrameForCurrentLayout(animated: false)
         updateChrome()
-        panel.orderFrontRegardless()
+        panel.orderFrontOnEverySpace()
         surfaceView?.updateBackingScale(panel.backingScaleFactor)
         waveformView?.updateBackingScale(panel.backingScaleFactor)
         startAnimationTimer()
@@ -827,6 +827,7 @@ final class MeetingRecordingPanelController: NSObject {
         // orderFront, never makeKey: an object that takes focus during a call swallows the
         // keystrokes meant for Zoom. Chat and My notes ask for key themselves when clicked.
         panel?.orderFront(nil)
+        panel?.restoreEverySpaceMembershipIfNeeded()
         announce("Meeting panel opened")
         if userInitiated { rememberPanelOpen(true) }
     }

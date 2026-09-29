@@ -217,7 +217,7 @@ final class MeetingRecordButtonController: NSObject {
         )
         panel.setFrame(frame, display: true)
         applyChrome()
-        panel.orderFrontRegardless()
+        panel.orderFrontOnEverySpace()
     }
 
     func hide() {

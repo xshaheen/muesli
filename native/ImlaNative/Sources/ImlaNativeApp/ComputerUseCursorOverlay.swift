@@ -86,7 +86,7 @@ final class ComputerUseCursorOverlay: NSObject {
             ),
             display: true
         )
-        panel.orderFrontRegardless()
+        panel.orderFrontOnEverySpace()
     }
 
     func hideTarget() {
@@ -153,7 +153,7 @@ final class ComputerUseCursorOverlay: NSObject {
             ),
             display: true
         )
-        panel.orderFrontRegardless()
+        panel.orderFrontOnEverySpace()
     }
 
     private func applyBasePresentation() {
@@ -173,7 +173,7 @@ final class ComputerUseCursorOverlay: NSObject {
             ),
             display: true
         )
-        panel.orderFrontRegardless()
+        panel.orderFrontOnEverySpace()
         if basePresentation.isInteractive { startAmplitudeTimer() }
     }
 

@@ -8,6 +8,34 @@ import Testing
 @MainActor
 @Suite("WindowAppearance", .serialized)
 struct WindowAppearanceTests {
+    @Test("all-Spaces repair keeps the collection behavior and ignores ordinary windows")
+    func everySpaceRepairPreservesBehavior() {
+        let allSpaces = NSPanel(
+            contentRect: CGRect(x: 0, y: 0, width: 20, height: 20),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false
+        )
+        allSpaces.isReleasedWhenClosed = false
+        allSpaces.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        allSpaces.orderFrontOnEverySpace()
+        // A freshly made window is on every Space, so no repair runs, and whether or not one
+        // runs the behavior set the owner chose must come back intact.
+        #expect(allSpaces.collectionBehavior == [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary])
+        #expect(allSpaces.isVisible)
+        allSpaces.orderOut(nil)
+        #expect(!allSpaces.restoreEverySpaceMembershipIfNeeded())
+        allSpaces.close()
+
+        let ordinary = NSPanel(
+            contentRect: CGRect(x: 0, y: 0, width: 20, height: 20),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false
+        )
+        ordinary.isReleasedWhenClosed = false
+        ordinary.orderFrontRegardless()
+        #expect(!ordinary.restoreEverySpaceMembershipIfNeeded())
+        #expect(ordinary.collectionBehavior == [])
+        ordinary.close()
+    }
+
 
     @Test("dark mode maps to the dark AppKit appearance")
     func darkModeMapsToDarkAqua() {
