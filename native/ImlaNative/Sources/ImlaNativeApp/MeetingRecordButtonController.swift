@@ -208,7 +208,7 @@ final class MeetingRecordButtonController: NSObject {
             isHovered = false
             isPressed = false
         }
-        let panel = panel ?? makePanel()
+        var panel = panel ?? makePanel()
         self.panel = panel
         let frame = MeetingRecordingPanelController.resolvedFrame(
             savedCenter: savedCenter,
@@ -217,7 +217,13 @@ final class MeetingRecordButtonController: NSObject {
         )
         panel.setFrame(frame, display: true)
         applyChrome()
-        panel.orderFrontOnEverySpace()
+        panel.orderFrontRegardless()
+        if panel.isMissingFromActiveSpace {
+            panel = panel.replacedOnActiveSpace {
+                InteractiveFloatingPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            }
+            self.panel = panel
+        }
     }
 
     func hide() {

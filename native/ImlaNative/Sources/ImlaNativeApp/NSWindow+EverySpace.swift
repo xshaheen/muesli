@@ -3,43 +3,58 @@ import OSLog
 
 /// Membership repair for windows that must show on every Space.
 ///
-/// A window tagged `canJoinAllSpaces` is added to each Space when the Space is created, but
-/// the window server can later drop it from one: this app's dictation panel, its hint panel,
-/// and its status item window were all found missing from one full-screen Space while a
-/// freshly made window was on all of them, and nothing in the app had touched their
-/// collection behavior. Once dropped, the window is ordered in but never composited on that
-/// Space, and setting `collectionBehavior` again does not re-add it. What does re-add it is
-/// moving the window to the active Space and then restoring the all-Spaces tag: the window
-/// server rebuilds the membership from the current Space outward. The trigger that drops the
-/// window is still unknown, so this is repaired at every order-in rather than at a guessed
-/// moment.
+/// A window tagged `canJoinAllSpaces` is meant to be on each Space, but the window server
+/// leaves long-lived windows off a full-screen Space another app creates: this app's dictation
+/// panel and hint panel were on the desktop Space only while a status item window made later
+/// was on both, and nothing in the app had touched their collection behavior. Once off, the
+/// window is ordered in there but never composited, and nothing done to that window-server
+/// window puts it back. Resetting the behavior, toggling the level, `close()` on a window that
+/// is not released when closed, and swapping in `moveToActiveSpace` were all tried against a
+/// full-screen Space and left the membership as it was; the swap does work against the desktop
+/// Space, which is how an earlier version of this file came to ship it. Only a new window gets
+/// fresh membership, so the repair builds a replacement of the owner's class, moves the content
+/// view across, and copies the chrome. The trigger for the drop is still unknown, so owners
+/// check at every order-in.
 extension NSWindow {
     private static let spacesLogger = Logger(subsystem: "com.xshaheen.imla", category: "WindowSpaces")
 
-    /// Orders the window front without activating the app, then repairs its Space membership
-    /// if the window server left it off the active Space. Returns whether a repair was needed.
-    @discardableResult
-    func orderFrontOnEverySpace() -> Bool {
-        orderFrontRegardless()
-        return restoreEverySpaceMembershipIfNeeded()
+    /// Ordered in with the all-Spaces tag, yet the window server left it off the active Space.
+    var isMissingFromActiveSpace: Bool {
+        isVisible && collectionBehavior.contains(.canJoinAllSpaces) && !isOnActiveSpace
     }
 
-    /// For a window that is ordered in with `canJoinAllSpaces` but is not on the active Space:
-    /// moves it to the active Space and restores the tag, which puts it back on every Space.
-    /// `canJoinAllSpaces` and `moveToActiveSpace` cannot be set together, so the swap is
-    /// explicit. No-op for windows that are not all-Spaces windows or are already placed.
-    @discardableResult
-    func restoreEverySpaceMembershipIfNeeded() -> Bool {
-        let behavior = collectionBehavior
-        guard isVisible, behavior.contains(.canJoinAllSpaces), !isOnActiveSpace else { return false }
-        collectionBehavior = behavior.subtracting(.canJoinAllSpaces).union(.moveToActiveSpace)
-        orderFrontRegardless()
-        // Load-bearing read: it makes AppKit flush the move to the window server before the
-        // tag goes back. Restoring in the same transaction, on the next main-queue turn, or
-        // after an unrelated CoreGraphics query all left the membership unchanged.
-        let moved = isOnActiveSpace
-        collectionBehavior = behavior
-        Self.spacesLogger.notice("restored all-Spaces membership window=\(self.windowNumber, privacy: .public) level=\(self.level.rawValue, privacy: .public) moved=\(moved, privacy: .public)")
-        return true
+    /// Replaces this window with one `make` builds: the content view, frame, level, behavior,
+    /// and chrome carry over, this window is closed, and the replacement is ordered front.
+    /// `make` only has to produce a bare window of the right class and style mask.
+    func replacedOnActiveSpace<Window: NSWindow>(making make: () -> Window) -> Window {
+        let fresh = make()
+        if let panel = self as? NSPanel, let freshPanel = fresh as? NSPanel {
+            // `isFloatingPanel` rewrites the level, so it goes before the level copy.
+            freshPanel.isFloatingPanel = panel.isFloatingPanel
+            freshPanel.becomesKeyOnlyIfNeeded = panel.becomesKeyOnlyIfNeeded
+            freshPanel.worksWhenModal = panel.worksWhenModal
+        }
+        fresh.isReleasedWhenClosed = isReleasedWhenClosed
+        fresh.level = level
+        fresh.collectionBehavior = collectionBehavior
+        fresh.backgroundColor = backgroundColor
+        fresh.isOpaque = isOpaque
+        fresh.hasShadow = hasShadow
+        fresh.ignoresMouseEvents = ignoresMouseEvents
+        fresh.hidesOnDeactivate = hidesOnDeactivate
+        fresh.isMovableByWindowBackground = isMovableByWindowBackground
+        fresh.alphaValue = alphaValue
+        fresh.contentMinSize = contentMinSize
+        fresh.contentMaxSize = contentMaxSize
+        fresh.delegate = delegate
+        fresh.setFrame(frame, display: false)
+        let content = contentView
+        contentView = nil
+        fresh.contentView = content
+        orderOut(nil)
+        close()
+        fresh.orderFrontRegardless()
+        Self.spacesLogger.notice("replaced window off the active Space old=\(self.windowNumber, privacy: .public) new=\(fresh.windowNumber, privacy: .public) level=\(fresh.level.rawValue, privacy: .public) onActiveSpace=\(fresh.isOnActiveSpace, privacy: .public)")
+        return fresh
     }
 }

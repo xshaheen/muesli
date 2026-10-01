@@ -42,7 +42,7 @@ final class DictationMiniHintPanel {
         let token = generation
         dismissTask?.cancel()
         dismissTask = nil
-        let panel = panel ?? makePanel()
+        var panel = panel ?? makePanel()
         self.panel = panel
         buttons.forEach { $0.removeFromSuperview() }
         buttons.removeAll()
@@ -95,7 +95,13 @@ final class DictationMiniHintPanel {
         tintLayer.cornerRadius = actions.isEmpty ? 11 : 12
         applyChrome()
         panel.alphaValue = 0
-        panel.orderFrontOnEverySpace()
+        panel.orderFrontRegardless()
+        if panel.isMissingFromActiveSpace {
+            panel = panel.replacedOnActiveSpace {
+                NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            }
+            self.panel = panel
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.14
             panel.animator().alphaValue = 1
