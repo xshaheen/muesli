@@ -30,7 +30,8 @@ OFFICIAL_SIGN_IDENTITY := Apple Development: mxshaheen@icloud.com (AMM3J847CY)
 VERSION  ?=
 # XCODE=1 pins the xcodebuild path so App Intents metadata ships (Shortcuts).
 XCODE    ?=
-# LANE=A/B/C selects an isolated parallel dev lane for `make dev`.
+# LANE=A/B/C selects an isolated parallel dev lane for `make dev`, and an
+# isolated SwiftPM scratch channel for `make test`.
 LANE     ?=
 # FILTER narrows `make test` to matching suites/tests, e.g. FILTER=DictationStore.
 FILTER   ?=
@@ -105,9 +106,37 @@ dmg: build ## Signed installer at DMG_DIR/Imla-<version>.dmg (builds first).
 dev: ## Isolated dev/test build, ImlaDev.app; LANE=A/B/C for parallel lanes.
 	./scripts/dev-test.sh $(if $(LANE),--lane $(LANE),)
 
+# Resolution and the --build-system pin come from the same places the build and
+# release scripts get them, so this target cannot drift from them:
+# scripts/imla_spm_cache.sh for the scratch path, and the legacy `native` engine
+# because the default swiftbuild engine flattens binary-target headers into one
+# include/ where two vendored xcframeworks' module maps collide. The engine is
+# recorded inside the scratch directory, so an unpinned run would also discard
+# every artifact build_native_app.sh put there.
+#
+# Per-worktree, like the debug channel in build_native_app.sh, rather than one
+# channel shared across checkouts. llbuild keys its database on absolute source
+# paths but writes to the same output paths, so two checkouts sharing a scratch
+# path overwrite each other's first-party objects and neither is ever warm
+# again: measured here, a filtered run cost 4m43s cold, 37s warm, and 1m33s to
+# 8m54s on every alternation between two checkouts, recompiling all ~516
+# ImlaCore/ImlaNativeApp/ImlaCLI/ImlaTests files each time. Sharing does reuse
+# the compiled dependencies, but not enough to pay for that. LANE=A/B/C, or
+# MUESLI_SWIFTPM_SCRATCH_CHANNEL, separates two runs inside one worktree.
 .PHONY: test
-test: ## Run the SwiftPM test suite; FILTER=<suite or test> narrows.
-	swift test --package-path native/ImlaNative $(if $(FILTER),--filter '$(FILTER)',)
+test: ## Run the SwiftPM test suite; FILTER=<suite or test> narrows, LANE isolates the scratch path.
+	@source ./scripts/imla_spm_cache.sh; \
+	test_args=(--package-path native/ImlaNative --build-system native); \
+	if imla_spm_scratch_disabled; then \
+	  echo "Using SwiftPM scratch path: package-local .build"; \
+	else \
+	  channel="$$(imla_worktree_spm_scratch_channel 'test$(if $(LANE),-$(LANE),)' '$(CURDIR)')"; \
+	  scratch="$$(imla_resolve_spm_scratch_path "$$channel")"; \
+	  mkdir -p "$$scratch"; \
+	  test_args+=(--scratch-path "$$scratch"); \
+	  echo "Using SwiftPM scratch path: $$scratch"; \
+	fi; \
+	swift test "$${test_args[@]}" $(if $(FILTER),--filter '$(FILTER)',)
 
 .PHONY: release
 release: ## Official notarized release pipeline (Developer ID + ImlaNotary); VERSION=x.y.z pins.
