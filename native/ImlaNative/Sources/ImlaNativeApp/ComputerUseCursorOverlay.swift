@@ -86,7 +86,7 @@ final class ComputerUseCursorOverlay: NSObject {
             ),
             display: true
         )
-        panel.orderFrontOnEverySpace()
+        orderPanelFront(panel)
     }
 
     func hideTarget() {
@@ -153,7 +153,7 @@ final class ComputerUseCursorOverlay: NSObject {
             ),
             display: true
         )
-        panel.orderFrontOnEverySpace()
+        orderPanelFront(panel)
     }
 
     private func applyBasePresentation() {
@@ -173,8 +173,18 @@ final class ComputerUseCursorOverlay: NSObject {
             ),
             display: true
         )
-        panel.orderFrontOnEverySpace()
+        orderPanelFront(panel)
         if basePresentation.isInteractive { startAmplitudeTimer() }
+    }
+
+    /// Orders the panel front and swaps in a fresh window when the window server has left it
+    /// off the active Space; see `NSWindow+EverySpace`.
+    private func orderPanelFront(_ panel: NSPanel) {
+        panel.orderFrontRegardless()
+        guard panel.isMissingFromActiveSpace else { return }
+        self.panel = panel.replacedOnActiveSpace {
+            NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        }
     }
 
     private func ensurePanel(size: CGSize) -> NSPanel {

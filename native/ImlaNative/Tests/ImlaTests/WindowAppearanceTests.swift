@@ -8,22 +8,51 @@ import Testing
 @MainActor
 @Suite("WindowAppearance", .serialized)
 struct WindowAppearanceTests {
-    @Test("all-Spaces repair keeps the collection behavior and ignores ordinary windows")
-    func everySpaceRepairPreservesBehavior() {
-        let allSpaces = NSPanel(
-            contentRect: CGRect(x: 0, y: 0, width: 20, height: 20),
-            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false
+    @Test("replacing a panel off the active Space carries its content view, frame, and chrome")
+    func everySpaceReplacementCarriesState() {
+        let old = InteractiveFloatingPanel(
+            contentRect: CGRect(x: 40, y: 60, width: 120, height: 30),
+            styleMask: [.borderless, .nonactivatingPanel, .resizable], backing: .buffered, defer: false
         )
-        allSpaces.isReleasedWhenClosed = false
-        allSpaces.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        allSpaces.orderFrontOnEverySpace()
-        // A freshly made window is on every Space, so no repair runs, and whether or not one
-        // runs the behavior set the owner chose must come back intact.
-        #expect(allSpaces.collectionBehavior == [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary])
-        #expect(allSpaces.isVisible)
-        allSpaces.orderOut(nil)
-        #expect(!allSpaces.restoreEverySpaceMembershipIfNeeded())
-        allSpaces.close()
+        old.isReleasedWhenClosed = false
+        old.level = .statusBar
+        old.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        old.backgroundColor = .clear
+        old.isOpaque = false
+        old.hasShadow = false
+        old.ignoresMouseEvents = true
+        old.hidesOnDeactivate = false
+        old.alphaValue = 0.5
+        old.contentMinSize = NSSize(width: 100, height: 20)
+        old.becomesKeyOnlyIfNeeded = true
+        let content = NSView(frame: CGRect(x: 0, y: 0, width: 120, height: 30))
+        old.contentView = content
+        old.orderFrontRegardless()
+        // A freshly made window is on every Space, so an order-in needs no replacement.
+        #expect(!old.isMissingFromActiveSpace)
+
+        let fresh = old.replacedOnActiveSpace {
+            InteractiveFloatingPanel(
+                contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel, .resizable],
+                backing: .buffered, defer: false
+            )
+        }
+        #expect(fresh !== old)
+        #expect(fresh.contentView === content)
+        #expect(old.contentView == nil)
+        #expect(fresh.frame == CGRect(x: 40, y: 60, width: 120, height: 30))
+        #expect(fresh.level == .statusBar)
+        #expect(fresh.collectionBehavior == [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary])
+        #expect(fresh.ignoresMouseEvents)
+        #expect(!fresh.hasShadow)
+        #expect(!fresh.isOpaque)
+        #expect(fresh.alphaValue == 0.5)
+        #expect(fresh.contentMinSize == NSSize(width: 100, height: 20))
+        #expect(fresh.becomesKeyOnlyIfNeeded)
+        #expect(!fresh.isReleasedWhenClosed)
+        #expect(fresh.isVisible)
+        #expect(!old.isVisible)
+        fresh.close()
 
         let ordinary = NSPanel(
             contentRect: CGRect(x: 0, y: 0, width: 20, height: 20),
@@ -31,11 +60,10 @@ struct WindowAppearanceTests {
         )
         ordinary.isReleasedWhenClosed = false
         ordinary.orderFrontRegardless()
-        #expect(!ordinary.restoreEverySpaceMembershipIfNeeded())
-        #expect(ordinary.collectionBehavior == [])
+        // Only all-Spaces windows are candidates; an ordinary window is never "missing".
+        #expect(!ordinary.isMissingFromActiveSpace)
         ordinary.close()
     }
-
 
     @Test("dark mode maps to the dark AppKit appearance")
     func darkModeMapsToDarkAqua() {

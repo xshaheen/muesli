@@ -406,7 +406,7 @@ final class DictationMiniIndicatorController: NSObject {
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 panel.animator().setFrame(currentFrame, display: true)
             }
-            panel.orderFrontOnEverySpace()
+            orderPanelFront(logging: "move")
             if hintPanel.isVisible { hintPanel.move(beside: currentFrame, on: screens.map(\.visibleFrame)) }
         }
     }
@@ -613,8 +613,7 @@ final class DictationMiniIndicatorController: NSObject {
                         || newPresentation == .idle
                 )
             }
-            panel.orderFrontOnEverySpace()
-            logPanelPlacement("present", panel: panel)
+            orderPanelFront(logging: "present")
             if let pendingToast {
                 self.pendingToast = nil
                 hintPanel.show(pendingToast.text, beside: currentFrame, on: screenProvider().map(\.visibleFrame), duration: pendingToast.duration)
@@ -704,9 +703,17 @@ final class DictationMiniIndicatorController: NSObject {
         panel.contentView = view
         self.panel = panel
         contentView = view
-        // Occlusion changes arrive through NotificationCenter, which keeps delivering under
-        // App Nap when timers do not, so this is the record of when the window server actually
-        // showed or dropped the panel.
+        observeOcclusion(of: panel)
+        return panel
+    }
+
+    /// Occlusion changes arrive through NotificationCenter, which keeps delivering under App
+    /// Nap when timers do not, so this is the record of when the window server actually showed
+    /// or dropped the panel. Re-registered whenever the panel is replaced.
+    private func observeOcclusion(of panel: NSPanel) {
+        if let occlusionObserver {
+            NotificationCenter.default.removeObserver(occlusionObserver)
+        }
         occlusionObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeOcclusionStateNotification,
             object: panel,
@@ -717,7 +724,6 @@ final class DictationMiniIndicatorController: NSObject {
                 self.logPanelPlacement("occlusion", panel: panel)
             }
         }
-        return panel
     }
 
     private func startPointerMonitoring() {
@@ -753,8 +759,23 @@ final class DictationMiniIndicatorController: NSObject {
     private func restoreActiveVisibility() {
         guard presentation == .preparing || presentation == .recording else { return }
         refreshPointerIfNeeded()
-        panel?.orderFrontOnEverySpace()
-        if let panel { logPanelPlacement("restore", panel: panel) }
+        orderPanelFront(logging: "restore")
+    }
+
+    /// Orders the panel front and, when the window server has left it off the active Space,
+    /// swaps in a fresh window carrying the same content view; see `NSWindow+EverySpace`.
+    /// Called at every order-in because the drop has no known trigger to hook.
+    private func orderPanelFront(logging event: String? = nil) {
+        guard var panel else { return }
+        panel.orderFrontRegardless()
+        if panel.isMissingFromActiveSpace {
+            panel = panel.replacedOnActiveSpace {
+                NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            }
+            self.panel = panel
+            observeOcclusion(of: panel)
+        }
+        if let event { logPanelPlacement(event, panel: panel) }
     }
 
     private func logPanelPlacement(_ event: String, panel: NSPanel) {
@@ -786,7 +807,7 @@ final class DictationMiniIndicatorController: NSObject {
         if let currentFrame {
             panel?.setFrame(currentFrame, display: true)
             hintPanel.move(beside: currentFrame, on: screenProvider().map(\.visibleFrame))
-            panel?.orderFrontOnEverySpace()
+            orderPanelFront()
         }
     }
 

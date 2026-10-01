@@ -106,7 +106,12 @@ final class DictionarySuggestionPromptController: NSObject {
 
         self.panel = panel
         self.onDismiss = onDismiss
-        panel.orderFrontOnEverySpace()
+        panel.orderFrontRegardless()
+        if panel.isMissingFromActiveSpace {
+            self.panel = panel.replacedOnActiveSpace {
+                DictionarySuggestionPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            }
+        }
         startDismissCountdown(duration: Self.dismissDuration)
     }
 

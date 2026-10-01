@@ -417,7 +417,7 @@ final class MeetingRecordingPanelController: NSObject {
         bodyCoordinator.setPaused(false)
         bodyCoordinator.setSelectionAccentHex(DictationMiniPalette.accentHex)
 
-        let panel = panel ?? makePanel()
+        var panel = panel ?? makePanel()
         self.panel = panel
         resolvedPanelSize = Self.defaultPanelSize
         // The held corner is chosen from the base pill once per recording and kept from here on.
@@ -427,7 +427,10 @@ final class MeetingRecordingPanelController: NSObject {
         heldCorner = Self.heldCorner(for: pill, in: Self.screenFrame(containing: anchorCenter ?? .zero, screens: screens))
         updateFrameForCurrentLayout(animated: false)
         updateChrome()
-        panel.orderFrontOnEverySpace()
+        panel.orderFrontRegardless()
+        if panel.isMissingFromActiveSpace {
+            panel = replacementPanel(for: panel)
+        }
         surfaceView?.updateBackingScale(panel.backingScaleFactor)
         waveformView?.updateBackingScale(panel.backingScaleFactor)
         startAnimationTimer()
@@ -827,7 +830,9 @@ final class MeetingRecordingPanelController: NSObject {
         // orderFront, never makeKey: an object that takes focus during a call swallows the
         // keystrokes meant for Zoom. Chat and My notes ask for key themselves when clicked.
         panel?.orderFront(nil)
-        panel?.restoreEverySpaceMembershipIfNeeded()
+        if let panel, panel.isMissingFromActiveSpace {
+            _ = replacementPanel(for: panel)
+        }
         announce("Meeting panel opened")
         if userInitiated { rememberPanelOpen(true) }
     }
@@ -889,6 +894,21 @@ final class MeetingRecordingPanelController: NSObject {
     }
 
     // MARK: Window
+
+    /// Swaps in a fresh window when the window server has left this one off the active Space;
+    /// see `NSWindow+EverySpace`. The content view and its subviews move across intact.
+    private func replacementPanel(for panel: InteractiveFloatingPanel) -> InteractiveFloatingPanel {
+        let fresh = panel.replacedOnActiveSpace {
+            InteractiveFloatingPanel(
+                contentRect: .zero,
+                styleMask: [.borderless, .nonactivatingPanel, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+        }
+        self.panel = fresh
+        return fresh
+    }
 
     private func makePanel() -> InteractiveFloatingPanel {
         let panel = InteractiveFloatingPanel(
