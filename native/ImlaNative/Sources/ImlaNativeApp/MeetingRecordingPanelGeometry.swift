@@ -151,13 +151,13 @@ extension MeetingRecordingPanelController {
                 height: 14
             )
             var x = wave.minX - rowWaveGap
-            for _ in 0..<3 {
+            for _ in 0..<rowControlCount {
                 x -= controlWidth
                 controls.append(control(at: x))
             }
         } else {
             var x = bounds.width - rowEdgeInset
-            for _ in 0..<3 {
+            for _ in 0..<rowControlCount {
                 x -= controlWidth
                 // Built right to left but reported in tab order.
                 controls.insert(control(at: x), at: 0)

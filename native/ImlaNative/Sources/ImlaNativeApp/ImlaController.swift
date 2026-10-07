@@ -1150,6 +1150,7 @@ public final class ImlaController: NSObject {
             self?.confirmDiscardMeeting(ownerID: ownerID)
         }
         meetingRecordingPanel.onTogglePause = { [weak self] in self?.toggleMeetingRecordingPause() }
+        meetingRecordingPanel.onToggleMicMute = { [weak self] in self?.toggleMeetingMicMute() }
         meetingRecordingPanel.onOpenNotes = { [weak self] in self?.openActiveMeetingNotes() }
         ComputerUseCursorOverlay.shared.onStop = { [weak self] in
             guard let self else { return }
@@ -7968,6 +7969,17 @@ public final class ImlaController: NSObject {
             resumeMeetingRecording()
         } else {
             pauseMeetingRecording()
+        }
+    }
+
+    func toggleMeetingMicMute() {
+        guard let activeMeetingSession,
+              activeMeetingSession.isRecording,
+              !isStoppingMeetingRecording else { return }
+        let muted = !activeMeetingSession.isMicMuted
+        activeMeetingSession.setMicMuted(muted)
+        if let activeMeetingPanelOwnerID {
+            meetingRecordingPanel.setMicMuted(muted, ownerID: activeMeetingPanelOwnerID)
         }
     }
 

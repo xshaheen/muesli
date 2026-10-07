@@ -608,6 +608,9 @@ final class MeetingSession {
     private let systemAudioWatchdog = MeetingSystemAudioWatchdog()
     private let chunkRotationQueue = DispatchQueue(label: "ImlaNative.MeetingSession.chunkRotation")
     private let pausedDisplayLock = OSAllocatedUnfairLock(initialState: false)
+    /// Muting in the call app silences only that app's send path; the device keeps
+    /// capturing, so the meeting needs its own mute for the "You" side.
+    private let micMutedLock = OSAllocatedUnfairLock(initialState: false)
     private var chunkTimingTracker = MeetingChunkTimingTracker()
     private var systemChunkTimingTracker = MeetingChunkTimingTracker()
     /// Set after a system-capture interruption so the first recovered callback
@@ -675,7 +678,7 @@ final class MeetingSession {
 
     /// Current mic power level for waveform visualization.
     func currentPower() -> Float {
-        if isPaused {
+        if isPaused || isMicMuted {
             return -160
         }
         guard let lastCallback = micHealthTracker.snapshot().lastRawMicCallbackAt,
@@ -687,6 +690,20 @@ final class MeetingSession {
     private var captureRequestedStartTime: Date?
     private(set) var isRecording = false
     private(set) var isPaused = false
+
+    var isMicMuted: Bool { micMutedLock.withLock { $0 } }
+
+    /// Takes effect at the next mic callback. Audio already captured while unmuted
+    /// still finishes its chunk, because it was spoken before the user muted.
+    func setMicMuted(_ muted: Bool) {
+        let changed = micMutedLock.withLock { current -> Bool in
+            guard current != muted else { return false }
+            current = muted
+            return true
+        }
+        guard changed else { return }
+        fputs("[meeting] microphone \(muted ? "muted" : "unmuted")\n", stderr)
+    }
 
     private func setPausedStateOnQueue(_ paused: Bool) {
         isPaused = paused
@@ -2270,25 +2287,32 @@ final class MeetingSession {
         chunkRotationQueue.async { [weak self] in
             guard let self, self.capturePhase.acceptsSamples else { return }
 
+            // Health reads the real device even while muted: a muted mic is not a dead
+            // one, and treating its silence as failure would trigger a device handoff.
             let healthSnapshot = self.micHealthTracker.noteRawMicSamples(rawSamples)
             self.onMicHealthChanged?(healthSnapshot)
             self.micRecoveryCoordinator.process(healthSnapshot)
+            // Muted audio becomes silence of the same length rather than being dropped,
+            // so the recording, AEC, and chunk timelines stay aligned with system audio.
+            let micSamples = self.isMicMuted
+                ? [Int16](repeating: 0, count: rawSamples.count)
+                : rawSamples
             let recordingOffset = self.recordingOffsetOnQueue(
                 for: .mic,
-                sampleCount: rawSamples.count,
+                sampleCount: micSamples.count,
                 callbackUptimeNanoseconds: callbackUptime,
                 callbackDate: callbackDate
             )
-            self.retainedRecordingWriter?.appendMic(rawSamples, atSampleOffset: recordingOffset)
+            self.retainedRecordingWriter?.appendMic(micSamples, atSampleOffset: recordingOffset)
 
-            let floatSamples = rawSamples.map { Float($0) / 32767.0 }
+            let floatSamples = micSamples.map { Float($0) / 32767.0 }
 
             // The forward-residual exclusion compares raw against cleaned mic
             // energy at the same timeline position (KTD4); the cleaned side is
             // registered as the AEC releases it.
             self.reverseLeakSuppressor.feedRawMicSamples(floatSamples, timelineStartSample: recordingOffset)
             self.micArrivalTimeline.noteMicCallback(
-                sampleCount: rawSamples.count,
+                sampleCount: micSamples.count,
                 timelineStart: recordingOffset
             )
 

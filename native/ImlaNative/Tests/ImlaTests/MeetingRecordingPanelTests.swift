@@ -153,7 +153,7 @@ struct MeetingRecordingPanelGeometryTests {
 
         #expect(row.maxX == pill.maxX)
         #expect(row.minY == pill.minY)
-        #expect(row.width == 212)
+        #expect(row.width == 236)
         #expect(panel.maxX == pill.maxX)
         #expect(panel.minY == pill.minY)
         #expect(minimized == pill)
@@ -221,8 +221,8 @@ struct MeetingRecordingPanelGeometryTests {
             == NSSize(width: 72, height: 22))
         #expect(MeetingRecordingPanelController.pillSize(for: .clock(hasHours: true))
             == NSSize(width: 86, height: 22))
-        #expect(MeetingRecordingPanelController.size(for: .row, content: .clock(hasHours: false)).width == 212)
-        #expect(MeetingRecordingPanelController.size(for: .row, content: .clock(hasHours: true)).width == 226)
+        #expect(MeetingRecordingPanelController.size(for: .row, content: .clock(hasHours: false)).width == 236)
+        #expect(MeetingRecordingPanelController.size(for: .row, content: .clock(hasHours: true)).width == 250)
 
         let statusFont = NSFont.systemFont(ofSize: 10, weight: .semibold)
         var statusWidths: Set<CGFloat> = []
@@ -255,7 +255,7 @@ struct MeetingRecordingPanelGeometryTests {
                     #expect(part.minX >= 0)
                     #expect(part.maxX <= size.width)
                 }
-                #expect(row.controls.count == 3)
+                #expect(row.controls.count == MeetingRecordingPanelController.rowControlCount)
                 // The controls' outer edge keeps the same 6 pt inset the pill's own text
                 // slot uses, whichever side they unfold on.
                 let outerEdge = mirrored
@@ -373,7 +373,7 @@ struct MeetingRecordingPanelLifecycleTests {
 
         #expect(controller.accessibilityRoleForTesting == .button)
         #expect(controller.accessibilityLabelForTesting == "Meeting recording, 00:00, recording")
-        #expect(controller.accessibilityCustomActionNamesForTesting == ["Open panel", "Pause", "Stop"])
+        #expect(controller.accessibilityCustomActionNamesForTesting == ["Open panel", "Pause", "Stop", "Mute microphone"])
         #expect(controller.controlAccessibilityLabelsForTesting.isEmpty)
 
         controller.pointerEntered()
@@ -384,7 +384,44 @@ struct MeetingRecordingPanelLifecycleTests {
             "Pause meeting recording",
             "Stop meeting recording",
             "Open meeting panel",
+            "Mute microphone",
         ])
+        controller.close()
+    }
+
+    @Test("the mic control toggles its label and resets for the next recording")
+    func micMuteControlTracksState() {
+        let now = Date(timeIntervalSinceReferenceDate: 32_000)
+        let controller = makeController(now: { now })
+        controller.reduceMotionOverrideForTesting = true
+        var toggles = 0
+        controller.onToggleMicMute = { toggles += 1 }
+        let owner = UUID()
+        controller.showRecording(
+            ownerID: owner,
+            startedAt: now,
+            powerProvider: { -160 },
+            presentation: .backgroundPill
+        )
+        controller.pointerEntered()
+
+        controller.setMicMuted(true, ownerID: owner)
+        #expect(controller.controlAccessibilityLabelsForTesting.last == "Unmute microphone")
+        #expect(controller.accessibilityAnnouncementsForTesting.last == "Microphone muted")
+
+        // A stale owner must not flip the mute shown for the current recording.
+        controller.setMicMuted(false, ownerID: UUID())
+        #expect(controller.controlAccessibilityLabelsForTesting.last == "Unmute microphone")
+
+        controller.showRecording(
+            ownerID: UUID(),
+            startedAt: now,
+            powerProvider: { -160 },
+            presentation: .backgroundPill
+        )
+        controller.pointerEntered()
+        #expect(controller.controlAccessibilityLabelsForTesting.last == "Mute microphone")
+        #expect(toggles == 0)
         controller.close()
     }
 
@@ -404,10 +441,10 @@ struct MeetingRecordingPanelLifecycleTests {
             presentation: .backgroundPill
         )
 
-        #expect(controller.accessibilityCustomActionNamesForTesting == ["Open panel", "Pause", "Stop"])
+        #expect(controller.accessibilityCustomActionNamesForTesting == ["Open panel", "Pause", "Stop", "Mute microphone"])
 
         controller.setPaused(true, ownerID: owner)
-        #expect(controller.accessibilityCustomActionNamesForTesting == ["Open panel", "Resume", "Stop"])
+        #expect(controller.accessibilityCustomActionNamesForTesting == ["Open panel", "Resume", "Stop", "Mute microphone"])
 
         controller.beginFinalizing(ownerID: owner, status: "Summarizing")
 

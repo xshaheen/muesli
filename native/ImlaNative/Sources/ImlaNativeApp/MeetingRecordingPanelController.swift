@@ -152,11 +152,11 @@ final class MeetingRecordingPanelController: NSObject {
     /// `meeting_recording_panel_center` always stores *its* center.
     nonisolated static let basePillSize = NSSize(width: 72, height: 22)
     nonisolated static let widePillSize = NSSize(width: 86, height: 22)
-    /// 6 + 3×24 controls + 6 + 48 wave + 8 + the 72 pt pill block. The row is exactly what
+    /// 6 + 4×24 controls + 6 + 48 wave + 8 + the 72 pt pill block. The row is exactly what
     /// its parts need: anything narrower pushes the outermost control off the edge, which
     /// AppKit clips rather than absorbs.
-    nonisolated static let rowSize = NSSize(width: 212, height: 22)
-    nonisolated static let wideRowSize = NSSize(width: 226, height: 22)
+    nonisolated static let rowSize = NSSize(width: 236, height: 22)
+    nonisolated static let wideRowSize = NSSize(width: 250, height: 22)
     nonisolated static let defaultPanelSize = NSSize(width: 360, height: 320)
     nonisolated static let minimumPanelSize = NSSize(width: 360, height: 240)
     nonisolated static let panelHeaderHeight: CGFloat = 30
@@ -171,12 +171,15 @@ final class MeetingRecordingPanelController: NSObject {
 
     nonisolated static let waveSlotWidth: CGFloat = 48
     nonisolated static let controlWidth: CGFloat = 24
+    /// Mic mute, pause, stop, and the panel toggle.
+    nonisolated static let rowControlCount = 4
 
     var onStop: (() -> Void)?
     /// Carries the owner the object was showing, so a confirmation the user leaves open while
     /// that meeting stops is never applied to the recording that replaced it.
     var onDiscard: ((UUID) -> Void)?
     var onTogglePause: (() -> Void)?
+    var onToggleMicMute: (() -> Void)?
     var onOpenNotes: (() -> Void)?
     var onControlCenterSaved: ((CGPoint) -> Void)?
     /// Fires only for a user-initiated open or minimize. The start-time
@@ -232,6 +235,8 @@ final class MeetingRecordingPanelController: NSObject {
     private var panelButton: NSButton?
     private var pauseButton: NSButton?
     private var stopButton: NSButton?
+    private var micButton: NSButton?
+    private var isMicMuted = false
     private var elapsedLabel: NSTextField?
     private var statusLabel: NSTextField?
     private var waveformView: ContextualSparkWaveformView?
@@ -328,11 +333,11 @@ final class MeetingRecordingPanelController: NSObject {
     }
     var surfaceStyleForTesting: ContextualSparkSurfaceStyle? { surfaceView?.resolvedStyleForTesting }
     var controlsEnabledForTesting: Bool {
-        [pauseButton, stopButton, panelButton].allSatisfy { $0?.isEnabled == true }
+        [pauseButton, stopButton, panelButton, micButton].allSatisfy { $0?.isEnabled == true }
     }
     var controlAccessibilityLabelsForTesting: [String] {
         guard layout != .pill else { return [] }
-        return [pauseButton, stopButton, panelButton].compactMap { $0?.accessibilityLabel() }
+        return [pauseButton, stopButton, panelButton, micButton].compactMap { $0?.accessibilityLabel() }
     }
     var hasMeetingContextForTesting: Bool { bodyCoordinator.hasMeetingContextForTesting }
     var panelBodyForTesting: MeetingPanelBodyCoordinator { bodyCoordinator }
@@ -356,7 +361,7 @@ final class MeetingRecordingPanelController: NSObject {
     }
     var controlFramesForTesting: [String: NSRect] {
         var frames: [String: NSRect] = [:]
-        for button in [pauseButton, stopButton, panelButton] {
+        for button in [pauseButton, stopButton, panelButton, micButton] {
             guard let button, !button.isHidden, let label = button.accessibilityLabel() else { continue }
             frames[label] = button.frame
         }
@@ -415,6 +420,7 @@ final class MeetingRecordingPanelController: NSObject {
         bodyCoordinator.reset()
         bodyCoordinator.setChatContext(chatContext)
         bodyCoordinator.setPaused(false)
+        isMicMuted = false
         bodyCoordinator.setSelectionAccentHex(DictationMiniPalette.accentHex)
 
         var panel = panel ?? makePanel()
@@ -457,6 +463,14 @@ final class MeetingRecordingPanelController: NSObject {
             return
         }
         bodyCoordinator.setPaused(paused)
+        updateChrome()
+    }
+
+    func setMicMuted(_ muted: Bool, ownerID: UUID) {
+        guard self.ownerID == ownerID, isMicMuted != muted else { return }
+        guard state == .recording || state == .paused else { return }
+        isMicMuted = muted
+        announce(muted ? "Microphone muted" : "Microphone unmuted")
         updateChrome()
     }
 
@@ -512,6 +526,7 @@ final class MeetingRecordingPanelController: NSObject {
         panelButton = nil
         pauseButton = nil
         stopButton = nil
+        micButton = nil
         elapsedLabel = nil
         statusLabel = nil
         waveformView = nil
@@ -989,13 +1004,20 @@ final class MeetingRecordingPanelController: NSObject {
             accessibilityLabel: "Open meeting panel",
             action: #selector(panelButtonPressed)
         )
+        micButton = makeButton(
+            symbol: "mic.fill",
+            accessibilityLabel: "Mute microphone",
+            action: #selector(micButtonPressed)
+        )
+        if let micButton { content.addSubview(micButton) }
         if let pauseButton { content.addSubview(pauseButton) }
         if let stopButton { content.addSubview(stopButton) }
         if let panelButton { content.addSubview(panelButton) }
 
         pauseButton?.nextKeyView = stopButton
         stopButton?.nextKeyView = panelButton
-        panelButton?.nextKeyView = pauseButton
+        panelButton?.nextKeyView = micButton
+        micButton?.nextKeyView = pauseButton
 
         layoutContent()
         refreshAccessibilityPresentation()
@@ -1069,7 +1091,7 @@ final class MeetingRecordingPanelController: NSObject {
         )
         placeDot(centeredIn: row.dot)
         elapsedLabel?.frame = row.clock
-        for (button, frame) in zip([pauseButton, stopButton, panelButton], row.controls) {
+        for (button, frame) in zip([micButton, pauseButton, stopButton, panelButton], row.controls) {
             button?.frame = frame
         }
         placeWave(in: row.wave)
@@ -1093,7 +1115,7 @@ final class MeetingRecordingPanelController: NSObject {
             height: 14
         )
 
-        // One trailing cluster: pause · stop ‖ minimize behind a hairline (node 17, variant A).
+        // One trailing cluster: mic · pause · stop ‖ minimize behind a hairline.
         var x = bounds.width - 6
         x -= Self.controlWidth
         panelButton?.frame = NSRect(x: x, y: header.minY, width: Self.controlWidth, height: header.height)
@@ -1104,7 +1126,7 @@ final class MeetingRecordingPanelController: NSObject {
         clusterSeparatorLayer.frame = CGRect(x: separatorX, y: header.midY - 7, width: 1, height: 14)
         CATransaction.commit()
         x = separatorX - 4
-        for button in [stopButton, pauseButton] {
+        for button in [stopButton, pauseButton, micButton] {
             x -= Self.controlWidth
             button?.frame = NSRect(x: x, y: header.minY, width: Self.controlWidth, height: header.height)
         }
@@ -1193,6 +1215,11 @@ final class MeetingRecordingPanelController: NSObject {
             statusText = status
         }
 
+        let micLabel = isMicMuted ? "Unmute microphone" : "Mute microphone"
+        micButton?.image = configuredSymbol(isMicMuted ? "mic.slash.fill" : "mic.fill", description: micLabel)
+        micButton?.setAccessibilityLabel(micLabel)
+        micButton?.toolTip = micLabel
+
         let panelSymbol = layout == .panel ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
         let panelLabel = layout == .panel ? "Minimize meeting panel" : "Open meeting panel"
         panelButton?.image = configuredSymbol(panelSymbol, description: panelLabel)
@@ -1219,7 +1246,7 @@ final class MeetingRecordingPanelController: NSObject {
         statusLabel?.setAccessibilityValue(statusLabel?.stringValue ?? "")
 
         waveformView?.isHidden = !showsControls || statusLabel?.isHidden == false
-        for button in [pauseButton, stopButton, panelButton] {
+        for button in [pauseButton, stopButton, panelButton, micButton] {
             button?.isHidden = !showsControls
             button?.isEnabled = controlsEnabled
             button?.alphaValue = controlsEnabled ? 1 : 0.36
@@ -1324,6 +1351,11 @@ final class MeetingRecordingPanelController: NSObject {
             NSAccessibilityCustomAction(name: "Open panel", target: self, selector: #selector(panelButtonPressed)),
             NSAccessibilityCustomAction(name: pauseName, target: self, selector: #selector(pauseButtonPressed)),
             NSAccessibilityCustomAction(name: "Stop", target: self, selector: #selector(stopButtonPressed)),
+            NSAccessibilityCustomAction(
+                name: isMicMuted ? "Unmute microphone" : "Mute microphone",
+                target: self,
+                selector: #selector(micButtonPressed)
+            ),
         ]
     }
 
@@ -1410,6 +1442,11 @@ final class MeetingRecordingPanelController: NSObject {
     @objc private func pauseButtonPressed() {
         guard state == .recording || state == .paused else { return }
         onTogglePause?()
+    }
+
+    @objc private func micButtonPressed() {
+        guard state == .recording || state == .paused else { return }
+        onToggleMicMute?()
     }
 
     @objc private func stopButtonPressed() {
