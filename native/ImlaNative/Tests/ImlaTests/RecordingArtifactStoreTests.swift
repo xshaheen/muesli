@@ -424,6 +424,34 @@ struct RecordingArtifactStoreTests {
         #expect(recovered.orphanedAt == recovery)
     }
 
+    @Test("meeting tracks are adopted beside their recording and deleted with it")
+    func tracksLiveAndDieWithTheirArtifact() throws {
+        let fixture = try makeFixture()
+        let artifact = try fixture.store.adoptCapture(
+            at: try writeSource(in: fixture.root, name: "meeting.m4a"),
+            sessionID: UUID(), captureKind: .meeting, savePolicy: .always
+        )
+        #expect(fixture.store.tracksURL(id: artifact.id) == nil)
+
+        let tracksSource = try writeSource(in: fixture.root, name: "meeting.tracks.m4a")
+        try fixture.store.adoptTracks(at: tracksSource, for: artifact.id)
+        let tracks = try #require(fixture.store.tracksURL(id: artifact.id))
+        #expect(!FileManager.default.fileExists(atPath: tracksSource.path))
+        #expect(tracks.lastPathComponent == "\(artifact.id.storedValue).tracks.m4a")
+        #expect(try permissions(tracks) == 0o600)
+        // A second tracks file would leave two candidates for one recording.
+        #expect(throws: RecordingArtifactStoreError.destinationAlreadyExists) {
+            try fixture.store.adoptTracks(
+                at: try writeSource(in: fixture.root, name: "again.tracks.wav"),
+                for: artifact.id
+            )
+        }
+
+        try fixture.store.deleteArtifact(id: artifact.id)
+        #expect(!FileManager.default.fileExists(atPath: tracks.path))
+        #expect(fixture.store.tracksURL(id: artifact.id) == nil)
+    }
+
     @Test("soft history deletion detaches ownership and deletes only the last owner's file")
     func softDeletionHonorsLastOwner() throws {
         let fixture = try makeFixture()

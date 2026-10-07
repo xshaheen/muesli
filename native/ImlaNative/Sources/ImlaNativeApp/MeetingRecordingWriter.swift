@@ -169,13 +169,44 @@ final class MeetingRecordingWriter {
         var segments: [TimedSamples] = []
     }
 
-    private struct State {
+    /// One incrementally written WAV fed by two time-aligned sources.
+    private struct OutputFile {
+        enum Layout {
+            /// Mono average of both sources: the recording people play back.
+            case mix
+            /// First source on the left channel, second on the right, so a later pass
+            /// can transcribe each side on its own.
+            case separated
+
+            var channels: UInt16 {
+                switch self {
+                case .mix: 1
+                case .separated: 2
+                }
+            }
+        }
+
+        let layout: Layout
         var fileHandle: FileHandle?
         var fileURL: URL?
-        var bytesWritten: Int = 0
+        var bytesWritten = 0
         var writeOffset = 0
-        var mic = SourceState()
-        var system = SourceState()
+        var first = SourceState()
+        var second = SourceState()
+
+        init(layout: Layout, fileURL: URL? = nil, fileHandle: FileHandle? = nil) {
+            self.layout = layout
+            self.fileURL = fileURL
+            self.fileHandle = fileHandle
+        }
+    }
+
+    private struct State {
+        /// Raw mic + system: what the meeting sounded like in the room.
+        var mix = OutputFile(layout: .mix)
+        /// Echo-cancelled mic + system. The raw mic also hears the far side through
+        /// the speakers, so only the cleaned mic can be labelled as the user.
+        var tracks = OutputFile(layout: .separated)
     }
 
     private let lock = OSAllocatedUnfairLock(initialState: State())
@@ -191,63 +222,75 @@ final class MeetingRecordingWriter {
             .appendingPathComponent("imla-meeting-recordings", isDirectory: true)
         try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
         let fileURL = tempDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("wav")
-        FileManager.default.createFile(atPath: fileURL.path, contents: nil)
-        guard let fileHandle = FileHandle(forWritingAtPath: fileURL.path) else {
-            throw NSError(
-                domain: "MeetingRecordingWriter",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Could not open retained meeting recording file for writing."]
-            )
-        }
-        fileHandle.write(Self.wavHeader(dataSize: 0))
+        let mix = try Self.openOutput(layout: .mix, at: fileURL)
+        // The tracks file only improves retranscription; the mix is the recording, so
+        // a tracks file that cannot open must not stop the meeting from recording.
+        let tracks = (try? Self.openOutput(layout: .separated, at: Self.tracksURL(forRecording: fileURL)))
+            ?? OutputFile(layout: .separated)
         lock.withLock {
-            $0 = State(fileHandle: fileHandle, fileURL: fileURL)
+            $0 = State(mix: mix, tracks: tracks)
         }
+    }
+
+    /// The companion file holding the separated sources of the recording at `url`.
+    /// Every stage that moves, copies, or deletes a recording derives the companion's
+    /// location from this one rule, so the two never need to be passed around together.
+    static func tracksURL(forRecording url: URL) -> URL {
+        let ext = url.pathExtension
+        return url.deletingPathExtension().appendingPathExtension("tracks").appendingPathExtension(ext)
+    }
+
+    /// Removes a temporary recording together with its tracks companion.
+    static func removeTemporaryRecording(at url: URL) {
+        try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.removeItem(at: tracksURL(forRecording: url))
     }
 
     func appendMic(_ samples: [Int16], atSampleOffset sampleOffset: Int) {
-        append(samples, atSampleOffset: sampleOffset, toMic: true)
+        append(samples, atSampleOffset: sampleOffset, from: .mic)
+    }
+
+    /// The echo-cancelled mic, positioned on the same timeline as `appendMic`.
+    func appendCleanedMic(_ samples: [Int16], atSampleOffset sampleOffset: Int) {
+        append(samples, atSampleOffset: sampleOffset, from: .cleanedMic)
     }
 
     func appendSystem(_ samples: [Int16], atSampleOffset sampleOffset: Int) {
-        append(samples, atSampleOffset: sampleOffset, toMic: false)
+        append(samples, atSampleOffset: sampleOffset, from: .system)
     }
 
+    /// Returns the mix. Its tracks companion, when one was written, sits at
+    /// `tracksURL(forRecording:)` of the returned URL.
     func stop() -> URL? {
         lock.withLock { state in
-            writeMixedSamples(state: &state, flushAll: true)
-            guard let fileHandle = state.fileHandle, let fileURL = state.fileURL else { return nil }
-
-            fileHandle.seek(toFileOffset: 0)
-            fileHandle.write(Self.wavHeader(dataSize: UInt32(state.bytesWritten)))
-            fileHandle.closeFile()
-
-            let outputURL = fileURL
-            let bytesWritten = state.bytesWritten
+            let tracksURL = Self.finish(&state.tracks)
+            let mixURL = Self.finish(&state.mix)
             state = State()
-            if bytesWritten == 0 {
-                try? FileManager.default.removeItem(at: outputURL)
-                return nil
+            if mixURL == nil, let tracksURL {
+                // Tracks without the recording they belong to have nothing to serve.
+                try? FileManager.default.removeItem(at: tracksURL)
             }
-            return outputURL
+            return mixURL
         }
     }
 
     func markPauseBoundary() {
         lock.withLock { state in
-            writeMixedSamples(state: &state, flushAll: true)
+            Self.writeSamples(&state.mix, flushAll: true)
+            Self.writeSamples(&state.tracks, flushAll: true)
         }
     }
 
     func cancel() {
-        let tempURL = lock.withLock { state -> URL? in
-            state.fileHandle?.closeFile()
-            let fileURL = state.fileURL
+        let tempURLs = lock.withLock { state -> [URL] in
+            state.mix.fileHandle?.closeFile()
+            state.tracks.fileHandle?.closeFile()
+            let urls = [state.mix.fileURL, state.tracks.fileURL].compactMap { $0 }
             state = State()
-            return fileURL
+            return urls
         }
-        if let tempURL {
-            try? FileManager.default.removeItem(at: tempURL)
+        for url in tempURLs {
+            try? FileManager.default.removeItem(at: url)
         }
     }
 
@@ -283,23 +326,89 @@ final class MeetingRecordingWriter {
         case .wav:
             try FileManager.default.moveItem(at: tempURL, to: destinationURL)
         }
+        await persistTracksBestEffort(
+            from: tracksURL(forRecording: tempURL),
+            to: tracksURL(forRecording: destinationURL),
+            fileFormat: fileFormat
+        )
         return destinationURL
     }
 
-    private func append(_ samples: [Int16], atSampleOffset sampleOffset: Int, toMic: Bool) {
-        guard !samples.isEmpty else { return }
-        lock.withLock { state in
-            let writeOffset = state.writeOffset
-            if toMic {
-                append(samples, atSampleOffset: sampleOffset, to: &state.mic, writeOffset: writeOffset)
-            } else {
-                append(samples, atSampleOffset: sampleOffset, to: &state.system, writeOffset: writeOffset)
+    /// Tracks only sharpen a later retranscription, so losing them never fails the save:
+    /// retranscription falls back to the mix.
+    private static func persistTracksBestEffort(
+        from tempURL: URL,
+        to destinationURL: URL,
+        fileFormat: MeetingRecordingFileFormat
+    ) async {
+        guard FileManager.default.fileExists(atPath: tempURL.path) else { return }
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        try? FileManager.default.removeItem(at: destinationURL)
+        do {
+            switch fileFormat {
+            case .m4a:
+                try await transcodeWAVToM4AAsync(sourceURL: tempURL, destinationURL: destinationURL)
+            case .wav:
+                try FileManager.default.moveItem(at: tempURL, to: destinationURL)
             }
-            writeMixedSamples(state: &state, flushAll: false)
+        } catch {
+            try? FileManager.default.removeItem(at: destinationURL)
+            fputs("[recordings] meeting tracks not saved; retranscription will use the mix: \(error)\n", stderr)
         }
     }
 
-    private func append(
+    private enum Source {
+        case mic
+        case cleanedMic
+        case system
+    }
+
+    private func append(_ samples: [Int16], atSampleOffset sampleOffset: Int, from source: Source) {
+        guard !samples.isEmpty else { return }
+        lock.withLock { state in
+            switch source {
+            case .mic:
+                Self.append(samples, atSampleOffset: sampleOffset, to: &state.mix.first, writeOffset: state.mix.writeOffset)
+            case .cleanedMic:
+                Self.append(samples, atSampleOffset: sampleOffset, to: &state.tracks.first, writeOffset: state.tracks.writeOffset)
+            case .system:
+                Self.append(samples, atSampleOffset: sampleOffset, to: &state.mix.second, writeOffset: state.mix.writeOffset)
+                Self.append(samples, atSampleOffset: sampleOffset, to: &state.tracks.second, writeOffset: state.tracks.writeOffset)
+            }
+            Self.writeSamples(&state.mix, flushAll: false)
+            Self.writeSamples(&state.tracks, flushAll: false)
+        }
+    }
+
+    private static func openOutput(layout: OutputFile.Layout, at fileURL: URL) throws -> OutputFile {
+        FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+        guard let fileHandle = FileHandle(forWritingAtPath: fileURL.path) else {
+            throw NSError(
+                domain: "MeetingRecordingWriter",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Could not open retained meeting recording file for writing."]
+            )
+        }
+        fileHandle.write(wavHeader(dataSize: 0, channels: layout.channels))
+        return OutputFile(layout: layout, fileURL: fileURL, fileHandle: fileHandle)
+    }
+
+    /// Flushes, closes, and returns the file, or nil when nothing was written.
+    private static func finish(_ output: inout OutputFile) -> URL? {
+        writeSamples(&output, flushAll: true)
+        guard let fileHandle = output.fileHandle, let fileURL = output.fileURL else { return nil }
+        fileHandle.seek(toFileOffset: 0)
+        fileHandle.write(wavHeader(dataSize: UInt32(output.bytesWritten), channels: output.layout.channels))
+        fileHandle.closeFile()
+        output.fileHandle = nil
+        if output.bytesWritten == 0 {
+            try? FileManager.default.removeItem(at: fileURL)
+            return nil
+        }
+        return fileURL
+    }
+
+    private static func append(
         _ samples: [Int16],
         atSampleOffset sampleOffset: Int,
         to source: inout SourceState,
@@ -329,34 +438,53 @@ final class MeetingRecordingWriter {
         source.segments.append(TimedSamples(startOffset: adjustedStart, samples: retainedSamples))
     }
 
-    private func writeMixedSamples(state: inout State, flushAll: Bool) {
-        let furthestObserved = max(state.mic.observedThrough, state.system.observedThrough)
+    private static func writeSamples(_ output: inout OutputFile, flushAll: Bool) {
+        guard output.fileHandle != nil else {
+            // A file that never opened still drains its sources, so it cannot grow memory.
+            output.first.segments.removeAll()
+            output.second.segments.removeAll()
+            return
+        }
+        let furthestObserved = max(output.first.observedThrough, output.second.observedThrough)
         let availableThrough: Int
         if flushAll {
             availableThrough = furthestObserved
         } else {
-            let bothSourcesObservedThrough = min(state.mic.observedThrough, state.system.observedThrough)
-            let boundedSingleSourceThrough = furthestObserved - Self.maxPendingImbalance
+            let bothSourcesObservedThrough = min(output.first.observedThrough, output.second.observedThrough)
+            let boundedSingleSourceThrough = furthestObserved - maxPendingImbalance
             availableThrough = max(bothSourcesObservedThrough, boundedSingleSourceThrough)
         }
-        guard availableThrough > state.writeOffset else { return }
+        guard availableThrough > output.writeOffset else { return }
 
-        while state.writeOffset < availableThrough {
-            let blockEnd = min(availableThrough, state.writeOffset + 4_096)
-            let mixedSamples = Self.mix(
-                from: state.writeOffset,
-                through: blockEnd,
-                mic: state.mic.segments,
-                system: state.system.segments
-            )
-            let pcmData = mixedSamples.withUnsafeBufferPointer { Data(buffer: $0) }
-            state.fileHandle?.write(pcmData)
-            state.bytesWritten += pcmData.count
-            state.writeOffset = blockEnd
+        while output.writeOffset < availableThrough {
+            let blockEnd = min(availableThrough, output.writeOffset + 4_096)
+            let block: [Int16]
+            switch output.layout {
+            case .mix:
+                block = mix(
+                    from: output.writeOffset,
+                    through: blockEnd,
+                    sources: [output.first.segments, output.second.segments]
+                )
+            case .separated:
+                let left = mix(from: output.writeOffset, through: blockEnd, sources: [output.first.segments])
+                let right = mix(from: output.writeOffset, through: blockEnd, sources: [output.second.segments])
+                var interleaved = [Int16](repeating: 0, count: left.count * 2)
+                for index in left.indices {
+                    interleaved[index * 2] = left[index]
+                    interleaved[index * 2 + 1] = right[index]
+                }
+                block = interleaved
+            }
+            let pcmData = block.withUnsafeBufferPointer { Data(buffer: $0) }
+            output.fileHandle?.write(pcmData)
+            output.bytesWritten += pcmData.count
+            output.writeOffset = blockEnd
         }
 
-        state.mic.segments.removeAll { $0.endOffset <= state.writeOffset }
-        state.system.segments.removeAll { $0.endOffset <= state.writeOffset }
+        let writeOffset = output.writeOffset
+        output.first.segments.removeAll { $0.endOffset <= writeOffset }
+        output.second.segments.removeAll { $0.endOffset <= writeOffset }
     }
 
     private static func fileNamePrefix(for date: Date, title: String) -> String {
@@ -380,14 +508,13 @@ final class MeetingRecordingWriter {
     private static func mix(
         from startOffset: Int,
         through endOffset: Int,
-        mic: [TimedSamples],
-        system: [TimedSamples]
+        sources: [[TimedSamples]]
     ) -> [Int16] {
         let count = endOffset - startOffset
         var sums = [Int](repeating: 0, count: count)
         var contributors = [UInt8](repeating: 0, count: count)
 
-        for segments in [mic, system] {
+        for segments in sources {
             for segment in segments {
                 let overlapStart = max(startOffset, segment.startOffset)
                 let overlapEnd = min(endOffset, segment.endOffset)
@@ -440,9 +567,8 @@ final class MeetingRecordingWriter {
         }
     }
 
-    private static func wavHeader(dataSize: UInt32) -> Data {
+    private static func wavHeader(dataSize: UInt32, channels: UInt16) -> Data {
         let sampleRate = Self.sampleRate
-        let channels: UInt16 = 1
         let bitsPerSample: UInt16 = 16
         let byteRate = sampleRate * UInt32(channels) * UInt32(bitsPerSample / 8)
         let blockAlign = channels * (bitsPerSample / 8)

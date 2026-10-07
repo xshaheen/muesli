@@ -173,6 +173,88 @@ struct MeetingRecordingWriterTests {
         #expect(file.length > 0)
     }
 
+    @Test("tracks keep the cleaned mic left and system right while the mix keeps the raw mic")
+    func writerKeepsSeparatedTracks() throws {
+        let writer = try MeetingRecordingWriter()
+        writer.appendMic([1000, 2000, 3000], atSampleOffset: 0)
+        writer.appendCleanedMic([100, 200, 300], atSampleOffset: 0)
+        writer.appendSystem([-500, -600, -700], atSampleOffset: 0)
+
+        let mixURL = try #require(writer.stop())
+        let tracksURL = MeetingRecordingWriter.tracksURL(forRecording: mixURL)
+        defer { MeetingRecordingWriter.removeTemporaryRecording(at: mixURL) }
+
+        #expect(try readMonoPCM16WAVSamples(from: mixURL) == [250, 700, 1150])
+        // Interleaved frames: left is "You", right is everyone else.
+        #expect(try readMonoPCM16WAVSamples(from: tracksURL) == [100, -500, 200, -600, 300, -700])
+        #expect(try AVAudioFile(forReading: tracksURL).fileFormat.channelCount == 2)
+    }
+
+    @Test("removing a temporary recording removes its tracks and cancel leaves nothing behind")
+    func tracksFollowTheRecordingLifecycle() throws {
+        let writer = try MeetingRecordingWriter()
+        writer.appendCleanedMic([1, 2], atSampleOffset: 0)
+        writer.appendSystem([3, 4], atSampleOffset: 0)
+        let mixURL = try #require(writer.stop())
+        let tracksURL = MeetingRecordingWriter.tracksURL(forRecording: mixURL)
+        #expect(tracksURL.lastPathComponent == mixURL.deletingPathExtension().lastPathComponent + ".tracks.wav")
+        #expect(FileManager.default.fileExists(atPath: tracksURL.path))
+
+        MeetingRecordingWriter.removeTemporaryRecording(at: mixURL)
+        #expect(!FileManager.default.fileExists(atPath: mixURL.path))
+        #expect(!FileManager.default.fileExists(atPath: tracksURL.path))
+
+        let cancelled = try MeetingRecordingWriter()
+        cancelled.appendCleanedMic([1, 2], atSampleOffset: 0)
+        cancelled.appendSystem([3, 4], atSampleOffset: 0)
+        cancelled.cancel()
+        #expect(cancelled.stop() == nil)
+    }
+
+    @Test("persisting as M4A keeps the tracks stereo beside the recording, and they split back apart")
+    func persistedTracksSplitBackIntoSources() async throws {
+        let writer = try MeetingRecordingWriter()
+        let count = 16_000
+        writer.appendMic(Array(repeating: Int16(4000), count: count), atSampleOffset: 0)
+        writer.appendCleanedMic(Array(repeating: Int16(8000), count: count), atSampleOffset: 0)
+        writer.appendSystem(Array(repeating: Int16(0), count: count), atSampleOffset: 0)
+        let tempURL = try #require(writer.stop())
+        let supportDirectory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+
+        let savedURL = try await MeetingRecordingWriter.persistTemporaryRecordingAsync(
+            from: tempURL,
+            meetingTitle: "Tracks",
+            startedAt: Date(timeIntervalSince1970: 1_711_000_000),
+            supportDirectory: supportDirectory
+        )
+        let savedTracks = MeetingRecordingWriter.tracksURL(forRecording: savedURL)
+        #expect(!FileManager.default.fileExists(atPath: MeetingRecordingWriter.tracksURL(forRecording: tempURL).path))
+        #expect(savedTracks.lastPathComponent.hasSuffix("-tracks.tracks.m4a"))
+        #expect(try AVAudioFile(forReading: savedTracks).fileFormat.channelCount == 2)
+
+        let split = try MeetingRecordingTracks.split(savedTracks, into: supportDirectory.appendingPathComponent("split"))
+        let mic = try AVAudioFile(forReading: split.mic)
+        let system = try AVAudioFile(forReading: split.system)
+        #expect(mic.fileFormat.channelCount == 1)
+        #expect(system.fileFormat.channelCount == 1)
+        // AAC is lossy and primes with silence, so compare energy, not samples.
+        #expect(try rms(of: split.mic) > 0.1)
+        #expect(try rms(of: split.system) < 0.01)
+    }
+
+    private func rms(of url: URL) throws -> Float {
+        let file = try AVAudioFile(forReading: url)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: buffer)
+        let samples = try #require(buffer.floatChannelData)[0]
+        let frames = Int(buffer.frameLength)
+        guard frames > 0 else { return 0 }
+        var sum: Float = 0
+        for index in 0..<frames { sum += samples[index] * samples[index] }
+        return (sum / Float(frames)).squareRoot()
+    }
+
     private func makeTemporaryDirectory() -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("meeting-writer-\(UUID().uuidString)", isDirectory: true)

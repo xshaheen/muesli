@@ -2414,16 +2414,22 @@ final class MeetingSession {
         // Single funnel for all AEC'd mic audio — the streaming partial tail
         // must consume exactly the stream the mic chunks record.
         feedMicPartialSession(cleanedFloat)
-        // Reached from both callbacks, so it is the only place the reverse
-        // reference can be registered at its true timeline position (KTD6).
-        for span in micArrivalTimeline.consume(cleanedFloat.count) {
-            reverseLeakSuppressor.feedCleanedMicSamples(
-                Array(cleanedFloat[span.offset..<(span.offset + span.count)]),
-                timelineStartSample: span.timelineStart
-            )
-        }
         let cleanedInt16 = cleanedFloat.map { sample -> Int16 in
             Int16(max(-1.0, min(1.0, sample)) * 32767)
+        }
+        // Reached from both callbacks, so it is the only place the reverse
+        // reference, and the retained tracks' "You" channel, can be placed at
+        // their true timeline position (KTD6).
+        for span in micArrivalTimeline.consume(cleanedFloat.count) {
+            let range = span.offset..<(span.offset + span.count)
+            reverseLeakSuppressor.feedCleanedMicSamples(
+                Array(cleanedFloat[range]),
+                timelineStartSample: span.timelineStart
+            )
+            retainedRecordingWriter?.appendCleanedMic(
+                Array(cleanedInt16[range]),
+                atSampleOffset: span.timelineStart
+            )
         }
         rawMicChunkRecorder?.append(cleanedInt16)
         chunkTimingTracker.append(sampleCount: cleanedInt16.count)

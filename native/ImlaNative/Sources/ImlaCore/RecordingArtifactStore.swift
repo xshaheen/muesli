@@ -249,6 +249,45 @@ public final class RecordingArtifactStore: @unchecked Sendable {
         }
     }
 
+    /// Adopts a meeting's separated mic/system tracks as a companion of artifact `id`.
+    ///
+    /// The companion has no row of its own: it lives and dies with its artifact, keyed by
+    /// the artifact's file name, so every deletion path removes it without new lifecycle
+    /// states. It is optional data — callers treat a failure here as "no tracks".
+    public func adoptTracks(at sourceURL: URL, for id: RecordingArtifactID) throws {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        let record = try artifact(id: id)
+        guard record.lifecycleState == .retained || record.lifecycleState == .pending else {
+            throw RecordingArtifactStoreError.artifactUnavailable(record.lifecycleState)
+        }
+        let ext = try normalizedExtension(sourceURL.pathExtension)
+        try validateRegularSingleLinkFile(sourceURL)
+        for url in tracksURLCandidates(id: id) where FileManager.default.fileExists(atPath: url.path) {
+            throw RecordingArtifactStoreError.destinationAlreadyExists
+        }
+        let destination = tracksURL(id: id, fileExtension: ext)
+        try FileManager.default.moveItem(at: sourceURL, to: destination)
+        do {
+            try validateRegularSingleLinkFile(destination, confinedTo: recordingsRootURL)
+            guard chmod(destination.path, mode_t(S_IRUSR | S_IWUSR)) == 0 else {
+                throw CocoaError(.fileWriteNoPermission)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
+    }
+
+    /// The separated tracks of a playable artifact, or nil when it has none.
+    public func tracksURL(id: RecordingArtifactID) -> URL? {
+        guard let record = try? artifact(id: id),
+              record.lifecycleState == .retained || record.lifecycleState == .pending else { return nil }
+        return tracksURLCandidates(id: id).first { url in
+            (try? validateRegularSingleLinkFile(url, confinedTo: recordingsRootURL)) != nil
+        }
+    }
+
     public func retainPendingArtifact(id: RecordingArtifactID, now: Date = Date()) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
@@ -658,6 +697,14 @@ public final class RecordingArtifactStore: @unchecked Sendable {
 
     private func artifactURL(id: RecordingArtifactID, fileExtension: String) -> URL {
         recordingsRootURL.appendingPathComponent("\(id.storedValue).\(fileExtension)", isDirectory: false)
+    }
+
+    private func tracksURL(id: RecordingArtifactID, fileExtension: String) -> URL {
+        recordingsRootURL.appendingPathComponent("\(id.storedValue).tracks.\(fileExtension)", isDirectory: false)
+    }
+
+    private func tracksURLCandidates(id: RecordingArtifactID) -> [URL] {
+        Self.supportedExtensions.sorted().map { tracksURL(id: id, fileExtension: $0) }
     }
 
     private func normalizedExtension(_ value: String) throws -> String {
@@ -1158,6 +1205,12 @@ public final class RecordingArtifactStore: @unchecked Sendable {
 
     private func deleteFileAndMetadataIfPossible(id: RecordingArtifactID) throws {
         let record = try artifact(id: id)
+        for tracks in tracksURLCandidates(id: id) {
+            var tracksInfo = stat()
+            guard lstat(tracks.path, &tracksInfo) == 0 else { continue }
+            try validateRegularSingleLinkFile(tracks, confinedTo: recordingsRootURL)
+            try FileManager.default.removeItem(at: tracks)
+        }
         let url = artifactURL(id: id, fileExtension: record.fileExtension)
         var info = stat()
         if lstat(url.path, &info) == 0 {

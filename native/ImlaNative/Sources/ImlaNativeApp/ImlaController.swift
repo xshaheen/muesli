@@ -6830,21 +6830,44 @@ public final class ImlaController: NSObject {
                     meetingHelperTrigger: .retranscription,
                     appleSpeechLanguage: self.config.resolvedAppleSpeechLanguage
                 )
-                let transcription = try await self.transcriptionCoordinator.transcribeMeetingWithEvidence(
-                    at: recordingURL,
+                let coordinator = self.transcriptionCoordinator
+                let languageDecision = MeetingSession.meetingLanguageDecision(
+                    selection: retranscriptionSelection,
                     backend: backend,
-                    languageDecision: MeetingSession.meetingLanguageDecision(
-                        selection: retranscriptionSelection,
-                        backend: backend,
-                        workload: .retranscription
-                    ),
-                    profile: retranscriptionConfig.meetingLanguageProfile,
-                    appleSpeechLanguage: self.config.resolvedAppleSpeechLanguage,
-                    customWords: retranscriptionConfig.customWords
+                    workload: .retranscription
                 )
-                await trace.storeArtifact(transcription.raw.text, kind: .rawASR)
-                await trace.storeArtifact(transcription.cleaned.text, kind: .cleanupResult)
-                let rawTranscript = transcription.cleaned.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let appleSpeechLanguage = self.config.resolvedAppleSpeechLanguage
+                let transcribe: (URL) async throws -> MeetingTranscriptionEvidence = { url in
+                    try await coordinator.transcribeMeetingWithEvidence(
+                        at: url,
+                        backend: backend,
+                        languageDecision: languageDecision,
+                        profile: retranscriptionConfig.meetingLanguageProfile,
+                        appleSpeechLanguage: appleSpeechLanguage,
+                        customWords: retranscriptionConfig.customWords
+                    )
+                }
+                let meetingStart = ISO8601DateFormatter().date(from: meeting.startTime) ?? retranscriptionStartedAt
+                let retranscription: MeetingRecordingTracks.Retranscription
+                if let tracksURL = recordingArtifactStore.tracksURL(id: artifactID) {
+                    retranscription = try await MeetingRecordingTracks.retranscribe(
+                        tracks: tracksURL,
+                        meetingStart: meetingStart,
+                        coordinator: coordinator,
+                        transcribe: transcribe
+                    )
+                } else {
+                    retranscription = try await MeetingRecordingTracks.retranscribe(
+                        mix: recordingURL,
+                        meetingStart: meetingStart,
+                        coordinator: coordinator,
+                        transcribe: transcribe
+                    )
+                }
+                await trace.storeArtifact(retranscription.rawASR, kind: .rawASR)
+                await trace.storeArtifact(retranscription.cleaned, kind: .cleanupResult)
+                let transcriptText = retranscription.transcript
+                let rawTranscript = transcriptText.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !rawTranscript.isEmpty else {
                     throw MeetingRetranscriptionError.emptyTranscript
                 }
@@ -10447,7 +10470,11 @@ public final class ImlaController: NSObject {
               let artifactID = prior.artifactID,
               let store = recordingArtifactStore else { return nil }
         do {
-            return PriorMeetingRecording(artifactID: artifactID, url: try store.playableURL(id: artifactID))
+            return PriorMeetingRecording(
+                artifactID: artifactID,
+                url: try store.playableURL(id: artifactID),
+                tracksURL: store.tracksURL(id: artifactID)
+            )
         } catch {
             fputs("[recordings] earlier recording of resumed meeting \(meetingID) is not playable: \(error)\n", stderr)
             return nil
@@ -10457,6 +10484,8 @@ public final class ImlaController: NSObject {
     struct PriorMeetingRecording {
         let artifactID: RecordingArtifactID
         let url: URL
+        /// Nil when the earlier recording predates separated tracks or lost them.
+        var tracksURL: URL? = nil
     }
 
     func prepareMeetingRecordingSave(
@@ -10474,6 +10503,10 @@ public final class ImlaController: NSObject {
         case .always, .never: .always
         }
         var path = segmentPath
+        var tracksPath: String? = {
+            let url = MeetingRecordingWriter.tracksURL(forRecording: URL(fileURLWithPath: segmentPath))
+            return FileManager.default.fileExists(atPath: url.path) ? url.path : nil
+        }()
         if let prior {
             // A meeting owns one recording, so the segment must be joined to the earlier
             // audio before adoption; adopting the segment alone would replace the earlier
@@ -10491,9 +10524,16 @@ public final class ImlaController: NSObject {
                 }.value
                 try? FileManager.default.removeItem(at: segmentURL)
                 path = mergedURL.path
+                tracksPath = await Self.mergeResumedTracks(
+                    prior: prior.tracksURL,
+                    segmentPath: tracksPath,
+                    mergedRecording: mergedURL,
+                    format: format
+                )
             } catch {
                 try? FileManager.default.removeItem(at: segmentURL)
                 try? FileManager.default.removeItem(at: mergedURL)
+                if let tracksPath { try? FileManager.default.removeItem(atPath: tracksPath) }
                 // No recording reference: completion leaves the meeting's existing link alone,
                 // so the earlier recording survives and the error names what was lost.
                 return PreparedMeetingRecordingSave(
@@ -10513,6 +10553,16 @@ public final class ImlaController: NSObject {
                     terminalAt: result.endTime
                 )
             }.value
+            if let tracksPath {
+                do {
+                    try await Task.detached(priority: .utility) {
+                        try store.adoptTracks(at: URL(fileURLWithPath: tracksPath), for: artifact.id)
+                    }.value
+                } catch {
+                    try? FileManager.default.removeItem(atPath: tracksPath)
+                    fputs("[recordings] meeting tracks not adopted; retranscription will use the mix: \(error)\n", stderr)
+                }
+            }
             try? await Task.detached(priority: .utility) {
                 try store.attachDiagnostic(
                     sessionID: sessionID,
@@ -10531,11 +10581,40 @@ public final class ImlaController: NSObject {
             )
         } catch {
             try? FileManager.default.removeItem(atPath: path)
+            if let tracksPath { try? FileManager.default.removeItem(atPath: tracksPath) }
             return PreparedMeetingRecordingSave(
                 path: nil,
                 error: .failedToSaveRecording(underlying: error),
                 recording: RecordingArtifactReference(artifactID: nil, availability: .saveFailed)
             )
+        }
+    }
+
+    /// Joins the earlier tracks to the resumed segment's, beside the merged recording.
+    /// Tracks must cover the whole recording or they would misplace every line after the
+    /// gap, so when either side has none the merged recording keeps none.
+    private nonisolated static func mergeResumedTracks(
+        prior: URL?,
+        segmentPath: String?,
+        mergedRecording: URL,
+        format: MeetingRecordingFileFormat
+    ) async -> String? {
+        guard let segmentPath else { return nil }
+        let segmentURL = URL(fileURLWithPath: segmentPath)
+        defer { try? FileManager.default.removeItem(at: segmentURL) }
+        guard let prior else { return nil }
+        let mergedTracks = MeetingRecordingWriter.tracksURL(forRecording: mergedRecording)
+        do {
+            try await Task.detached(priority: .utility) {
+                try MeetingRecordingConcatenator.concatenate(
+                    prior: prior, segment: segmentURL, to: mergedTracks, format: format
+                )
+            }.value
+            return mergedTracks.path
+        } catch {
+            try? FileManager.default.removeItem(at: mergedTracks)
+            fputs("[recordings] resumed meeting tracks not merged; retranscription will use the mix: \(error)\n", stderr)
+            return nil
         }
     }
 
@@ -10546,7 +10625,7 @@ public final class ImlaController: NSObject {
         case .none:
             return PreparedMeetingRecordingSave(path: nil, error: nil)
         case .discard(let tempURL):
-            try? FileManager.default.removeItem(at: tempURL)
+            MeetingRecordingWriter.removeTemporaryRecording(at: tempURL)
             return PreparedMeetingRecordingSave(path: nil, error: nil)
         case .failed(let error):
             return PreparedMeetingRecordingSave(path: nil, error: error)
@@ -10604,7 +10683,7 @@ public final class ImlaController: NSObject {
 
     private func cleanupTemporaryMeetingAudioFiles(for result: MeetingSessionResult) {
         if let retainedRecordingURL = result.retainedRecordingURL {
-            try? FileManager.default.removeItem(at: retainedRecordingURL)
+            MeetingRecordingWriter.removeTemporaryRecording(at: retainedRecordingURL)
         }
         if let systemRecordingURL = result.systemRecordingURL {
             try? FileManager.default.removeItem(at: systemRecordingURL)
