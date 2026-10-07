@@ -7958,10 +7958,10 @@ public final class ImlaController: NSObject {
         meetingRecordingPanel.toggleTranscriptPanel()
     }
 
+    // Starts outside the main window only show the meeting panel: the call is in the
+    // foreground, and opening the dashboard over it covers the meeting being recorded.
     @objc func startMeetingRecordingFromMenuBar() {
-        startMeetingRecordingFromEntryPoint(
-            dashboardWindowPresentation: .compactMeetingTrailing
-        )
+        startMeetingRecordingFromEntryPoint(presentation: .floatingPanel)
     }
 
     @objc func toggleMeetingRecordingPause() {
@@ -8018,17 +8018,14 @@ public final class ImlaController: NSObject {
                 calendarOccurrence: payload.calendarOccurrence,
                 endDate: payload.endDate,
                 autoStopSource: payload.autoStopSource,
-                startOrigin: .scheduledMeetingPrompt,
-                dashboardWindowPresentation: .compactMeetingTrailing
+                presentation: .floatingPanel,
+                startOrigin: .scheduledMeetingPrompt
             )
             return
         }
 
         guard let title = sender.representedObject as? String else { return }
-        startMeetingRecordingFromEntryPoint(
-            title: title,
-            dashboardWindowPresentation: .compactMeetingTrailing
-        )
+        startMeetingRecordingFromEntryPoint(title: title, presentation: .floatingPanel)
     }
 
     @discardableResult
