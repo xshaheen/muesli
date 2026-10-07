@@ -317,6 +317,7 @@ final class MeetingRecordButtonController: NSObject {
         panel.isMovableByWindowBackground = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.sharingType = .none
 
         let content = MeetingRecordButtonContentView(frame: NSRect(origin: .zero, size: Self.pillSize))
         content.owner = self

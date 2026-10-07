@@ -925,6 +925,8 @@ final class MeetingRecordingPanelController: NSObject {
         panel.isMovableByWindowBackground = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        // A screen shared into the call being recorded must not show that it is being recorded.
+        panel.sharingType = .none
 
         let content = MeetingRecordingPanelContentView(frame: NSRect(origin: .zero, size: Self.basePillSize))
         content.owner = self

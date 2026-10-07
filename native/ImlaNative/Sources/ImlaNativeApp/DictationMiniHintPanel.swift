@@ -232,6 +232,7 @@ final class DictationMiniHintPanel {
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.sharingType = .none
 
         let content = NSView(frame: panel.contentView?.bounds ?? .zero)
         content.wantsLayer = true

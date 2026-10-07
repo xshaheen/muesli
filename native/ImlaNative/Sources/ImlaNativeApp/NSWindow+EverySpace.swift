@@ -37,6 +37,7 @@ extension NSWindow {
         fresh.isReleasedWhenClosed = isReleasedWhenClosed
         fresh.level = level
         fresh.collectionBehavior = collectionBehavior
+        fresh.sharingType = sharingType
         fresh.backgroundColor = backgroundColor
         fresh.isOpaque = isOpaque
         fresh.hasShadow = hasShadow

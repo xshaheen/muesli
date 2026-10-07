@@ -151,6 +151,7 @@ final class MeetingNotificationController {
         panel.ignoresMouseEvents = false
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.becomesKeyOnlyIfNeeded = true
+        panel.sharingType = .none
 
         let contentView = HoverAwareView(frame: NSRect(origin: .zero, size: NSSize(width: width, height: height)))
         contentView.onMouseEntered = { [weak self] in self?.pauseDismissCountdown() }

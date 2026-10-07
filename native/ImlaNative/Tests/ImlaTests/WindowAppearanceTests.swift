@@ -17,6 +17,7 @@ struct WindowAppearanceTests {
         old.isReleasedWhenClosed = false
         old.level = .statusBar
         old.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        old.sharingType = .none
         old.backgroundColor = .clear
         old.isOpaque = false
         old.hasShadow = false
@@ -43,6 +44,8 @@ struct WindowAppearanceTests {
         #expect(fresh.frame == CGRect(x: 40, y: 60, width: 120, height: 30))
         #expect(fresh.level == .statusBar)
         #expect(fresh.collectionBehavior == [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary])
+        // A replacement must stay hidden from screen sharing, or a repair would reveal the panel mid-call.
+        #expect(fresh.sharingType == .none)
         #expect(fresh.ignoresMouseEvents)
         #expect(!fresh.hasShadow)
         #expect(!fresh.isOpaque)

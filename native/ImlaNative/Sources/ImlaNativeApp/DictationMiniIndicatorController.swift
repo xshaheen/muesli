@@ -698,6 +698,7 @@ final class DictationMiniIndicatorController: NSObject {
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.sharingType = .none
         let view = DictationMiniView(frame: CGRect(origin: .zero, size: size))
         view.owner = self
         panel.contentView = view
