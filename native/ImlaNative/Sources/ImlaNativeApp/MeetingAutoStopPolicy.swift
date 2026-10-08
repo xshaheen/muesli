@@ -18,7 +18,7 @@ enum MeetingRecordingStartOrigin: Equatable {
     case scheduledMeetingPrompt
     case joinAndRecord
 
-    var enablesMeetingAutoStop: Bool {
+    var tracksMeetingSource: Bool {
         switch self {
         case .manual:
             return false
@@ -27,14 +27,9 @@ enum MeetingRecordingStartOrigin: Equatable {
         }
     }
 
-    var signalLossResponse: MeetingSignalLossResponse {
-        switch self {
-        case .manual:
-            return .warnOnly
-        case .detectedPrompt, .calendarAutoRecord, .scheduledMeetingPrompt, .joinAndRecord:
-            return .autoStopAfterWarning
-        }
-    }
+    /// A lost meeting signal or a passed calendar end is never proof the conversation
+    /// ended, so every origin only warns; stopping stays the user's explicit action.
+    var signalLossResponse: MeetingSignalLossResponse { .warnOnly }
 
     func signalLossSource(
         explicitSource: MeetingAutoStopSource?,
@@ -50,12 +45,12 @@ enum MeetingRecordingStartOrigin: Equatable {
 enum MeetingSignalLossResponse: Equatable {
     case none
     case warnOnly
-    case autoStopAfterWarning
 }
 
 struct MeetingSignalLossPromptState: Equatable {
     private(set) var isPromptSuppressed = false
     private(set) var isDismissedForRecording = false
+    private(set) var lastTranscriptActivityAt: Date?
 
     var canPresentPrompt: Bool {
         !isPromptSuppressed && !isDismissedForRecording
@@ -64,6 +59,16 @@ struct MeetingSignalLossPromptState: Equatable {
     mutating func resetForRecording() {
         isPromptSuppressed = false
         isDismissedForRecording = false
+        lastTranscriptActivityAt = nil
+    }
+
+    mutating func noteTranscriptActivity(now: Date) {
+        lastTranscriptActivityAt = now
+    }
+
+    func hasRecentTranscriptActivity(now: Date, quietPeriod: TimeInterval) -> Bool {
+        guard let lastTranscriptActivityAt else { return false }
+        return now.timeIntervalSince(lastTranscriptActivityAt) < quietPeriod
     }
 
     mutating func markPromptPresented() {

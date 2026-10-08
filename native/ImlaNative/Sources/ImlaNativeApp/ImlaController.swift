@@ -764,6 +764,7 @@ public final class ImlaController: NSObject {
     private var activeMeetingSignalLossResponse: MeetingSignalLossResponse = .none
     private var meetingSignalLossPromptState = MeetingSignalLossPromptState()
     private let meetingAutoStopGracePeriod: TimeInterval = 20
+    private let meetingSignalLossTranscriptQuietPeriod: TimeInterval = 45
     private var meetingActivity: NSObjectProtocol?
     private var isStoppingMeetingRecording = false
     private var isPresentingMeetingTerminationConfirmation = false
@@ -8921,6 +8922,7 @@ public final class ImlaController: NSObject {
                             )
                         }
                         guard !entries.isEmpty else { return }
+                        self.noteMeetingTranscriptActivity()
                         do {
                             try self.dictationStore.appendLiveTranscriptCheckpoints(meetingID: meetingID, entries: entries)
                         } catch {
@@ -8951,6 +8953,9 @@ public final class ImlaController: NSObject {
                         } else {
                             guard self.appState.liveMeetingPartialOthers != tail else { return }
                             self.appState.liveMeetingPartialOthers = tail
+                        }
+                        if !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            self.noteMeetingTranscriptActivity()
                         }
                         self.meetingRecordingPanel.updateMeetingTranscript(
                             transcript: self.appState.liveMeetingTranscript,
@@ -11315,7 +11320,7 @@ public final class ImlaController: NSObject {
 
     private func armMeetingAutoStop(
         source: MeetingAutoStopSource?,
-        response: MeetingSignalLossResponse = .autoStopAfterWarning
+        response: MeetingSignalLossResponse = .warnOnly
     ) {
         let lateArmDeadline = source == nil && response == .warnOnly
             ? Date().addingTimeInterval(15)
@@ -11473,9 +11478,22 @@ public final class ImlaController: NSObject {
         meetingNotification.close()
     }
 
+    private func noteMeetingTranscriptActivity() {
+        meetingSignalLossPromptState.noteTranscriptActivity(now: Date())
+        let promptID = meetingSignalLossPromptID(for: activeMeetingID)
+        if meetingNotification.isVisible,
+           meetingNotification.currentPromptID == promptID {
+            meetingSignalLossPromptState.markAutoDismissed()
+            meetingNotification.close()
+        }
+    }
+
     private func presentMeetingSignalLossPromptIfNeeded() {
         guard activeMeetingSignalLossResponse != .none,
               meetingSignalLossPromptState.canPresentPrompt,
+              !meetingSignalLossPromptState.hasRecentTranscriptActivity(
+                  now: Date(), quietPeriod: meetingSignalLossTranscriptQuietPeriod
+              ),
               activeMeetingSession?.isRecording == true,
               !isStoppingMeetingRecording else { return }
 
@@ -11484,11 +11502,10 @@ public final class ImlaController: NSObject {
         guard meetingNotification.currentPromptID != promptID || !meetingNotification.isVisible else { return }
 
         meetingSignalLossPromptState.markPromptPresented()
-        let response = activeMeetingSignalLossResponse
         let didShow = meetingNotification.show(
             promptID: promptID,
             title: "Meeting signal lost",
-            subtitle: "Still transcribing. Stop if the meeting ended.",
+            subtitle: "Recording continues. Stop if the meeting ended.",
             actionLabel: "Stop Transcribing",
             dismissAfter: 30,
             // MeetingNotificationController uses onStartRecording as its generic
@@ -11505,16 +11522,9 @@ public final class ImlaController: NSObject {
                 guard let self else { return }
                 guard self.activeMeetingID == meetingID else { return }
                 self.meetingSignalLossPromptState.markAutoDismissed()
-                guard response == .autoStopAfterWarning else { return }
-                fputs("[meeting] auto-stopping recording after meeting source disappeared and warning timed out\n", stderr)
-                self.stopMeetingRecording()
             }
         )
-
-        if !didShow, response == .autoStopAfterWarning {
-            fputs("[meeting] auto-stopping recording after meeting source disappeared; warning unavailable\n", stderr)
-            stopMeetingRecording()
-        }
+        if !didShow { meetingSignalLossPromptState.markAutoDismissed() }
     }
 
     private func presentMeetingDetection(_ candidate: MeetingCandidate) {
@@ -15739,8 +15749,8 @@ public final class ImlaController: NSObject {
     private func showMeetingEndNotification(title: String) {
         guard isMeetingRecording() else { return }
         meetingNotification.show(
-            title: "Meeting ended",
-            subtitle: "\(title) · scheduled time is over",
+            title: "Scheduled time ended",
+            subtitle: "\(title) may still be ongoing. Stop when finished.",
             actionLabel: "Stop Transcribing",
             dismissAfter: 45,
             onStartRecording: { [weak self] in
