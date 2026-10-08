@@ -217,6 +217,7 @@ case "${shard}" in
       MeetingPanelBodyCoordinatorTests
       MeetingRecordingPanelGeometryTests
       MeetingRecordingPanelLifecycleTests
+      MeetingRecordingTranscriberTests
       MeetingResumePolicyTests
       MeetingReverseLeakEstimatorTests
       MeetingReverseLeakLockPolicyTests

@@ -326,7 +326,10 @@ struct MeetingDetailView: View {
     var recordingCoordinator: RecordingArtifactPlaybackCoordinator = .shared
     @Environment(\.usesCompactQuickNotes) private var usesCompactQuickNotes
     @State private var isSummarizing = false
-    @State private var isRetranscribing = false
+    private var isRetranscribing: Bool {
+        guard let id = meeting?.id else { return false }
+        return appState.meetingRetranscriptions[id]?.isRunning == true
+    }
     @State private var isEditingNotes = false
     @State private var isEditingTranscript = false
     @State private var editableTitle: String
@@ -346,6 +349,7 @@ struct MeetingDetailView: View {
     @State private var manualNotesSaveStatusTask: DispatchWorkItem?
     @State private var summaryErrorMessage: String?
     @State private var retranscriptionErrorMessage: String?
+    @State private var pendingRetranscriptionBackend: BackendOption?
     @State private var showDeleteConfirmation = false
     @State private var transcriptResummaryPromptMeetingID: Int64?
     @State private var transcriptEditOriginalTranscript: String?
@@ -382,6 +386,8 @@ struct MeetingDetailView: View {
             if let meeting {
                 VStack(alignment: .leading, spacing: 0) {
                     header(meeting)
+
+                    retranscriptionStatus(for: meeting)
 
                     Divider()
                         .background(ImlaTheme.surfaceBorder)
@@ -433,6 +439,24 @@ struct MeetingDetailView: View {
             }
         } message: {
             Text(summaryErrorMessage ?? "The updated meeting notes could not be saved.")
+        }
+        .confirmationDialog("Re-transcribe saved recording?", isPresented: Binding(
+            get: { pendingRetranscriptionBackend != nil },
+            set: { if !$0 { pendingRetranscriptionBackend = nil } }
+        ), titleVisibility: .visible) {
+            Button("Re-transcribe") {
+                if let model = pendingRetranscriptionBackend, let meeting {
+                    controller.retranscribe(meeting: controller.meeting(id: meeting.id) ?? meeting, backend: model) { result in
+                        if case .failure(let error) = result, appState.meetingRetranscriptions[meeting.id] == nil {
+                            retranscriptionErrorMessage = error.localizedDescription
+                        }
+                    }
+                }
+                pendingRetranscriptionBackend = nil
+            }
+            Button("Cancel", role: .cancel) { pendingRetranscriptionBackend = nil }
+        } message: {
+            Text("Replaces the transcript and regenerates notes from the saved audio. Written notes are retained. Processing continues while you navigate elsewhere, but not after quitting Imla.")
         }
         .alert("Couldn't Re-transcribe Meeting", isPresented: retranscriptionErrorBinding) {
             Button("OK", role: .cancel) {
@@ -543,6 +567,7 @@ struct MeetingDetailView: View {
                 .layoutPriority(1)
 
                 if showsManualNotesEditor(for: meeting) {
+                    recordingRecoveryHeaderAction(for: meeting)
                     compactRecordingControls(for: meeting)
                 } else {
                     compactHeaderActions(for: meeting, appliedTemplate: appliedTemplate)
@@ -651,7 +676,10 @@ struct MeetingDetailView: View {
         appliedTemplate: MeetingTemplateSnapshot
     ) -> some View {
         if showsManualNotesEditor(for: meeting) {
-            recordingControlGroup(for: meeting)
+            HStack(spacing: ImlaTheme.spacing8) {
+                recordingRecoveryHeaderAction(for: meeting)
+                recordingControlGroup(for: meeting)
+            }
         } else {
             compactHeaderActions(for: meeting, appliedTemplate: appliedTemplate)
         }
@@ -1293,43 +1321,85 @@ struct MeetingDetailView: View {
     }
 
     @ViewBuilder
-    private func retranscribeAction(for meeting: MeetingRecord) -> some View {
-        if recordingCoordinator.resolution(for: .meeting(meeting.id)).availability == .available {
-            if isRetranscribing {
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Re-transcribing...")
-                        .font(ImlaTheme.font(size: 11))
-                        .foregroundStyle(ImlaTheme.textTertiary)
+    private func retranscribeAction(for meeting: MeetingRecord, accessibilityIdentifier: String) -> some View {
+        if recordingCoordinator.resolution(for: .meeting(meeting.id)).availability == .available,
+           meeting.status != .recording, meeting.status != .noteOnly {
+            Menu {
+                let models = BackendOption.downloadedMeetingTranscription
+                if models.isEmpty { Text("Download a meeting model in Settings") }
+                ForEach(models, id: \.model) { model in
+                    Button(model.label) {
+                        pendingRetranscriptionBackend = model
+                    }
                 }
-                .padding(.horizontal, ImlaTheme.spacing8)
-            } else {
-                iconButton("arrow.clockwise", label: "Re-transcribe") {
-                    startRetranscription(for: meeting)
-                }
-                .disabled(meeting.status == .recording || meeting.status == .processing || isEditingNotes || isEditingTranscript)
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                    .frame(width: 36, height: ImlaTheme.controlHeight)
+                    .contentShape(Rectangle())
             }
+            .menuStyle(.borderlessButton)
+            .frame(height: ImlaTheme.controlHeight)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel("Re-transcribe")
+            .help("Re-transcribe the saved recording with a model")
+            .disabled(!controller.canRetranscribeMeeting(meeting) || isSummarizing || isEditingNotes || isEditingTranscript)
+            .accessibilityIdentifier(accessibilityIdentifier)
         }
     }
 
-    private func startRetranscription(for meeting: MeetingRecord) {
-        isRetranscribing = true
-        controller.retranscribe(meeting: meeting) { [meeting] result in
-            isRetranscribing = false
-            switch result {
-            case .success:
-                if let updated = controller.meeting(id: meeting.id) {
-                    syncLocalState(with: updated)
-                }
-            case .failure(let error):
-                retranscriptionErrorMessage = error.localizedDescription
-            }
+    @ViewBuilder
+    private func recordingRecoveryHeaderAction(for meeting: MeetingRecord) -> some View {
+        if Self.showsRecordingRecoveryAction(for: meeting) {
+            retranscribeAction(for: meeting, accessibilityIdentifier: "meeting.retranscription.header.models")
         }
     }
 
     /// The compact quick-notes header has room for a single row, so it carries
     /// the action rail's controls without the rail's divider chrome.
+    @ViewBuilder
+    private func retranscriptionStatus(for meeting: MeetingRecord) -> some View {
+        if appState.meetingRetranscriptions[meeting.id] != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    if let job = appState.meetingRetranscriptions[meeting.id] {
+                        if job.isRunning { ProgressView().controlSize(.small) }
+                        Text(job.message).font(.callout)
+                        Spacer()
+                        if job.isRunning {
+                            Button("Cancel") { controller.cancelMeetingRetranscription(id: meeting.id) }
+                        } else {
+                            Button("Dismiss") { appState.meetingRetranscriptions[meeting.id] = nil }
+                        }
+                    }
+                }
+                if let job = appState.meetingRetranscriptions[meeting.id], job.isRunning {
+                    if job.phase == .transcribing || job.phase == .diarizing { ProgressView(value: job.fraction) }
+                    if !job.preview.isEmpty {
+                        Text(job.preview).font(.callout).lineLimit(3).foregroundStyle(.secondary)
+                    }
+                }
+                if let warning = appState.meetingRetranscriptions[meeting.id]?.warning {
+                    Label(warning, systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(ImlaTheme.recording)
+                        .accessibilityIdentifier("meeting.retranscription.diarizationWarning")
+                }
+            }
+            .padding(.horizontal, usesCompactQuickNotes ? 24 : 40)
+            .padding(.bottom, 12)
+            .accessibilityIdentifier("meeting.retranscription.status")
+        }
+    }
+
+    /// A failed meeting offers recovery from its recording; `retranscribeAction` itself
+    /// shows nothing unless the artifact store reports that recording available.
+    static func showsRecordingRecoveryAction(for meeting: MeetingRecord) -> Bool {
+        meeting.status == .failed
+    }
+
     @ViewBuilder
     private func compactHeaderActions(
         for meeting: MeetingRecord,
@@ -1427,7 +1497,7 @@ struct MeetingDetailView: View {
 
             Spacer()
 
-            retranscribeAction(for: meeting)
+            retranscribeAction(for: meeting, accessibilityIdentifier: "meeting.retranscription.toolbar.models")
 
             Button(action: {
                 controller.copyToClipboard(activeCopyText(for: meeting))
@@ -2610,6 +2680,8 @@ struct TranscriptChatMessage: Identifiable, Equatable {
         guard !label.isEmpty, label.count <= 32 else { return false }
         if label.localizedCaseInsensitiveCompare("You") == .orderedSame { return true }
         if label.localizedCaseInsensitiveCompare("Others") == .orderedSame { return true }
+        if label.localizedCaseInsensitiveCompare("Multiple speakers") == .orderedSame { return true }
+        if label.localizedCaseInsensitiveCompare("Unknown speaker") == .orderedSame { return true }
         if label.range(of: #"^Speaker\s+\d+$"#, options: [.regularExpression, .caseInsensitive]) != nil {
             return true
         }

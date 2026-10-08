@@ -844,6 +844,9 @@ struct MeetingsView: View {
     }
 
     private func activeMeetingStatusText(for meeting: MeetingListRecord) -> String {
+        if let job = appState.meetingRetranscriptions[meeting.id], job.isRunning {
+            return job.message
+        }
         guard meeting.status == .recording else { return "Finalizing notes" }
         return appState.isMeetingRecordingPaused ? "Recording paused" : "Recording now"
     }

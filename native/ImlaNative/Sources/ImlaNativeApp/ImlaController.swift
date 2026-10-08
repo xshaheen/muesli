@@ -306,6 +306,7 @@ private enum CalendarAttendeePersistenceMode: Sendable, Equatable {
 
 enum MeetingRetranscriptionError: Error, LocalizedError {
     case controllerUnavailable
+    case busy
     case recordingUnavailable
     case noDownloadedTranscriptionModel
     case emptyTranscript
@@ -315,6 +316,8 @@ enum MeetingRetranscriptionError: Error, LocalizedError {
         switch self {
         case .controllerUnavailable:
             return "Meeting re-transcription could not continue because Imla is no longer available."
+        case .busy:
+            return "Wait for the current recording, import, or transcription to finish before re-transcribing a meeting."
         case .recordingUnavailable:
             return "The saved meeting recording is no longer available on disk."
         case .noDownloadedTranscriptionModel:
@@ -783,6 +786,9 @@ public final class ImlaController: NSObject {
     private var meetingStartMeetingID: Int64?
     private var importTask: Task<Void, Never>?
     private var importSessionID: UUID?
+    private var meetingRetranscriptionTasks: [Int64: Task<Void, Never>] = [:]
+    private var isShuttingDown = false
+    private var modelFileMutationTokens: Set<UUID> = []
     private var meetingFinalizationTasks: [UUID: Task<Void, Never>] = [:]
     private var recordingStartupRecoveryTask: Task<Void, Never>?
     private var recordingMaintenanceTask: Task<Void, Never>?
@@ -1370,7 +1376,18 @@ public final class ImlaController: NSObject {
         applyBilingualRepairAutoEnableIfNeeded()
     }
 
+    func cancelMeetingRetranscriptionsForShutdown() async {
+        isShuttingDown = true
+        // Suspend asynchronously (never block the main thread) until retry
+        // cancellation and its deferred state cleanup finish. Do this before
+        // tearing down any shared resources those jobs may still access.
+        let retranscriptionTasks = Array(meetingRetranscriptionTasks.values)
+        retranscriptionTasks.forEach { $0.cancel() }
+        for task in retranscriptionTasks { await task.value }
+    }
+
     func shutdown() async {
+        await cancelMeetingRetranscriptionsForShutdown()
         keyboardLanguageMonitor.stop()
         dictationModelPreparationTask?.cancel()
         dictationModelPreparationTask = nil
@@ -3665,6 +3682,7 @@ public final class ImlaController: NSObject {
         _ option: BackendOption,
         makePrimaryDictationModel: Bool
     ) {
+        guard ensureNoAudioReplayInProgress() else { return }
         let replacesGemmaCleanup = !selectedPostProcessorBackend.isCompatible(with: option)
         let hasLocalCleanupModel = PostProcessorOption.runtimeOption(id: config.activePostProcessorId) != nil
         updateConfig {
@@ -3879,6 +3897,7 @@ public final class ImlaController: NSObject {
     }
 
     func selectMeetingTranscriptionBackend(_ option: BackendOption, requireDownloaded: Bool = true) {
+        guard ensureNoAudioReplayInProgress() else { return }
         applyMeetingTranscriptionBackend(option, requireDownloaded: requireDownloaded)
     }
 
@@ -6786,14 +6805,56 @@ public final class ImlaController: NSObject {
         }
     }
 
-    func retranscribe(meeting: MeetingRecord, completion: @escaping (Result<Void, Error>) -> Void) {
-        Task { @MainActor [weak self] in
+    func cancelMeetingRetranscription(id: Int64) {
+        meetingRetranscriptionTasks[id]?.cancel()
+    }
+
+    /// Retranscription shares the loaded models with recording, imports, and model
+    /// file changes, so it runs only when none of them is in flight.
+    func canRetranscribeMeeting(_ meeting: MeetingRecord) -> Bool {
+        !isShuttingDown && meetingRetranscriptionTasks.isEmpty && appState.modelFileMutationCount == 0
+            && appState.activeAudioImportCount == 0 && importTask == nil
+            && !isMeetingRecording() && !isStartingMeetingRecording
+            && backgroundMeetingProcessingCount == 0
+            && (meeting.status == .completed || meeting.status == .failed)
+    }
+
+    /// Runs as a background job the detail view can follow and cancel. `backend` lets
+    /// the user pick a model for this run without changing the meeting setting.
+    func retranscribe(
+        meeting: MeetingRecord,
+        backend requestedBackend: BackendOption? = nil,
+        completion: @escaping (Result<Void, Error>) -> Void = { _ in }
+    ) {
+        // Register synchronously: a second click cannot race task startup.
+        flushCachedMeetingTitle(id: meeting.id)
+        flushCachedMeetingManualNotes(id: meeting.id, sync: false)
+        guard let meeting = self.meeting(id: meeting.id) else {
+            completion(.failure(MeetingRetranscriptionError.recordingUnavailable))
+            return
+        }
+        guard canRetranscribeMeeting(meeting) else {
+            completion(.failure(MeetingRetranscriptionError.busy))
+            return
+        }
+        appState.meetingRetranscriptions[meeting.id] = MeetingRetranscriptionProgress()
+        meetingRetranscriptionTasks[meeting.id] = Task { @MainActor [weak self] in
             guard let self else {
                 completion(.failure(MeetingRetranscriptionError.controllerUnavailable))
                 return
             }
             var didSetProcessing = false
             var sessionTrace: SessionRunTrace?
+            let activity = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .idleSystemSleepDisabled],
+                reason: "Re-transcribing retained meeting audio"
+            )
+            defer {
+                ProcessInfo.processInfo.endActivity(activity)
+                self.meetingRetranscriptionTasks[meeting.id] = nil
+                self.syncAppState()
+                self.historyWindowController?.reload()
+            }
             do {
                 guard let recordingArtifactStore,
                       let reference = try recordingArtifactStore.recordingForMeeting(id: meeting.id),
@@ -6801,8 +6862,17 @@ public final class ImlaController: NSObject {
                     throw MeetingRetranscriptionError.recordingUnavailable
                 }
                 let recordingURL = try recordingArtifactStore.playableURL(id: artifactID)
-                guard let backend = self.normalizeMeetingTranscriptionSelectionForAvailability() else {
-                    throw MeetingRetranscriptionError.noDownloadedTranscriptionModel
+                let backend: BackendOption
+                if let requestedBackend {
+                    guard requestedBackend.supportsMeetingTranscription, requestedBackend.isDownloaded else {
+                        throw MeetingRetranscriptionError.noDownloadedTranscriptionModel
+                    }
+                    backend = requestedBackend
+                } else {
+                    guard let selected = self.normalizeMeetingTranscriptionSelectionForAvailability() else {
+                        throw MeetingRetranscriptionError.noDownloadedTranscriptionModel
+                    }
+                    backend = selected
                 }
                 let retranscriptionConfig = self.config
                 let retranscriptionStartedAt = Date()
@@ -6828,26 +6898,40 @@ public final class ImlaController: NSObject {
                 try await self.transcriptionCoordinator.preloadRequired(
                     backend: backend,
                     enablePostProcessor: false,
-                    includeMeetingHelpers: true,
+                    includeMeetingHelpers: false,
                     meetingHelperTrigger: .retranscription,
-                    appleSpeechLanguage: self.config.resolvedAppleSpeechLanguage
+                    appleSpeechLanguage: retranscriptionConfig.resolvedAppleSpeechLanguage
                 )
+                // Silence gating needs VAD now; the diarizer loads only once ASR succeeds.
+                await self.transcriptionCoordinator.preloadMeetingVAD()
+                try Task.checkCancellation()
+                self.appState.meetingRetranscriptions[meeting.id]?.phase = .transcribing
+
                 let coordinator = self.transcriptionCoordinator
                 let languageDecision = MeetingSession.meetingLanguageDecision(
                     selection: retranscriptionSelection,
                     backend: backend,
                     workload: .retranscription
                 )
-                let appleSpeechLanguage = self.config.resolvedAppleSpeechLanguage
-                let transcribe: (URL) async throws -> MeetingTranscriptionEvidence = { url in
-                    try await coordinator.transcribeMeetingWithEvidence(
+                let profile = retranscriptionConfig.meetingLanguageProfile
+                let appleSpeechLanguage = retranscriptionConfig.resolvedAppleSpeechLanguage
+                let customWords = retranscriptionConfig.customWords
+                let transcribe: MeetingRecordingTracks.Transcribe = { url, progress in
+                    try await coordinator.transcribeRecordedAudio(
                         at: url,
                         backend: backend,
                         languageDecision: languageDecision,
-                        profile: retranscriptionConfig.meetingLanguageProfile,
+                        profile: profile,
                         appleSpeechLanguage: appleSpeechLanguage,
-                        customWords: retranscriptionConfig.customWords
+                        customWords: customWords,
+                        progress: progress
                     )
+                }
+                let meetingID = meeting.id
+                let progress: MeetingRecordingTracks.Progress = { [weak self] stage, fraction, preview in
+                    await MainActor.run {
+                        self?.applyRetranscriptionProgress(meetingID: meetingID, stage: stage, fraction: fraction, preview: preview)
+                    }
                 }
                 let meetingStart = ISO8601DateFormatter().date(from: meeting.startTime) ?? retranscriptionStartedAt
                 let retranscription: MeetingRecordingTracks.Retranscription
@@ -6856,20 +6940,23 @@ public final class ImlaController: NSObject {
                         tracks: tracksURL,
                         meetingStart: meetingStart,
                         coordinator: coordinator,
-                        transcribe: transcribe
+                        transcribe: transcribe,
+                        progress: progress
                     )
                 } else {
                     retranscription = try await MeetingRecordingTracks.retranscribe(
                         mix: recordingURL,
                         meetingStart: meetingStart,
                         coordinator: coordinator,
-                        transcribe: transcribe
+                        transcribe: transcribe,
+                        progress: progress
                     )
                 }
+                try Task.checkCancellation()
+                self.appState.meetingRetranscriptions[meeting.id]?.warning = retranscription.warning
                 await trace.storeArtifact(retranscription.rawASR, kind: .rawASR)
                 await trace.storeArtifact(retranscription.cleaned, kind: .cleanupResult)
-                let transcriptText = retranscription.transcript
-                let rawTranscript = transcriptText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let rawTranscript = retranscription.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !rawTranscript.isEmpty else {
                     throw MeetingRetranscriptionError.emptyTranscript
                 }
@@ -6877,6 +6964,8 @@ public final class ImlaController: NSObject {
 
                 let templateSnapshot = self.meetingTemplateSnapshot(for: meeting)
                 let participantNames = await self.summaryParticipantNames(meetingID: meeting.id)
+                self.appState.meetingRetranscriptions[meeting.id]?.phase = .summarizing
+                self.appState.meetingRetranscriptions[meeting.id]?.message = "Re-summarizing…"
                 let formattedNotes: String
                 do {
                     formattedNotes = try await MeetingSummaryClient.summarize(
@@ -6889,6 +6978,7 @@ public final class ImlaController: NSObject {
                         participantNames: participantNames
                     )
                 } catch {
+                    try Task.checkCancellation()
                     fputs("[imla-native] re-transcription summary generation failed: \(error)\n", stderr)
                     formattedNotes = MeetingSummaryClient.summaryFailureNotes(
                         transcript: rawTranscript,
@@ -6900,6 +6990,7 @@ public final class ImlaController: NSObject {
                 }
 
                 do {
+                    try Task.checkCancellation()
                     try self.dictationStore.updateMeetingTranscriptAndSummary(
                         id: meeting.id,
                         rawTranscript: rawTranscript,
@@ -6910,6 +7001,7 @@ public final class ImlaController: NSObject {
                         selectedTemplatePrompt: templateSnapshot.prompt
                     )
                 } catch {
+                    if error is CancellationError { throw error }
                     throw MeetingRetranscriptionError.failedToSave(underlying: error)
                 }
 
@@ -6925,49 +7017,72 @@ public final class ImlaController: NSObject {
                         .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
                 self.scheduleICloudSyncAfterLocalChange()
-                self.syncAppState()
-                self.historyWindowController?.reload()
+                self.appState.meetingRetranscriptions[meeting.id]?.phase = .completed
+                self.appState.meetingRetranscriptions[meeting.id]?.message = "Re-transcription complete"
+                self.appState.meetingRetranscriptions[meeting.id]?.preview = ""
                 completion(.success(()))
-            } catch is CancellationError {
-                _ = await sessionTrace?.cancel(stage: "meeting_retranscription")
-                if didSetProcessing {
-                    self.updateMeetingStatusAndScheduleSync(id: meeting.id, status: meeting.status)
-                }
-                self.syncAppState()
-                self.historyWindowController?.reload()
-                completion(.failure(CancellationError()))
             } catch {
-                _ = await sessionTrace?.fail(stage: "meeting_retranscription")
-                fputs("[imla-native] failed to re-transcribe meeting \(meeting.id): \(error)\n", stderr)
-                if let status = Self.retranscriptionFailureStatus(
+                let cancelled = Task.isCancelled || error is CancellationError
+                if cancelled {
+                    _ = await sessionTrace?.cancel(stage: "meeting_retranscription")
+                } else {
+                    _ = await sessionTrace?.fail(stage: "meeting_retranscription")
+                    fputs("[imla-native] failed to re-transcribe meeting \(meeting.id): \(error)\n", stderr)
+                }
+                if let restoredStatus = Self.retranscriptionFailureStatus(
                     originalStatus: meeting.status,
                     didSetProcessing: didSetProcessing,
                     error: error
                 ) {
-                    self.updateMeetingStatusAndScheduleSync(id: meeting.id, status: status)
+                    self.updateMeetingStatusAndScheduleSync(id: meeting.id, status: restoredStatus)
                 }
-                self.syncAppState()
-                self.historyWindowController?.reload()
-                completion(.failure(error))
+                self.appState.meetingRetranscriptions[meeting.id]?.phase = cancelled ? .cancelled : .failed
+                self.appState.meetingRetranscriptions[meeting.id]?.message = cancelled
+                    ? "Re-transcription cancelled"
+                    : error.localizedDescription
+                self.appState.meetingRetranscriptions[meeting.id]?.preview = ""
+                completion(.failure(cancelled ? CancellationError() : error))
             }
         }
     }
 
+    private func applyRetranscriptionProgress(
+        meetingID: Int64,
+        stage: MeetingRecordingTracks.Stage,
+        fraction: Double,
+        preview: String
+    ) {
+        guard appState.meetingRetranscriptions[meetingID]?.isRunning == true else { return }
+        let percent = Int(fraction * 100)
+        switch stage {
+        case .transcribingMic:
+            appState.meetingRetranscriptions[meetingID]?.phase = .transcribing
+            appState.meetingRetranscriptions[meetingID]?.message = "Re-transcribing your side · \(percent)%"
+        case .transcribingSystem:
+            appState.meetingRetranscriptions[meetingID]?.phase = .transcribing
+            appState.meetingRetranscriptions[meetingID]?.message = "Re-transcribing other speakers · \(percent)%"
+        case .transcribingMix:
+            appState.meetingRetranscriptions[meetingID]?.phase = .transcribing
+            appState.meetingRetranscriptions[meetingID]?.message = "Re-transcribing · \(percent)%"
+        case .identifyingSpeakers:
+            appState.meetingRetranscriptions[meetingID]?.phase = .diarizing
+            appState.meetingRetranscriptions[meetingID]?.message = "Identifying speakers · \(percent)%"
+        }
+        appState.meetingRetranscriptions[meetingID]?.fraction = fraction
+        if !preview.isEmpty {
+            appState.meetingRetranscriptions[meetingID]?.preview = preview
+        }
+    }
+
+    /// A retry must never discard a usable original result, even on cancellation or a
+    /// backend error: only a successful save replaces the meeting's contents.
     static func retranscriptionFailureStatus(
         originalStatus: MeetingStatus,
         didSetProcessing: Bool,
         error: Error
     ) -> MeetingStatus? {
         guard didSetProcessing else { return nil }
-        if let retranscriptionError = error as? MeetingRetranscriptionError {
-            switch retranscriptionError {
-            case .emptyTranscript, .failedToSave:
-                return originalStatus
-            case .controllerUnavailable, .recordingUnavailable, .noDownloadedTranscriptionModel:
-                break
-            }
-        }
-        return .failed
+        return originalStatus
     }
 
     nonisolated static func completeMeetingRetranscriptionTrace(
@@ -7760,6 +7875,8 @@ public final class ImlaController: NSObject {
 
     private func canDeleteMeeting(id: Int64, status: MeetingStatus) -> Bool {
         guard id != activeMeetingID else { return false }
+        // A running retranscription would save its result into the deleted row.
+        guard meetingRetranscriptionTasks[id] == nil else { return false }
         if staleLiveMeetingRecoveryFailures.contains(id) {
             return true
         }
@@ -8109,7 +8226,11 @@ public final class ImlaController: NSObject {
         inheritedFolderID: Int64? = nil,
         previousMeetingNotes: String? = nil
     ) -> Bool {
+        guard !isShuttingDown else { return false }
         guard !isMeetingRecording(), !isStartingMeetingRecording else { return false }
+        // A meeting cannot be re-run but a retranscription can, so the meeting wins
+        // the shared models; the cancelled job reports itself in the meeting's detail.
+        meetingRetranscriptionTasks.values.forEach { $0.cancel() }
         guard let defaultMeetingBackend = normalizeMeetingTranscriptionSelectionForAvailability() else {
             presentErrorAlert(
                 title: "Meeting failed to start",
@@ -8421,8 +8542,24 @@ public final class ImlaController: NSObject {
     // MARK: - Audio File Import
 
     /// Presents a file picker and imports an audio file for offline transcription.
+    /// Imports, retranscriptions, and model switches all replay audio through the
+    /// shared models, so only one may run at a time. A meeting start is not on this
+    /// list: it cancels a retranscription instead, because a meeting cannot be re-run.
+    private func ensureNoAudioReplayInProgress() -> Bool {
+        guard !isShuttingDown else { return false }
+        guard meetingRetranscriptionTasks.isEmpty, appState.activeAudioImportCount == 0 else {
+            presentErrorAlert(
+                title: "Audio processing in progress",
+                message: "Wait for the current import or re-transcription to finish, or cancel it, before starting another import or changing models."
+            )
+            return false
+        }
+        return true
+    }
+
     func importAudioFile() {
-        guard !isMeetingRecording(), !isStartingMeetingRecording else { return }
+        guard ensureNoAudioReplayInProgress() else { return }
+        guard !isMeetingRecording(), !isStartingMeetingRecording, appState.modelFileMutationCount == 0 else { return }
         guard normalizeMeetingTranscriptionSelectionForAvailability() != nil else {
             presentErrorAlert(
                 title: "Import Failed",
@@ -8449,7 +8586,8 @@ public final class ImlaController: NSObject {
 
     /// Imports an audio file from a URL (drag-and-drop or file picker).
     func importAudioFileFromURL(_ url: URL) {
-        guard !isMeetingRecording(), !isStartingMeetingRecording else { return }
+        guard ensureNoAudioReplayInProgress() else { return }
+        guard !isMeetingRecording(), !isStartingMeetingRecording, appState.modelFileMutationCount == 0 else { return }
         guard AudioFileImportController.isSupportedFileURL(url) else {
             presentErrorAlert(
                 title: "Import Failed",
@@ -8475,6 +8613,10 @@ public final class ImlaController: NSObject {
     }
 
     private func importAudioFile(from sourceURL: URL, sessionID: UUID) async {
+        // Cancellation may clear UI ownership before an in-flight model call
+        // returns. Keep its runtime protected until the operation really exits.
+        appState.activeAudioImportCount += 1
+        defer { appState.activeAudioImportCount -= 1 }
         let filename = sourceURL.deletingPathExtension().lastPathComponent
         let title = filename.isEmpty ? "Imported Recording" : filename
         let importContext = audioFileImportContext()
@@ -10685,6 +10827,26 @@ public final class ImlaController: NSObject {
                 fputs("[recordings] retention sweep failed for \(kind.rawValue): \(error)\n", stderr)
             }
         }
+    }
+
+    var canModifyModelFiles: Bool {
+        !isShuttingDown && !appState.meetingRetranscriptions.values.contains(where: \.isRunning)
+            && !appState.isMeetingStarting && appState.activeAudioImportCount == 0
+    }
+
+    /// Reserve synchronously, before an async unload/delete can yield to a retry.
+    func beginModelFileMutation() -> UUID? {
+        guard !isShuttingDown, meetingRetranscriptionTasks.isEmpty, !isStartingMeetingRecording,
+              appState.activeAudioImportCount == 0 else { return nil }
+        let token = UUID()
+        modelFileMutationTokens.insert(token)
+        appState.modelFileMutationCount = modelFileMutationTokens.count
+        return token
+    }
+
+    func endModelFileMutation(_ token: UUID) {
+        modelFileMutationTokens.remove(token)
+        appState.modelFileMutationCount = modelFileMutationTokens.count
     }
 
     private func cleanupTemporaryMeetingAudioFiles(for result: MeetingSessionResult) {
