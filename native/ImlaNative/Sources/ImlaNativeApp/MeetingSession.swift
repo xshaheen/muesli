@@ -2303,7 +2303,6 @@ final class MeetingSession {
                 callbackUptimeNanoseconds: callbackUptime,
                 callbackDate: callbackDate
             )
-            self.retainedRecordingWriter?.appendMic(micSamples, atSampleOffset: recordingOffset)
 
             let floatSamples = micSamples.map { Float($0) / 32767.0 }
 
@@ -2417,16 +2416,17 @@ final class MeetingSession {
         let cleanedInt16 = cleanedFloat.map { sample -> Int16 in
             Int16(max(-1.0, min(1.0, sample)) * 32767)
         }
-        // Reached from both callbacks, so it is the only place the reverse
-        // reference, and the retained tracks' "You" channel, can be placed at
-        // their true timeline position (KTD6).
+        // Reached from both callbacks and the pause/stop flushes, so it is the
+        // only place the reverse reference and the retained recording's mic can be
+        // placed at their true timeline position (KTD6). The recording takes the
+        // same echo-cancelled stream transcription does.
         for span in micArrivalTimeline.consume(cleanedFloat.count) {
             let range = span.offset..<(span.offset + span.count)
             reverseLeakSuppressor.feedCleanedMicSamples(
                 Array(cleanedFloat[range]),
                 timelineStartSample: span.timelineStart
             )
-            retainedRecordingWriter?.appendCleanedMic(
+            retainedRecordingWriter?.appendMic(
                 Array(cleanedInt16[range]),
                 atSampleOffset: span.timelineStart
             )
