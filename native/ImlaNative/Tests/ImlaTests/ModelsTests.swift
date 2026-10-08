@@ -830,7 +830,12 @@ struct LanguageProfileTests {
         config.meetingSpokenLanguage = .automatic
         let automatic = String(decoding: try encoder.encode(config), as: UTF8.self)
         #expect(automatic.contains(#""meeting_spoken_language":{"selectedLanguages":[]}"#))
-        #expect(!automatic.contains(#""mode""#))
+        // Scoped to the profile: other settings, such as the paste shortcut, have a mode.
+        let automaticObject = try #require(
+            try JSONSerialization.jsonObject(with: try encoder.encode(config)) as? [String: Any]
+        )
+        let automaticProfile = try #require(automaticObject["meeting_spoken_language"] as? [String: Any])
+        #expect(automaticProfile["mode"] == nil)
 
         config.meetingSpokenLanguage = try SpokenLanguageProfile(
             selectedLanguages: [.english, .arabic],

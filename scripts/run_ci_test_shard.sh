@@ -128,6 +128,7 @@ case "${shard}" in
       DiarizerPreloadDiagnosticsTests
       DiarizerPreloadCoordinationTests
       PasteControllerTests
+      PasteShortcutTests
       DictationPasteSpacingPolicyTests
       DictationPasteSpacingTests
       QuilTransformationTests

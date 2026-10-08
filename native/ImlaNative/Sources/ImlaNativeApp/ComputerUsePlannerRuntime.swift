@@ -54,9 +54,7 @@ final class ComputerUsePlannerRuntime {
             )
         },
         plan: PlanHandler? = nil,
-        execute: @escaping ExecuteHandler = { toolCall, registry in
-            await ComputerUseToolExecutor.execute(toolCall, registry: registry)
-        }
+        execute: ExecuteHandler? = nil
     ) {
         self.config = config
         self.maxSteps = maxSteps
@@ -66,7 +64,9 @@ final class ComputerUsePlannerRuntime {
         self.plan = plan ?? { request in
             try await ComputerUsePlannerClient.planNextTool(request: request, config: config)
         }
-        self.execute = execute
+        self.execute = execute ?? { toolCall, registry in
+            await ComputerUseToolExecutor.execute(toolCall, registry: registry, pasteShortcut: config.pasteShortcut)
+        }
     }
 
     func run(command: String) async -> ComputerUsePlannerRuntimeResult {

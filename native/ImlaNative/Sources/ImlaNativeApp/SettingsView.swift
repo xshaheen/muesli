@@ -2072,6 +2072,13 @@ struct SettingsView: View {
             }
 
             settingsSection("Advanced") {
+                settingsRow("Paste shortcut", controlWidth: meetingControlWidth) {
+                    PasteShortcutControl(controller: controller, appState: appState)
+                        .help("Custom applies to keyboard paste in Dictation, Quill, and Computer Use. Browser Paste commands and live streaming are unchanged. Re-record custom shortcuts after changing keyboard layouts.")
+                }
+                settingsDescription("Uses your keyboard layout, or a custom paste shortcut.")
+                    .lineLimit(1)
+                Divider().background(ImlaTheme.surfaceBorder)
                 settingsRow("Pause media during dictation") {
                     settingsSwitch(isOn: appState.config.pauseMediaDuringDictation) { newValue in
                         controller.updateConfig { $0.pauseMediaDuringDictation = newValue }
@@ -4248,6 +4255,7 @@ struct FixedWidthPopUp: NSViewRepresentable {
         button.removeAllItems()
         button.addItems(withTitles: options)
         button.menu?.autoenablesItems = false
+        button.isEnabled = context.environment.isEnabled
         updateEnabledItems(in: button)
         button.selectItem(withTitle: selection)
         button.target = context.coordinator
@@ -4258,6 +4266,7 @@ struct FixedWidthPopUp: NSViewRepresentable {
     }
 
     func updateNSView(_ button: NSPopUpButton, context: Context) {
+        button.isEnabled = context.environment.isEnabled
         let currentTitles = button.itemTitles
         if currentTitles != options {
             button.removeAllItems()

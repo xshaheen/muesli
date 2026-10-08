@@ -494,6 +494,7 @@ public final class ImlaController: NSObject {
     private let computerUseHotkeyMonitor = HotkeyMonitor()
     private let quilHotkeyMonitor = HotkeyMonitor()
     private let meetingRecordingHotkeyMonitor = HotkeyMonitor()
+    private var isRecordingPasteShortcut = false
     private let computerUseRecorder = RouteAwareDictationRecorder()
     private let quilRecorder = RouteAwareDictationRecorder()
     private let dictationRecorder = RouteAwareDictationRecorder()
@@ -5922,6 +5923,35 @@ public final class ImlaController: NSObject {
         hotkeyMonitor.stop()
         computerUseHotkeyMonitor.stop()
         meetingRecordingHotkeyMonitor.stop()
+    }
+
+    /// Recorder owns a temporary pause, never changes feature enablement/config.
+    func beginPasteShortcutCapture() -> Bool {
+        let monitors = [hotkeyMonitor, computerUseHotkeyMonitor, quilHotkeyMonitor, meetingRecordingHotkeyMonitor]
+        guard !isRecordingPasteShortcut, dictationState == .idle,
+              !isMeetingRecording(), !isStartingMeetingRecording, !isMeetingAudioProcessing,
+              !isDictationTestMode, quilTask == nil, computerUseCommandTask == nil,
+              interactiveAudioSessionOwnership.canStart(.dictation),
+              monitors.allSatisfy({ !$0.hasPendingOrActiveSession }) else { return false }
+        isRecordingPasteShortcut = true
+        monitors.forEach { $0.suspendForShortcutCapture() }
+        return true
+    }
+
+    func endPasteShortcutCapture() {
+        guard isRecordingPasteShortcut else { return }
+        isRecordingPasteShortcut = false
+        [hotkeyMonitor, computerUseHotkeyMonitor, quilHotkeyMonitor, meetingRecordingHotkeyMonitor]
+            .forEach { $0.resumeAfterShortcutCapture() }
+    }
+
+    func pasteShortcutConflict(_ chord: PasteKeyChord) -> Bool {
+        let candidate = HotkeyConfig.combination(modifiers: NSEvent.ModifierFlags(rawValue: UInt(chord.modifiers)), keyCode: chord.keyCode)
+        return [(config.enablePushToTalk, config.dictationHotkey),
+                (config.enableComputerUseHotkey, config.computerUseHotkey),
+                (config.enableQuilMode, config.quilHotkey),
+                (config.enableMeetingRecordingHotkey, config.meetingRecordingHotkey)]
+            .contains { $0.0 && $0.1.isCombination && ShortcutHotkeyPolicy.hotkeysConflict(candidate, $0.1) }
     }
 
     func downloadModelForOnboarding(
@@ -12058,6 +12088,7 @@ public final class ImlaController: NSObject {
                     var pasteLifecycleEvents: [PasteController.LifecycleEvent] = []
                     PasteController.paste(
                         text: replacement,
+                        shortcut: configSnapshot.pasteShortcut,
                         requireStagedClipboardOwnership: true,
                         targetApplicationProvider: { snapshot.application },
                         shouldDispatchPaste: { snapshot.isTargetStillFocused() },
@@ -12095,7 +12126,7 @@ public final class ImlaController: NSObject {
                                 deliveryStatus = "needs_attention"
                                 deliveryMessage = "Generated text is ready for manual paste"
                                 deliveryTraceBody = "Automatic paste was not accepted; generated text was retained on the clipboard"
-                                userMessage = "Generated — press ⌘V to paste"
+                                userMessage = "Generated — press \(configSnapshot.pasteShortcut.chordLabel) to paste"
                             } else {
                                 deliveryStatus = "needs_attention"
                                 deliveryMessage = "Automatic paste could not be completed"
@@ -15396,6 +15427,7 @@ public final class ImlaController: NSObject {
                     let autoEnter = job.deliveryPolicy.autoEnter
                     await PasteController.pasteAndWait(
                         text: text,
+                        shortcut: cleanupRuntime.config.pasteShortcut,
                         onPasteDispatched: { [weak self] ownedStagedClipboard in
                             guard let self,
                                   let autoEnter,

@@ -73,6 +73,7 @@ enum PasteController {
         text: String,
         appendDictationSentenceSpace: Bool = false,
         pasteboard: NSPasteboard = .general,
+        shortcut: PasteShortcut = .automatic,
         requireStagedClipboardOwnership: Bool = false,
         targetApplicationProvider: @escaping @MainActor () -> NSRunningApplication? = {
             NSWorkspace.shared.frontmostApplication
@@ -83,13 +84,14 @@ enum PasteController {
         targetPasteAction: @escaping @MainActor (NSRunningApplication) -> Bool? = {
             PasteController.performTargetPasteCommand(in: $0)
         },
-        simulatePasteAction: @escaping @MainActor () -> Bool = PasteController.simulatePaste,
+        simulatePasteAction: (@MainActor (PasteShortcut) -> Bool)? = nil,
         onPasteDispatched: @escaping @MainActor (Bool) -> Void = { _ in },
         onPasteFinished: @escaping @MainActor (NSRunningApplication?) -> Void = { _ in },
         onClipboardSettled: @escaping @MainActor () -> Void = {},
         onLifecycleEvent: @escaping @MainActor (LifecycleEvent) -> Void = { _ in }
     ) {
         guard !text.isEmpty else { return }
+        let simulatePasteAction = simulatePasteAction ?? { PasteController.simulatePaste(shortcut: $0) }
 
         // Save current clipboard contents (all types) so we can restore after paste.
         let savedItems = saveClipboard(pasteboard)
@@ -154,7 +156,7 @@ enum PasteController {
             let didDispatchPaste: Bool
             switch dispatchStrategy {
             case .keyboardShortcut:
-                didDispatchPaste = simulatePasteAction()
+                didDispatchPaste = simulatePasteAction(shortcut)
             case .targetApplicationPasteCommand:
                 guard let targetApplication else {
                     onLifecycleEvent(.targetPasteCommandUnavailable)
@@ -210,7 +212,8 @@ enum PasteController {
     static func pasteAndWait(
         text: String,
         pasteboard: NSPasteboard = .general,
-        simulatePasteAction: @escaping @MainActor () -> Bool = PasteController.simulatePaste,
+        shortcut: PasteShortcut = .automatic,
+        simulatePasteAction: (@MainActor (PasteShortcut) -> Bool)? = nil,
         shouldDispatchPaste: @escaping @MainActor () -> Bool = { true },
         onPasteDispatched: @escaping @MainActor (Bool) -> Void = { _ in }
     ) async {
@@ -220,6 +223,7 @@ enum PasteController {
             paste(
                 text: text,
                 pasteboard: pasteboard,
+                shortcut: shortcut,
                 shouldDispatchPaste: shouldDispatchPaste,
                 simulatePasteAction: simulatePasteAction,
                 onPasteDispatched: onPasteDispatched,
@@ -336,12 +340,17 @@ enum PasteController {
         return true
     }
 
-    private static func simulatePaste() -> Bool {
+    @MainActor
+    private static func simulatePaste(shortcut: PasteShortcut) -> Bool {
+        guard let chord = PasteKeyboardLayout.resolve(shortcut) else {
+            fputs("[imla-native] could not resolve paste shortcut for current keyboard layout\n", stderr)
+            return false
+        }
         guard let source = CGEventSource(stateID: .combinedSessionState) else {
             fputs("[imla-native] failed to create event source for paste\n", stderr)
             return false
         }
-        let keyCode: CGKeyCode = 9 // V
+        let keyCode = chord.keyCode
         guard let commandDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
               let commandUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
         else {
@@ -350,8 +359,8 @@ enum PasteController {
         }
         ImlaSyntheticKeyboardEvent.mark(commandDown)
         ImlaSyntheticKeyboardEvent.mark(commandUp)
-        commandDown.flags = .maskCommand
-        commandUp.flags = .maskCommand
+        commandDown.flags = chord.flags
+        commandUp.flags = chord.flags
         commandDown.post(tap: .cghidEventTap)
         commandUp.post(tap: .cghidEventTap)
         return true
