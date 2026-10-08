@@ -269,6 +269,7 @@ case "${shard}" in
       MeetingTranscriptCleanupTests
       CalendarEventQueryTests
       CalendarMonitorLifecycleTests
+      CalendarPermissionStateTests
       DisabledCalendarFilterTests
       GoogleCalendarTests
       NaturalTextDirectionTests

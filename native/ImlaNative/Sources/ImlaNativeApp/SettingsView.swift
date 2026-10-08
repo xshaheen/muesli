@@ -214,7 +214,8 @@ struct SettingsView: View {
     @State private var isCheckingSystemAudioPermission = false
     @State private var isUsingCustomOpenRouterModel = false
     @State private var isUsingCustomOpenRouterDictationModel = false
-    @State private var hasRefreshedMeetingCalendarSources = false
+    @State private var calendarPermission = CalendarPermissionState()
+    @State private var calendarSourcesRefresh = CalendarSourceRefreshState()
     @State private var isShowingICloudSyncReconnectConfirmation = false
     @State private var isShowingICloudSyncResetConfirmation = false
     @State private var isShowingIPhoneBridgeQRCode = false
@@ -471,6 +472,7 @@ struct SettingsView: View {
                 stopPermissionMonitoring()
             }
             .onChange(of: appState.selectedSettingsPane) { _, pane in
+                calendarPermission.refresh()
                 if pane == .dictation || pane == .meetings {
                     loadCachedAudioInputDevices()
                 }
@@ -487,9 +489,9 @@ struct SettingsView: View {
                     if appState.selectedMeetingSummaryBackend == .claudeCode {
                         Task { await refreshClaudeCodeAuthStatus() }
                     }
-                    Task {
-                        await controller.calendarAccessDidChange()
-                    }
+                }
+                if selectedPane == .general || selectedPane == .meetings {
+                    refreshCalendarSources(reconcileAccess: true)
                 }
             }
             .onChange(of: appState.selectedBackend) { _, _ in
@@ -2431,17 +2433,29 @@ struct SettingsView: View {
             }
 
             settingsSection("Calendars") {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Use calendars already connected to your Mac.")
-                            .font(ImlaTheme.body())
-                        Text("Add or remove accounts in macOS System Settings.")
-                            .font(ImlaTheme.caption())
-                            .foregroundStyle(ImlaTheme.textSecondary)
+                settingsRow("Calendar access", controlWidth: meetingControlWidth) {
+                    HStack {
+                        Spacer(minLength: 0)
+                        if calendarPermission.granted {
+                            Text("Granted")
+                                .font(ImlaTheme.caption())
+                                .foregroundStyle(ImlaTheme.success)
+                        } else {
+                            Button(calendarPermission.requesting ? "Requesting…" : (calendarPermission.canRequest ? "Allow Access" : "Open Settings"), action: requestCalendarPermission)
+                                .buttonStyle(.borderedProminent)
+                                .disabled(calendarPermission.requesting)
+                        }
                     }
-                    Spacer()
-                    Button("Manage accounts…", action: CalendarIntegration.openAccounts)
-                        .buttonStyle(.borderedProminent)
+                }
+                if !calendarPermission.granted {
+                    settingsDescription(calendarPermission.canRequest
+                        ? "Show meetings from calendars on your Mac."
+                        : "Allow full Calendar access in System Settings.")
+                }
+                if let errorMessage = calendarPermission.errorMessage {
+                    Text(errorMessage)
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(ImlaTheme.recording)
                 }
                 Divider().background(ImlaTheme.surfaceBorder)
                 settingsRow("Upcoming meetings", controlWidth: meetingControlWidth) {
@@ -2453,10 +2467,9 @@ struct SettingsView: View {
                         controller.updateUpcomingMeetingsWindow(dayCount: window.dayCount)
                     }
                 }
-                settingsDescription("Controls how many calendar days appear in Coming Up, the menu bar, and scheduled meeting checks.")
+                .help("How many calendar days appear in Coming Up, the menu bar, and meeting reminders.")
                 Divider().background(ImlaTheme.surfaceBorder)
                 calendarSourcesControl
-                    .padding(.bottom, ImlaTheme.spacing8)
             }
 
             settingsSection("Advanced") {
@@ -3266,6 +3279,20 @@ struct SettingsView: View {
                     isBusy: isCheckingSystemAudioPermission
                 )
             }
+            Divider().background(ImlaTheme.surfaceBorder)
+            permissionStatusRow(
+                "Calendars",
+                granted: calendarPermission.granted,
+                action: requestCalendarPermission,
+                pane: "Privacy_Calendars",
+                isBusy: calendarPermission.requesting,
+                actionTitle: calendarPermission.canRequest ? "Grant" : "Open Settings"
+            )
+            if let errorMessage = calendarPermission.errorMessage {
+                Text(errorMessage)
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.recording)
+            }
         }
     }
 
@@ -3275,7 +3302,8 @@ struct SettingsView: View {
         granted: Bool,
         action: @escaping () -> Void,
         pane: String,
-        isBusy: Bool = false
+        isBusy: Bool = false,
+        actionTitle: String = "Grant"
     ) -> some View {
         HStack {
             HStack(spacing: 8) {
@@ -3292,7 +3320,7 @@ struct SettingsView: View {
                     .font(ImlaTheme.font(size: 11))
                     .foregroundStyle(ImlaTheme.success)
             } else {
-                Button(isBusy ? "Checking…" : "Grant") {
+                Button(isBusy ? "Checking…" : actionTitle) {
                     action()
                 }
                 .disabled(isBusy)
@@ -3320,6 +3348,20 @@ struct SettingsView: View {
     private func openPrivacyPane(_ pane: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
             NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func requestCalendarPermission() {
+        calendarPermission.refresh()
+        guard calendarPermission.canRequest else {
+            CalendarIntegration.openPrivacy()
+            return
+        }
+        Task { @MainActor in
+            await calendarPermission.requestAccess()
+            if calendarPermission.granted {
+                refreshCalendarSources(reconcileAccess: true)
+            }
         }
     }
 
@@ -3416,6 +3458,7 @@ struct SettingsView: View {
     }
 
     private func refreshPermissionStatuses(for reason: SettingsPermissionRefreshReason) {
+        calendarPermission.refresh()
         if reason.refreshesLaunchAtLogin {
             controller.refreshLaunchAtLoginState()
         }
@@ -3616,32 +3659,31 @@ struct SettingsView: View {
     private var calendarSourcesControl: some View {
         let sourceGroups = calendarSourceGroups
         return VStack(alignment: .leading, spacing: ImlaTheme.spacing16) {
-            if sourceGroups.isEmpty {
-                CalendarAccessControl(refreshOnActivation: false) {
-                    await controller.calendarAccessDidChange()
-                }
-                Text("No calendars found. Add an account in macOS Internet Accounts and turn on Calendars, or open Calendar to manage local calendars and subscriptions.")
-                    .font(ImlaTheme.caption())
-                    .foregroundStyle(ImlaTheme.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                ForEach(sourceGroups) { group in
-                    calendarSourceGroupView(group)
+            if calendarPermission.granted {
+                if sourceGroups.isEmpty {
+                    Text(calendarSourcesRefresh.isLoading ? "Loading calendars…" : "No calendars on this Mac.")
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                } else {
+                    Text("Choose calendars to show meetings from.")
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                    ForEach(sourceGroups) { group in
+                        calendarSourceGroupView(group)
+                    }
                 }
             }
-            Divider().background(ImlaTheme.surfaceBorder)
-            HStack(alignment: .top) {
-                Text("Uncheck a calendar to hide its meetings and notifications in Imla.")
-                    .font(ImlaTheme.caption())
-                    .foregroundStyle(ImlaTheme.textSecondary)
+            HStack {
+                Button("Manage accounts…", action: CalendarIntegration.openAccounts)
+                    .buttonStyle(.link)
+                    .help("Add or remove accounts in macOS Internet Accounts. Changes also affect other apps on this Mac.")
                 Spacer()
                 Button("Open Calendar…", action: CalendarIntegration.openCalendar)
                     .buttonStyle(.link)
+                    .help("Manage local calendars and subscriptions in Apple Calendar.")
             }
-            Text("Manage accounts opens Internet Accounts. Changes there also affect other apps on this Mac.")
-                .font(ImlaTheme.caption())
-                .foregroundStyle(ImlaTheme.textTertiary)
         }
+        .padding(.top, ImlaTheme.spacing8)
     }
 
     @ViewBuilder
@@ -3731,10 +3773,19 @@ struct SettingsView: View {
     }
 
     private func refreshMeetingCalendarSourcesIfNeeded() {
-        guard !hasRefreshedMeetingCalendarSources else { return }
-        hasRefreshedMeetingCalendarSources = true
-        Task {
-            await controller.refreshAvailableEventKitCalendars()
+        guard calendarSourcesRefresh.needsInitialRefresh else { return }
+        refreshCalendarSources()
+    }
+
+    private func refreshCalendarSources(reconcileAccess: Bool = false) {
+        calendarSourcesRefresh.begin()
+        Task { @MainActor in
+            defer { calendarSourcesRefresh.finish(completed: !Task.isCancelled) }
+            if reconcileAccess {
+                await controller.calendarAccessDidChange()
+            } else {
+                await controller.refreshAvailableEventKitCalendars()
+            }
         }
     }
 
