@@ -30,7 +30,10 @@ enum MeetingCleanupTransport {
     /// Reuses the summary client's own check rather than restating per-backend
     /// credential rules that would then drift from it.
     static func isConfigured(config: AppConfig, isChatGPTAuthenticated: Bool) -> Bool {
-        MeetingSummaryClient.isBackendConfigured(
+        // A summary backend that cannot serve cleanup (Claude Code runs a CLI, not a
+        // chat endpoint) must not report ready, or cleanup would silently never run.
+        guard MeetingTranscriptCleanupPolicy.isEligible(backend(for: config)) else { return false }
+        return MeetingSummaryClient.isBackendConfigured(
             config: config,
             isChatGPTAuthenticated: isChatGPTAuthenticated
         )

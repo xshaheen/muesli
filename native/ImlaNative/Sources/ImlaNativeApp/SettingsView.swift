@@ -186,6 +186,11 @@ struct SettingsView: View {
     @State private var isSigningInChatGPT = false
     @State private var openRouterSignInError: String?
     @State private var isSigningInOpenRouter = false
+    @State private var claudeCodeAuthStatus: ClaudeCodeAuthenticationStatus?
+    @State private var claudeCodeSignInError: String?
+    @State private var isShowingInvalidClaudeCodeExecutableAlert = false
+    @State private var isWaitingForClaudeCodeSignIn = false
+    @State private var isShowingClaudeCodeAdvanced = false
     @State private var isEnteringOpenRouterAPIKey = false
     @State private var manualOpenRouterAPIKey = ""
     @State private var pendingDataDestruction: PendingDataDestruction?
@@ -209,7 +214,8 @@ struct SettingsView: View {
     @State private var isCheckingSystemAudioPermission = false
     @State private var isUsingCustomOpenRouterModel = false
     @State private var isUsingCustomOpenRouterDictationModel = false
-    @State private var hasRefreshedMeetingCalendarSources = false
+    @State private var calendarPermission = CalendarPermissionState()
+    @State private var calendarSourcesRefresh = CalendarSourceRefreshState()
     @State private var isShowingICloudSyncReconnectConfirmation = false
     @State private var isShowingICloudSyncResetConfirmation = false
     @State private var isShowingIPhoneBridgeQRCode = false
@@ -466,6 +472,7 @@ struct SettingsView: View {
                 stopPermissionMonitoring()
             }
             .onChange(of: appState.selectedSettingsPane) { _, pane in
+                calendarPermission.refresh()
                 if pane == .dictation || pane == .meetings {
                     loadCachedAudioInputDevices()
                 }
@@ -479,9 +486,12 @@ struct SettingsView: View {
                 refreshAudioInputDevices()
                 refreshPermissionStatuses(for: .appActivated)
                 if selectedPane == .meetings {
-                    Task {
-                        await controller.calendarAccessDidChange()
+                    if appState.selectedMeetingSummaryBackend == .claudeCode {
+                        Task { await refreshClaudeCodeAuthStatus() }
                     }
+                }
+                if selectedPane == .general || selectedPane == .meetings {
+                    refreshCalendarSources(reconcileAccess: true)
                 }
             }
             .onChange(of: appState.selectedBackend) { _, _ in
@@ -493,6 +503,8 @@ struct SettingsView: View {
             .onChange(of: appState.selectedMeetingSummaryBackend) { _, backend in
                 if backend == .openRouter {
                     loadOpenRouterFreeModelsIfNeeded()
+                } else if backend == .claudeCode {
+                    Task { await refreshClaudeCodeAuthStatus() }
                 }
             }
             .alert(
@@ -1448,6 +1460,23 @@ struct SettingsView: View {
                     onChange: { value in controller.updateConfig { $0.openAIAPIKey = value } }
                 ).frame(height: 22)
             }
+        } else if backend == .hosted(.anthropic) {
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("API Key", controlWidth: meetingControlWidth) {
+                PastableSecureField(
+                    text: appState.config.anthropicAPIKey,
+                    placeholder: "sk-ant-api...",
+                    onChange: { value in controller.updateConfig { $0.anthropicAPIKey = value } }
+                ).frame(height: 22)
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Workspace ID", description: "For keys not scoped to one workspace.", controlWidth: meetingControlWidth) {
+                PastableTextField(
+                    text: appState.config.anthropicWorkspaceID,
+                    placeholder: "Optional workspace ID",
+                    onChange: { value in controller.updateConfig { $0.anthropicWorkspaceID = value } }
+                ).frame(height: 22)
+            }
         } else if backend == .hosted(.openRouter) {
             Divider().background(ImlaTheme.surfaceBorder)
             settingsRow("Account", controlWidth: meetingControlWidth) {
@@ -1546,6 +1575,40 @@ struct SettingsView: View {
                 }
             }
             keyStatusRow(key: appState.config.openAIAPIKey)
+        case .some(.anthropic):
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("API Key", controlWidth: meetingControlWidth) {
+                PastableSecureField(
+                    text: appState.config.anthropicAPIKey,
+                    placeholder: "sk-ant-api...",
+                    onChange: { val in controller.updateConfig { $0.anthropicAPIKey = val } }
+                )
+                .frame(height: 22)
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
+                settingsModelMenu(
+                    currentModel: appState.config.postProcessorAnthropicModel,
+                    presets: SummaryModelPreset.anthropicModels
+                ) { controller.updatePostProcessorModel($0, for: backend) }
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Custom model ID", controlWidth: meetingControlWidth) {
+                settingsModelTextField(
+                    currentModel: appState.config.postProcessorAnthropicModel,
+                    placeholder: "Optional model ID"
+                ) { controller.updatePostProcessorModel($0, for: backend) }
+            }
+            Divider().background(ImlaTheme.surfaceBorder)
+            settingsRow("Workspace ID", description: "For keys not scoped to one workspace.", controlWidth: meetingControlWidth) {
+                PastableTextField(
+                    text: appState.config.anthropicWorkspaceID,
+                    placeholder: "Optional workspace ID",
+                    onChange: { val in controller.updateConfig { $0.anthropicWorkspaceID = val } }
+                )
+                .frame(height: 22)
+            }
+            keyStatusRow(key: MeetingSummaryClient.resolvedAnthropicAPIKey(config: appState.config))
         case .some(.openRouter):
             Divider().background(ImlaTheme.surfaceBorder)
             settingsRow("Account", controlWidth: meetingControlWidth) {
@@ -1700,15 +1763,32 @@ struct SettingsView: View {
         settingsSection("Meeting Summaries") {
             settingsRow(
                 "Summary backend",
-                description: "Remote summaries may send transcripts, notes, screen context, and participant names.",
+                description: "Remote backends may receive meeting data.",
                 controlWidth: meetingControlWidth
             ) {
-                settingsMenu(
-                    selection: appState.selectedMeetingSummaryBackend.label,
-                    options: MeetingSummaryBackendOption.all.map(\.label)
-                ) { label in
-                    if let option = MeetingSummaryBackendOption.all.first(where: { $0.label == label }) {
-                        controller.selectMeetingSummaryBackend(option)
+                VStack(alignment: .trailing, spacing: 4) {
+                    settingsMenu(
+                        selection: appState.selectedMeetingSummaryBackend.label,
+                        options: MeetingSummaryBackendOption.selectable(
+                            config: appState.config,
+                            selected: appState.selectedMeetingSummaryBackend
+                        ).map(\.label)
+                    ) { label in
+                        if let option = MeetingSummaryBackendOption.all.first(where: { $0.label == label }) {
+                            controller.selectMeetingSummaryBackend(option)
+                        }
+                    }
+                    .help("Remote summaries may send transcripts, notes, screen context, and participant names.")
+                    if ClaudeCodeSummarizer.executableURL(configuredPath: appState.config.claudeCodeExecutablePath) == nil,
+                       appState.selectedMeetingSummaryBackend != .claudeCode {
+                        Button("Locate existing Claude Code…") { pickExistingClaudeCodeExecutable() }
+                            .font(ImlaTheme.caption())
+                            .buttonStyle(.link)
+                            .alert("Couldn't Use Claude Code", isPresented: $isShowingInvalidClaudeCodeExecutableAlert) {
+                                Button("OK", role: .cancel) {}
+                            } message: {
+                                Text("The selected file isn't executable. Choose the installed Claude Code CLI.")
+                            }
                     }
                 }
             }
@@ -1772,6 +1852,71 @@ struct SettingsView: View {
                     }
                 }
                 keyStatusRow(key: appState.config.openAIAPIKey)
+            } else if appState.selectedMeetingSummaryBackend == .anthropic {
+                settingsRow("API Key", description: "Use an Anthropic API key from the Claude Console.", controlWidth: meetingControlWidth) {
+                    PastableSecureField(
+                        text: appState.config.anthropicAPIKey,
+                        placeholder: "sk-ant-api...",
+                        onChange: { val in controller.updateConfig { $0.anthropicAPIKey = val } }
+                    )
+                    .frame(height: 22)
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Model", controlWidth: meetingControlWidth) {
+                    settingsModelMenu(
+                        currentModel: appState.config.anthropicModel,
+                        presets: SummaryModelPreset.anthropicModels
+                    ) { val in controller.updateConfig { $0.anthropicModel = val } }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Custom model ID", description: "Use a Claude API model ID that is not in the list.", controlWidth: meetingControlWidth) {
+                    settingsModelTextField(
+                        currentModel: appState.config.anthropicModel,
+                        placeholder: "Optional model ID"
+                    ) { val in controller.updateConfig { $0.anthropicModel = val } }
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Workspace ID", description: "Only needed for API keys that are not scoped to one workspace.", controlWidth: meetingControlWidth) {
+                    PastableTextField(
+                        text: appState.config.anthropicWorkspaceID,
+                        placeholder: "Optional workspace ID",
+                        onChange: { val in controller.updateConfig { $0.anthropicWorkspaceID = val } }
+                    )
+                    .frame(height: 22)
+                }
+                keyStatusRow(key: MeetingSummaryClient.resolvedAnthropicAPIKey(config: appState.config))
+            } else if appState.selectedMeetingSummaryBackend == .claudeCode {
+                settingsRow("Account", description: "Uses the Claude Code sign-in on this Mac.", controlWidth: meetingControlWidth) {
+                    claudeCodeAccountControl()
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Model", description: "Uses your Claude Code model preference, or your account's default.", controlWidth: meetingControlWidth) {
+                    claudeCodeModelControl()
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                DisclosureGroup(isExpanded: $isShowingClaudeCodeAdvanced) {
+                    VStack(alignment: .leading, spacing: ImlaTheme.spacing12) {
+                        settingsRow("Custom executable path", description: "Override the Claude Code CLI Imla detected.", controlWidth: meetingControlWidth) {
+                            PastableTextField(
+                                text: appState.config.claudeCodeExecutablePath,
+                                placeholder: "Optional path",
+                                onChange: { val in controller.updateConfig { $0.claudeCodeExecutablePath = val } }
+                            )
+                            .frame(height: 22)
+                        }
+                        settingsRow("Custom model ID", controlWidth: meetingControlWidth) {
+                            settingsModelTextField(
+                                currentModel: appState.config.claudeCodeModel,
+                                placeholder: "Optional model ID"
+                            ) { val in controller.updateConfig { $0.claudeCodeModel = val } }
+                        }
+                    }
+                    .padding(.top, ImlaTheme.spacing12)
+                } label: {
+                    Text("Advanced")
+                        .font(ImlaTheme.captionMedium())
+                        .foregroundStyle(ImlaTheme.textSecondary)
+                }
             } else if appState.selectedMeetingSummaryBackend == .ollama {
                 settingsRow("Ollama URL", controlWidth: meetingControlWidth) {
                     PastableTextField(
@@ -1851,6 +1996,9 @@ struct SettingsView: View {
             )
             .frame(height: 22)
         }
+        settingsDescription(CustomLLMConnectionGuidance.endpointHelp)
+            .lineLimit(1)
+            .help("Use HTTPS with a certificate trusted by your Mac. Enable TLS on the server or use a reverse proxy such as Caddy. Localhost means a server running on this Mac.")
         Divider().background(ImlaTheme.surfaceBorder)
         settingsRow("API Key", controlWidth: meetingControlWidth) {
             PastableSecureField(
@@ -1863,6 +2011,68 @@ struct SettingsView: View {
             .frame(height: 22)
         }
         Divider().background(ImlaTheme.surfaceBorder)
+        settingsRow("API Key Command", controlWidth: meetingControlWidth) {
+            PastableTextField(
+                text: appState.config.customLLMAPIKeyCommand,
+                placeholder: "e.g. /opt/homebrew/bin/vault print token",
+                commitsOnEndEditing: true,
+                onChange: { val in controller.updateConfig { $0.customLLMAPIKeyCommand = val } }
+            )
+            .frame(height: 22)
+            .help("Runs shell code via /bin/sh with your user permissions before each request. Use an absolute executable path. Non-empty output replaces the saved API key; failures fall back to it.")
+        }
+        settingsDescription("Optional shell command for an API key; falls back to the saved key.")
+            .lineLimit(1)
+        Divider().background(ImlaTheme.surfaceBorder)
+        settingsRow(
+            "Headers",
+            description: "Optional authentication or routing headers.",
+            controlWidth: meetingControlWidth
+        ) {
+            VStack(alignment: .trailing, spacing: ImlaTheme.spacing8) {
+                ForEach(appState.config.customLLMHeaders) { header in
+                    HStack(spacing: 6) {
+                        PastableTextField(
+                            text: header.name,
+                            placeholder: "Header name",
+                            onChange: { updateCustomLLMHeader(id: header.id, name: $0) }
+                        )
+                        .frame(width: 116, height: 22)
+                        PastableTextField(
+                            text: header.value,
+                            placeholder: "Value",
+                            onChange: { updateCustomLLMHeader(id: header.id, value: $0) }
+                        )
+                        .frame(width: 116, height: 22)
+                        Button {
+                            removeCustomLLMHeader(id: header.id)
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(ImlaTheme.textSecondary)
+                                .frame(width: 20, height: 22)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove header")
+                    }
+                }
+                compactActionButton("Add Header", systemImage: "plus") {
+                    controller.updateConfig {
+                        $0.customLLMHeaders.append(CustomLLMRequestHeader())
+                    }
+                }
+                .disabled(appState.config.customLLMHeaders.count >= CustomLLMRequestHeaders.maximumCount)
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .frame(width: meetingControlWidth, alignment: .trailing)
+            .padding(.vertical, 5)
+        }
+        .help("Values are stored in the owner-only config file and never logged. Imla-managed HTTP headers cannot be overridden.")
+        if let message = customLLMHeadersValidationMessage {
+            settingsDescription(message)
+                .foregroundStyle(ImlaTheme.recording)
+        }
+        Divider().background(ImlaTheme.surfaceBorder)
         settingsRow("Model", controlWidth: meetingControlWidth) {
             settingsModelTextField(
                 currentModel: model,
@@ -1870,6 +2080,29 @@ struct SettingsView: View {
                     ? "claude-3-5-sonnet-20241022"
                     : "custom-model-id"
             ) { val in onModelChange(val) }
+        }
+    }
+
+    private var customLLMHeadersValidationMessage: String? {
+        do {
+            _ = try CustomLLMRequestHeaders.validated(appState.config.customLLMHeaders)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private func updateCustomLLMHeader(id: String, name: String? = nil, value: String? = nil) {
+        controller.updateConfig { config in
+            guard let index = config.customLLMHeaders.firstIndex(where: { $0.id == id }) else { return }
+            if let name { config.customLLMHeaders[index].name = name }
+            if let value { config.customLLMHeaders[index].value = value }
+        }
+    }
+
+    private func removeCustomLLMHeader(id: String) {
+        controller.updateConfig {
+            $0.customLLMHeaders.removeAll { $0.id == id }
         }
     }
 
@@ -1930,6 +2163,13 @@ struct SettingsView: View {
             }
 
             settingsSection("Advanced") {
+                settingsRow("Paste shortcut", controlWidth: meetingControlWidth) {
+                    PasteShortcutControl(controller: controller, appState: appState)
+                        .help("Custom applies to keyboard paste in Dictation, Quill, and Computer Use. Browser Paste commands and live streaming are unchanged. Re-record custom shortcuts after changing keyboard layouts.")
+                }
+                settingsDescription("Uses your keyboard layout, or a custom paste shortcut.")
+                    .lineLimit(1)
+                Divider().background(ImlaTheme.surfaceBorder)
                 settingsRow("Pause media during dictation") {
                     settingsSwitch(isOn: appState.config.pauseMediaDuringDictation) { newValue in
                         controller.updateConfig { $0.pauseMediaDuringDictation = newValue }
@@ -2193,17 +2433,29 @@ struct SettingsView: View {
             }
 
             settingsSection("Calendars") {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Use calendars already connected to your Mac.")
-                            .font(ImlaTheme.body())
-                        Text("Add or remove accounts in macOS System Settings.")
-                            .font(ImlaTheme.caption())
-                            .foregroundStyle(ImlaTheme.textSecondary)
+                settingsRow("Calendar access", controlWidth: meetingControlWidth) {
+                    HStack {
+                        Spacer(minLength: 0)
+                        if calendarPermission.granted {
+                            Text("Granted")
+                                .font(ImlaTheme.caption())
+                                .foregroundStyle(ImlaTheme.success)
+                        } else {
+                            Button(calendarPermission.requesting ? "Requesting…" : (calendarPermission.canRequest ? "Allow Access" : "Open Settings"), action: requestCalendarPermission)
+                                .buttonStyle(.borderedProminent)
+                                .disabled(calendarPermission.requesting)
+                        }
                     }
-                    Spacer()
-                    Button("Manage accounts…", action: CalendarIntegration.openAccounts)
-                        .buttonStyle(.borderedProminent)
+                }
+                if !calendarPermission.granted {
+                    settingsDescription(calendarPermission.canRequest
+                        ? "Show meetings from calendars on your Mac."
+                        : "Allow full Calendar access in System Settings.")
+                }
+                if let errorMessage = calendarPermission.errorMessage {
+                    Text(errorMessage)
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(ImlaTheme.recording)
                 }
                 Divider().background(ImlaTheme.surfaceBorder)
                 settingsRow("Upcoming meetings", controlWidth: meetingControlWidth) {
@@ -2215,10 +2467,9 @@ struct SettingsView: View {
                         controller.updateUpcomingMeetingsWindow(dayCount: window.dayCount)
                     }
                 }
-                settingsDescription("Controls how many calendar days appear in Coming Up, the menu bar, and scheduled meeting checks.")
+                .help("How many calendar days appear in Coming Up, the menu bar, and meeting reminders.")
                 Divider().background(ImlaTheme.surfaceBorder)
                 calendarSourcesControl
-                    .padding(.bottom, ImlaTheme.spacing8)
             }
 
             settingsSection("Advanced") {
@@ -2388,6 +2639,99 @@ struct SettingsView: View {
                     .help(option.label)
                 }
             }
+        }
+    }
+
+    private func claudeCodeAccountControl() -> some View {
+        VStack(alignment: .center, spacing: 5) {
+            switch claudeCodeAuthStatus {
+            case .signedIn:
+                Label("Connected to Claude Code", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(ImlaTheme.success)
+            case .unavailable:
+                Label("Claude Code unavailable", systemImage: "exclamationmark.circle")
+                    .foregroundStyle(ImlaTheme.textSecondary)
+            case .signedOut, .unknown:
+                if isWaitingForClaudeCodeSignIn {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Finish sign-in in Terminal or your browser")
+                    }
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                } else {
+                    ClaudeCodeSignInButton(compact: true) { beginClaudeCodeSignIn() }
+                }
+                Button("Check again") { Task { await refreshClaudeCodeAuthStatus() } }
+                    .font(ImlaTheme.caption())
+                    .buttonStyle(.plain)
+            case nil:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking Claude Code…")
+                }
+                .foregroundStyle(ImlaTheme.textSecondary)
+            }
+            if let claudeCodeSignInError {
+                Text(claudeCodeSignInError)
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.recording)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .font(ImlaTheme.caption())
+        .frame(maxWidth: .infinity, alignment: .center)
+        .task(id: appState.config.claudeCodeExecutablePath) {
+            await refreshClaudeCodeAuthStatus()
+        }
+        .task(id: isWaitingForClaudeCodeSignIn) {
+            guard isWaitingForClaudeCodeSignIn else { return }
+            for _ in 0..<90 {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !Task.isCancelled else { return }
+                await refreshClaudeCodeAuthStatus()
+                if claudeCodeAuthStatus == .signedIn || claudeCodeAuthStatus == .unavailable {
+                    isWaitingForClaudeCodeSignIn = false
+                    return
+                }
+            }
+            isWaitingForClaudeCodeSignIn = false
+        }
+    }
+
+    private func claudeCodeModelControl() -> some View {
+        let configured = appState.config.claudeCodeModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let presets = SummaryModelPreset.claudeCodeModels
+        let options = [SummaryModelPreset(id: "", label: "Follow Claude Code settings")]
+            + presets
+            + (configured.isEmpty || presets.contains(where: { $0.id == configured })
+                ? [] : [SummaryModelPreset(id: configured, label: "Custom: \(configured)")])
+        let selectedLabel = options.first(where: { $0.id == configured })?.label ?? options[0].label
+        return FixedWidthPopUp(
+            selection: selectedLabel,
+            options: options.map(\.label),
+            onSelectIndex: { index in
+                guard options.indices.contains(index) else { return }
+                controller.updateConfig { $0.claudeCodeModel = options[index].id }
+            }
+        )
+        .frame(height: 24)
+    }
+
+    @MainActor
+    private func refreshClaudeCodeAuthStatus() async {
+        claudeCodeAuthStatus = await ClaudeCodeSummarizer.authenticationStatus(
+            executablePath: appState.config.claudeCodeExecutablePath
+        )
+    }
+
+    @MainActor
+    private func beginClaudeCodeSignIn() {
+        claudeCodeSignInError = nil
+        do {
+            try ClaudeCodeSignInLauncher.start(executablePath: appState.config.claudeCodeExecutablePath)
+            isWaitingForClaudeCodeSignIn = true
+        } catch {
+            claudeCodeSignInError = error.localizedDescription
         }
     }
 
@@ -2804,6 +3148,29 @@ struct SettingsView: View {
         }
     }
 
+    private func pickExistingClaudeCodeExecutable() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose your existing Claude Code executable"
+        panel.prompt = "Use Claude Code"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.showsHiddenFiles = true
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+
+        presentOpenPanel(panel) { url in
+            let path = url.standardizedFileURL.path
+            guard ClaudeCodeSummarizer.executableURL(configuredPath: path) != nil else {
+                isShowingInvalidClaudeCodeExecutableAlert = true
+                return
+            }
+            controller.updateConfig {
+                $0.claudeCodeExecutablePath = path
+                $0.meetingSummaryBackend = MeetingSummaryBackendOption.claudeCode.backend
+            }
+        }
+    }
+
     private func pickAutoExportFolder() {
         let panel = NSOpenPanel()
         panel.title = "Choose a folder for exported notes"
@@ -2912,6 +3279,20 @@ struct SettingsView: View {
                     isBusy: isCheckingSystemAudioPermission
                 )
             }
+            Divider().background(ImlaTheme.surfaceBorder)
+            permissionStatusRow(
+                "Calendars",
+                granted: calendarPermission.granted,
+                action: requestCalendarPermission,
+                pane: "Privacy_Calendars",
+                isBusy: calendarPermission.requesting,
+                actionTitle: calendarPermission.canRequest ? "Grant" : "Open Settings"
+            )
+            if let errorMessage = calendarPermission.errorMessage {
+                Text(errorMessage)
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.recording)
+            }
         }
     }
 
@@ -2921,7 +3302,8 @@ struct SettingsView: View {
         granted: Bool,
         action: @escaping () -> Void,
         pane: String,
-        isBusy: Bool = false
+        isBusy: Bool = false,
+        actionTitle: String = "Grant"
     ) -> some View {
         HStack {
             HStack(spacing: 8) {
@@ -2938,7 +3320,7 @@ struct SettingsView: View {
                     .font(ImlaTheme.font(size: 11))
                     .foregroundStyle(ImlaTheme.success)
             } else {
-                Button(isBusy ? "Checking…" : "Grant") {
+                Button(isBusy ? "Checking…" : actionTitle) {
                     action()
                 }
                 .disabled(isBusy)
@@ -2966,6 +3348,20 @@ struct SettingsView: View {
     private func openPrivacyPane(_ pane: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
             NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func requestCalendarPermission() {
+        calendarPermission.refresh()
+        guard calendarPermission.canRequest else {
+            CalendarIntegration.openPrivacy()
+            return
+        }
+        Task { @MainActor in
+            await calendarPermission.requestAccess()
+            if calendarPermission.granted {
+                refreshCalendarSources(reconcileAccess: true)
+            }
         }
     }
 
@@ -3062,6 +3458,7 @@ struct SettingsView: View {
     }
 
     private func refreshPermissionStatuses(for reason: SettingsPermissionRefreshReason) {
+        calendarPermission.refresh()
         if reason.refreshesLaunchAtLogin {
             controller.refreshLaunchAtLoginState()
         }
@@ -3262,32 +3659,31 @@ struct SettingsView: View {
     private var calendarSourcesControl: some View {
         let sourceGroups = calendarSourceGroups
         return VStack(alignment: .leading, spacing: ImlaTheme.spacing16) {
-            if sourceGroups.isEmpty {
-                CalendarAccessControl(refreshOnActivation: false) {
-                    await controller.calendarAccessDidChange()
-                }
-                Text("No calendars found. Add an account in macOS Internet Accounts and turn on Calendars, or open Calendar to manage local calendars and subscriptions.")
-                    .font(ImlaTheme.caption())
-                    .foregroundStyle(ImlaTheme.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                ForEach(sourceGroups) { group in
-                    calendarSourceGroupView(group)
+            if calendarPermission.granted {
+                if sourceGroups.isEmpty {
+                    Text(calendarSourcesRefresh.isLoading ? "Loading calendars…" : "No calendars on this Mac.")
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                } else {
+                    Text("Choose calendars to show meetings from.")
+                        .font(ImlaTheme.caption())
+                        .foregroundStyle(ImlaTheme.textTertiary)
+                    ForEach(sourceGroups) { group in
+                        calendarSourceGroupView(group)
+                    }
                 }
             }
-            Divider().background(ImlaTheme.surfaceBorder)
-            HStack(alignment: .top) {
-                Text("Uncheck a calendar to hide its meetings and notifications in Imla.")
-                    .font(ImlaTheme.caption())
-                    .foregroundStyle(ImlaTheme.textSecondary)
+            HStack {
+                Button("Manage accounts…", action: CalendarIntegration.openAccounts)
+                    .buttonStyle(.link)
+                    .help("Add or remove accounts in macOS Internet Accounts. Changes also affect other apps on this Mac.")
                 Spacer()
                 Button("Open Calendar…", action: CalendarIntegration.openCalendar)
                     .buttonStyle(.link)
+                    .help("Manage local calendars and subscriptions in Apple Calendar.")
             }
-            Text("Manage accounts opens Internet Accounts. Changes there also affect other apps on this Mac.")
-                .font(ImlaTheme.caption())
-                .foregroundStyle(ImlaTheme.textTertiary)
         }
+        .padding(.top, ImlaTheme.spacing8)
     }
 
     @ViewBuilder
@@ -3377,10 +3773,19 @@ struct SettingsView: View {
     }
 
     private func refreshMeetingCalendarSourcesIfNeeded() {
-        guard !hasRefreshedMeetingCalendarSources else { return }
-        hasRefreshedMeetingCalendarSources = true
-        Task {
-            await controller.refreshAvailableEventKitCalendars()
+        guard calendarSourcesRefresh.needsInitialRefresh else { return }
+        refreshCalendarSources()
+    }
+
+    private func refreshCalendarSources(reconcileAccess: Bool = false) {
+        calendarSourcesRefresh.begin()
+        Task { @MainActor in
+            defer { calendarSourcesRefresh.finish(completed: !Task.isCancelled) }
+            if reconcileAccess {
+                await controller.calendarAccessDidChange()
+            } else {
+                await controller.refreshAvailableEventKitCalendars()
+            }
         }
     }
 
@@ -3673,15 +4078,12 @@ struct SettingsView: View {
         onBeginEditing: (() -> Void)? = nil,
         onChange: @escaping (String) -> Void
     ) -> some View {
-        PastableTextField(
+        SettingsModelTextField(
             text: currentModel,
             placeholder: placeholder,
             onBeginEditing: onBeginEditing,
-            onChange: { value in
-                onChange(value.trimmingCharacters(in: .whitespacesAndNewlines))
-            }
+            onChange: onChange
         )
-        .frame(height: 22)
     }
 
     @ViewBuilder
@@ -3990,6 +4392,7 @@ struct FixedWidthPopUp: NSViewRepresentable {
         button.removeAllItems()
         button.addItems(withTitles: options)
         button.menu?.autoenablesItems = false
+        button.isEnabled = context.environment.isEnabled
         updateEnabledItems(in: button)
         button.selectItem(withTitle: selection)
         button.target = context.coordinator
@@ -4000,6 +4403,7 @@ struct FixedWidthPopUp: NSViewRepresentable {
     }
 
     func updateNSView(_ button: NSPopUpButton, context: Context) {
+        button.isEnabled = context.environment.isEnabled
         let currentTitles = button.itemTitles
         if currentTitles != options {
             button.removeAllItems()
@@ -4071,22 +4475,48 @@ struct PastableSecureField: NSViewRepresentable {
     }
 }
 
+/// Model IDs stay local to the field editor until Return or focus loss.
+struct SettingsModelTextField: View {
+    let text: String
+    let placeholder: String
+    var onBeginEditing: (() -> Void)? = nil
+    let onChange: (String) -> Void
+
+    var body: some View {
+        PastableTextField(
+            text: text,
+            placeholder: placeholder,
+            onBeginEditing: onBeginEditing,
+            commitsOnEndEditing: true,
+            showsFullValueOnHover: true,
+            onChange: { onChange($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        )
+        .frame(height: 22)
+    }
+}
+
 /// Plain text field with the same accessory-app edit shortcuts as secure fields.
 struct PastableTextField: NSViewRepresentable {
     let text: String
     let placeholder: String
     let onBeginEditing: (() -> Void)?
+    let commitsOnEndEditing: Bool
+    let showsFullValueOnHover: Bool
     let onChange: (String) -> Void
 
     init(
         text: String,
         placeholder: String,
         onBeginEditing: (() -> Void)? = nil,
+        commitsOnEndEditing: Bool = false,
+        showsFullValueOnHover: Bool = false,
         onChange: @escaping (String) -> Void
     ) {
         self.text = text
         self.placeholder = placeholder
         self.onBeginEditing = onBeginEditing
+        self.commitsOnEndEditing = commitsOnEndEditing
+        self.showsFullValueOnHover = showsFullValueOnHover
         self.onChange = onChange
     }
 
@@ -4099,37 +4529,120 @@ struct PastableTextField: NSViewRepresentable {
         field.bezelStyle = .roundedBezel
         field.delegate = context.coordinator
         field.stringValue = text
+        if commitsOnEndEditing {
+            field.cell?.usesSingleLineMode = true
+            field.cell?.lineBreakMode = .byTruncatingMiddle
+            if showsFullValueOnHover { field.toolTip = text.isEmpty ? nil : text }
+        }
         return field
     }
 
     func updateNSView(_ nsView: EditableNSTextField, context: Context) {
-        if nsView.stringValue != text {
-            nsView.stringValue = text
-        }
         context.coordinator.onBeginEditing = onBeginEditing
         context.coordinator.onChange = onChange
+        context.coordinator.synchronize(nsView, text: text)
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onBeginEditing: onBeginEditing, onChange: onChange)
+        Coordinator(text: text, commitsOnEndEditing: commitsOnEndEditing, showsFullValueOnHover: showsFullValueOnHover,
+                    onBeginEditing: onBeginEditing, onChange: onChange)
+    }
+
+    static func dismantleNSView(_ nsView: EditableNSTextField, coordinator: Coordinator) {
+        // AppKit does not guarantee an end-edit notification during removal.
+        // Save outside SwiftUI's teardown transaction to avoid publishing into it.
+        coordinator.finishEditing(nsView, deferCommit: true)
+        nsView.delegate = nil
     }
 
     class Coordinator: NSObject, NSTextFieldDelegate {
         var onBeginEditing: (() -> Void)?
         var onChange: (String) -> Void
+        private let commitsOnEndEditing: Bool
+        private let showsFullValueOnHover: Bool
+        private var configuredText: String
+        private var editingStartText: String?
+        private var draftText: String?
+        private var isEditing = false
+        private weak var editingField: NSTextField?
 
-        init(onBeginEditing: (() -> Void)?, onChange: @escaping (String) -> Void) {
+        init(text: String, commitsOnEndEditing: Bool, showsFullValueOnHover: Bool,
+             onBeginEditing: (() -> Void)?, onChange: @escaping (String) -> Void) {
+            self.configuredText = text
+            self.commitsOnEndEditing = commitsOnEndEditing
+            self.showsFullValueOnHover = showsFullValueOnHover
             self.onBeginEditing = onBeginEditing
             self.onChange = onChange
         }
 
         func controlTextDidBeginEditing(_ obj: Notification) {
+            isEditing = true
+            editingStartText = configuredText
+            if let field = obj.object as? NSTextField {
+                draftText = field.stringValue
+                editingField = field
+                if commitsOnEndEditing, let window = field.window {
+                    NotificationCenter.default.addObserver(
+                        self, selector: #selector(windowWillClose(_:)),
+                        name: NSWindow.willCloseNotification, object: window
+                    )
+                }
+            }
             onBeginEditing?()
         }
 
         func controlTextDidChange(_ obj: Notification) {
             guard let field = obj.object as? NSTextField else { return }
+            if commitsOnEndEditing {
+                draftText = field.stringValue
+                if showsFullValueOnHover { field.toolTip = field.stringValue.isEmpty ? nil : field.stringValue }
+                return
+            }
             onChange(field.stringValue)
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            finishEditing(field)
+        }
+
+        @objc private func windowWillClose(_ notification: Notification) {
+            guard let field = editingField else { return }
+            finishEditing(field)
+        }
+
+        func finishEditing(_ field: NSTextField, deferCommit: Bool = false) {
+            guard isEditing else { return }
+            isEditing = false
+            NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: nil)
+            editingField = nil
+            let value = draftText ?? field.stringValue
+            let changed = value != editingStartText
+            editingStartText = nil
+            draftText = nil
+            guard commitsOnEndEditing else { return }
+            if changed {
+                configuredText = value
+                let commit = onChange
+                if deferCommit {
+                    DispatchQueue.main.async { commit(value) }
+                } else {
+                    commit(value)
+                }
+            } else {
+                // An external update may have arrived during an unchanged edit.
+                field.stringValue = configuredText
+            }
+            if showsFullValueOnHover { field.toolTip = field.stringValue.isEmpty ? nil : field.stringValue }
+        }
+
+        func synchronize(_ field: NSTextField, text: String) {
+            configuredText = text
+            // SwiftUI can refresh from unrelated state while the user types.
+            // Replacing stringValue here resets the live field editor/caret.
+            guard !isEditing, field.currentEditor() == nil else { return }
+            if field.stringValue != text { field.stringValue = text }
+            if showsFullValueOnHover { field.toolTip = text.isEmpty ? nil : text }
         }
     }
 }

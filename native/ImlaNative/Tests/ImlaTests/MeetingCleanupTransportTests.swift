@@ -14,9 +14,19 @@ struct MeetingCleanupTransportTests {
         return config
     }
 
+    @Test("a summary backend that cannot serve cleanup never reports cleanup as ready")
+    func claudeCodeCleanupIsNotConfigured() {
+        #expect(!MeetingCleanupTransport.isConfigured(
+            config: config(summaryBackend: MeetingSummaryBackendOption.claudeCode.backend),
+            isChatGPTAuthenticated: true
+        ))
+    }
+
     @Test("every summary backend resolves to a cleanup backend that can serve it")
     func everySummaryBackendIsEligible() {
-        for option in MeetingSummaryBackendOption.all {
+        // Claude Code summarizes through its CLI and has no chat endpoint for cleanup;
+        // it reports cleanup as unconfigured instead, checked below.
+        for option in MeetingSummaryBackendOption.all where option != .claudeCode {
             let resolved = MeetingCleanupTransport.backend(for: config(summaryBackend: option.backend))
             #expect(resolved.llmBackend != nil, "\(option.backend) should be cleanup-eligible")
             #expect(MeetingTranscriptCleanupPolicy.isEligible(resolved))

@@ -1418,6 +1418,11 @@ actor TranscriptionCoordinator {
     }
 
     func preloadMeetingHelpers(trigger: DiarizerPreloadTrigger = .unspecified) async {
+        await preloadMeetingVAD()
+        await preloadDiarizer(trigger: trigger)
+    }
+
+    func preloadMeetingVAD() async {
         if vadManager == nil {
             do {
                 vadManager = try await vadLoader()
@@ -1426,8 +1431,6 @@ actor TranscriptionCoordinator {
                 fputs("[imla-native] VAD load failed (non-critical): \(error)\n", stderr)
             }
         }
-
-        await preloadDiarizer(trigger: trigger)
     }
 
     func preloadDiarizer(
@@ -2333,6 +2336,53 @@ actor TranscriptionCoordinator {
             vocabulary: AsrVocabularyPrompt.build(customWords: customWords)
         )
         return MeetingTranscriptionEvidence(raw: raw)
+    }
+
+    /// Imports and retained recordings share bounded replay; live capture keeps
+    /// its own chunking, repair and noise-cancellation path.
+    func transcribeRecordedAudio(
+        at url: URL,
+        backend: BackendOption,
+        languageDecision: LanguageRoutingDecision? = nil,
+        profile: LanguageProfile = .automatic,
+        appleSpeechLanguage: String = AppleSpeechLanguageOption.systemIdentifier,
+        customWords: [CustomWord] = [],
+        progress: @escaping @Sendable (Double, String) async -> Void = { _, _ in }
+    ) async throws -> MeetingTranscriptionEvidence {
+        // Windows are joined from the recognizer's raw text and cleaned once at the
+        // end, so diagnostics keep the raw transcript and cleanup sees whole sentences.
+        let raw = try await MeetingRecordingTranscriber().transcribe(url: url, infer: { chunk in
+            try await self.transcribeMeetingChunkWithEvidence(
+                at: chunk,
+                backend: backend,
+                languageDecision: languageDecision,
+                profile: profile,
+                appleSpeechLanguage: appleSpeechLanguage,
+                customWords: customWords
+            ).raw
+        }, progress: progress)
+        return MeetingTranscriptionEvidence(raw: raw)
+    }
+
+    /// Recorded-file replay only. Live meeting finalization remains unchanged.
+    func diarizeRecordedAudio(
+        at url: URL,
+        progress: @escaping @Sendable (Double) async -> Void = { _ in }
+    ) async throws -> [TimedSpeakerSegment] {
+        try Task.checkCancellation()
+        guard let diarizerManager, diarizerManager.isAvailable else { throw DiarizerError.notInitialized }
+        let session = RecordedAudioDiarizationSession(manager: diarizerManager)
+        let reader = try RecordingAudioWindowReader(
+            url: url, seconds: RecordedAudioDiarizationSession.windowSeconds, overlapSeconds: 0
+        )
+        defer { reader.close() }
+        var segments: [TimedSpeakerSegment] = []
+        while let window = try reader.next() {
+            segments.append(contentsOf: try session.process(window))
+            await progress(window.fraction)
+        }
+        try Task.checkCancellation()
+        return segments
     }
 
     func transcribeMeetingChunk(

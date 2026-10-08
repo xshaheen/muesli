@@ -87,17 +87,29 @@ enum MeetingRecordingTracks {
         let transcript: String
         let rawASR: String
         let cleaned: String
+        /// Set when speaker identification failed and the transcript kept fewer labels.
+        let warning: String?
     }
 
-    typealias Transcribe = (URL) async throws -> MeetingTranscriptionEvidence
+    enum Stage {
+        case transcribingMic
+        case transcribingSystem
+        case transcribingMix
+        case identifyingSpeakers
+    }
+
+    typealias Transcribe = @Sendable (URL, @escaping @Sendable (Double, String) async -> Void) async throws -> MeetingTranscriptionEvidence
+    typealias Progress = @Sendable (Stage, Double, String) async -> Void
 
     /// Transcribes each side of the tracks as the live meeting did: the mic is the
-    /// user, and only system audio is diarized into other speakers.
+    /// user, and only system audio is diarized into other speakers. Both sides replay
+    /// through bounded windows, so a long meeting never sits in memory as PCM.
     static func retranscribe(
         tracks tracksURL: URL,
         meetingStart: Date,
         coordinator: TranscriptionCoordinator,
-        transcribe: Transcribe
+        transcribe: Transcribe,
+        progress: @escaping Progress
     ) async throws -> Retranscription {
         let workDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("imla-meeting-retranscription", isDirectory: true)
@@ -106,18 +118,26 @@ enum MeetingRecordingTracks {
         let sources = try await Task.detached(priority: .userInitiated) {
             try Self.split(tracksURL, into: workDirectory)
         }.value
-        let mic = try await transcribeInSpeechChunks(sources.mic, coordinator: coordinator, transcribe: transcribe)
-        let system = try await transcribeInSpeechChunks(sources.system, coordinator: coordinator, transcribe: transcribe)
-        let diarization = try? await coordinator.diarizeSystemAudio(at: sources.system)
+        let mic = try await transcribe(sources.mic) { await progress(.transcribingMic, $0, $1) }
+        let system = try await transcribe(sources.system) { await progress(.transcribingSystem, $0, $1) }
+        try Task.checkCancellation()
+        let diarization = try await RecordedTranscriptDiarization.identify {
+            await coordinator.preloadDiarizer(trigger: .retranscription)
+            return try await coordinator.diarizeRecordedAudio(at: sources.system) {
+                await progress(.identifyingSpeakers, $0, "")
+            }
+        }
         return Retranscription(
             transcript: TranscriptFormatter.merge(
-                micSegments: mic.segments,
-                systemSegments: system.segments,
-                diarizationSegments: diarization?.segments,
-                meetingStart: meetingStart
+                micSegments: mic.cleaned.segments,
+                systemSegments: system.cleaned.segments,
+                diarizationSegments: diarization.segments,
+                meetingStart: meetingStart,
+                conservativeSpeakerAttribution: true
             ),
-            rawASR: "You:\n\(mic.rawText)\n\nOthers:\n\(system.rawText)",
-            cleaned: "You:\n\(mic.cleanedText)\n\nOthers:\n\(system.cleanedText)"
+            rawASR: "You:\n\(mic.raw.text)\n\nOthers:\n\(system.raw.text)",
+            cleaned: "You:\n\(mic.cleaned.text)\n\nOthers:\n\(system.cleaned.text)",
+            warning: diarization.warning
         )
     }
 
@@ -128,79 +148,27 @@ enum MeetingRecordingTracks {
         mix recordingURL: URL,
         meetingStart: Date,
         coordinator: TranscriptionCoordinator,
-        transcribe: Transcribe
+        transcribe: Transcribe,
+        progress: @escaping Progress
     ) async throws -> Retranscription {
-        let mix = try await transcribeInSpeechChunks(recordingURL, coordinator: coordinator, transcribe: transcribe)
-        let diarization = try? await coordinator.diarizeSystemAudio(at: recordingURL)
-        let speakerCount = Set(diarization?.segments.map(\.speakerId) ?? []).count
-        let transcript = speakerCount > 1
-            ? TranscriptFormatter.merge(
-                micSegments: [],
-                systemSegments: mix.segments,
-                diarizationSegments: diarization?.segments,
-                meetingStart: meetingStart
-            )
-            : mix.cleanedText
-        return Retranscription(transcript: transcript, rawASR: mix.rawText, cleaned: mix.cleanedText)
-    }
-
-    private struct TrackTranscription {
-        var segments: [SpeechSegment] = []
-        var rawText = ""
-        var cleanedText = ""
-    }
-
-    /// Most backends return a whole file as one segment stamped at zero, which would
-    /// collapse a meeting into one block per side. Transcribing speech regions one at a
-    /// time, as the live meeting's chunks do, keeps every turn at its real time, and
-    /// never sends silence to a recognizer that hallucinates on it.
-    private static func transcribeInSpeechChunks(
-        _ url: URL,
-        coordinator: TranscriptionCoordinator,
-        transcribe: Transcribe
-    ) async throws -> TrackTranscription {
-        let samples = try AudioConverter().resampleAudioFile(url)
-        let sampleRate = Double(VadManager.sampleRate)
-        guard let vadManager = await coordinator.getVadManager() else {
-            let evidence = try await transcribe(url)
-            return TrackTranscription(
-                segments: SystemTurnNormalizer.normalize(
-                    result: evidence.cleaned,
-                    startTime: 0,
-                    endTime: Double(samples.count) / sampleRate
-                ),
-                rawText: evidence.raw.text,
-                cleanedText: evidence.cleaned.text
-            )
+        let mix = try await transcribe(recordingURL) { await progress(.transcribingMix, $0, $1) }
+        try Task.checkCancellation()
+        let diarization = try await RecordedTranscriptDiarization.identify {
+            await coordinator.preloadDiarizer(trigger: .retranscription)
+            return try await coordinator.diarizeRecordedAudio(at: recordingURL) {
+                await progress(.identifyingSpeakers, $0, "")
+            }
         }
-        let regions = try await vadManager.segmentSpeech(
-            samples,
-            config: VadSegmentationConfig(maxSpeechDuration: 10.0, speechPadding: 0.15)
+        let transcript = AudioFileImportController.formatTranscriptWithSpeakers(
+            transcription: mix.cleaned,
+            diarizationSegments: diarization.segments ?? [],
+            meetingStart: meetingStart
         )
-        var result = TrackTranscription()
-        var rawTexts: [String] = []
-        var cleanedTexts: [String] = []
-        for region in regions {
-            try Task.checkCancellation()
-            let start = max(0, region.startSample(sampleRate: VadManager.sampleRate))
-            let end = min(samples.count, region.endSample(sampleRate: VadManager.sampleRate))
-            guard end > start else { continue }
-            let chunkURL = try WavWriter.writeTemporaryWAV(
-                samples: Array(samples[start..<end]),
-                directoryName: "imla-meeting-retranscription"
-            )
-            defer { try? FileManager.default.removeItem(at: chunkURL) }
-            let evidence = try await transcribe(chunkURL)
-            result.segments.append(contentsOf: SystemTurnNormalizer.normalize(
-                result: evidence.cleaned,
-                startTime: Double(start) / sampleRate,
-                endTime: Double(end) / sampleRate
-            ))
-            rawTexts.append(evidence.raw.text)
-            cleanedTexts.append(evidence.cleaned.text)
-        }
-        result.rawText = rawTexts.filter { !$0.isEmpty }.joined(separator: "\n")
-        result.cleanedText = cleanedTexts.filter { !$0.isEmpty }.joined(separator: " ")
-        return result
+        return Retranscription(
+            transcript: transcript,
+            rawASR: mix.raw.text,
+            cleaned: mix.cleaned.text,
+            warning: diarization.warning
+        )
     }
 }

@@ -214,7 +214,7 @@ struct MeetingAutoStopPolicyTests {
             recentSource: recentSource
         )
 
-        #expect(!MeetingRecordingStartOrigin.manual.enablesMeetingAutoStop)
+        #expect(!MeetingRecordingStartOrigin.manual.tracksMeetingSource)
         #expect(MeetingRecordingStartOrigin.manual.signalLossResponse == .warnOnly)
         #expect(resolvedSource == explicitSource)
         #expect(MeetingRecordingStartOrigin.manual.signalLossSource(
@@ -227,8 +227,8 @@ struct MeetingAutoStopPolicyTests {
         ) == nil)
     }
 
-    @Test("source-backed start origins can auto-stop after warning")
-    func sourceBackedStartOriginsCanAutoStopAfterWarning() {
+    @Test("source-backed start origins warn without stopping the recording")
+    func sourceBackedStartOriginsWarnWithoutStopping() {
         let explicitSource = MeetingAutoStopSource(candidate: googleMeetCandidate())
         let recentSource = MeetingAutoStopSource(candidate: teamsCandidate())
         let origins: [MeetingRecordingStartOrigin] = [
@@ -239,8 +239,8 @@ struct MeetingAutoStopPolicyTests {
         ]
 
         for origin in origins {
-            #expect(origin.enablesMeetingAutoStop)
-            #expect(origin.signalLossResponse == .autoStopAfterWarning)
+            #expect(origin.tracksMeetingSource)
+            #expect(origin.signalLossResponse == .warnOnly)
             #expect(origin.signalLossSource(explicitSource: explicitSource, recentSource: recentSource) == explicitSource)
             #expect(origin.signalLossSource(explicitSource: nil, recentSource: recentSource) == recentSource)
         }
@@ -294,18 +294,29 @@ struct MeetingAutoStopPolicyTests {
         #expect(MeetingAutoStopSource(candidate: candidate()).hasObservedCandidate)
     }
 
-    @Test("only source-backed origins enable auto-stop", arguments: [
+    @Test("every start origin only warns on signal loss", arguments: [
         MeetingRecordingStartOrigin.manual, .detectedPrompt, .calendarAutoRecord,
         .scheduledMeetingPrompt, .joinAndRecord
     ])
     func startOrigin(origin: MeetingRecordingStartOrigin) {
         let explicit = MeetingAutoStopSource(candidate: candidate())
         let recent = MeetingAutoStopSource(candidate: candidate(id: "recent", url: nil))
-        let enabled = origin != .manual
-        #expect(origin.enablesMeetingAutoStop == enabled)
-        #expect(origin.signalLossResponse == (enabled ? .autoStopAfterWarning : .none))
-        #expect(origin.signalLossSource(explicitSource: explicit, recentSource: recent) == (enabled ? explicit : nil))
-        #expect(origin.signalLossSource(explicitSource: nil, recentSource: recent) == (enabled ? recent : nil))
+        #expect(origin.tracksMeetingSource == (origin != .manual))
+        // A lost signal is never proof the meeting ended, so no origin stops a recording.
+        #expect(origin.signalLossResponse == .warnOnly)
+        #expect(origin.signalLossSource(explicitSource: explicit, recentSource: recent) == explicit)
+        #expect(origin.signalLossSource(explicitSource: nil, recentSource: recent) == recent)
+    }
+
+    @Test("recent transcript activity defers a signal-loss warning")
+    func transcriptActivity() {
+        var state = MeetingSignalLossPromptState()
+        #expect(!state.hasRecentTranscriptActivity(now: now, quietPeriod: 45))
+        state.noteTranscriptActivity(now: now)
+        #expect(state.hasRecentTranscriptActivity(now: now.addingTimeInterval(44), quietPeriod: 45))
+        #expect(!state.hasRecentTranscriptActivity(now: now.addingTimeInterval(45), quietPeriod: 45))
+        state.resetForRecording()
+        #expect(!state.hasRecentTranscriptActivity(now: now, quietPeriod: 45))
     }
 
     @Test("source recovery reopens prompts unless the user dismissed them", arguments: [false, true])

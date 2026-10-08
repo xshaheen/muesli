@@ -73,6 +73,10 @@ command that becomes history.
 - Timing: `timestamp`, `started_at`, `ended_at`, `created_at`
 - Origin/type: `source` (`dictation`, `cua`, or `ios` in current flows)
 - Local destination attribution: `target_app_name`, `target_app_bundle_id`
+- Transcription model identity, for Insights usage by model:
+  `transcription_backend`, `transcription_model`, `transcription_model_name`,
+  and `transcription_endpoint` (hosted speech only; NULL for on-device models).
+  Rows written before schema version 6 leave them NULL and count as unknown.
 - Sync/tombstone bookkeeping: `updated_at`, `deleted_at`, `cloud_*`,
   `last_synced_at`, `sync_dirty`
 
@@ -114,6 +118,11 @@ occurrence can be recorded more than once.
 | `meeting_participants` | Calendar-attendee or Apple Contact name/email snapshots, including source and calendar suppression state | `(meeting_id, participant_identifier)`; cascades with its meeting | Local-only |
 | `meeting_transcript_checkpoints` | Incremental live transcript recovery segments | `id`; cascades with its meeting | Local-only |
 | `meeting_resume_snapshots` | Safety copy used while resuming a finished meeting | One row per `meeting_id`; cascades with its meeting | Local-only |
+| `bodhan_wbcs_measurements` | Bodhan language-window samples behind the "words before code switch" Insight | One row per `dictation_id`; cascades on delete and is removed by triggers when the dictation is soft-deleted | Local-only |
+
+`bodhan_wbcs_measurements` describes the original speech, so transcript edits
+keep it. Nothing writes it yet in this fork: it needs Bodhan Flex's mixed-script
+output, which has not been ported, so the Insight reads as unavailable.
 
 Participant identifiers describe provenance and identity, while the stored name
 and email are snapshots. Calendar entries normally use a normalized email-based

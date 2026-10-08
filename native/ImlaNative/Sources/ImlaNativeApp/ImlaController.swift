@@ -62,6 +62,8 @@ private struct PendingStandardDictationStop {
     let recordingSavePolicy: DictationRecordingSavePolicy
     let latencyTrace: DictationLatencyTraceSnapshot?
     let sessionTrace: SessionRunTrace
+    /// The hosted provider's session for this capture, finished by its job.
+    var hostedSession: (any HostedDictationSession)? = nil
 }
 
 private enum CompletedStandardDictationStop {
@@ -88,6 +90,9 @@ private struct StandardDictationJob: Identifiable {
     let recordingSavePolicy: DictationRecordingSavePolicy
     let latencyTrace: DictationLatencyTraceSnapshot?
     let sessionTrace: SessionRunTrace
+    /// Each queued capture finishes its own hosted session, so a dictation started
+    /// while an earlier one is still transcribing can never cancel or reuse it.
+    var hostedSession: (any HostedDictationSession)? = nil
 }
 
 private struct DictationLatencyTraceToken: Sendable {
@@ -306,6 +311,7 @@ private enum CalendarAttendeePersistenceMode: Sendable, Equatable {
 
 enum MeetingRetranscriptionError: Error, LocalizedError {
     case controllerUnavailable
+    case busy
     case recordingUnavailable
     case noDownloadedTranscriptionModel
     case emptyTranscript
@@ -315,6 +321,8 @@ enum MeetingRetranscriptionError: Error, LocalizedError {
         switch self {
         case .controllerUnavailable:
             return "Meeting re-transcription could not continue because Imla is no longer available."
+        case .busy:
+            return "Wait for the current recording, import, or transcription to finish before re-transcribing a meeting."
         case .recordingUnavailable:
             return "The saved meeting recording is no longer available on disk."
         case .noDownloadedTranscriptionModel:
@@ -491,6 +499,7 @@ public final class ImlaController: NSObject {
     private let computerUseHotkeyMonitor = HotkeyMonitor()
     private let quilHotkeyMonitor = HotkeyMonitor()
     private let meetingRecordingHotkeyMonitor = HotkeyMonitor()
+    private var isRecordingPasteShortcut = false
     private let computerUseRecorder = RouteAwareDictationRecorder()
     private let quilRecorder = RouteAwareDictationRecorder()
     private let dictationRecorder = RouteAwareDictationRecorder()
@@ -764,6 +773,7 @@ public final class ImlaController: NSObject {
     private var activeMeetingSignalLossResponse: MeetingSignalLossResponse = .none
     private var meetingSignalLossPromptState = MeetingSignalLossPromptState()
     private let meetingAutoStopGracePeriod: TimeInterval = 20
+    private let meetingSignalLossTranscriptQuietPeriod: TimeInterval = 45
     private var meetingActivity: NSObjectProtocol?
     private var isStoppingMeetingRecording = false
     private var isPresentingMeetingTerminationConfirmation = false
@@ -782,6 +792,9 @@ public final class ImlaController: NSObject {
     private var meetingStartMeetingID: Int64?
     private var importTask: Task<Void, Never>?
     private var importSessionID: UUID?
+    private var meetingRetranscriptionTasks: [Int64: Task<Void, Never>] = [:]
+    private var isShuttingDown = false
+    private var modelFileMutationTokens: Set<UUID> = []
     private var meetingFinalizationTasks: [UUID: Task<Void, Never>] = [:]
     private var recordingStartupRecoveryTask: Task<Void, Never>?
     private var recordingMaintenanceTask: Task<Void, Never>?
@@ -1369,7 +1382,18 @@ public final class ImlaController: NSObject {
         applyBilingualRepairAutoEnableIfNeeded()
     }
 
+    func cancelMeetingRetranscriptionsForShutdown() async {
+        isShuttingDown = true
+        // Suspend asynchronously (never block the main thread) until retry
+        // cancellation and its deferred state cleanup finish. Do this before
+        // tearing down any shared resources those jobs may still access.
+        let retranscriptionTasks = Array(meetingRetranscriptionTasks.values)
+        retranscriptionTasks.forEach { $0.cancel() }
+        for task in retranscriptionTasks { await task.value }
+    }
+
     func shutdown() async {
+        await cancelMeetingRetranscriptionsForShutdown()
         keyboardLanguageMonitor.stop()
         dictationModelPreparationTask?.cancel()
         dictationModelPreparationTask = nil
@@ -1521,6 +1545,7 @@ public final class ImlaController: NSObject {
         nemotron35StreamingRecordingSavePolicy = .never
         previousStreamText = ""
         dictationStartedAt = nil
+        pendingStandardDictationStops.values.forEach { $0.hostedSession?.cancel() }
         pendingStandardDictationStops.removeAll()
         frozenDictationTranscriptionSelections.removeAll()
         dictationMiniGeneration = nil
@@ -1990,6 +2015,20 @@ public final class ImlaController: NSObject {
             try Task.checkCancellation()
             return try DictationStore(databaseURL: databaseURL).insightsSnapshot(range: range)
         }.value
+    }
+
+    func insightsWordsBeforeCodeSwitch(range: InsightsRange, now: Date) async throws -> Double? {
+        let databaseURL = dictationStore.resolvedDatabaseURL
+        let worker = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
+            return try DictationStore(databaseURL: databaseURL)
+                .insightsWordsBeforeCodeSwitch(range: range, now: now)
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
     }
 
     func truncate(_ text: String, limit: Int) -> String {
@@ -3664,6 +3703,7 @@ public final class ImlaController: NSObject {
         _ option: BackendOption,
         makePrimaryDictationModel: Bool
     ) {
+        guard ensureNoAudioReplayInProgress() else { return }
         let replacesGemmaCleanup = !selectedPostProcessorBackend.isCompatible(with: option)
         let hasLocalCleanupModel = PostProcessorOption.runtimeOption(id: config.activePostProcessorId) != nil
         updateConfig {
@@ -3878,6 +3918,7 @@ public final class ImlaController: NSObject {
     }
 
     func selectMeetingTranscriptionBackend(_ option: BackendOption, requireDownloaded: Bool = true) {
+        guard ensureNoAudioReplayInProgress() else { return }
         applyMeetingTranscriptionBackend(option, requireDownloaded: requireDownloaded)
     }
 
@@ -4303,6 +4344,8 @@ public final class ImlaController: NSObject {
                 config.postProcessorChatGPTModel = model
             case .some(.openAI):
                 config.postProcessorOpenAIModel = model
+            case .some(.anthropic):
+                config.postProcessorAnthropicModel = model
             case .some(.openRouter):
                 config.postProcessorOpenRouterModel = model
             case .some(.ollama):
@@ -5871,6 +5914,7 @@ public final class ImlaController: NSObject {
         let pendingTestStops = pendingStandardDictationStops.values.filter(\.isTestMode)
         for pendingStop in pendingTestStops {
             pendingStandardDictationStops.removeValue(forKey: pendingStop.id)
+            pendingStop.hostedSession?.cancel()
             dictationSessionTraces.removeValue(forKey: pendingStop.id)
             if let trace = pendingStop.latencyTrace {
                 markDictationLatency("pipeline_cancelled", trace: trace)
@@ -5900,6 +5944,35 @@ public final class ImlaController: NSObject {
         hotkeyMonitor.stop()
         computerUseHotkeyMonitor.stop()
         meetingRecordingHotkeyMonitor.stop()
+    }
+
+    /// Recorder owns a temporary pause, never changes feature enablement/config.
+    func beginPasteShortcutCapture() -> Bool {
+        let monitors = [hotkeyMonitor, computerUseHotkeyMonitor, quilHotkeyMonitor, meetingRecordingHotkeyMonitor]
+        guard !isRecordingPasteShortcut, dictationState == .idle,
+              !isMeetingRecording(), !isStartingMeetingRecording, !isMeetingAudioProcessing,
+              !isDictationTestMode, quilTask == nil, computerUseCommandTask == nil,
+              interactiveAudioSessionOwnership.canStart(.dictation),
+              monitors.allSatisfy({ !$0.hasPendingOrActiveSession }) else { return false }
+        isRecordingPasteShortcut = true
+        monitors.forEach { $0.suspendForShortcutCapture() }
+        return true
+    }
+
+    func endPasteShortcutCapture() {
+        guard isRecordingPasteShortcut else { return }
+        isRecordingPasteShortcut = false
+        [hotkeyMonitor, computerUseHotkeyMonitor, quilHotkeyMonitor, meetingRecordingHotkeyMonitor]
+            .forEach { $0.resumeAfterShortcutCapture() }
+    }
+
+    func pasteShortcutConflict(_ chord: PasteKeyChord) -> Bool {
+        let candidate = HotkeyConfig.combination(modifiers: NSEvent.ModifierFlags(rawValue: UInt(chord.modifiers)), keyCode: chord.keyCode)
+        return [(config.enablePushToTalk, config.dictationHotkey),
+                (config.enableComputerUseHotkey, config.computerUseHotkey),
+                (config.enableQuilMode, config.quilHotkey),
+                (config.enableMeetingRecordingHotkey, config.meetingRecordingHotkey)]
+            .contains { $0.0 && $0.1.isCombination && ShortcutHotkeyPolicy.hotkeysConflict(candidate, $0.1) }
     }
 
     func downloadModelForOnboarding(
@@ -6021,7 +6094,8 @@ public final class ImlaController: NSObject {
         hotkey: HotkeyConfig,
         onboardingUseCase: OnboardingUseCase,
         summaryBackend: MeetingSummaryBackendOption?,
-        apiKey: String?
+        apiKey: String?,
+        anthropicWorkspaceID: String? = nil
     ) {
         var shouldRetainLegacyOpenRouterKey = false
         if summaryBackend == .openRouter,
@@ -6053,9 +6127,14 @@ public final class ImlaController: NSObject {
             if let summaryBackend {
                 config.meetingSummaryBackend = summaryBackend.backend
             }
+            if let anthropicWorkspaceID {
+                config.anthropicWorkspaceID = anthropicWorkspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
             if let apiKey, !apiKey.isEmpty {
                 if summaryBackend == .openAI {
                     config.openAIAPIKey = apiKey
+                } else if summaryBackend == .anthropic {
+                    config.anthropicAPIKey = apiKey
                 } else if summaryBackend == .openRouter,
                           shouldRetainLegacyOpenRouterKey {
                     // ConfigStore retries the migration and preserves this
@@ -6701,15 +6780,18 @@ public final class ImlaController: NSObject {
         selectMeetingSummaryBackend(option)
     }
 
-    func canUseSummaryProvider(_ provider: MeetingSummaryBackendOption) -> Bool {
+    func canUseSummaryProvider(_ provider: MeetingSummaryBackendOption, config summaryConfig: AppConfig? = nil) -> Bool {
+        let summaryConfig = summaryConfig ?? config
         switch provider {
         case .chatGPT: return appState.isChatGPTAuthenticated
-        case .openAI: return !resolvedOpenAIAPIKey().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .openAI: return !MeetingSummaryClient.resolvedOpenAIAPIKey(config: summaryConfig).isEmpty
+        case .anthropic: return !MeetingSummaryClient.resolvedAnthropicAPIKey(config: summaryConfig).isEmpty
         case .openRouter:
-            return appState.isOpenRouterAuthenticated || !config.openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return !openRouterAuth.resolvedAPIKey(legacyAPIKey: summaryConfig.openRouterAPIKey).isEmpty
         case .ollama: return true
-        case .lmStudio: return MeetingSummaryClient.lmStudioHasRequiredSettings(config: config)
-        case .customLLM: return MeetingSummaryClient.customLLMHasRequiredSettings(config: config)
+        case .claudeCode: return ClaudeCodeSummarizer.executableURL(configuredPath: summaryConfig.claudeCodeExecutablePath) != nil
+        case .lmStudio: return MeetingSummaryClient.lmStudioHasRequiredSettings(config: summaryConfig)
+        case .customLLM: return MeetingSummaryClient.customLLMHasRequiredSettings(config: summaryConfig)
         default: return false
         }
     }
@@ -6737,6 +6819,11 @@ public final class ImlaController: NSObject {
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         let summaryConfig = summaryConfig ?? config
+        let provider = MeetingSummaryBackendOption.resolved(summaryConfig.meetingSummaryBackend)
+        guard canUseSummaryProvider(provider, config: summaryConfig) else {
+            completion(.failure(MeetingSummaryError.notConfigured(backend: provider.label)))
+            return
+        }
         let openRouterKey = openRouterAuth.resolvedAPIKey(legacyAPIKey: summaryConfig.openRouterAPIKey)
         Task { [weak self] in
             guard let self else { return }
@@ -6784,14 +6871,56 @@ public final class ImlaController: NSObject {
         }
     }
 
-    func retranscribe(meeting: MeetingRecord, completion: @escaping (Result<Void, Error>) -> Void) {
-        Task { @MainActor [weak self] in
+    func cancelMeetingRetranscription(id: Int64) {
+        meetingRetranscriptionTasks[id]?.cancel()
+    }
+
+    /// Retranscription shares the loaded models with recording, imports, and model
+    /// file changes, so it runs only when none of them is in flight.
+    func canRetranscribeMeeting(_ meeting: MeetingRecord) -> Bool {
+        !isShuttingDown && meetingRetranscriptionTasks.isEmpty && appState.modelFileMutationCount == 0
+            && appState.activeAudioImportCount == 0 && importTask == nil
+            && !isMeetingRecording() && !isStartingMeetingRecording
+            && backgroundMeetingProcessingCount == 0
+            && (meeting.status == .completed || meeting.status == .failed)
+    }
+
+    /// Runs as a background job the detail view can follow and cancel. `backend` lets
+    /// the user pick a model for this run without changing the meeting setting.
+    func retranscribe(
+        meeting: MeetingRecord,
+        backend requestedBackend: BackendOption? = nil,
+        completion: @escaping (Result<Void, Error>) -> Void = { _ in }
+    ) {
+        // Register synchronously: a second click cannot race task startup.
+        flushCachedMeetingTitle(id: meeting.id)
+        flushCachedMeetingManualNotes(id: meeting.id, sync: false)
+        guard let meeting = self.meeting(id: meeting.id) else {
+            completion(.failure(MeetingRetranscriptionError.recordingUnavailable))
+            return
+        }
+        guard canRetranscribeMeeting(meeting) else {
+            completion(.failure(MeetingRetranscriptionError.busy))
+            return
+        }
+        appState.meetingRetranscriptions[meeting.id] = MeetingRetranscriptionProgress()
+        meetingRetranscriptionTasks[meeting.id] = Task { @MainActor [weak self] in
             guard let self else {
                 completion(.failure(MeetingRetranscriptionError.controllerUnavailable))
                 return
             }
             var didSetProcessing = false
             var sessionTrace: SessionRunTrace?
+            let activity = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .idleSystemSleepDisabled],
+                reason: "Re-transcribing retained meeting audio"
+            )
+            defer {
+                ProcessInfo.processInfo.endActivity(activity)
+                self.meetingRetranscriptionTasks[meeting.id] = nil
+                self.syncAppState()
+                self.historyWindowController?.reload()
+            }
             do {
                 guard let recordingArtifactStore,
                       let reference = try recordingArtifactStore.recordingForMeeting(id: meeting.id),
@@ -6799,8 +6928,17 @@ public final class ImlaController: NSObject {
                     throw MeetingRetranscriptionError.recordingUnavailable
                 }
                 let recordingURL = try recordingArtifactStore.playableURL(id: artifactID)
-                guard let backend = self.normalizeMeetingTranscriptionSelectionForAvailability() else {
-                    throw MeetingRetranscriptionError.noDownloadedTranscriptionModel
+                let backend: BackendOption
+                if let requestedBackend {
+                    guard requestedBackend.supportsMeetingTranscription, requestedBackend.isDownloaded else {
+                        throw MeetingRetranscriptionError.noDownloadedTranscriptionModel
+                    }
+                    backend = requestedBackend
+                } else {
+                    guard let selected = self.normalizeMeetingTranscriptionSelectionForAvailability() else {
+                        throw MeetingRetranscriptionError.noDownloadedTranscriptionModel
+                    }
+                    backend = selected
                 }
                 let retranscriptionConfig = self.config
                 let retranscriptionStartedAt = Date()
@@ -6826,26 +6964,40 @@ public final class ImlaController: NSObject {
                 try await self.transcriptionCoordinator.preloadRequired(
                     backend: backend,
                     enablePostProcessor: false,
-                    includeMeetingHelpers: true,
+                    includeMeetingHelpers: false,
                     meetingHelperTrigger: .retranscription,
-                    appleSpeechLanguage: self.config.resolvedAppleSpeechLanguage
+                    appleSpeechLanguage: retranscriptionConfig.resolvedAppleSpeechLanguage
                 )
+                // Silence gating needs VAD now; the diarizer loads only once ASR succeeds.
+                await self.transcriptionCoordinator.preloadMeetingVAD()
+                try Task.checkCancellation()
+                self.appState.meetingRetranscriptions[meeting.id]?.phase = .transcribing
+
                 let coordinator = self.transcriptionCoordinator
                 let languageDecision = MeetingSession.meetingLanguageDecision(
                     selection: retranscriptionSelection,
                     backend: backend,
                     workload: .retranscription
                 )
-                let appleSpeechLanguage = self.config.resolvedAppleSpeechLanguage
-                let transcribe: (URL) async throws -> MeetingTranscriptionEvidence = { url in
-                    try await coordinator.transcribeMeetingWithEvidence(
+                let profile = retranscriptionConfig.meetingLanguageProfile
+                let appleSpeechLanguage = retranscriptionConfig.resolvedAppleSpeechLanguage
+                let customWords = retranscriptionConfig.customWords
+                let transcribe: MeetingRecordingTracks.Transcribe = { url, progress in
+                    try await coordinator.transcribeRecordedAudio(
                         at: url,
                         backend: backend,
                         languageDecision: languageDecision,
-                        profile: retranscriptionConfig.meetingLanguageProfile,
+                        profile: profile,
                         appleSpeechLanguage: appleSpeechLanguage,
-                        customWords: retranscriptionConfig.customWords
+                        customWords: customWords,
+                        progress: progress
                     )
+                }
+                let meetingID = meeting.id
+                let progress: MeetingRecordingTracks.Progress = { [weak self] stage, fraction, preview in
+                    await MainActor.run {
+                        self?.applyRetranscriptionProgress(meetingID: meetingID, stage: stage, fraction: fraction, preview: preview)
+                    }
                 }
                 let meetingStart = ISO8601DateFormatter().date(from: meeting.startTime) ?? retranscriptionStartedAt
                 let retranscription: MeetingRecordingTracks.Retranscription
@@ -6854,20 +7006,23 @@ public final class ImlaController: NSObject {
                         tracks: tracksURL,
                         meetingStart: meetingStart,
                         coordinator: coordinator,
-                        transcribe: transcribe
+                        transcribe: transcribe,
+                        progress: progress
                     )
                 } else {
                     retranscription = try await MeetingRecordingTracks.retranscribe(
                         mix: recordingURL,
                         meetingStart: meetingStart,
                         coordinator: coordinator,
-                        transcribe: transcribe
+                        transcribe: transcribe,
+                        progress: progress
                     )
                 }
+                try Task.checkCancellation()
+                self.appState.meetingRetranscriptions[meeting.id]?.warning = retranscription.warning
                 await trace.storeArtifact(retranscription.rawASR, kind: .rawASR)
                 await trace.storeArtifact(retranscription.cleaned, kind: .cleanupResult)
-                let transcriptText = retranscription.transcript
-                let rawTranscript = transcriptText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let rawTranscript = retranscription.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !rawTranscript.isEmpty else {
                     throw MeetingRetranscriptionError.emptyTranscript
                 }
@@ -6875,6 +7030,9 @@ public final class ImlaController: NSObject {
 
                 let templateSnapshot = self.meetingTemplateSnapshot(for: meeting)
                 let participantNames = await self.summaryParticipantNames(meetingID: meeting.id)
+                var summaryFailureWarning: String?
+                self.appState.meetingRetranscriptions[meeting.id]?.phase = .summarizing
+                self.appState.meetingRetranscriptions[meeting.id]?.message = "Re-summarizing…"
                 let formattedNotes: String
                 do {
                     formattedNotes = try await MeetingSummaryClient.summarize(
@@ -6887,17 +7045,22 @@ public final class ImlaController: NSObject {
                         participantNames: participantNames
                     )
                 } catch {
+                    try Task.checkCancellation()
                     fputs("[imla-native] re-transcription summary generation failed: \(error)\n", stderr)
-                    formattedNotes = MeetingSummaryClient.summaryFailureNotes(
+                    formattedNotes = MeetingSummaryClient.notesAfterFailedRegeneration(
+                        existingNotes: meeting.formattedNotes,
+                        previousTranscript: meeting.rawTranscript,
                         transcript: rawTranscript,
                         meetingTitle: meeting.title,
                         error: error,
                         manualNotes: meeting.manualNotes,
                         languageProfile: retranscriptionConfig.meetingLanguageProfile
                     )
+                    summaryFailureWarning = "Summary could not be regenerated. The new transcript was saved separately from any retained note edits. \(error.localizedDescription)"
                 }
 
                 do {
+                    try Task.checkCancellation()
                     try self.dictationStore.updateMeetingTranscriptAndSummary(
                         id: meeting.id,
                         rawTranscript: rawTranscript,
@@ -6908,6 +7071,7 @@ public final class ImlaController: NSObject {
                         selectedTemplatePrompt: templateSnapshot.prompt
                     )
                 } catch {
+                    if error is CancellationError { throw error }
                     throw MeetingRetranscriptionError.failedToSave(underlying: error)
                 }
 
@@ -6922,50 +7086,80 @@ public final class ImlaController: NSObject {
                     hadManualNotes: !meeting.manualNotes
                         .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
-                self.scheduleICloudSyncAfterLocalChange()
-                self.syncAppState()
-                self.historyWindowController?.reload()
-                completion(.success(()))
-            } catch is CancellationError {
-                _ = await sessionTrace?.cancel(stage: "meeting_retranscription")
-                if didSetProcessing {
-                    self.updateMeetingStatusAndScheduleSync(id: meeting.id, status: meeting.status)
+                if let summaryFailureWarning {
+                    let previousWarning = self.appState.meetingRetranscriptions[meeting.id]?.warning
+                    self.appState.meetingRetranscriptions[meeting.id]?.warning = [previousWarning, summaryFailureWarning]
+                        .compactMap { $0 }
+                        .joined(separator: " ")
                 }
-                self.syncAppState()
-                self.historyWindowController?.reload()
-                completion(.failure(CancellationError()))
+
+                self.scheduleICloudSyncAfterLocalChange()
+                self.appState.meetingRetranscriptions[meeting.id]?.phase = .completed
+                self.appState.meetingRetranscriptions[meeting.id]?.message = "Re-transcription complete"
+                self.appState.meetingRetranscriptions[meeting.id]?.preview = ""
+                completion(.success(()))
             } catch {
-                _ = await sessionTrace?.fail(stage: "meeting_retranscription")
-                fputs("[imla-native] failed to re-transcribe meeting \(meeting.id): \(error)\n", stderr)
-                if let status = Self.retranscriptionFailureStatus(
+                let cancelled = Task.isCancelled || error is CancellationError
+                if cancelled {
+                    _ = await sessionTrace?.cancel(stage: "meeting_retranscription")
+                } else {
+                    _ = await sessionTrace?.fail(stage: "meeting_retranscription")
+                    fputs("[imla-native] failed to re-transcribe meeting \(meeting.id): \(error)\n", stderr)
+                }
+                if let restoredStatus = Self.retranscriptionFailureStatus(
                     originalStatus: meeting.status,
                     didSetProcessing: didSetProcessing,
                     error: error
                 ) {
-                    self.updateMeetingStatusAndScheduleSync(id: meeting.id, status: status)
+                    self.updateMeetingStatusAndScheduleSync(id: meeting.id, status: restoredStatus)
                 }
-                self.syncAppState()
-                self.historyWindowController?.reload()
-                completion(.failure(error))
+                self.appState.meetingRetranscriptions[meeting.id]?.phase = cancelled ? .cancelled : .failed
+                self.appState.meetingRetranscriptions[meeting.id]?.message = cancelled
+                    ? "Re-transcription cancelled"
+                    : error.localizedDescription
+                self.appState.meetingRetranscriptions[meeting.id]?.preview = ""
+                completion(.failure(cancelled ? CancellationError() : error))
             }
         }
     }
 
+    private func applyRetranscriptionProgress(
+        meetingID: Int64,
+        stage: MeetingRecordingTracks.Stage,
+        fraction: Double,
+        preview: String
+    ) {
+        guard appState.meetingRetranscriptions[meetingID]?.isRunning == true else { return }
+        let percent = Int(fraction * 100)
+        switch stage {
+        case .transcribingMic:
+            appState.meetingRetranscriptions[meetingID]?.phase = .transcribing
+            appState.meetingRetranscriptions[meetingID]?.message = "Re-transcribing your side · \(percent)%"
+        case .transcribingSystem:
+            appState.meetingRetranscriptions[meetingID]?.phase = .transcribing
+            appState.meetingRetranscriptions[meetingID]?.message = "Re-transcribing other speakers · \(percent)%"
+        case .transcribingMix:
+            appState.meetingRetranscriptions[meetingID]?.phase = .transcribing
+            appState.meetingRetranscriptions[meetingID]?.message = "Re-transcribing · \(percent)%"
+        case .identifyingSpeakers:
+            appState.meetingRetranscriptions[meetingID]?.phase = .diarizing
+            appState.meetingRetranscriptions[meetingID]?.message = "Identifying speakers · \(percent)%"
+        }
+        appState.meetingRetranscriptions[meetingID]?.fraction = fraction
+        if !preview.isEmpty {
+            appState.meetingRetranscriptions[meetingID]?.preview = preview
+        }
+    }
+
+    /// A retry must never discard a usable original result, even on cancellation or a
+    /// backend error: only a successful save replaces the meeting's contents.
     static func retranscriptionFailureStatus(
         originalStatus: MeetingStatus,
         didSetProcessing: Bool,
         error: Error
     ) -> MeetingStatus? {
         guard didSetProcessing else { return nil }
-        if let retranscriptionError = error as? MeetingRetranscriptionError {
-            switch retranscriptionError {
-            case .emptyTranscript, .failedToSave:
-                return originalStatus
-            case .controllerUnavailable, .recordingUnavailable, .noDownloadedTranscriptionModel:
-                break
-            }
-        }
-        return .failed
+        return originalStatus
     }
 
     nonisolated static func completeMeetingRetranscriptionTrace(
@@ -7758,6 +7952,8 @@ public final class ImlaController: NSObject {
 
     private func canDeleteMeeting(id: Int64, status: MeetingStatus) -> Bool {
         guard id != activeMeetingID else { return false }
+        // A running retranscription would save its result into the deleted row.
+        guard meetingRetranscriptionTasks[id] == nil else { return false }
         if staleLiveMeetingRecoveryFailures.contains(id) {
             return true
         }
@@ -8107,7 +8303,11 @@ public final class ImlaController: NSObject {
         inheritedFolderID: Int64? = nil,
         previousMeetingNotes: String? = nil
     ) -> Bool {
+        guard !isShuttingDown else { return false }
         guard !isMeetingRecording(), !isStartingMeetingRecording else { return false }
+        // A meeting cannot be re-run but a retranscription can, so the meeting wins
+        // the shared models; the cancelled job reports itself in the meeting's detail.
+        meetingRetranscriptionTasks.values.forEach { $0.cancel() }
         guard let defaultMeetingBackend = normalizeMeetingTranscriptionSelectionForAvailability() else {
             presentErrorAlert(
                 title: "Meeting failed to start",
@@ -8419,8 +8619,24 @@ public final class ImlaController: NSObject {
     // MARK: - Audio File Import
 
     /// Presents a file picker and imports an audio file for offline transcription.
+    /// Imports, retranscriptions, and model switches all replay audio through the
+    /// shared models, so only one may run at a time. A meeting start is not on this
+    /// list: it cancels a retranscription instead, because a meeting cannot be re-run.
+    private func ensureNoAudioReplayInProgress() -> Bool {
+        guard !isShuttingDown else { return false }
+        guard meetingRetranscriptionTasks.isEmpty, appState.activeAudioImportCount == 0 else {
+            presentErrorAlert(
+                title: "Audio processing in progress",
+                message: "Wait for the current import or re-transcription to finish, or cancel it, before starting another import or changing models."
+            )
+            return false
+        }
+        return true
+    }
+
     func importAudioFile() {
-        guard !isMeetingRecording(), !isStartingMeetingRecording else { return }
+        guard ensureNoAudioReplayInProgress() else { return }
+        guard !isMeetingRecording(), !isStartingMeetingRecording, appState.modelFileMutationCount == 0 else { return }
         guard normalizeMeetingTranscriptionSelectionForAvailability() != nil else {
             presentErrorAlert(
                 title: "Import Failed",
@@ -8447,7 +8663,8 @@ public final class ImlaController: NSObject {
 
     /// Imports an audio file from a URL (drag-and-drop or file picker).
     func importAudioFileFromURL(_ url: URL) {
-        guard !isMeetingRecording(), !isStartingMeetingRecording else { return }
+        guard ensureNoAudioReplayInProgress() else { return }
+        guard !isMeetingRecording(), !isStartingMeetingRecording, appState.modelFileMutationCount == 0 else { return }
         guard AudioFileImportController.isSupportedFileURL(url) else {
             presentErrorAlert(
                 title: "Import Failed",
@@ -8473,6 +8690,10 @@ public final class ImlaController: NSObject {
     }
 
     private func importAudioFile(from sourceURL: URL, sessionID: UUID) async {
+        // Cancellation may clear UI ownership before an in-flight model call
+        // returns. Keep its runtime protected until the operation really exits.
+        appState.activeAudioImportCount += 1
+        defer { appState.activeAudioImportCount -= 1 }
         let filename = sourceURL.deletingPathExtension().lastPathComponent
         let title = filename.isEmpty ? "Imported Recording" : filename
         let importContext = audioFileImportContext()
@@ -8921,6 +9142,7 @@ public final class ImlaController: NSObject {
                             )
                         }
                         guard !entries.isEmpty else { return }
+                        self.noteMeetingTranscriptActivity()
                         do {
                             try self.dictationStore.appendLiveTranscriptCheckpoints(meetingID: meetingID, entries: entries)
                         } catch {
@@ -8951,6 +9173,9 @@ public final class ImlaController: NSObject {
                         } else {
                             guard self.appState.liveMeetingPartialOthers != tail else { return }
                             self.appState.liveMeetingPartialOthers = tail
+                        }
+                        if !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            self.noteMeetingTranscriptActivity()
                         }
                         self.meetingRecordingPanel.updateMeetingTranscript(
                             transcript: self.appState.liveMeetingTranscript,
@@ -10681,6 +10906,26 @@ public final class ImlaController: NSObject {
         }
     }
 
+    var canModifyModelFiles: Bool {
+        !isShuttingDown && !appState.meetingRetranscriptions.values.contains(where: \.isRunning)
+            && !appState.isMeetingStarting && appState.activeAudioImportCount == 0
+    }
+
+    /// Reserve synchronously, before an async unload/delete can yield to a retry.
+    func beginModelFileMutation() -> UUID? {
+        guard !isShuttingDown, meetingRetranscriptionTasks.isEmpty, !isStartingMeetingRecording,
+              appState.activeAudioImportCount == 0 else { return nil }
+        let token = UUID()
+        modelFileMutationTokens.insert(token)
+        appState.modelFileMutationCount = modelFileMutationTokens.count
+        return token
+    }
+
+    func endModelFileMutation(_ token: UUID) {
+        modelFileMutationTokens.remove(token)
+        appState.modelFileMutationCount = modelFileMutationTokens.count
+    }
+
     private func cleanupTemporaryMeetingAudioFiles(for result: MeetingSessionResult) {
         if let retainedRecordingURL = result.retainedRecordingURL {
             MeetingRecordingWriter.removeTemporaryRecording(at: retainedRecordingURL)
@@ -11315,7 +11560,7 @@ public final class ImlaController: NSObject {
 
     private func armMeetingAutoStop(
         source: MeetingAutoStopSource?,
-        response: MeetingSignalLossResponse = .autoStopAfterWarning
+        response: MeetingSignalLossResponse = .warnOnly
     ) {
         let lateArmDeadline = source == nil && response == .warnOnly
             ? Date().addingTimeInterval(15)
@@ -11473,9 +11718,22 @@ public final class ImlaController: NSObject {
         meetingNotification.close()
     }
 
+    private func noteMeetingTranscriptActivity() {
+        meetingSignalLossPromptState.noteTranscriptActivity(now: Date())
+        let promptID = meetingSignalLossPromptID(for: activeMeetingID)
+        if meetingNotification.isVisible,
+           meetingNotification.currentPromptID == promptID {
+            meetingSignalLossPromptState.markAutoDismissed()
+            meetingNotification.close()
+        }
+    }
+
     private func presentMeetingSignalLossPromptIfNeeded() {
         guard activeMeetingSignalLossResponse != .none,
               meetingSignalLossPromptState.canPresentPrompt,
+              !meetingSignalLossPromptState.hasRecentTranscriptActivity(
+                  now: Date(), quietPeriod: meetingSignalLossTranscriptQuietPeriod
+              ),
               activeMeetingSession?.isRecording == true,
               !isStoppingMeetingRecording else { return }
 
@@ -11484,11 +11742,10 @@ public final class ImlaController: NSObject {
         guard meetingNotification.currentPromptID != promptID || !meetingNotification.isVisible else { return }
 
         meetingSignalLossPromptState.markPromptPresented()
-        let response = activeMeetingSignalLossResponse
         let didShow = meetingNotification.show(
             promptID: promptID,
             title: "Meeting signal lost",
-            subtitle: "Still transcribing. Stop if the meeting ended.",
+            subtitle: "Recording continues. Stop if the meeting ended.",
             actionLabel: "Stop Transcribing",
             dismissAfter: 30,
             // MeetingNotificationController uses onStartRecording as its generic
@@ -11505,16 +11762,9 @@ public final class ImlaController: NSObject {
                 guard let self else { return }
                 guard self.activeMeetingID == meetingID else { return }
                 self.meetingSignalLossPromptState.markAutoDismissed()
-                guard response == .autoStopAfterWarning else { return }
-                fputs("[meeting] auto-stopping recording after meeting source disappeared and warning timed out\n", stderr)
-                self.stopMeetingRecording()
             }
         )
-
-        if !didShow, response == .autoStopAfterWarning {
-            fputs("[meeting] auto-stopping recording after meeting source disappeared; warning unavailable\n", stderr)
-            stopMeetingRecording()
-        }
+        if !didShow { meetingSignalLossPromptState.markAutoDismissed() }
     }
 
     private func presentMeetingDetection(_ candidate: MeetingCandidate) {
@@ -11859,6 +12109,7 @@ public final class ImlaController: NSObject {
                     var pasteLifecycleEvents: [PasteController.LifecycleEvent] = []
                     PasteController.paste(
                         text: replacement,
+                        shortcut: configSnapshot.pasteShortcut,
                         requireStagedClipboardOwnership: true,
                         targetApplicationProvider: { snapshot.application },
                         shouldDispatchPaste: { snapshot.isTargetStillFocused() },
@@ -11896,7 +12147,7 @@ public final class ImlaController: NSObject {
                                 deliveryStatus = "needs_attention"
                                 deliveryMessage = "Generated text is ready for manual paste"
                                 deliveryTraceBody = "Automatic paste was not accepted; generated text was retained on the clipboard"
-                                userMessage = "Generated — press ⌘V to paste"
+                                userMessage = "Generated — press \(configSnapshot.pasteShortcut.chordLabel) to paste"
                             } else {
                                 deliveryStatus = "needs_attention"
                                 deliveryMessage = "Automatic paste could not be completed"
@@ -13220,6 +13471,7 @@ public final class ImlaController: NSObject {
             }
             if let sessionID,
                let pendingStop = pendingStandardDictationStops.removeValue(forKey: sessionID) {
+                pendingStop.hostedSession?.cancel()
                 if !pendingStop.isTestMode {
                     recordDiagnosticIncident(
                         kind: .dictationAudioFailed,
@@ -13481,6 +13733,9 @@ public final class ImlaController: NSObject {
     /// when supported, forwards authoritative route-aware recorder buffers live.
     /// The recorder still writes its WAV so a network failure can fall back locally.
     private func beginHostedDictationIfNeeded() -> Bool {
+        // The previous capture's session may still be queued for transcription; its
+        // weakly held feed must not receive this capture's audio.
+        dictationAudioSessionManager.onAudioBuffer = nil
         guard !isDictationTestMode, selectedDictationProvider.isHosted else { return true }
         cancelHostedDictation()
 
@@ -14109,10 +14364,13 @@ public final class ImlaController: NSObject {
             settleStandardDictationSessionWithoutJob(intent: .postDictation(.stopWithoutWav))
             return
         }
-        pendingStandardDictationStops[sessionID] = capturePendingStandardDictationStop(
+        var pendingStop = capturePendingStandardDictationStop(
             id: sessionID,
             startedAt: startedAt
         )
+        pendingStop.hostedSession = hostedDictationSession
+        hostedDictationSession = nil
+        pendingStandardDictationStops[sessionID] = pendingStop
         clearCapturedDictationSessionContext()
         resetDictationOutputMode()
         dictationAudioSessionManager.stop()
@@ -14511,7 +14769,12 @@ public final class ImlaController: NSObject {
                     targetAppBundleID: targetApp?.bundleID,
                     startedAt: startedAt,
                     endedAt: Date(),
-                    recording: recordingReference
+                    recording: recordingReference,
+                    transcriptionModel: DictationModelIdentity(
+                        backend: BackendOption.nemotron35Multilingual.backend,
+                        model: BackendOption.nemotron35Multilingual.model,
+                        name: BackendOption.nemotron35Multilingual.label
+                    )
                 )
             } else {
                 dictationID = nil
@@ -14836,7 +15099,13 @@ public final class ImlaController: NSObject {
         if let trace = pendingStop.latencyTrace {
             markDictationLatency("stop_finished", trace: trace)
         }
+        // The recorder has delivered its last buffer, so the live feed can detach,
+        // unless a newer hosted capture already took it over.
+        if hostedDictationSession == nil {
+            dictationAudioSessionManager.onAudioBuffer = nil
+        }
         guard let wavURL = stoppedWavURL else {
+            pendingStop.hostedSession?.cancel()
             fputs("[imla-native] stop without wav\n", stderr)
             if let trace = pendingStop.latencyTrace {
                 markDictationLatency("stop_without_wav", trace: trace)
@@ -14870,6 +15139,7 @@ public final class ImlaController: NSObject {
         }
         let duration = max(Date().timeIntervalSince(pendingStop.startedAt), 0)
         if duration < 0.3 {
+            pendingStop.hostedSession?.cancel()
             fputs("[imla-native] discarded short recording\n", stderr)
             if pendingStop.recordingSavePolicy == .never {
                 try? FileManager.default.removeItem(at: wavURL)
@@ -14931,7 +15201,8 @@ public final class ImlaController: NSObject {
             detectedSpeech: pendingStop.detectedSpeech,
             recordingSavePolicy: pendingStop.recordingSavePolicy,
             latencyTrace: pendingStop.latencyTrace,
-            sessionTrace: pendingStop.sessionTrace
+            sessionTrace: pendingStop.sessionTrace,
+            hostedSession: pendingStop.hostedSession
         )
         completeStandardDictationStop(.job(job), sequence: pendingStop.sequence)
     }
@@ -14997,6 +15268,46 @@ public final class ImlaController: NSObject {
         }
     }
 
+    private enum HostedDictationOutcome {
+        case transcribed(HostedDictationResult)
+        case fallBackLocally(BackendOption)
+    }
+
+    /// Finishes a capture's hosted session. A provider failure falls back to a local
+    /// model when one can serve dictation; cancellation and a failure with no usable
+    /// local model propagate, so a dropped dictation never silently becomes another.
+    private func finishHostedDictation(
+        _ session: any HostedDictationSession,
+        for job: StandardDictationJob
+    ) async throws -> HostedDictationOutcome {
+        finalizingHostedDictationSession = (job.id, session)
+        defer {
+            if finalizingHostedDictationSession?.id == job.id {
+                finalizingHostedDictationSession = nil
+            }
+        }
+        do {
+            let result = try await withTaskCancellationHandler {
+                try await session.finish(recordedWAVURL: job.wavURL)
+            } onCancel: {
+                session.cancel()
+            }
+            return .transcribed(result)
+        } catch {
+            guard HostedDictationFallbackPolicy.shouldFallback(
+                after: error,
+                taskIsCancelled: Task.isCancelled,
+                isCurrentSession: finalizingHostedDictationSession?.id == job.id
+            ),
+                  let fallback = BackendOption.resolveHostedDictationFallback(
+                    selected: job.backend,
+                    available: BackendOption.downloaded
+                  ) else { throw error }
+            fputs("[hosted-dictation] transcription failed; falling back locally: \(error)\n", stderr)
+            return .fallBackLocally(fallback)
+        }
+    }
+
     private func processStandardDictationJob(_ job: StandardDictationJob) async {
         defer {
             try? FileManager.default.removeItem(at: job.wavURL)
@@ -15020,13 +15331,57 @@ public final class ImlaController: NSObject {
                 await Self.recordDictationTraceEvent(event, trace: job.sessionTrace)
             }
             await job.sessionTrace.recordStageStarted("speech_recognition")
+            var transcriptionModel = DictationModelIdentity(
+                backend: job.backend.backend,
+                model: job.backend.model,
+                name: job.backend.label
+            )
+            var localBackend = job.backend
+            var hostedResult: HostedDictationResult?
+            if let hostedSession = job.hostedSession {
+                switch try await finishHostedDictation(hostedSession, for: job) {
+                case .transcribed(let hosted):
+                    hostedResult = hosted
+                    transcriptionModel = DictationModelIdentity(
+                        backend: hosted.backend,
+                        model: hosted.model ?? "",
+                        name: hosted.model ?? "Not recorded",
+                        endpoint: hosted.endpoint
+                    )
+                case .fallBackLocally(let fallback):
+                    // A hosted provider was selected, so the local model may not be loaded.
+                    try await transcriptionCoordinator.preloadRequired(
+                        backend: fallback,
+                        enablePostProcessor: false,
+                        includeMeetingHelpers: false,
+                        appleSpeechLanguage: job.cleanupRequest.runtime.config.resolvedAppleSpeechLanguage
+                    )
+                    localBackend = fallback
+                    transcriptionModel = DictationModelIdentity(
+                        backend: fallback.backend,
+                        model: fallback.model,
+                        name: fallback.label
+                    )
+                }
+            }
             let frozenLanguageDecision = Self.dictationLanguageDecision(
                 profile: job.languageProfile,
-                backend: job.backend
+                backend: localBackend
             )
-            let result = try await transcriptionCoordinator.transcribeDictationWithCleanupOutcome(
+            let result: DictationTranscriptionResult
+            if let hostedResult {
+                // Hosted transcription models already produce finished prose, so a
+                // hosted success skips local cleanup, as the provider choice intends.
+                result = DictationTranscriptionResult(
+                    transcription: SpeechTranscriptionResult(text: hostedResult.text, segments: []),
+                    cleanupOutcome: .skippedDisabled,
+                    cleanupStyle: nil
+                )
+                await job.sessionTrace.storeArtifact(hostedResult.text, kind: .rawASR)
+            } else {
+                result = try await transcriptionCoordinator.transcribeDictationWithCleanupOutcome(
                 at: job.wavURL,
-                backend: job.backend,
+                backend: localBackend,
                 languageDecision: frozenLanguageDecision,
                 cohereLanguage: job.languageProfile.resolvedCohereLanguage,
                 bodhanLanguage: job.languageProfile.resolvedBodhanLanguage,
@@ -15039,7 +15394,8 @@ public final class ImlaController: NSObject {
                 appContext: job.promptContext,
                 stageReporter: stageReporter,
                 traceReporter: traceReporter
-            )
+                )
+            }
             try Task.checkCancellation()
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -15119,7 +15475,8 @@ public final class ImlaController: NSObject {
                 dictationCleanupOutcome: result.cleanupOutcome.rawValue,
                 startedAt: job.startedAt,
                 endedAt: Date(),
-                recording: recordingReference
+                recording: recordingReference,
+                transcriptionModel: transcriptionModel
             )
             if dictationID == nil, let store = recordingArtifactStore,
                job.recordingSavePolicy != .never {
@@ -15197,6 +15554,7 @@ public final class ImlaController: NSObject {
                     let autoEnter = job.deliveryPolicy.autoEnter
                     await PasteController.pasteAndWait(
                         text: text,
+                        shortcut: cleanupRuntime.config.pasteShortcut,
                         onPasteDispatched: { [weak self] ownedStagedClipboard in
                             guard let self,
                                   let autoEnter,
@@ -15739,8 +16097,8 @@ public final class ImlaController: NSObject {
     private func showMeetingEndNotification(title: String) {
         guard isMeetingRecording() else { return }
         meetingNotification.show(
-            title: "Meeting ended",
-            subtitle: "\(title) · scheduled time is over",
+            title: "Scheduled time ended",
+            subtitle: "\(title) may still be ongoing. Stop when finished.",
             actionLabel: "Stop Transcribing",
             dismissAfter: 45,
             onStartRecording: { [weak self] in

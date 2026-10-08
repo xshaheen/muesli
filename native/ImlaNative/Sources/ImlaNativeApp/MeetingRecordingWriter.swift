@@ -202,10 +202,9 @@ final class MeetingRecordingWriter {
     }
 
     private struct State {
-        /// Raw mic + system: what the meeting sounded like in the room.
+        /// Mic + system averaged: the recording people play back.
         var mix = OutputFile(layout: .mix)
-        /// Echo-cancelled mic + system. The raw mic also hears the far side through
-        /// the speakers, so only the cleaned mic can be labelled as the user.
+        /// The same two sources kept apart, so retranscription can label the mic as the user.
         var tracks = OutputFile(layout: .separated)
     }
 
@@ -246,13 +245,10 @@ final class MeetingRecordingWriter {
         try? FileManager.default.removeItem(at: tracksURL(forRecording: url))
     }
 
+    /// The echo-cancelled mic. The raw mic also hears the far side through the
+    /// speakers, so mixing it would put every remote voice in the recording twice.
     func appendMic(_ samples: [Int16], atSampleOffset sampleOffset: Int) {
         append(samples, atSampleOffset: sampleOffset, from: .mic)
-    }
-
-    /// The echo-cancelled mic, positioned on the same timeline as `appendMic`.
-    func appendCleanedMic(_ samples: [Int16], atSampleOffset sampleOffset: Int) {
-        append(samples, atSampleOffset: sampleOffset, from: .cleanedMic)
     }
 
     func appendSystem(_ samples: [Int16], atSampleOffset sampleOffset: Int) {
@@ -359,7 +355,6 @@ final class MeetingRecordingWriter {
 
     private enum Source {
         case mic
-        case cleanedMic
         case system
     }
 
@@ -369,7 +364,6 @@ final class MeetingRecordingWriter {
             switch source {
             case .mic:
                 Self.append(samples, atSampleOffset: sampleOffset, to: &state.mix.first, writeOffset: state.mix.writeOffset)
-            case .cleanedMic:
                 Self.append(samples, atSampleOffset: sampleOffset, to: &state.tracks.first, writeOffset: state.tracks.writeOffset)
             case .system:
                 Self.append(samples, atSampleOffset: sampleOffset, to: &state.mix.second, writeOffset: state.mix.writeOffset)

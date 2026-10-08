@@ -28,6 +28,7 @@ case "${shard}" in
       MeetingChatConversationLoadingTests
       TranscriptionQualityUpgradeComparisonTests
       TranscriptionLanguageRoutingTests
+      InsightsTests
       DictationStoreTests
       SessionTraceStoreTests
       RecordingArtifactStoreTests
@@ -128,6 +129,7 @@ case "${shard}" in
       DiarizerPreloadDiagnosticsTests
       DiarizerPreloadCoordinationTests
       PasteControllerTests
+      PasteShortcutTests
       DictationPasteSpacingPolicyTests
       DictationPasteSpacingTests
       QuilTransformationTests
@@ -211,12 +213,14 @@ case "${shard}" in
       MeetingActivityDetectionPolicyTests
       MeetingParticipantStoreTests
       MeetingProcessingStageTests
+      MeetingRecordingConcatenatorTests
       MeetingRecordingWriterTests
       MeetingRecordingElapsedClockTests
       MeetingRecordButtonTests
       MeetingPanelBodyCoordinatorTests
       MeetingRecordingPanelGeometryTests
       MeetingRecordingPanelLifecycleTests
+      MeetingRecordingTranscriberTests
       MeetingResumePolicyTests
       MeetingReverseLeakEstimatorTests
       MeetingReverseLeakLockPolicyTests
@@ -231,7 +235,12 @@ case "${shard}" in
       MeetingFollowUpPolicyTests
       MeetingFollowUpThreadTests
       MeetingFollowUpSummaryPromptTests
+      CustomLLMAPIKeyResolutionTests
+      CustomLLMHeaderPropagationTests
+      CustomLLMRequestHeadersTests
+      SettingsModelFieldTests
       MeetingSummaryClientTests
+      ClaudeCodeSummarizerTests
       MeetingsNavigationTests
       MeetingDetailResponsiveLayoutTests
       MeetingDurationLimitTests
@@ -262,6 +271,7 @@ case "${shard}" in
       MeetingTranscriptCleanupTests
       CalendarEventQueryTests
       CalendarMonitorLifecycleTests
+      CalendarPermissionStateTests
       DisabledCalendarFilterTests
       GoogleCalendarTests
       NaturalTextDirectionTests

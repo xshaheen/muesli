@@ -6,6 +6,30 @@ import Testing
 @Suite("MeetingRecordingWriter")
 struct MeetingRecordingWriterTests {
 
+    @Test("the retained mic is wired only to the echo-cancelled stream, before pause and stop finalize")
+    func sessionRetainsCleanedMicAndFlushesBeforeFinalization() throws {
+        // Guards the session wiring without starting hardware capture or loading models.
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ImlaNativeApp/MeetingSession.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        #expect(source.components(separatedBy: "retainedRecordingWriter?.appendMic(").count == 2)
+        let funnel = try #require(source.range(of: "private func appendCleanedMicSamplesOnQueue"))
+        let append = try #require(source.range(of: "retainedRecordingWriter?.appendMic("))
+        #expect(funnel.lowerBound < append.lowerBound)
+        // Stop flushes through `finishRealtimeCapture`, which drains the AEC tail.
+        for (start, flushCall, finish) in [
+            ("func pause()", "appendFlushedStreamingMicOnQueue()", "retainedRecordingWriter?.markPauseBoundary()"),
+            ("func stop(", "finishRealtimeCapture()", "retainedRecordingWriter?.stop()"),
+        ] {
+            let startRange = try #require(source.range(of: start))
+            let body = source[startRange.upperBound...]
+            let flush = try #require(body.range(of: flushCall))
+            let finalization = try #require(body.range(of: finish))
+            #expect(flush.lowerBound < finalization.lowerBound)
+        }
+    }
+
     @Test("streaming writer merges mic and system samples incrementally")
     func writerMergesIncrementally() throws {
         let writer = try MeetingRecordingWriter()
@@ -173,18 +197,17 @@ struct MeetingRecordingWriterTests {
         #expect(file.length > 0)
     }
 
-    @Test("tracks keep the cleaned mic left and system right while the mix keeps the raw mic")
+    @Test("tracks keep the mic left and system right while the mix averages them")
     func writerKeepsSeparatedTracks() throws {
         let writer = try MeetingRecordingWriter()
-        writer.appendMic([1000, 2000, 3000], atSampleOffset: 0)
-        writer.appendCleanedMic([100, 200, 300], atSampleOffset: 0)
+        writer.appendMic([100, 200, 300], atSampleOffset: 0)
         writer.appendSystem([-500, -600, -700], atSampleOffset: 0)
 
         let mixURL = try #require(writer.stop())
         let tracksURL = MeetingRecordingWriter.tracksURL(forRecording: mixURL)
         defer { MeetingRecordingWriter.removeTemporaryRecording(at: mixURL) }
 
-        #expect(try readMonoPCM16WAVSamples(from: mixURL) == [250, 700, 1150])
+        #expect(try readMonoPCM16WAVSamples(from: mixURL) == [-200, -200, -200])
         // Interleaved frames: left is "You", right is everyone else.
         #expect(try readMonoPCM16WAVSamples(from: tracksURL) == [100, -500, 200, -600, 300, -700])
         #expect(try AVAudioFile(forReading: tracksURL).fileFormat.channelCount == 2)
@@ -193,7 +216,7 @@ struct MeetingRecordingWriterTests {
     @Test("removing a temporary recording removes its tracks and cancel leaves nothing behind")
     func tracksFollowTheRecordingLifecycle() throws {
         let writer = try MeetingRecordingWriter()
-        writer.appendCleanedMic([1, 2], atSampleOffset: 0)
+        writer.appendMic([1, 2], atSampleOffset: 0)
         writer.appendSystem([3, 4], atSampleOffset: 0)
         let mixURL = try #require(writer.stop())
         let tracksURL = MeetingRecordingWriter.tracksURL(forRecording: mixURL)
@@ -205,7 +228,7 @@ struct MeetingRecordingWriterTests {
         #expect(!FileManager.default.fileExists(atPath: tracksURL.path))
 
         let cancelled = try MeetingRecordingWriter()
-        cancelled.appendCleanedMic([1, 2], atSampleOffset: 0)
+        cancelled.appendMic([1, 2], atSampleOffset: 0)
         cancelled.appendSystem([3, 4], atSampleOffset: 0)
         cancelled.cancel()
         #expect(cancelled.stop() == nil)
@@ -215,8 +238,7 @@ struct MeetingRecordingWriterTests {
     func persistedTracksSplitBackIntoSources() async throws {
         let writer = try MeetingRecordingWriter()
         let count = 16_000
-        writer.appendMic(Array(repeating: Int16(4000), count: count), atSampleOffset: 0)
-        writer.appendCleanedMic(Array(repeating: Int16(8000), count: count), atSampleOffset: 0)
+        writer.appendMic(Array(repeating: Int16(8000), count: count), atSampleOffset: 0)
         writer.appendSystem(Array(repeating: Int16(0), count: count), atSampleOffset: 0)
         let tempURL = try #require(writer.stop())
         let supportDirectory = makeTemporaryDirectory()
