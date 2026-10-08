@@ -523,6 +523,9 @@ public final class ImlaController: NSObject {
             await job.sessionTrace.recordCancellationRequested(stage: "dictation_queue")
         },
         onCancel: { [weak self] job in
+            // A job cancelled before it ran never reaches finishHostedDictation, so
+            // nothing else closes its provider connection.
+            job.hostedSession?.cancel()
             self?.dictationTestJobIDs.remove(job.id)
             self?.dictationSessionTraces.removeValue(forKey: job.id)
             let didWin = await job.sessionTrace.cancel(stage: "dictation_queue")
@@ -15268,44 +15271,40 @@ public final class ImlaController: NSObject {
         }
     }
 
-    private enum HostedDictationOutcome {
-        case transcribed(HostedDictationResult)
-        case fallBackLocally(BackendOption)
-    }
-
-    /// Finishes a capture's hosted session. A provider failure falls back to a local
-    /// model when one can serve dictation; cancellation and a failure with no usable
-    /// local model propagate, so a dropped dictation never silently becomes another.
+    /// Finishes a capture's hosted session and decides what transcribes it; see
+    /// `HostedDictationDecision.resolve` for when a provider failure falls back locally.
     private func finishHostedDictation(
         _ session: any HostedDictationSession,
         for job: StandardDictationJob
-    ) async throws -> HostedDictationOutcome {
+    ) async throws -> HostedDictationDecision {
         finalizingHostedDictationSession = (job.id, session)
         defer {
             if finalizingHostedDictationSession?.id == job.id {
                 finalizingHostedDictationSession = nil
             }
         }
+        let outcome: Result<HostedDictationResult, Error>
         do {
             let result = try await withTaskCancellationHandler {
                 try await session.finish(recordedWAVURL: job.wavURL)
             } onCancel: {
                 session.cancel()
             }
-            return .transcribed(result)
+            outcome = .success(result)
         } catch {
-            guard HostedDictationFallbackPolicy.shouldFallback(
-                after: error,
-                taskIsCancelled: Task.isCancelled,
-                isCurrentSession: finalizingHostedDictationSession?.id == job.id
-            ),
-                  let fallback = BackendOption.resolveHostedDictationFallback(
-                    selected: job.backend,
-                    available: BackendOption.downloaded
-                  ) else { throw error }
-            fputs("[hosted-dictation] transcription failed; falling back locally: \(error)\n", stderr)
-            return .fallBackLocally(fallback)
+            outcome = .failure(error)
         }
+        let decision = try HostedDictationDecision.resolve(
+            hostedOutcome: outcome,
+            selected: job.backend,
+            taskIsCancelled: Task.isCancelled,
+            isCurrentSession: finalizingHostedDictationSession?.id == job.id,
+            availableFallbacks: { BackendOption.downloaded }
+        )
+        if case .failure(let error) = outcome {
+            fputs("[hosted-dictation] transcription failed; falling back locally: \(error)\n", stderr)
+        }
+        return decision
     }
 
     private func processStandardDictationJob(_ job: StandardDictationJob) async {
@@ -15339,16 +15338,11 @@ public final class ImlaController: NSObject {
             var localBackend = job.backend
             var hostedResult: HostedDictationResult?
             if let hostedSession = job.hostedSession {
-                switch try await finishHostedDictation(hostedSession, for: job) {
-                case .transcribed(let hosted):
+                let decision = try await finishHostedDictation(hostedSession, for: job)
+                switch decision.source {
+                case .hosted(let hosted):
                     hostedResult = hosted
-                    transcriptionModel = DictationModelIdentity(
-                        backend: hosted.backend,
-                        model: hosted.model ?? "",
-                        name: hosted.model ?? "Not recorded",
-                        endpoint: hosted.endpoint
-                    )
-                case .fallBackLocally(let fallback):
+                case .localFallback(let fallback):
                     // A hosted provider was selected, so the local model may not be loaded.
                     try await transcriptionCoordinator.preloadRequired(
                         backend: fallback,
@@ -15357,12 +15351,8 @@ public final class ImlaController: NSObject {
                         appleSpeechLanguage: job.cleanupRequest.runtime.config.resolvedAppleSpeechLanguage
                     )
                     localBackend = fallback
-                    transcriptionModel = DictationModelIdentity(
-                        backend: fallback.backend,
-                        model: fallback.model,
-                        name: fallback.label
-                    )
                 }
+                transcriptionModel = decision.transcriptionModel
             }
             let frozenLanguageDecision = Self.dictationLanguageDecision(
                 profile: job.languageProfile,
@@ -15371,7 +15361,7 @@ public final class ImlaController: NSObject {
             let result: DictationTranscriptionResult
             if let hostedResult {
                 // Hosted transcription models already produce finished prose, so a
-                // hosted success skips local cleanup, as the provider choice intends.
+                // hosted success skips local cleanup (HostedDictationDecision.skipsCleanup).
                 result = DictationTranscriptionResult(
                     transcription: SpeechTranscriptionResult(text: hostedResult.text, segments: []),
                     cleanupOutcome: .skippedDisabled,

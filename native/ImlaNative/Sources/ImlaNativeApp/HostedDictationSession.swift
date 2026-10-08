@@ -1,4 +1,5 @@
 import Foundation
+import ImlaCore
 
 struct HostedDictationResult: Equatable, Sendable {
     let text: String
@@ -89,6 +90,73 @@ enum HostedDictationFallbackPolicy {
         if error is CancellationError { return false }
         if let urlError = error as? URLError, urlError.code == .cancelled { return false }
         return true
+    }
+}
+
+/// What a hosted dictation job transcribes with once its provider has finished.
+/// Kept apart from the controller so the hosted-versus-local choice is testable
+/// without a recorder, a provider connection, or a loaded model.
+struct HostedDictationDecision: Equatable {
+    enum Source: Equatable {
+        /// The provider's finished prose.
+        case hosted(HostedDictationResult)
+        /// The provider failed, so this local model transcribes the saved capture.
+        case localFallback(BackendOption)
+    }
+
+    let source: Source
+    /// The identity recorded with the dictation, so history names what actually
+    /// produced the text rather than the provider the user selected.
+    let transcriptionModel: DictationModelIdentity
+
+    /// Hosted transcription models already produce finished prose, so a hosted
+    /// success skips local cleanup, as the provider choice intends.
+    var skipsCleanup: Bool {
+        if case .hosted = source { return true }
+        return false
+    }
+
+    /// Cancellation, a superseded session, and a failure with no local model able
+    /// to serve dictation rethrow the provider's error, so a dropped dictation
+    /// never silently becomes another. `availableFallbacks` is read only after a
+    /// failure, keeping the downloaded-model scan off the hosted success path.
+    static func resolve(
+        hostedOutcome: Result<HostedDictationResult, Error>,
+        selected: BackendOption,
+        taskIsCancelled: Bool,
+        isCurrentSession: Bool,
+        availableFallbacks: () -> [BackendOption]
+    ) throws -> HostedDictationDecision {
+        switch hostedOutcome {
+        case .success(let hosted):
+            return HostedDictationDecision(
+                source: .hosted(hosted),
+                transcriptionModel: DictationModelIdentity(
+                    backend: hosted.backend,
+                    model: hosted.model ?? "",
+                    name: hosted.model ?? "Not recorded",
+                    endpoint: hosted.endpoint
+                )
+            )
+        case .failure(let error):
+            guard HostedDictationFallbackPolicy.shouldFallback(
+                after: error,
+                taskIsCancelled: taskIsCancelled,
+                isCurrentSession: isCurrentSession
+            ),
+                  let fallback = BackendOption.resolveHostedDictationFallback(
+                    selected: selected,
+                    available: availableFallbacks()
+                  ) else { throw error }
+            return HostedDictationDecision(
+                source: .localFallback(fallback),
+                transcriptionModel: DictationModelIdentity(
+                    backend: fallback.backend,
+                    model: fallback.model,
+                    name: fallback.label
+                )
+            )
+        }
     }
 }
 

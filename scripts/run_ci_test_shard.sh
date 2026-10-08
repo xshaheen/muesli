@@ -164,6 +164,7 @@ case "${shard}" in
       ModelDeletionExecutorTests
       Nemotron35ModelStoreTests
       HostedDictationCleanupDeadlineTests
+      HostedDictationOutcomeTests
       OrderedDictationJobQueueTests
       SessionTraceRuntimeTests
       SessionTracePerformanceTests
