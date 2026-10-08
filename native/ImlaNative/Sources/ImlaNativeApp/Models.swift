@@ -1373,6 +1373,12 @@ struct SummaryModelPreset {
         SummaryModelPreset(id: "gpt-5.6-luna", label: "GPT-5.6 Luna"),
     ]
 
+    static let claudeCodeModels: [SummaryModelPreset] = [
+        SummaryModelPreset(id: "sonnet", label: "Claude Sonnet"),
+        SummaryModelPreset(id: "opus", label: "Claude Opus"),
+        SummaryModelPreset(id: "haiku", label: "Claude Haiku"),
+    ]
+
     static let chatGPTTranscriptCleanupModels: [SummaryModelPreset] = [
         SummaryModelPreset(id: "gpt-5.6-terra", label: "GPT-5.6 Terra (default)"),
         SummaryModelPreset(id: "gpt-6-astra", label: "GPT-6 Astra"),
@@ -1559,6 +1565,7 @@ extension MeetingSummaryBackendOption {
         case .openRouter: return \.openRouterModel
         case .ollama: return \.ollamaModel
         case .lmStudio: return \.lmStudioModel
+        case .claudeCode: return \.claudeCodeModel
         default: return \.customLLMModel
         }
     }
@@ -1576,6 +1583,7 @@ extension MeetingSummaryBackendOption {
         switch self {
         case .chatGPT: presets = SummaryModelPreset.chatGPTModels
         case .openAI: presets = SummaryModelPreset.openAIModels
+        case .claudeCode: presets = SummaryModelPreset.claudeCodeModels
         case .openRouter:
             presets = [SummaryModelPreset.openRouterModels[0]]
                 + openRouterModels.filter { $0.id != "openrouter/free" }
@@ -1615,12 +1623,23 @@ struct MeetingSummaryBackendOption: Equatable {
         label: "LM Studio"
     )
 
+    static let claudeCode = MeetingSummaryBackendOption(
+        backend: "claude_code",
+        label: "Claude Code"
+    )
+
     static let customLLM = MeetingSummaryBackendOption(
         backend: "custom_llm",
         label: "Custom LLM"
     )
 
-    static let all: [MeetingSummaryBackendOption] = [.chatGPT, .openAI, .openRouter, .ollama, .lmStudio, .customLLM]
+    static let all: [MeetingSummaryBackendOption] = [.chatGPT, .openAI, .claudeCode, .openRouter, .ollama, .lmStudio, .customLLM]
+
+    static func selectable(config: AppConfig, selected: MeetingSummaryBackendOption? = nil) -> [MeetingSummaryBackendOption] {
+        guard ClaudeCodeSummarizer.executableURL(configuredPath: config.claudeCodeExecutablePath) == nil,
+              selected != .claudeCode else { return all }
+        return all.filter { $0 != .claudeCode }
+    }
 
     static func resolved(_ backend: String?) -> MeetingSummaryBackendOption {
         guard let backend, let option = all.first(where: { $0.backend == backend }) else {
@@ -2886,6 +2905,8 @@ struct AppConfig: Codable {
     var openAIModel: String = ""
     var openRouterModel: String = ""
     var chatGPTModel: String = ""
+    var claudeCodeModel: String = ""
+    var claudeCodeExecutablePath: String = ""
     var meetingSummaryReasoningEffort: ReasoningEffort?
     var meetingSummaryRetryCount: Int = MeetingSummaryRetryPolicy.defaultRetryCount
     var ollamaURL: String = "http://localhost:11434"
@@ -3116,6 +3137,8 @@ struct AppConfig: Codable {
         case openAIModel = "openai_model"
         case openRouterModel = "openrouter_model"
         case chatGPTModel = "chatgpt_model"
+        case claudeCodeModel = "claude_code_model"
+        case claudeCodeExecutablePath = "claude_code_executable_path"
         case meetingSummaryReasoningEffort = "meeting_summary_reasoning_effort"
         case meetingSummaryRetryCount = "meeting_summary_retry_count"
         case ollamaURL = "ollama_url"
@@ -3528,6 +3551,8 @@ struct AppConfig: Codable {
                 (try? c.decode(String.self, forKey: .chatGPTModel)) ?? defaults.chatGPTModel
             )
         )
+        claudeCodeModel = (try? c.decode(String.self, forKey: .claudeCodeModel)) ?? defaults.claudeCodeModel
+        claudeCodeExecutablePath = (try? c.decode(String.self, forKey: .claudeCodeExecutablePath)) ?? defaults.claudeCodeExecutablePath
         meetingSummaryReasoningEffort = try? c.decode(
             ReasoningEffort.self,
             forKey: .meetingSummaryReasoningEffort

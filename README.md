@@ -56,7 +56,7 @@ By default, dictation uses an on-device model. You can instead opt into OpenAI S
 Select text and speak an instruction to rewrite it, or ask a question and generate text at the cursor with no selection. Choose your model in **Models → Quill**. If a required local model is missing or a selected account is signed out, Imla prompts you to download the model or sign in before use.
 
 ### Meeting Transcription
-Start a meeting recording → Imla captures your mic (You) and system audio (Others) simultaneously → VAD-driven chunked transcription happens during the meeting at natural speech boundaries → speaker diarization identifies individual remote speakers (Speaker 1, Speaker 2, etc.) → when you stop, the transcript is ready in seconds, not minutes. Generate structured meeting notes via OpenAI, free OpenRouter models, your ChatGPT Plus/Pro subscription, or local Ollama models.
+Start a meeting recording → Imla captures your mic (You) and system audio (Others) simultaneously → VAD-driven chunked transcription happens during the meeting at natural speech boundaries → speaker diarization identifies individual remote speakers (Speaker 1, Speaker 2, etc.) → when you stop, the transcript is ready in seconds, not minutes. Generate structured meeting notes via OpenAI, free OpenRouter models, your ChatGPT Plus/Pro subscription, Claude Code, or local Ollama models.
 
 Live meeting transcripts have two explicit modes. **Nemotron 3.5** provides a multilingual continuous transcript and defaults to using it as the final raw transcript before diarization and note generation. You can instead select any downloaded meeting model as the authoritative final transcript while keeping Nemotron for live preview. **Parakeet Realtime EOU** is a low-latency English preview paired with a separately selected final model. Settings always shows which model owns the final transcript.
 
@@ -87,14 +87,14 @@ Live transcription is off by default. Choose Apple Speech, or download Parakeet 
 - **Local or hosted AI cleanup** — Keep cleanup on-device with Qwen/Gemma, or configure a hosted provider. Hosted cleanup receives transcript text plus the selected style instructions; separately enabled App Context is included only when that feature is on.
 - **Optional transcript cleanup** — Refine dictated text locally with **[S1-mini by Superwhisper](https://huggingface.co/superwhisper/s1-mini-GGUF)**, Imla's GGUF cleanup models, or on-device Gemma 4 E2B; hosted providers are also available when preferred.
 - **Filler word removal** — Automatically strips "uh", "um", "er", "hmm" and verbal disfluencies.
-- **AI meeting notes** — BYOK with OpenAI or OpenRouter, sign in with your ChatGPT Plus/Pro subscription (no API key needed), or use local Ollama models. Auto-generated meeting titles. Re-summarize any saved meeting with a different summary model.
+- **AI meeting notes** — BYOK with OpenAI or OpenRouter, sign in with ChatGPT, use your local Claude Code installation and sign-in, or run Ollama. Claude Code runs `claude -p` and sends the meeting prompt to Claude through your configured account or proxy; the model itself does not run on-device. Auto-generated meeting titles. Re-summarize any saved meeting with a different summary model.
 - **ChatGPT OAuth** — Sign in with your existing ChatGPT subscription via browser-based OAuth (PKCE). Tokens stored in the app support directory with owner-only file permissions.
 - **Computer Use planner** — Optional voice-driven planner that can execute local app and browser actions from dictated commands with configurable model and timeout settings.
 - **Post-meeting hooks** — Run a user-supplied executable after completed meetings. Hooks receive a JSON payload on stdin and log results in the app support directory.
 - **Personal dictionary** — Add custom words, phrase matches, and replacement pairs. Jaro-Winkler fuzzy matching auto-corrects transcription output.
 - **Model management** — Download, delete, and switch between models from the Models tab. Background downloads that don't block the app.
 - **Configurable hotkeys** — Choose any modifier key (Cmd, Option, Ctrl, Fn, Shift) for dictation.
-- **Onboarding** — First-launch wizard with model selection, real OS permission verification, hotkey configuration, smoother Accessibility handoff, live dictation test to verify the full pipeline works, and optional summary setup for ChatGPT, OpenAI, OpenRouter, or Ollama. Progress saved on every step — survives crashes and manual quits.
+- **Onboarding** — First-launch wizard with model selection, real OS permission verification, hotkey configuration, smoother Accessibility handoff, live dictation test to verify the full pipeline works, and optional summary setup for ChatGPT, OpenAI, OpenRouter, or Ollama. Claude Code is offered when its CLI is already installed, with a sign-in status check. Progress saved on every step — survives crashes and manual quits.
 - **Launch at Login** — Start Imla automatically with macOS login items, with approval-state refresh in Settings.
 - **Dark & light mode** — Adaptive theme with toggle in sidebar.
 - **SwiftUI dashboard** — Dictation history, meeting notes (Notes-style split view), meeting folders, dictionary, models, shortcuts, settings, about page.
@@ -229,7 +229,7 @@ Generate markdown notes with the configured API/local summary backend when avail
 imla-cli transcribe interview.mp4 --summarize --format markdown --output notes.md
 ```
 
-`--summarize` uses configured OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM settings. If the configured backend is unavailable in headless CLI mode, Imla keeps the transcript and reports a warning instead of discarding the transcription.
+`--summarize` uses configured Claude Code, OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM settings. When Claude Code is already installed, Imla offers it under Settings → Meeting Summaries. Imla passes the prompt on stdin, disables Claude's tools and MCP servers for this call, and does not save a Claude session. Your Claude Code user settings, including any configured provider or hooks, still apply. If the configured backend is unavailable in headless CLI mode, Imla keeps the transcript and reports a warning instead of discarding the transcription.
 
 Save the import into Imla as `source = audio_import`:
 

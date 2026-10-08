@@ -1388,6 +1388,8 @@ struct CLISummaryConfig: Decodable {
     var customLLMAPIKey = ""
     var customLLMModel = ""
     var customLLMFormat = "openai"
+    var claudeCodeModel = ""
+    var claudeCodeExecutablePath = ""
 
     // Raw values must match AppConfig.CodingKeys exactly — config.json is written by the app in snake_case.
     enum CodingKeys: String, CodingKey {
@@ -1404,6 +1406,8 @@ struct CLISummaryConfig: Decodable {
         case customLLMAPIKey = "custom_llm_api_key"
         case customLLMModel = "custom_llm_model"
         case customLLMFormat = "custom_llm_format"
+        case claudeCodeModel = "claude_code_model"
+        case claudeCodeExecutablePath = "claude_code_executable_path"
     }
 
     init() {}
@@ -1423,6 +1427,8 @@ struct CLISummaryConfig: Decodable {
         customLLMAPIKey = try container.decodeIfPresent(String.self, forKey: .customLLMAPIKey) ?? customLLMAPIKey
         customLLMModel = try container.decodeIfPresent(String.self, forKey: .customLLMModel) ?? customLLMModel
         customLLMFormat = try container.decodeIfPresent(String.self, forKey: .customLLMFormat) ?? customLLMFormat
+        claudeCodeModel = try container.decodeIfPresent(String.self, forKey: .claudeCodeModel) ?? claudeCodeModel
+        claudeCodeExecutablePath = try container.decodeIfPresent(String.self, forKey: .claudeCodeExecutablePath) ?? claudeCodeExecutablePath
     }
 
     static func load(from supportDirectory: URL) -> CLISummaryConfig {
@@ -1474,6 +1480,13 @@ enum CLISummaryClient {
     static func summarize(transcript: String, title: String, config: CLISummaryConfig) async throws -> String {
         let backend = config.meetingSummaryBackend.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch backend.isEmpty ? "chatgpt" : backend {
+        case "claude_code":
+            return try await ClaudeCodeSummarizer.run(
+                instructions: "You are a meeting notes assistant. Summarize the transcript as concise Markdown. Include decisions, action items with owners when stated, and open questions. Do not invent facts. Return only the notes.",
+                input: "Meeting title: \(title)\n\nRaw transcript:\n\(transcript)",
+                model: config.claudeCodeModel,
+                executablePath: config.claudeCodeExecutablePath
+            )
         case "openai":
             let key = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? config.openAIAPIKey
             guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -1549,7 +1562,7 @@ enum CLISummaryClient {
                 title: title
             )
         default:
-            throw CLISummaryError.unavailable("The configured ChatGPT session summary backend is app-only in headless CLI mode. Select OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM in Imla settings for `imla-cli transcribe --summarize`.")
+            throw CLISummaryError.unavailable("The configured ChatGPT session summary backend is app-only in headless CLI mode. Select Claude Code, OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM in Imla settings for `imla-cli transcribe --summarize`.")
         }
     }
 

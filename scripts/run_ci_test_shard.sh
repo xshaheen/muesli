@@ -232,6 +232,7 @@ case "${shard}" in
       MeetingFollowUpThreadTests
       MeetingFollowUpSummaryPromptTests
       MeetingSummaryClientTests
+      ClaudeCodeSummarizerTests
       MeetingsNavigationTests
       MeetingDetailResponsiveLayoutTests
       MeetingDurationLimitTests

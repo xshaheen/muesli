@@ -1378,8 +1378,9 @@ struct MeetingSummaryBackendTests {
 
     @Test("all options listed")
     func allOptions() {
-        #expect(MeetingSummaryBackendOption.all.count == 6)
+        #expect(MeetingSummaryBackendOption.all.count == 7)
         #expect(MeetingSummaryBackendOption.all.contains(.openAI))
+        #expect(MeetingSummaryBackendOption.all.contains(.claudeCode))
         #expect(MeetingSummaryBackendOption.all.contains(.openRouter))
         #expect(MeetingSummaryBackendOption.all.contains(.chatGPT))
         #expect(MeetingSummaryBackendOption.all.contains(.ollama))
@@ -1390,6 +1391,7 @@ struct MeetingSummaryBackendTests {
     @Test("backend strings are lowercase")
     func backendStrings() {
         #expect(MeetingSummaryBackendOption.openAI.backend == "openai")
+        #expect(MeetingSummaryBackendOption.claudeCode.backend == "claude_code")
         #expect(MeetingSummaryBackendOption.openRouter.backend == "openrouter")
         #expect(MeetingSummaryBackendOption.ollama.backend == "ollama")
         #expect(MeetingSummaryBackendOption.lmStudio.backend == "lmstudio")
@@ -1399,12 +1401,31 @@ struct MeetingSummaryBackendTests {
     @Test("configured values resolve with ChatGPT fallback")
     func resolvedValues() {
         #expect(MeetingSummaryBackendOption.resolved("chatgpt") == .chatGPT)
+        #expect(MeetingSummaryBackendOption.resolved("claude_code") == .claudeCode)
         #expect(MeetingSummaryBackendOption.resolved("openrouter") == .openRouter)
         #expect(MeetingSummaryBackendOption.resolved("ollama") == .ollama)
         #expect(MeetingSummaryBackendOption.resolved("lmstudio") == .lmStudio)
         #expect(MeetingSummaryBackendOption.resolved("custom_llm") == .customLLM)
         #expect(MeetingSummaryBackendOption.resolved("unknown") == .chatGPT)
         #expect(MeetingSummaryBackendOption.resolved(nil) == .chatGPT)
+    }
+
+    @Test("Claude Code is offered only when its executable is available")
+    func claudeCodeVisibility() throws {
+        var config = AppConfig()
+        config.claudeCodeExecutablePath = "/missing/imla-test-claude"
+        #expect(!MeetingSummaryBackendOption.selectable(config: config).contains(.claudeCode))
+        #expect(MeetingSummaryBackendOption.selectable(config: config, selected: .claudeCode).contains(.claudeCode))
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("imla-claude-visibility-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("claude")
+        try "#!/bin/sh\nexit 0\n".write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        config.claudeCodeExecutablePath = executable.path
+        #expect(MeetingSummaryBackendOption.selectable(config: config).contains(.claudeCode))
     }
 
     @Test("Custom LLM format labels")
@@ -1465,6 +1486,8 @@ struct AppConfigTests {
         #expect(config.meetingTranscriptionBackend == BackendOption.whisper.backend)
         #expect(config.meetingTranscriptionModel == BackendOption.whisper.model)
         #expect(config.meetingSummaryBackend == "chatgpt")
+        #expect(config.claudeCodeModel.isEmpty)
+        #expect(config.claudeCodeExecutablePath.isEmpty)
         #expect(config.meetingSummaryReasoningEffort == nil)
         #expect(config.defaultMeetingTemplateID == MeetingTemplates.autoID)
         #expect(config.dictationRecordingSavePolicy == .never)
@@ -2051,6 +2074,8 @@ struct AppConfigTests {
         config.customLLMAPIKey = "custom-key"
         config.customLLMModel = "custom-model"
         config.customLLMFormat = "anthropic"
+        config.claudeCodeModel = "opus"
+        config.claudeCodeExecutablePath = "/custom/claude"
         config.meetingSummaryReasoningEffort = .xhigh
         config.meetingSummaryRetryCount = 5
         config.postProcessorBackend = TranscriptCleanupBackendOption.hosted(.openRouter).backend
@@ -2142,6 +2167,8 @@ struct AppConfigTests {
         #expect(decoded.customLLMAPIKey == "custom-key")
         #expect(decoded.customLLMModel == "custom-model")
         #expect(decoded.customLLMFormat == "anthropic")
+        #expect(decoded.claudeCodeModel == "opus")
+        #expect(decoded.claudeCodeExecutablePath == "/custom/claude")
         #expect(decoded.meetingSummaryReasoningEffort == .xhigh)
         #expect(decoded.meetingSummaryRetryCount == 5)
         #expect(decoded.postProcessorBackend == "openrouter")

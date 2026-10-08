@@ -186,6 +186,11 @@ struct SettingsView: View {
     @State private var isSigningInChatGPT = false
     @State private var openRouterSignInError: String?
     @State private var isSigningInOpenRouter = false
+    @State private var claudeCodeAuthStatus: ClaudeCodeAuthenticationStatus?
+    @State private var claudeCodeSignInError: String?
+    @State private var isShowingInvalidClaudeCodeExecutableAlert = false
+    @State private var isWaitingForClaudeCodeSignIn = false
+    @State private var isShowingClaudeCodeAdvanced = false
     @State private var isEnteringOpenRouterAPIKey = false
     @State private var manualOpenRouterAPIKey = ""
     @State private var pendingDataDestruction: PendingDataDestruction?
@@ -479,6 +484,9 @@ struct SettingsView: View {
                 refreshAudioInputDevices()
                 refreshPermissionStatuses(for: .appActivated)
                 if selectedPane == .meetings {
+                    if appState.selectedMeetingSummaryBackend == .claudeCode {
+                        Task { await refreshClaudeCodeAuthStatus() }
+                    }
                     Task {
                         await controller.calendarAccessDidChange()
                     }
@@ -493,6 +501,8 @@ struct SettingsView: View {
             .onChange(of: appState.selectedMeetingSummaryBackend) { _, backend in
                 if backend == .openRouter {
                     loadOpenRouterFreeModelsIfNeeded()
+                } else if backend == .claudeCode {
+                    Task { await refreshClaudeCodeAuthStatus() }
                 }
             }
             .alert(
@@ -1703,12 +1713,28 @@ struct SettingsView: View {
                 description: "Remote summaries may send transcripts, notes, screen context, and participant names.",
                 controlWidth: meetingControlWidth
             ) {
-                settingsMenu(
-                    selection: appState.selectedMeetingSummaryBackend.label,
-                    options: MeetingSummaryBackendOption.all.map(\.label)
-                ) { label in
-                    if let option = MeetingSummaryBackendOption.all.first(where: { $0.label == label }) {
-                        controller.selectMeetingSummaryBackend(option)
+                VStack(alignment: .trailing, spacing: 4) {
+                    settingsMenu(
+                        selection: appState.selectedMeetingSummaryBackend.label,
+                        options: MeetingSummaryBackendOption.selectable(
+                            config: appState.config,
+                            selected: appState.selectedMeetingSummaryBackend
+                        ).map(\.label)
+                    ) { label in
+                        if let option = MeetingSummaryBackendOption.all.first(where: { $0.label == label }) {
+                            controller.selectMeetingSummaryBackend(option)
+                        }
+                    }
+                    if ClaudeCodeSummarizer.executableURL(configuredPath: appState.config.claudeCodeExecutablePath) == nil,
+                       appState.selectedMeetingSummaryBackend != .claudeCode {
+                        Button("Locate existing Claude Code…") { pickExistingClaudeCodeExecutable() }
+                            .font(ImlaTheme.caption())
+                            .buttonStyle(.link)
+                            .alert("Couldn't Use Claude Code", isPresented: $isShowingInvalidClaudeCodeExecutableAlert) {
+                                Button("OK", role: .cancel) {}
+                            } message: {
+                                Text("The selected file isn't executable. Choose the installed Claude Code CLI.")
+                            }
                     }
                 }
             }
@@ -1772,6 +1798,38 @@ struct SettingsView: View {
                     }
                 }
                 keyStatusRow(key: appState.config.openAIAPIKey)
+            } else if appState.selectedMeetingSummaryBackend == .claudeCode {
+                settingsRow("Account", description: "Uses the Claude Code sign-in on this Mac.", controlWidth: meetingControlWidth) {
+                    claudeCodeAccountControl()
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                settingsRow("Model", description: "Uses your Claude Code model preference, or your account's default.", controlWidth: meetingControlWidth) {
+                    claudeCodeModelControl()
+                }
+                Divider().background(ImlaTheme.surfaceBorder)
+                DisclosureGroup(isExpanded: $isShowingClaudeCodeAdvanced) {
+                    VStack(alignment: .leading, spacing: ImlaTheme.spacing12) {
+                        settingsRow("Custom executable path", description: "Override the Claude Code CLI Imla detected.", controlWidth: meetingControlWidth) {
+                            PastableTextField(
+                                text: appState.config.claudeCodeExecutablePath,
+                                placeholder: "Optional path",
+                                onChange: { val in controller.updateConfig { $0.claudeCodeExecutablePath = val } }
+                            )
+                            .frame(height: 22)
+                        }
+                        settingsRow("Custom model ID", controlWidth: meetingControlWidth) {
+                            settingsModelTextField(
+                                currentModel: appState.config.claudeCodeModel,
+                                placeholder: "Optional model ID"
+                            ) { val in controller.updateConfig { $0.claudeCodeModel = val } }
+                        }
+                    }
+                    .padding(.top, ImlaTheme.spacing12)
+                } label: {
+                    Text("Advanced")
+                        .font(ImlaTheme.captionMedium())
+                        .foregroundStyle(ImlaTheme.textSecondary)
+                }
             } else if appState.selectedMeetingSummaryBackend == .ollama {
                 settingsRow("Ollama URL", controlWidth: meetingControlWidth) {
                     PastableTextField(
@@ -2391,6 +2449,99 @@ struct SettingsView: View {
         }
     }
 
+    private func claudeCodeAccountControl() -> some View {
+        VStack(alignment: .center, spacing: 5) {
+            switch claudeCodeAuthStatus {
+            case .signedIn:
+                Label("Connected to Claude Code", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(ImlaTheme.success)
+            case .unavailable:
+                Label("Claude Code unavailable", systemImage: "exclamationmark.circle")
+                    .foregroundStyle(ImlaTheme.textSecondary)
+            case .signedOut, .unknown:
+                if isWaitingForClaudeCodeSignIn {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Finish sign-in in Terminal or your browser")
+                    }
+                    .foregroundStyle(ImlaTheme.textSecondary)
+                } else {
+                    ClaudeCodeSignInButton(compact: true) { beginClaudeCodeSignIn() }
+                }
+                Button("Check again") { Task { await refreshClaudeCodeAuthStatus() } }
+                    .font(ImlaTheme.caption())
+                    .buttonStyle(.plain)
+            case nil:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking Claude Code…")
+                }
+                .foregroundStyle(ImlaTheme.textSecondary)
+            }
+            if let claudeCodeSignInError {
+                Text(claudeCodeSignInError)
+                    .font(ImlaTheme.caption())
+                    .foregroundStyle(ImlaTheme.recording)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .font(ImlaTheme.caption())
+        .frame(maxWidth: .infinity, alignment: .center)
+        .task(id: appState.config.claudeCodeExecutablePath) {
+            await refreshClaudeCodeAuthStatus()
+        }
+        .task(id: isWaitingForClaudeCodeSignIn) {
+            guard isWaitingForClaudeCodeSignIn else { return }
+            for _ in 0..<90 {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !Task.isCancelled else { return }
+                await refreshClaudeCodeAuthStatus()
+                if claudeCodeAuthStatus == .signedIn || claudeCodeAuthStatus == .unavailable {
+                    isWaitingForClaudeCodeSignIn = false
+                    return
+                }
+            }
+            isWaitingForClaudeCodeSignIn = false
+        }
+    }
+
+    private func claudeCodeModelControl() -> some View {
+        let configured = appState.config.claudeCodeModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let presets = SummaryModelPreset.claudeCodeModels
+        let options = [SummaryModelPreset(id: "", label: "Follow Claude Code settings")]
+            + presets
+            + (configured.isEmpty || presets.contains(where: { $0.id == configured })
+                ? [] : [SummaryModelPreset(id: configured, label: "Custom: \(configured)")])
+        let selectedLabel = options.first(where: { $0.id == configured })?.label ?? options[0].label
+        return FixedWidthPopUp(
+            selection: selectedLabel,
+            options: options.map(\.label),
+            onSelectIndex: { index in
+                guard options.indices.contains(index) else { return }
+                controller.updateConfig { $0.claudeCodeModel = options[index].id }
+            }
+        )
+        .frame(height: 24)
+    }
+
+    @MainActor
+    private func refreshClaudeCodeAuthStatus() async {
+        claudeCodeAuthStatus = await ClaudeCodeSummarizer.authenticationStatus(
+            executablePath: appState.config.claudeCodeExecutablePath
+        )
+    }
+
+    @MainActor
+    private func beginClaudeCodeSignIn() {
+        claudeCodeSignInError = nil
+        do {
+            try ClaudeCodeSignInLauncher.start(executablePath: appState.config.claudeCodeExecutablePath)
+            isWaitingForClaudeCodeSignIn = true
+        } catch {
+            claudeCodeSignInError = error.localizedDescription
+        }
+    }
+
     @ViewBuilder
     private func chatGPTAccountControl(selectMeetingSummaryBackend: Bool = true) -> some View {
         if appState.isChatGPTAuthenticated {
@@ -2801,6 +2952,29 @@ struct SettingsView: View {
 
         presentOpenPanel(panel) { url in
             controller.updateConfig { $0.meetingHookPath = url.standardizedFileURL.path }
+        }
+    }
+
+    private func pickExistingClaudeCodeExecutable() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose your existing Claude Code executable"
+        panel.prompt = "Use Claude Code"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.showsHiddenFiles = true
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+
+        presentOpenPanel(panel) { url in
+            let path = url.standardizedFileURL.path
+            guard ClaudeCodeSummarizer.executableURL(configuredPath: path) != nil else {
+                isShowingInvalidClaudeCodeExecutableAlert = true
+                return
+            }
+            controller.updateConfig {
+                $0.claudeCodeExecutablePath = path
+                $0.meetingSummaryBackend = MeetingSummaryBackendOption.claudeCode.backend
+            }
         }
     }
 
