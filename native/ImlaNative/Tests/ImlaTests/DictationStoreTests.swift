@@ -5079,6 +5079,36 @@ struct DictationStoreTests {
         ) == ["1"]
     }
 
+    @Test("a version 5 database gains the dictation model columns and measurement table")
+    func schemaVersion6UpgradesExistingDatabases() throws {
+        let (store, url) = try makeStoreWithURL()
+        // Rewind to what a version 5 database looked like before this migration existed.
+        try rawExec(url, "DROP TABLE bodhan_wbcs_measurements")
+        try rawExec(url, "PRAGMA user_version = 5")
+
+        try store.migrateIfNeeded()
+
+        let id = try store.insertDictation(
+            text: "Upgraded", durationSeconds: 1, startedAt: Date(), endedAt: Date(),
+            transcriptionModel: DictationModelIdentity(backend: "cohere-arabic", model: "cohere", name: "Cohere")
+        )
+        #expect(id > 0)
+        #expect(try rawScalar(url, "PRAGMA user_version") == Int(DictationStore.currentSchemaVersion))
+        #expect(try rawScalar(url, "SELECT COUNT(*) FROM sqlite_master WHERE name = 'bodhan_wbcs_measurements'") == 1)
+        #expect(try rawScalar(url, "SELECT COUNT(*) FROM dictations WHERE transcription_backend = 'cohere-arabic'") == 1)
+    }
+
+    private func rawScalar(_ url: URL, _ sql: String) throws -> Int {
+        var db: OpaquePointer?
+        guard sqlite3_open(url.path, &db) == SQLITE_OK else { throw sqliteTestError("open failed") }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw sqliteTestError("prepare failed") }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { throw sqliteTestError("no row") }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+
     private func makeStoreWithURL() throws -> (store: DictationStore, url: URL) {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("imla-test-\(UUID().uuidString).db")

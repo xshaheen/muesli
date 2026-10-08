@@ -28,6 +28,7 @@ case "${shard}" in
       MeetingChatConversationLoadingTests
       TranscriptionQualityUpgradeComparisonTests
       TranscriptionLanguageRoutingTests
+      InsightsTests
       DictationStoreTests
       SessionTraceStoreTests
       RecordingArtifactStoreTests
