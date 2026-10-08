@@ -5082,11 +5082,37 @@ struct DictationStoreTests {
     @Test("a version 5 database gains the dictation model columns and measurement table")
     func schemaVersion6UpgradesExistingDatabases() throws {
         let (store, url) = try makeStoreWithURL()
-        // Rewind to what a version 5 database looked like before this migration existed.
-        try rawExec(url, "DROP TABLE bodhan_wbcs_measurements")
-        try rawExec(url, "PRAGMA user_version = 5")
+        // A fresh store is already v6, so rewinding user_version alone would leave the model
+        // columns in place and the ADD COLUMN path unexercised. Rebuild the real v5 shape.
+        try rawExec(url, """
+            DROP TRIGGER bodhan_wbcs_invalidate_soft_delete;
+            DROP TRIGGER bodhan_wbcs_invalidate_delete;
+            DROP TABLE bodhan_wbcs_measurements;
+            ALTER TABLE dictations DROP COLUMN transcription_backend;
+            ALTER TABLE dictations DROP COLUMN transcription_model;
+            ALTER TABLE dictations DROP COLUMN transcription_model_name;
+            ALTER TABLE dictations DROP COLUMN transcription_endpoint;
+            INSERT INTO dictations (timestamp, raw_text) VALUES ('2026-08-09T00:00:00Z', 'pre-v6 text');
+            PRAGMA user_version = 5;
+            """)
+        for column in ["transcription_backend", "transcription_model", "transcription_model_name", "transcription_endpoint"] {
+            #expect(try rawScalar(url, "SELECT COUNT(*) FROM pragma_table_info('dictations') WHERE name = '\(column)'") == 0)
+        }
 
         try store.migrateIfNeeded()
+
+        for column in ["transcription_backend", "transcription_model", "transcription_model_name", "transcription_endpoint"] {
+            #expect(try rawScalar(url, "SELECT COUNT(*) FROM pragma_table_info('dictations') WHERE name = '\(column)'") == 1)
+        }
+        #expect(try rawScalar(url, """
+            SELECT COUNT(*) FROM dictations WHERE raw_text = 'pre-v6 text'
+              AND transcription_backend IS NULL AND transcription_model IS NULL
+              AND transcription_model_name IS NULL AND transcription_endpoint IS NULL
+            """) == 1)
+        #expect(try rawScalar(url, """
+            SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'
+              AND name IN ('bodhan_wbcs_invalidate_soft_delete', 'bodhan_wbcs_invalidate_delete')
+            """) == 2)
 
         let id = try store.insertDictation(
             text: "Upgraded", durationSeconds: 1, startedAt: Date(), endedAt: Date(),
