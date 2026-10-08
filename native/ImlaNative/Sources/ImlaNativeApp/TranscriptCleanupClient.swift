@@ -1,4 +1,5 @@
 import Foundation
+import ImlaCore
 
 enum TranscriptCleanupError: LocalizedError {
     case missingConfiguration(String)
@@ -63,6 +64,7 @@ struct TranscriptCleanupRequestOptions {
 
 enum TranscriptCleanupClient {
     private static let openAIResponsesURL = URL(string: "https://api.openai.com/v1/responses")!
+    private static let anthropicURL = URL(string: "https://api.anthropic.com/v1/messages")!
     private static let openRouterURL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
     private static let defaultOllamaBaseURL = URL(string: "http://localhost:11434")!
     private static let requestTimeout: TimeInterval = 120
@@ -107,9 +109,11 @@ enum TranscriptCleanupClient {
         }
         switch backend.llmBackend {
         case .some(.chatGPT):
-            return SummaryModelPreset.chatGPTTranscriptCleanupModels.first?.id ?? "gpt-5.6-terra"
+            return SummaryModelPreset.chatGPTTranscriptCleanupModels.first?.id ?? "gpt-6-luna"
         case .some(.openAI):
-            return SummaryModelPreset.openAIModels.first?.id ?? "gpt-5.4-mini"
+            return SummaryModelPreset.openAIModels.first?.id ?? "gpt-6.1-sol"
+        case .some(.anthropic):
+            return SummaryModelPreset.anthropicModels.first?.id ?? "claude-sonnet-5-5"
         case .some(.openRouter):
             return SummaryModelPreset.openRouterModels.first?.id ?? "openrouter/free"
         case .some(.ollama):
@@ -133,6 +137,8 @@ enum TranscriptCleanupClient {
             raw = config.postProcessorChatGPTModel
         case .some(.openAI):
             raw = config.postProcessorOpenAIModel
+        case .some(.anthropic):
+            raw = config.postProcessorAnthropicModel
         case .some(.openRouter):
             raw = config.postProcessorOpenRouterModel
         case .some(.ollama):
@@ -159,8 +165,9 @@ enum TranscriptCleanupClient {
         case .some(.chatGPT):
             return isChatGPTAuthenticated
         case .some(.openAI):
-            return !config.openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || ProcessInfo.processInfo.environment["OPENAI_API_KEY"] != nil
+            return !MeetingSummaryClient.resolvedOpenAIAPIKey(config: config).isEmpty
+        case .some(.anthropic):
+            return !MeetingSummaryClient.resolvedAnthropicAPIKey(config: config).isEmpty
         case .some(.openRouter):
             return !resolvedOpenRouterAPIKey(config: config).isEmpty
         case .some(.ollama):
@@ -237,6 +244,23 @@ enum TranscriptCleanupClient {
             )
         case .ollama:
             response = try await cleanWithOllama(systemPrompt: effectiveSystemPrompt, userPrompt: userPrompt, model: model, config: config, options: options)
+        case .anthropic:
+            let apiKey = MeetingSummaryClient.resolvedAnthropicAPIKey(config: config)
+            guard !apiKey.isEmpty else {
+                throw TranscriptCleanupError.missingConfiguration("Anthropic transcript cleanup requires an API key.")
+            }
+            var anthropicOptions = options
+            anthropicOptions.maxOutputTokens = options.maxOutputTokens ?? AnthropicModelPolicy.cleanupMaxOutputTokens
+            response = try await cleanWithAnthropic(
+                requestURL: anthropicURL,
+                apiKey: apiKey,
+                systemPrompt: effectiveSystemPrompt,
+                userPrompt: userPrompt,
+                model: model,
+                options: anthropicOptions,
+                backend: "Anthropic",
+                workspaceID: MeetingSummaryClient.resolvedAnthropicWorkspaceID(config: config)
+            )
         case .lmStudio:
             guard let requestURL = MeetingSummaryClient.resolveLMStudioURL(config: cleanupConfig(config, model: model)) else {
                 throw TranscriptCleanupError.missingConfiguration("Invalid LM Studio URL: \(config.lmStudioURL)")
@@ -336,6 +360,21 @@ enum TranscriptCleanupClient {
                 model: model,
                 config: config,
                 options: options
+            ).text
+        case .anthropic:
+            let apiKey = MeetingSummaryClient.resolvedAnthropicAPIKey(config: config)
+            guard !apiKey.isEmpty else {
+                throw TranscriptCleanupError.missingConfiguration("Anthropic generation requires an API key.")
+            }
+            return try await cleanWithAnthropic(
+                requestURL: anthropicURL,
+                apiKey: apiKey,
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                model: model,
+                options: options,
+                backend: "Anthropic",
+                workspaceID: MeetingSummaryClient.resolvedAnthropicWorkspaceID(config: config)
             ).text
         case .openRouter:
             return try await cleanWithChatCompletions(
@@ -648,39 +687,43 @@ enum TranscriptCleanupClient {
         ]
     }
 
+    /// Serves both the Custom LLM "Anthropic" format and the first-party Anthropic
+    /// backend, which adds a workspace header and a brief-task effort hint.
     private static func cleanWithAnthropic(
         requestURL: URL,
         apiKey: String,
         systemPrompt: String,
         userPrompt: String,
         model: String,
-        options: TranscriptCleanupRequestOptions
+        options: TranscriptCleanupRequestOptions,
+        backend: String = "Custom LLM",
+        workspaceID: String = ""
     ) async throws -> TranscriptCleanupRawResponse {
-        let body = anthropicRequestBody(
+        var body = anthropicRequestBody(
             systemPrompt: systemPrompt,
             userPrompt: userPrompt,
             model: model,
             options: options
         )
-        var request = URLRequest(url: requestURL)
-        request.timeoutInterval = timeoutInterval(for: options)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedKey.isEmpty {
-            request.setValue(trimmedKey, forHTTPHeaderField: "x-api-key")
+        if backend == "Anthropic", let effort = AnthropicModelPolicy.briefTaskEffort(for: model) {
+            body["output_config"] = ["effort": effort]
         }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let request = try AnthropicAPIRequest.make(
+            url: requestURL,
+            apiKey: apiKey,
+            workspaceID: workspaceID,
+            body: body,
+            timeout: timeoutInterval(for: options)
+        )
 
         let (data, response) = try await session.data(for: request)
-        try validateHTTPResponse(response, data: data, backend: "Custom LLM")
+        try validateHTTPResponse(response, data: data, backend: backend)
         guard
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
             let text = extractAnthropicText(from: json),
             !text.isEmpty
         else {
-            throw TranscriptCleanupError.emptyResponse("Custom LLM")
+            throw TranscriptCleanupError.emptyResponse(backend)
         }
         return TranscriptCleanupRawResponse(text: text, wasTruncated: anthropicHitOutputCap(json))
     }

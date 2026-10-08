@@ -466,14 +466,25 @@ struct MeetingDetailView: View {
             Text(retranscriptionErrorMessage ?? "The saved recording could not be re-transcribed.")
         }
         .alert("Re-summarize Notes?", isPresented: transcriptResummaryPromptBinding) {
-            Button("Re-summarize") {
-                resummarizeAfterTranscriptEdit()
+            if hasApiKey {
+                Button("Re-summarize") {
+                    resummarizeAfterTranscriptEdit()
+                }
+            } else {
+                Button("Configure \(appState.selectedMeetingSummaryBackend.label) in Settings…") {
+                    transcriptResummaryPromptMeetingID = nil
+                    controller.openSettingsWindow()
+                }
             }
             Button("Not Now", role: .cancel) {
                 transcriptResummaryPromptMeetingID = nil
             }
         } message: {
-            Text("Your transcript edits may change the generated notes. Re-summarize now to update them from the edited transcript.")
+            if hasApiKey {
+                Text("Your transcript edits may change the generated notes. Re-summarize now to update them from the edited transcript.")
+            } else {
+                Text("Your transcript edits were saved. Configure \(appState.selectedMeetingSummaryBackend.label) to regenerate notes. Existing notes are kept.")
+            }
         }
         .alert("Delete Meeting", isPresented: $showDeleteConfirmation) {
             Button("Delete", role: .destructive) {
@@ -1178,8 +1189,14 @@ struct MeetingDetailView: View {
             // Clicking summarizes with the configured provider; the menu overrides
             // provider and model for this meeting alone, without changing settings.
             Menu {
-                Button("Use Settings (\(appState.selectedMeetingSummaryBackend.label))") {
-                    beginSummary(for: meeting)
+                if controller.canUseSummaryProvider(appState.selectedMeetingSummaryBackend) {
+                    Button("Use Settings (\(appState.selectedMeetingSummaryBackend.label))") {
+                        beginSummary(for: meeting)
+                    }
+                } else {
+                    Button("Configure \(appState.selectedMeetingSummaryBackend.label) in Settings…") {
+                        controller.openSettingsWindow()
+                    }
                 }
                 Divider()
                 ForEach(MeetingSummaryBackendOption.all, id: \.backend) { provider in
@@ -2074,7 +2091,7 @@ struct MeetingDetailView: View {
             } else {
                 Image(systemName: "key.fill")
                     .foregroundStyle(ImlaTheme.accent)
-                Text("Add your API key in Settings to generate meeting notes")
+                Text("Configure \(appState.selectedMeetingSummaryBackend.label) in Settings to generate meeting notes")
                     .font(ImlaTheme.callout())
                     .foregroundStyle(ImlaTheme.textSecondary)
                 Spacer()
@@ -2117,24 +2134,7 @@ struct MeetingDetailView: View {
     }
 
     private var hasApiKey: Bool {
-        let config = appState.config
-        if appState.selectedMeetingSummaryBackend == .chatGPT {
-            return appState.isChatGPTAuthenticated
-        } else if appState.selectedMeetingSummaryBackend == .openAI {
-            return !config.openAIAPIKey.isEmpty || ProcessInfo.processInfo.environment["OPENAI_API_KEY"] != nil
-        } else if appState.selectedMeetingSummaryBackend == .ollama {
-            return true
-        } else if appState.selectedMeetingSummaryBackend == .claudeCode {
-            return ClaudeCodeSummarizer.executableURL(configuredPath: config.claudeCodeExecutablePath) != nil
-        } else if appState.selectedMeetingSummaryBackend == .lmStudio {
-            return MeetingSummaryClient.lmStudioHasRequiredSettings(config: config)
-        } else if appState.selectedMeetingSummaryBackend == .customLLM {
-            return MeetingSummaryClient.customLLMHasRequiredSettings(config: config)
-        } else {
-            return !OpenRouterCredentialResolver.resolvedAPIKey(
-                legacyAPIKey: config.openRouterAPIKey
-            ).isEmpty
-        }
+        controller.canUseSummaryProvider(appState.selectedMeetingSummaryBackend)
     }
 
     private var primarySummaryActionLabel: String {
