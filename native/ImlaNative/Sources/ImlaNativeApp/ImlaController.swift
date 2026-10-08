@@ -62,6 +62,8 @@ private struct PendingStandardDictationStop {
     let recordingSavePolicy: DictationRecordingSavePolicy
     let latencyTrace: DictationLatencyTraceSnapshot?
     let sessionTrace: SessionRunTrace
+    /// The hosted provider's session for this capture, finished by its job.
+    var hostedSession: (any HostedDictationSession)? = nil
 }
 
 private enum CompletedStandardDictationStop {
@@ -88,6 +90,9 @@ private struct StandardDictationJob: Identifiable {
     let recordingSavePolicy: DictationRecordingSavePolicy
     let latencyTrace: DictationLatencyTraceSnapshot?
     let sessionTrace: SessionRunTrace
+    /// Each queued capture finishes its own hosted session, so a dictation started
+    /// while an earlier one is still transcribing can never cancel or reuse it.
+    var hostedSession: (any HostedDictationSession)? = nil
 }
 
 private struct DictationLatencyTraceToken: Sendable {
@@ -1540,6 +1545,7 @@ public final class ImlaController: NSObject {
         nemotron35StreamingRecordingSavePolicy = .never
         previousStreamText = ""
         dictationStartedAt = nil
+        pendingStandardDictationStops.values.forEach { $0.hostedSession?.cancel() }
         pendingStandardDictationStops.removeAll()
         frozenDictationTranscriptionSelections.removeAll()
         dictationMiniGeneration = nil
@@ -5908,6 +5914,7 @@ public final class ImlaController: NSObject {
         let pendingTestStops = pendingStandardDictationStops.values.filter(\.isTestMode)
         for pendingStop in pendingTestStops {
             pendingStandardDictationStops.removeValue(forKey: pendingStop.id)
+            pendingStop.hostedSession?.cancel()
             dictationSessionTraces.removeValue(forKey: pendingStop.id)
             if let trace = pendingStop.latencyTrace {
                 markDictationLatency("pipeline_cancelled", trace: trace)
@@ -13464,6 +13471,7 @@ public final class ImlaController: NSObject {
             }
             if let sessionID,
                let pendingStop = pendingStandardDictationStops.removeValue(forKey: sessionID) {
+                pendingStop.hostedSession?.cancel()
                 if !pendingStop.isTestMode {
                     recordDiagnosticIncident(
                         kind: .dictationAudioFailed,
@@ -13725,6 +13733,9 @@ public final class ImlaController: NSObject {
     /// when supported, forwards authoritative route-aware recorder buffers live.
     /// The recorder still writes its WAV so a network failure can fall back locally.
     private func beginHostedDictationIfNeeded() -> Bool {
+        // The previous capture's session may still be queued for transcription; its
+        // weakly held feed must not receive this capture's audio.
+        dictationAudioSessionManager.onAudioBuffer = nil
         guard !isDictationTestMode, selectedDictationProvider.isHosted else { return true }
         cancelHostedDictation()
 
@@ -14353,10 +14364,13 @@ public final class ImlaController: NSObject {
             settleStandardDictationSessionWithoutJob(intent: .postDictation(.stopWithoutWav))
             return
         }
-        pendingStandardDictationStops[sessionID] = capturePendingStandardDictationStop(
+        var pendingStop = capturePendingStandardDictationStop(
             id: sessionID,
             startedAt: startedAt
         )
+        pendingStop.hostedSession = hostedDictationSession
+        hostedDictationSession = nil
+        pendingStandardDictationStops[sessionID] = pendingStop
         clearCapturedDictationSessionContext()
         resetDictationOutputMode()
         dictationAudioSessionManager.stop()
@@ -15085,7 +15099,13 @@ public final class ImlaController: NSObject {
         if let trace = pendingStop.latencyTrace {
             markDictationLatency("stop_finished", trace: trace)
         }
+        // The recorder has delivered its last buffer, so the live feed can detach,
+        // unless a newer hosted capture already took it over.
+        if hostedDictationSession == nil {
+            dictationAudioSessionManager.onAudioBuffer = nil
+        }
         guard let wavURL = stoppedWavURL else {
+            pendingStop.hostedSession?.cancel()
             fputs("[imla-native] stop without wav\n", stderr)
             if let trace = pendingStop.latencyTrace {
                 markDictationLatency("stop_without_wav", trace: trace)
@@ -15119,6 +15139,7 @@ public final class ImlaController: NSObject {
         }
         let duration = max(Date().timeIntervalSince(pendingStop.startedAt), 0)
         if duration < 0.3 {
+            pendingStop.hostedSession?.cancel()
             fputs("[imla-native] discarded short recording\n", stderr)
             if pendingStop.recordingSavePolicy == .never {
                 try? FileManager.default.removeItem(at: wavURL)
@@ -15180,7 +15201,8 @@ public final class ImlaController: NSObject {
             detectedSpeech: pendingStop.detectedSpeech,
             recordingSavePolicy: pendingStop.recordingSavePolicy,
             latencyTrace: pendingStop.latencyTrace,
-            sessionTrace: pendingStop.sessionTrace
+            sessionTrace: pendingStop.sessionTrace,
+            hostedSession: pendingStop.hostedSession
         )
         completeStandardDictationStop(.job(job), sequence: pendingStop.sequence)
     }
@@ -15246,6 +15268,46 @@ public final class ImlaController: NSObject {
         }
     }
 
+    private enum HostedDictationOutcome {
+        case transcribed(HostedDictationResult)
+        case fallBackLocally(BackendOption)
+    }
+
+    /// Finishes a capture's hosted session. A provider failure falls back to a local
+    /// model when one can serve dictation; cancellation and a failure with no usable
+    /// local model propagate, so a dropped dictation never silently becomes another.
+    private func finishHostedDictation(
+        _ session: any HostedDictationSession,
+        for job: StandardDictationJob
+    ) async throws -> HostedDictationOutcome {
+        finalizingHostedDictationSession = (job.id, session)
+        defer {
+            if finalizingHostedDictationSession?.id == job.id {
+                finalizingHostedDictationSession = nil
+            }
+        }
+        do {
+            let result = try await withTaskCancellationHandler {
+                try await session.finish(recordedWAVURL: job.wavURL)
+            } onCancel: {
+                session.cancel()
+            }
+            return .transcribed(result)
+        } catch {
+            guard HostedDictationFallbackPolicy.shouldFallback(
+                after: error,
+                taskIsCancelled: Task.isCancelled,
+                isCurrentSession: finalizingHostedDictationSession?.id == job.id
+            ),
+                  let fallback = BackendOption.resolveHostedDictationFallback(
+                    selected: job.backend,
+                    available: BackendOption.downloaded
+                  ) else { throw error }
+            fputs("[hosted-dictation] transcription failed; falling back locally: \(error)\n", stderr)
+            return .fallBackLocally(fallback)
+        }
+    }
+
     private func processStandardDictationJob(_ job: StandardDictationJob) async {
         defer {
             try? FileManager.default.removeItem(at: job.wavURL)
@@ -15269,13 +15331,57 @@ public final class ImlaController: NSObject {
                 await Self.recordDictationTraceEvent(event, trace: job.sessionTrace)
             }
             await job.sessionTrace.recordStageStarted("speech_recognition")
+            var transcriptionModel = DictationModelIdentity(
+                backend: job.backend.backend,
+                model: job.backend.model,
+                name: job.backend.label
+            )
+            var localBackend = job.backend
+            var hostedResult: HostedDictationResult?
+            if let hostedSession = job.hostedSession {
+                switch try await finishHostedDictation(hostedSession, for: job) {
+                case .transcribed(let hosted):
+                    hostedResult = hosted
+                    transcriptionModel = DictationModelIdentity(
+                        backend: hosted.backend,
+                        model: hosted.model ?? "",
+                        name: hosted.model ?? "Not recorded",
+                        endpoint: hosted.endpoint
+                    )
+                case .fallBackLocally(let fallback):
+                    // A hosted provider was selected, so the local model may not be loaded.
+                    try await transcriptionCoordinator.preloadRequired(
+                        backend: fallback,
+                        enablePostProcessor: false,
+                        includeMeetingHelpers: false,
+                        appleSpeechLanguage: job.cleanupRequest.runtime.config.resolvedAppleSpeechLanguage
+                    )
+                    localBackend = fallback
+                    transcriptionModel = DictationModelIdentity(
+                        backend: fallback.backend,
+                        model: fallback.model,
+                        name: fallback.label
+                    )
+                }
+            }
             let frozenLanguageDecision = Self.dictationLanguageDecision(
                 profile: job.languageProfile,
-                backend: job.backend
+                backend: localBackend
             )
-            let result = try await transcriptionCoordinator.transcribeDictationWithCleanupOutcome(
+            let result: DictationTranscriptionResult
+            if let hostedResult {
+                // Hosted transcription models already produce finished prose, so a
+                // hosted success skips local cleanup, as the provider choice intends.
+                result = DictationTranscriptionResult(
+                    transcription: SpeechTranscriptionResult(text: hostedResult.text, segments: []),
+                    cleanupOutcome: .skippedDisabled,
+                    cleanupStyle: nil
+                )
+                await job.sessionTrace.storeArtifact(hostedResult.text, kind: .rawASR)
+            } else {
+                result = try await transcriptionCoordinator.transcribeDictationWithCleanupOutcome(
                 at: job.wavURL,
-                backend: job.backend,
+                backend: localBackend,
                 languageDecision: frozenLanguageDecision,
                 cohereLanguage: job.languageProfile.resolvedCohereLanguage,
                 bodhanLanguage: job.languageProfile.resolvedBodhanLanguage,
@@ -15288,7 +15394,8 @@ public final class ImlaController: NSObject {
                 appContext: job.promptContext,
                 stageReporter: stageReporter,
                 traceReporter: traceReporter
-            )
+                )
+            }
             try Task.checkCancellation()
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -15369,11 +15476,7 @@ public final class ImlaController: NSObject {
                 startedAt: job.startedAt,
                 endedAt: Date(),
                 recording: recordingReference,
-                transcriptionModel: DictationModelIdentity(
-                    backend: job.backend.backend,
-                    model: job.backend.model,
-                    name: job.backend.label
-                )
+                transcriptionModel: transcriptionModel
             )
             if dictationID == nil, let store = recordingArtifactStore,
                job.recordingSavePolicy != .never {
