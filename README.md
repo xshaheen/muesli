@@ -35,17 +35,17 @@ Imla is a **lightweight native macOS app** that combines **WisprFlow-style dicta
 
 <p align="center"><sub>Illustrative entries and usage statistics. Personal content has been replaced.</sub></p>
 
-### New in 0.8.4
+### New in 0.8.5
 
 | Feature | What you can do |
 |---|---|
-| **Quill** | Ask a question, rewrite selected text, or create text at the cursor with your voice. |
-| **Bodhan for Indic languages** | Dictate across Indic languages and English, including code-switching. |
-| **Live meeting transcripts** | Use Apple Speech on macOS 26+. Live transcription is off by default. |
-| **Re-summarize meetings** | Choose a different summary model for a saved meeting. |
-| **BYOK dictation** | Use OpenAI or OpenRouter when you want hosted transcription. Local by default. |
+| **Offline Arabic** | Dictate and transcribe meetings in Arabic with Cohere, fully on-device. |
+| **Modes** | Let the app or website you dictate into pick the cleanup instructions. |
+| **Separate meeting tracks** | Re-transcribe a meeting with you kept apart from the other speakers. |
+| **Meeting chat and panel** | Ask about a meeting, and follow transcript, chat, and notes in one floating panel hidden from screen sharing. |
+| **Claude summaries** | Use the Anthropic API or Claude Code for meeting notes. |
 
-This release also adds S1-mini English cleanup, Apple Shortcuts and Siri actions, clearer macOS calendar management, and iCloud reconnection recovery. [Read the full 0.8.4 release notes](docs/release-notes/0.8.4.md).
+0.8.5 is the first release under the Imla name. Coming from Muesli? [Move your history across](docs/release-notes/0.8.5.md#upgrading-from-muesli) before first launch. [Read the full 0.8.5 release notes](docs/release-notes/0.8.5.md), or the [0.8.4 notes](docs/release-notes/0.8.4.md).
 
 ### Dictation
 Hold your hotkey (or double-tap for hands-free mode) → speak → release → transcribed text is pasted at your cursor. **~0.13 second latency** via Parakeet TDT on the Apple Neural Engine.
