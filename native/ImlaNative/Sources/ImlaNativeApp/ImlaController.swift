@@ -796,6 +796,11 @@ public final class ImlaController: NSObject {
     private var importTask: Task<Void, Never>?
     private var importSessionID: UUID?
     private var meetingRetranscriptionTasks: [Int64: Task<Void, Never>] = [:]
+    /// Stands in for the model-dependent half of retranscription: choosing a
+    /// downloaded model, loading it, and decoding the retained audio. Tests set it to
+    /// reach the status-restore path without a speech model on disk; nil runs the
+    /// real models.
+    var meetingRetranscriptionModelOverride: MeetingRetranscriptionModelOverride?
     private var isShuttingDown = false
     private var modelFileMutationTokens: Set<UUID> = []
     private var meetingFinalizationTasks: [UUID: Task<Void, Never>] = [:]
@@ -6914,6 +6919,7 @@ public final class ImlaController: NSObject {
             }
             var didSetProcessing = false
             var sessionTrace: SessionRunTrace?
+            let modelOverride = self.meetingRetranscriptionModelOverride
             let activity = ProcessInfo.processInfo.beginActivity(
                 options: [.userInitiated, .idleSystemSleepDisabled],
                 reason: "Re-transcribing retained meeting audio"
@@ -6932,7 +6938,9 @@ public final class ImlaController: NSObject {
                 }
                 let recordingURL = try recordingArtifactStore.playableURL(id: artifactID)
                 let backend: BackendOption
-                if let requestedBackend {
+                if let modelOverride {
+                    backend = modelOverride.backend
+                } else if let requestedBackend {
                     guard requestedBackend.supportsMeetingTranscription, requestedBackend.isDownloaded else {
                         throw MeetingRetranscriptionError.noDownloadedTranscriptionModel
                     }
@@ -6964,62 +6972,67 @@ public final class ImlaController: NSObject {
                 self.syncAppState()
                 self.historyWindowController?.reload()
 
-                try await self.transcriptionCoordinator.preloadRequired(
-                    backend: backend,
-                    enablePostProcessor: false,
-                    includeMeetingHelpers: false,
-                    meetingHelperTrigger: .retranscription,
-                    appleSpeechLanguage: retranscriptionConfig.resolvedAppleSpeechLanguage
-                )
-                // Silence gating needs VAD now; the diarizer loads only once ASR succeeds.
-                await self.transcriptionCoordinator.preloadMeetingVAD()
-                try Task.checkCancellation()
-                self.appState.meetingRetranscriptions[meeting.id]?.phase = .transcribing
-
-                let coordinator = self.transcriptionCoordinator
-                let languageDecision = MeetingSession.meetingLanguageDecision(
-                    selection: retranscriptionSelection,
-                    backend: backend,
-                    workload: .retranscription
-                )
-                let profile = retranscriptionConfig.meetingLanguageProfile
-                let appleSpeechLanguage = retranscriptionConfig.resolvedAppleSpeechLanguage
-                let customWords = retranscriptionConfig.customWords
-                let transcribe: MeetingRecordingTracks.Transcribe = { url, progress in
-                    try await coordinator.transcribeRecordedAudio(
-                        at: url,
-                        backend: backend,
-                        languageDecision: languageDecision,
-                        profile: profile,
-                        appleSpeechLanguage: appleSpeechLanguage,
-                        customWords: customWords,
-                        progress: progress
-                    )
-                }
-                let meetingID = meeting.id
-                let progress: MeetingRecordingTracks.Progress = { [weak self] stage, fraction, preview in
-                    await MainActor.run {
-                        self?.applyRetranscriptionProgress(meetingID: meetingID, stage: stage, fraction: fraction, preview: preview)
-                    }
-                }
-                let meetingStart = ISO8601DateFormatter().date(from: meeting.startTime) ?? retranscriptionStartedAt
                 let retranscription: MeetingRecordingTracks.Retranscription
-                if let tracksURL = recordingArtifactStore.tracksURL(id: artifactID) {
-                    retranscription = try await MeetingRecordingTracks.retranscribe(
-                        tracks: tracksURL,
-                        meetingStart: meetingStart,
-                        coordinator: coordinator,
-                        transcribe: transcribe,
-                        progress: progress
-                    )
+                if let modelOverride {
+                    self.appState.meetingRetranscriptions[meeting.id]?.phase = .transcribing
+                    retranscription = try await modelOverride.transcribe()
                 } else {
-                    retranscription = try await MeetingRecordingTracks.retranscribe(
-                        mix: recordingURL,
-                        meetingStart: meetingStart,
-                        coordinator: coordinator,
-                        transcribe: transcribe,
-                        progress: progress
+                    try await self.transcriptionCoordinator.preloadRequired(
+                        backend: backend,
+                        enablePostProcessor: false,
+                        includeMeetingHelpers: false,
+                        meetingHelperTrigger: .retranscription,
+                        appleSpeechLanguage: retranscriptionConfig.resolvedAppleSpeechLanguage
                     )
+                    // Silence gating needs VAD now; the diarizer loads only once ASR succeeds.
+                    await self.transcriptionCoordinator.preloadMeetingVAD()
+                    try Task.checkCancellation()
+                    self.appState.meetingRetranscriptions[meeting.id]?.phase = .transcribing
+
+                    let coordinator = self.transcriptionCoordinator
+                    let languageDecision = MeetingSession.meetingLanguageDecision(
+                        selection: retranscriptionSelection,
+                        backend: backend,
+                        workload: .retranscription
+                    )
+                    let profile = retranscriptionConfig.meetingLanguageProfile
+                    let appleSpeechLanguage = retranscriptionConfig.resolvedAppleSpeechLanguage
+                    let customWords = retranscriptionConfig.customWords
+                    let transcribe: MeetingRecordingTracks.Transcribe = { url, progress in
+                        try await coordinator.transcribeRecordedAudio(
+                            at: url,
+                            backend: backend,
+                            languageDecision: languageDecision,
+                            profile: profile,
+                            appleSpeechLanguage: appleSpeechLanguage,
+                            customWords: customWords,
+                            progress: progress
+                        )
+                    }
+                    let meetingID = meeting.id
+                    let progress: MeetingRecordingTracks.Progress = { [weak self] stage, fraction, preview in
+                        await MainActor.run {
+                            self?.applyRetranscriptionProgress(meetingID: meetingID, stage: stage, fraction: fraction, preview: preview)
+                        }
+                    }
+                    let meetingStart = ISO8601DateFormatter().date(from: meeting.startTime) ?? retranscriptionStartedAt
+                    if let tracksURL = recordingArtifactStore.tracksURL(id: artifactID) {
+                        retranscription = try await MeetingRecordingTracks.retranscribe(
+                            tracks: tracksURL,
+                            meetingStart: meetingStart,
+                            coordinator: coordinator,
+                            transcribe: transcribe,
+                            progress: progress
+                        )
+                    } else {
+                        retranscription = try await MeetingRecordingTracks.retranscribe(
+                            mix: recordingURL,
+                            meetingStart: meetingStart,
+                            coordinator: coordinator,
+                            transcribe: transcribe,
+                            progress: progress
+                        )
+                    }
                 }
                 try Task.checkCancellation()
                 self.appState.meetingRetranscriptions[meeting.id]?.warning = retranscription.warning
@@ -7111,8 +7124,7 @@ public final class ImlaController: NSObject {
                 }
                 if let restoredStatus = Self.retranscriptionFailureStatus(
                     originalStatus: meeting.status,
-                    didSetProcessing: didSetProcessing,
-                    error: error
+                    didSetProcessing: didSetProcessing
                 ) {
                     self.updateMeetingStatusAndScheduleSync(id: meeting.id, status: restoredStatus)
                 }
@@ -7158,11 +7170,15 @@ public final class ImlaController: NSObject {
     /// backend error: only a successful save replaces the meeting's contents.
     static func retranscriptionFailureStatus(
         originalStatus: MeetingStatus,
-        didSetProcessing: Bool,
-        error: Error
+        didSetProcessing: Bool
     ) -> MeetingStatus? {
         guard didSetProcessing else { return nil }
         return originalStatus
+    }
+
+    struct MeetingRetranscriptionModelOverride {
+        let backend: BackendOption
+        let transcribe: @MainActor () async throws -> MeetingRecordingTracks.Retranscription
     }
 
     nonisolated static func completeMeetingRetranscriptionTrace(

@@ -895,18 +895,137 @@ struct MeetingsNavigationTests {
         #expect(updated.formattedNotes == "## Existing notes")
     }
 
-    @Test("retranscribe empty transcript restores original meeting status")
-    func retranscribeEmptyTranscriptRestoresOriginalMeetingStatus() {
+    @Test("retranscribe restores the original status only once processing was set")
+    func retranscribeFailureStatusRestoresOnlyAfterProcessing() {
+        // Before the job marks the meeting processing, the stored status was never
+        // touched, so there is nothing to restore.
         #expect(ImlaController.retranscriptionFailureStatus(
             originalStatus: .completed,
-            didSetProcessing: true,
-            error: MeetingRetranscriptionError.emptyTranscript
+            didSetProcessing: false
+        ) == nil)
+        #expect(ImlaController.retranscriptionFailureStatus(
+            originalStatus: .completed,
+            didSetProcessing: true
         ) == .completed)
         #expect(ImlaController.retranscriptionFailureStatus(
             originalStatus: .failed,
-            didSetProcessing: true,
-            error: MeetingRetranscriptionError.emptyTranscript
+            didSetProcessing: true
         ) == .failed)
+    }
+
+    @Test("cancelling retranscription mid-transcription restores the completed meeting untouched")
+    func retranscribeCancelledWhileProcessingRestoresMeeting() async throws {
+        let fixture = try makeRetainedRecordingFixture()
+        let (entered, enteredContinuation) = AsyncStream<Void>.makeStream()
+        fixture.controller.meetingRetranscriptionModelOverride = .init(backend: .parakeetUnified) {
+            enteredContinuation.yield()
+            // Suspends until the job is cancelled; Task.sleep throws CancellationError.
+            try await Task.sleep(for: .seconds(600))
+            throw MeetingRetranscriptionError.emptyTranscript
+        }
+        let (completions, completionContinuation) = AsyncStream<Result<Void, Error>>.makeStream()
+        fixture.controller.retranscribe(meeting: fixture.meeting) { completionContinuation.yield($0) }
+
+        var enteredIterator = entered.makeAsyncIterator()
+        _ = await enteredIterator.next()
+        #expect(try fixture.store.meeting(id: fixture.meetingID)?.status == .processing)
+        fixture.controller.cancelMeetingRetranscription(id: fixture.meetingID)
+
+        var completionIterator = completions.makeAsyncIterator()
+        let completion = await completionIterator.next()
+        let result = try #require(completion)
+        guard case .failure(let error) = result else {
+            Issue.record("Expected cancellation")
+            return
+        }
+        #expect(error is CancellationError)
+        #expect(fixture.controller.appState.meetingRetranscriptions[fixture.meetingID]?.phase == .cancelled)
+        let restored = try #require(try fixture.store.meeting(id: fixture.meetingID))
+        #expect(restored.status == .completed)
+        #expect(restored.rawTranscript == fixture.meeting.rawTranscript)
+        #expect(restored.formattedNotes == fixture.meeting.formattedNotes)
+    }
+
+    @Test("a transcription failure after processing starts restores the completed meeting untouched")
+    func retranscribeFailureWhileProcessingRestoresMeeting() async throws {
+        let fixture = try makeRetainedRecordingFixture()
+        let store = fixture.store
+        let meetingID = fixture.meetingID
+        var statusDuringTranscription: MeetingStatus?
+        fixture.controller.meetingRetranscriptionModelOverride = .init(backend: .parakeetUnified) {
+            statusDuringTranscription = try store.meeting(id: meetingID)?.status
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let result = await withCheckedContinuation { continuation in
+            fixture.controller.retranscribe(meeting: fixture.meeting) { continuation.resume(returning: $0) }
+        }
+
+        guard case .failure(let error) = result else {
+            Issue.record("Expected the transcription failure to propagate")
+            return
+        }
+        #expect((error as? CocoaError)?.code == .fileReadCorruptFile)
+        #expect(statusDuringTranscription == .processing)
+        #expect(fixture.controller.appState.meetingRetranscriptions[meetingID]?.phase == .failed)
+        let restored = try #require(try store.meeting(id: meetingID))
+        #expect(restored.status == .completed)
+        #expect(restored.rawTranscript == fixture.meeting.rawTranscript)
+        #expect(restored.formattedNotes == fixture.meeting.formattedNotes)
+    }
+
+    /// A completed meeting whose retained recording is registered in the artifact
+    /// store, so retranscription gets past the recording lookup to the model work.
+    private func makeRetainedRecordingFixture() throws -> (
+        store: DictationStore,
+        controller: ImlaController,
+        meetingID: Int64,
+        meeting: MeetingRecord
+    ) {
+        let supportDirectory = makeSupportDirectory()
+        try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
+        let store = DictationStore(databaseURL: supportDirectory.appendingPathComponent("history.db"))
+        try store.migrateIfNeeded()
+        let artifactStore = try RecordingArtifactStore(
+            databaseURL: store.resolvedDatabaseURL,
+            recordingsRootURL: supportDirectory.appendingPathComponent("recordings", isDirectory: true),
+            legacyMeetingRootURL: supportDirectory.appendingPathComponent("meeting-recordings", isDirectory: true),
+            migrateDatabase: false
+        )
+        let now = Date()
+        let meetingID = try store.insertMeeting(
+            title: "Retained Meeting",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: "Original transcript",
+            formattedNotes: "## Original notes",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+        // The override replaces decoding, so the bytes only need to be a storable file.
+        let recordingURL = supportDirectory.appendingPathComponent("retained.wav")
+        try Data("recording".utf8).write(to: recordingURL)
+        let artifact = try artifactStore.adoptCapture(
+            at: recordingURL,
+            sessionID: UUID(),
+            captureKind: .meeting,
+            savePolicy: .always
+        )
+        try artifactStore.attachMeeting(meetingID: meetingID, artifactID: artifact.id, availability: .available)
+        let controller = ImlaController(
+            runtime: RuntimePaths(
+                repoRoot: supportDirectory,
+                menuIcon: nil,
+                appIcon: nil,
+                bundlePath: nil
+            ),
+            dictationStore: store,
+            recordingArtifactStore: artifactStore,
+            configStore: ConfigStore(supportDirectory: supportDirectory)
+        )
+        let meeting = try #require(try store.meeting(id: meetingID))
+        #expect(meeting.status == .completed)
+        return (store, controller, meetingID, meeting)
     }
 
     @Test("retry registration survives navigation, rejects duplicate jobs, and cancellation preserves data")
@@ -1014,33 +1133,6 @@ struct MeetingsNavigationTests {
         #expect(!controller.canRetranscribeMeeting(meeting))
         controller.appState.activeAudioImportCount = 0
         #expect(controller.canModifyModelFiles)
-    }
-
-    @Test("retranscribe status is unchanged before processing starts")
-    func retranscribeStatusIsUnchangedBeforeProcessingStarts() {
-        #expect(ImlaController.retranscriptionFailureStatus(
-            originalStatus: .completed,
-            didSetProcessing: false,
-            error: MeetingRetranscriptionError.recordingUnavailable
-        ) == nil)
-    }
-
-    @Test("retranscribe save failures restore original meeting status")
-    func retranscribeSaveFailuresRestoreOriginalMeetingStatus() {
-        #expect(ImlaController.retranscriptionFailureStatus(
-            originalStatus: .completed,
-            didSetProcessing: true,
-            error: MeetingRetranscriptionError.failedToSave(underlying: CocoaError(.fileWriteUnknown))
-        ) == .completed)
-    }
-
-    @Test("retranscribe processing failures preserve original meeting status")
-    func retranscribeProcessingFailuresPreserveOriginalMeetingStatus() {
-        #expect(ImlaController.retranscriptionFailureStatus(
-            originalStatus: .completed,
-            didSetProcessing: true,
-            error: CocoaError(.fileReadUnknown)
-        ) == .completed)
     }
 
     @Test("cached manual notes are persisted before debounce")
