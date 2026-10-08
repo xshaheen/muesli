@@ -62,6 +62,7 @@ enum MeetingRecordingTracks {
                     forWriting: systemURL, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false
                 )
                 while source.framePosition < source.length {
+                    try Task.checkCancellation()
                     try source.read(into: input, frameCount: framesPerRead)
                     let frames = input.frameLength
                     guard frames > 0, let channels = input.floatChannelData,
@@ -115,9 +116,16 @@ enum MeetingRecordingTracks {
             .appendingPathComponent("imla-meeting-retranscription", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: workDirectory) }
-        let sources = try await Task.detached(priority: .userInitiated) {
+        // Detached work does not inherit cancellation, and app quit waits on retranscription
+        // tasks, so forward cancellation to the split or quit stalls until the decode finishes.
+        let splitTask = Task.detached(priority: .userInitiated) {
             try Self.split(tracksURL, into: workDirectory)
-        }.value
+        }
+        let sources = try await withTaskCancellationHandler {
+            try await splitTask.value
+        } onCancel: {
+            splitTask.cancel()
+        }
         let mic = try await transcribe(sources.mic) { await progress(.transcribingMic, $0, $1) }
         let system = try await transcribe(sources.system) { await progress(.transcribingSystem, $0, $1) }
         try Task.checkCancellation()
