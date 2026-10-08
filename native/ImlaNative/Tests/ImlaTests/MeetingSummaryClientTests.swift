@@ -195,6 +195,8 @@ struct MeetingSummaryClientTests {
         #expect(AnthropicModelPolicy.briefTaskEffort(for: "claude-opus-5-5") == "low")
         #expect(AnthropicModelPolicy.briefTaskEffort(for: "claude-fable-5-1") == "low")
         #expect(AnthropicModelPolicy.briefTaskEffort(for: "claude-sonnet-5-5") == "low")
+        #expect(AnthropicModelPolicy.briefTaskEffort(for: "claude-haiku-5-5") == "low")
+        // Legacy models without the effort parameter get no effort hint.
         #expect(AnthropicModelPolicy.briefTaskEffort(for: "claude-haiku-4-5-20251001") == nil)
     }
 

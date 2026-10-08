@@ -33,7 +33,7 @@ enum AnthropicModelPolicy {
 
     static func briefTaskEffort(for model: String) -> String? {
         switch model {
-        case "claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5":
+        case "claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5":
             return "low"
         default:
             return nil

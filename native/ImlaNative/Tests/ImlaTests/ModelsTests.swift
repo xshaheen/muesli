@@ -1215,7 +1215,9 @@ struct SummaryModelPresetTests {
         #expect(SummaryModelPreset.anthropicModels.first?.id == "claude-sonnet-5-5")
         #expect(SummaryModelPreset.anthropicModels.contains { $0.id == "claude-opus-5-5" })
         #expect(SummaryModelPreset.anthropicModels.contains { $0.id == "claude-fable-5-1" })
-        #expect(SummaryModelPreset.anthropicModels.contains { $0.id == "claude-haiku-4-5-20251001" })
+        #expect(SummaryModelPreset.anthropicModels.contains { $0.id == "claude-haiku-5-5" })
+        // Haiku 4.5 is a legacy model now; the picker offers the current lineup only.
+        #expect(!SummaryModelPreset.anthropicModels.contains { $0.id.hasPrefix("claude-haiku-4") })
         let backend = TranscriptCleanupBackendOption.hosted(.anthropic)
         #expect(TranscriptCleanupClient.defaultModel(for: backend) == "claude-sonnet-5-5")
     }
