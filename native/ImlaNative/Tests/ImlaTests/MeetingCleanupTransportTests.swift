@@ -68,6 +68,40 @@ struct MeetingCleanupTransportTests {
         var router = config(summaryBackend: MeetingSummaryBackendOption.openRouter.backend)
         router.openRouterModel = "some/model"
         #expect(MeetingCleanupTransport.model(for: router) == "some/model")
+
+        var anthropic = config(summaryBackend: MeetingSummaryBackendOption.anthropic.backend)
+        anthropic.anthropicModel = "claude-custom"
+        #expect(MeetingCleanupTransport.model(for: anthropic) == "claude-custom")
+        anthropic.anthropicModel = ""
+        let anthropicDefault = MeetingCleanupTransport.model(for: anthropic)
+        #expect(!anthropicDefault.isEmpty)
+        #expect(anthropicDefault != MeetingCleanupTransport.model(for: config(summaryBackend: MeetingSummaryBackendOption.openAI.backend)))
+    }
+
+    @Test("Anthropic readiness follows the Anthropic key, not the OpenAI key")
+    func anthropicReadinessFollowsAnthropicKey() {
+        var withKey = config(summaryBackend: MeetingSummaryBackendOption.anthropic.backend)
+        withKey.anthropicAPIKey = "sk-ant-test"
+        #expect(MeetingCleanupTransport.isConfigured(config: withKey, isChatGPTAuthenticated: false))
+
+        // The environment can supply a key on its own, so only assert the negative without one.
+        if ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] == nil {
+            var openAIOnly = config(summaryBackend: MeetingSummaryBackendOption.anthropic.backend)
+            openAIOnly.openAIAPIKey = "sk-openai-test"
+            #expect(!MeetingCleanupTransport.isConfigured(config: openAIOnly, isChatGPTAuthenticated: false))
+        }
+    }
+
+    @Test("a Custom LLM with only an API key command is configured")
+    func customLLMKeyCommandCountsAsCredential() {
+        var config = config(summaryBackend: MeetingSummaryBackendOption.customLLM.backend)
+        // The Anthropic wire format is the one that requires a credential, so it exercises the key check.
+        config.customLLMFormat = CustomLLMFormat.anthropic.rawValue
+        config.customLLMURL = "https://llm.example.com"
+        config.customLLMModel = "model-x"
+        config.customLLMAPIKey = ""
+        config.customLLMAPIKeyCommand = "echo token"
+        #expect(MeetingCleanupTransport.isConfigured(config: config, isChatGPTAuthenticated: false))
     }
 
     @Test("the post-processor model does not leak into the meeting request")

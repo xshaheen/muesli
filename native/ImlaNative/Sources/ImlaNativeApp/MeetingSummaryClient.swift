@@ -283,6 +283,8 @@ enum MeetingSummaryClient {
             return config.lmStudioModel
         case MeetingSummaryBackendOption.customLLM.backend:
             return config.customLLMModel
+        case MeetingSummaryBackendOption.anthropic.backend:
+            return config.anthropicModel.isEmpty ? defaultAnthropicModel : config.anthropicModel
         default:
             return config.openAIModel.isEmpty ? defaultOpenAIModel : config.openAIModel
         }
@@ -305,10 +307,16 @@ enum MeetingSummaryClient {
                 && !config.lmStudioModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case MeetingSummaryBackendOption.customLLM.backend:
             let format = CustomLLMFormat(rawValue: config.customLLMFormat) ?? .openAI
-            let key = config.customLLMAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            // A key command is an alternative to the static key, matching customLLMHasRequiredSettings.
+            let hasCredential = !config.customLLMAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !config.customLLMAPIKeyCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             return resolveCustomLLMURL(config: config, format: format) != nil
                 && !config.customLLMModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                && (!customLLMRequiresAPIKey(config: config) || !key.isEmpty)
+                && (!customLLMRequiresAPIKey(config: config) || hasCredential)
+        case MeetingSummaryBackendOption.anthropic.backend:
+            return !resolvedAnthropicAPIKey(config: config).isEmpty
+        case MeetingSummaryBackendOption.claudeCode.backend:
+            return ClaudeCodeSummarizer.executableURL(configuredPath: config.claudeCodeExecutablePath) != nil
         default:
             return !(ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? config.openAIAPIKey).isEmpty
         }
