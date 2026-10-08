@@ -96,12 +96,19 @@ enum TranscriptCleanupClient {
 
     private static let redirectRejectingDelegate = RedirectRejectingDelegate()
 
-    /// Every cleanup request goes through this instead of `URLSession.shared`.
-    private static let session = URLSession(
+    private static let redirectRejectingSession = URLSession(
         configuration: .default,
         delegate: redirectRejectingDelegate,
         delegateQueue: nil
     )
+
+    /// Tests route requests through a stub protocol here; production never sets it.
+    nonisolated(unsafe) static var sessionOverrideForTesting: URLSession?
+
+    /// Every cleanup request goes through this instead of `URLSession.shared`.
+    private static var session: URLSession {
+        sessionOverrideForTesting ?? redirectRejectingSession
+    }
 
     static func defaultModel(for backend: TranscriptCleanupBackendOption) -> String {
         if backend == .gemma4LiteRT {
@@ -180,9 +187,13 @@ enum TranscriptCleanupClient {
             let model = modelOverride ?? configuredModel(for: backend, config: config)
             let format = CustomLLMFormat(rawValue: config.customLLMFormat) ?? .openAI
             let key = config.customLLMAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !model.isEmpty
+            let keyCommand = config.customLLMAPIKeyCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+            let hasAPIKey = !key.isEmpty || !keyCommand.isEmpty
+            let headersAreValid = (try? CustomLLMRequestHeaders.validated(config.customLLMHeaders)) != nil
+            return headersAreValid
+                && !model.isEmpty
                 && resolveConfiguredCustomLLMURL(config: config, format: format) != nil
-                && (!MeetingSummaryClient.customLLMRequiresAPIKey(config: config) || !key.isEmpty)
+                && (!MeetingSummaryClient.customLLMRequiresAPIKey(config: config) || hasAPIKey)
         case nil:
             return true
         default:
@@ -279,25 +290,41 @@ enum TranscriptCleanupClient {
             guard let requestURL = resolveConfiguredCustomLLMURL(config: config, format: format) else {
                 throw TranscriptCleanupError.missingConfiguration("Invalid custom URL: \(config.customLLMURL)")
             }
+            let extraHeaders: [String: String]
+            do {
+                extraHeaders = try CustomLLMRequestHeaders.validated(config.customLLMHeaders)
+            } catch {
+                throw TranscriptCleanupError.missingConfiguration(error.localizedDescription)
+            }
+            // A key command runs here too, so a user who keeps the key only in a
+            // credential manager gets dictation cleanup as well as summaries.
+            let apiKey = try await MeetingSummaryClient.resolveCustomLLMAPIKey(config: config)
+            if MeetingSummaryClient.customLLMRequiresAPIKey(config: config) && apiKey.isEmpty {
+                throw TranscriptCleanupError.missingConfiguration(
+                    "Enter an API key or API key command for the selected Custom LLM format."
+                )
+            }
             switch format {
             case .openAI:
                 response = try await cleanWithChatCompletions(
                     backend: "Custom LLM",
                     requestURL: requestURL,
-                    apiKey: config.customLLMAPIKey,
+                    apiKey: apiKey,
                     systemPrompt: effectiveSystemPrompt,
                     userPrompt: userPrompt,
                     model: model,
-                    options: options
+                    options: options,
+                    extraHeaders: extraHeaders
                 )
             case .anthropic:
                 response = try await cleanWithAnthropic(
                     requestURL: requestURL,
-                    apiKey: config.customLLMAPIKey,
+                    apiKey: apiKey,
                     systemPrompt: effectiveSystemPrompt,
                     userPrompt: userPrompt,
                     model: model,
-                    options: options
+                    options: options,
+                    extraHeaders: extraHeaders
                 )
             }
         default:
@@ -412,25 +439,50 @@ enum TranscriptCleanupClient {
             guard let requestURL = resolveConfiguredCustomLLMURL(config: config, format: format) else {
                 throw TranscriptCleanupError.missingConfiguration("Invalid Custom LLM URL: \(config.customLLMURL)")
             }
+            let configuredModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !configuredModel.isEmpty else {
+                throw TranscriptCleanupError.missingConfiguration("No model selected. Enter a model in Settings.")
+            }
+            if MeetingSummaryClient.customLLMRequiresAPIKey(config: config),
+               config.customLLMAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               config.customLLMAPIKeyCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw TranscriptCleanupError.missingConfiguration(
+                    "Enter an API key or API key command for the selected Custom LLM format."
+                )
+            }
+            let extraHeaders: [String: String]
+            do {
+                extraHeaders = try CustomLLMRequestHeaders.validated(config.customLLMHeaders)
+            } catch {
+                throw TranscriptCleanupError.missingConfiguration(error.localizedDescription)
+            }
+            let apiKey = try await MeetingSummaryClient.resolveCustomLLMAPIKey(config: config)
+            if MeetingSummaryClient.customLLMRequiresAPIKey(config: config) && apiKey.isEmpty {
+                throw TranscriptCleanupError.missingConfiguration(
+                    "Enter an API key or API key command for the selected Custom LLM format."
+                )
+            }
             switch format {
             case .openAI:
                 return try await cleanWithChatCompletions(
                     backend: "Custom LLM",
                     requestURL: requestURL,
-                    apiKey: config.customLLMAPIKey,
+                    apiKey: apiKey,
                     systemPrompt: systemPrompt,
                     userPrompt: userPrompt,
-                    model: model,
-                    options: options
+                    model: configuredModel,
+                    options: options,
+                    extraHeaders: extraHeaders
                 ).text
             case .anthropic:
                 return try await cleanWithAnthropic(
                     requestURL: requestURL,
-                    apiKey: config.customLLMAPIKey,
+                    apiKey: apiKey,
                     systemPrompt: systemPrompt,
                     userPrompt: userPrompt,
-                    model: model,
-                    options: options
+                    model: configuredModel,
+                    options: options,
+                    extraHeaders: extraHeaders
                 ).text
             }
         default:
@@ -640,7 +692,8 @@ enum TranscriptCleanupClient {
         systemPrompt: String,
         userPrompt: String,
         model: String,
-        options: TranscriptCleanupRequestOptions
+        options: TranscriptCleanupRequestOptions,
+        extraHeaders: [String: String] = [:]
     ) async throws -> TranscriptCleanupRawResponse {
         var body: [String: Any] = [
             "model": model,
@@ -658,6 +711,9 @@ enum TranscriptCleanupClient {
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedKey.isEmpty {
             request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
+        }
+        for (name, value) in extraHeaders {
+            request.setValue(value, forHTTPHeaderField: name)
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -697,7 +753,8 @@ enum TranscriptCleanupClient {
         model: String,
         options: TranscriptCleanupRequestOptions,
         backend: String = "Custom LLM",
-        workspaceID: String = ""
+        workspaceID: String = "",
+        extraHeaders: [String: String] = [:]
     ) async throws -> TranscriptCleanupRawResponse {
         var body = anthropicRequestBody(
             systemPrompt: systemPrompt,
@@ -708,13 +765,16 @@ enum TranscriptCleanupClient {
         if backend == "Anthropic", let effort = AnthropicModelPolicy.briefTaskEffort(for: model) {
             body["output_config"] = ["effort": effort]
         }
-        let request = try AnthropicAPIRequest.make(
+        var request = try AnthropicAPIRequest.make(
             url: requestURL,
             apiKey: apiKey,
             workspaceID: workspaceID,
             body: body,
             timeout: timeoutInterval(for: options)
         )
+        for (name, value) in extraHeaders {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
 
         let (data, response) = try await session.data(for: request)
         try validateHTTPResponse(response, data: data, backend: backend)
@@ -731,6 +791,11 @@ enum TranscriptCleanupClient {
     private static func validateHTTPResponse(_ response: URLResponse, data: Data, backend: String) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard (200..<300).contains(http.statusCode) else {
+            if backend == "Custom LLM" {
+                throw TranscriptCleanupError.backendFailed(
+                    "Custom LLM cleanup failed with HTTP \(http.statusCode)."
+                )
+            }
             let message = extractErrorMessage(from: data)
                 ?? String(data: data, encoding: .utf8)
                 ?? "HTTP \(http.statusCode)"
