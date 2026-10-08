@@ -53,7 +53,7 @@ struct DictationStoreTests {
         #expect(trace.events.isEmpty)
     }
 
-    private func makeLegacyStore() throws -> DictationStore {
+    private func makeLegacyStore(extraMeetingColumns: String = "") throws -> DictationStore {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-legacy-test-\(UUID().uuidString).db")
         var db: OpaquePointer?
@@ -73,7 +73,7 @@ struct DictationStoreTests {
             system_audio_path TEXT,
             word_count INTEGER NOT NULL DEFAULT 0,
             source TEXT NOT NULL DEFAULT 'meeting',
-            created_at TEXT DEFAULT (datetime('now'))
+            created_at TEXT DEFAULT (datetime('now'))\(extraMeetingColumns)
         );
         """
         #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
@@ -1690,6 +1690,35 @@ struct DictationStoreTests {
         )
 
         #expect(try #require(try store.meeting(id: id)).visualContext == "context after migration")
+    }
+
+    /// Databases created while the column was declared `NOT NULL DEFAULT ''` keep that
+    /// constraint forever, so every write meaning "no visual context" must still succeed.
+    @Test("a NOT NULL visual_context column from an older build accepts absent context")
+    func notNullVisualContextAcceptsAbsentContext() throws {
+        let store = try makeLegacyStore(extraMeetingColumns: ",\n    visual_context TEXT NOT NULL DEFAULT ''")
+        try store.migrateIfNeeded()
+
+        let start = Date()
+        func insert(_ title: String) throws -> Int64 {
+            try store.insertMeeting(
+                title: title,
+                calendarEventID: nil,
+                startTime: start,
+                endTime: start.addingTimeInterval(60),
+                rawTranscript: "",
+                formattedNotes: "",
+                micAudioPath: nil,
+                systemAudioPath: nil
+            )
+        }
+        let deletedID = try insert("Calendar placeholder")
+        try store.deleteMeeting(id: deletedID)
+        #expect(try rawMeetingVisualContext(id: deletedID, store: store) == "")
+
+        let clearedID = try insert("Another placeholder")
+        try store.clearMeetings()
+        #expect(try rawMeetingVisualContext(id: clearedID, store: store) == "")
     }
 
     @Test("meetingRawTranscript returns the stored transcript")

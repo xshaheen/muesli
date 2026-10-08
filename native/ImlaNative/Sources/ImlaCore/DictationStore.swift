@@ -107,6 +107,17 @@ public final class DictationStore {
         FileManager.default.fileExists(atPath: databaseURL.path)
     }
 
+    /// What a write stores when a meeting has no visual context.
+    ///
+    /// Databases created between the column's introduction and the change that made it
+    /// nullable declared it `NOT NULL DEFAULT ''`, and `ADD COLUMN` never alters an
+    /// existing column, so those databases still reject NULL. Asking the schema keeps
+    /// NULL wherever the column allows it, without rebuilding a synced table to fix the
+    /// constraint.
+    static let absentVisualContextSQL = """
+    (CASE WHEN (SELECT "notnull" FROM pragma_table_info('meetings') WHERE name = 'visual_context') = 1 THEN '' END)
+    """
+
     public func migrateIfNeeded() throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
@@ -2060,7 +2071,7 @@ public final class DictationStore {
         let sql = """
         INSERT INTO meetings
         (title, calendar_event_id, start_time, end_time, duration_seconds, raw_transcript, formatted_notes, mic_audio_path, system_audio_path, saved_recording_path, word_count, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source, updated_at, sync_dirty, calendar_occurrence_key, calendar_source, calendar_id, calendar_series_id, calendar_occurrence_start, visual_context)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, COALESCE(?, \(Self.absentVisualContextSQL)))
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -3368,7 +3379,7 @@ public final class DictationStore {
                 saved_recording_path = NULL,
                 follow_up_to_id = NULL,
                 follow_up_to_record_name = NULL,
-                visual_context = NULL,
+                visual_context = \(Self.absentVisualContextSQL),
                 word_count = 0,
                 duration_seconds = 0,
                 deleted_at = ?,
@@ -3577,7 +3588,7 @@ public final class DictationStore {
                 mic_audio_path = NULL,
                 system_audio_path = NULL,
                 saved_recording_path = NULL,
-                visual_context = NULL,
+                visual_context = \(Self.absentVisualContextSQL),
                 word_count = 0,
                 duration_seconds = 0,
                 deleted_at = strftime('%s','now'),
@@ -4190,7 +4201,7 @@ public final class DictationStore {
         defer { sqlite3_close(db) }
         let sql = """
         UPDATE meetings
-        SET title = ?, calendar_event_id = ?, start_time = ?, end_time = ?, duration_seconds = ?, raw_transcript = ?, formatted_notes = ?, mic_audio_path = ?, system_audio_path = ?, saved_recording_path = ?, meeting_status = ?, word_count = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, visual_context = ?, updated_at = ?, sync_dirty = 1
+        SET title = ?, calendar_event_id = ?, start_time = ?, end_time = ?, duration_seconds = ?, raw_transcript = ?, formatted_notes = ?, mic_audio_path = ?, system_audio_path = ?, saved_recording_path = ?, meeting_status = ?, word_count = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, visual_context = COALESCE(?, \(Self.absentVisualContextSQL)), updated_at = ?, sync_dirty = 1
         WHERE id = ? AND deleted_at IS NULL
         """
         var statement: OpaquePointer?
