@@ -81,20 +81,25 @@ struct MeetingExporter {
 
     // MARK: - Markdown composition
 
-    static func buildMarkdown(meeting: MeetingRecord, content: MeetingExportContent) -> String {
+    /// Shared by exports and Copy, so pasted notes carry the same title, date, and length.
+    static func metadataHeader(for meeting: MeetingRecord, wordCount: Int? = nil) -> String {
         var parts: [String] = []
-
         parts.append("# \(meeting.title)")
         parts.append("")
         parts.append("**Date:** \(formatExportDate(meeting.startTime))")
         parts.append("**Duration:** \(formatExportDuration(meeting.durationSeconds))")
-        parts.append("**Words:** \(meeting.wordCount)")
+        parts.append("**Words:** \(wordCount ?? meeting.wordCount)")
         if let name = meeting.selectedTemplateName, !name.isEmpty {
             parts.append("**Template:** \(name)")
         }
         parts.append("")
         parts.append("---")
         parts.append("")
+        return parts.joined(separator: "\n")
+    }
+
+    static func buildMarkdown(meeting: MeetingRecord, content: MeetingExportContent) -> String {
+        var parts: [String] = [metadataHeader(for: meeting)]
 
         switch content {
         case .notes:
@@ -378,8 +383,20 @@ struct MeetingExporter {
         return "\(stem)\(suffix).\(fileExtension)"
     }
 
-    private static func formatExportDate(_ raw: String) -> String {
-        MeetingBrowserLogic.formatStartTime(raw)
+    static func formatExportDate(
+        _ raw: String,
+        locale: Locale = .current,
+        timeZone: TimeZone = .current
+    ) -> String {
+        guard let date = MeetingBrowserLogic.parseDate(raw) else {
+            return MeetingBrowserLogic.formatStartTime(raw, locale: locale, timeZone: timeZone)
+        }
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.timeZone = timeZone
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 
     private static func formatExportDuration(_ seconds: Double) -> String {

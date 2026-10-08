@@ -1,7 +1,7 @@
 import SwiftUI
 import ImlaCore
 
-private enum MeetingDocumentMode: Hashable {
+enum MeetingDocumentMode: Hashable {
     case notes
     case transcript
     case chat
@@ -2160,14 +2160,51 @@ struct MeetingDetailView: View {
     private func activeCopyText(for meeting: MeetingRecord) -> String {
         switch documentMode {
         case .notes:
-            return isEditingNotes ? editableNotes : Self.notesContent(for: meeting)
+            return Self.copyContent(for: meeting, content: .notes,
+                                    editedText: isEditingNotes ? editableNotes : nil)
         case .transcript:
-            return isEditingTranscript ? editableTranscript : meeting.displayTranscript
+            return Self.copyContent(for: meeting, content: .transcript,
+                                    editedText: isEditingTranscript ? editableTranscript : nil)
         case .chat:
             // Chat bubbles are individually selectable; copying the whole meeting from the
             // chat tab should still yield the transcript, which is what a user means here.
-            return meeting.displayTranscript
+            return Self.copyContent(for: meeting, content: .transcript)
         }
+    }
+
+    /// Composes exactly the body selected by Copy, including unsaved edits.
+    static func copyContent(
+        for meeting: MeetingRecord,
+        content: MeetingDocumentMode,
+        editedText: String? = nil
+    ) -> String {
+        var body: String
+        switch content {
+        case .notes:
+            body = editedText ?? notesCopyContent(for: meeting)
+            // The raw-notes editor includes a display-only title. Remove only
+            // that exact leading heading before adding the metadata title.
+            if editedText != nil, meeting.status != .noteOnly,
+               meeting.notesState != .structuredNotes {
+                let title = "# \(meeting.title)"
+                if body == title {
+                    body = ""
+                } else {
+                    for newline in ["\r\n", "\n"] {
+                        let prefix = title + newline
+                        if body.hasPrefix(prefix) {
+                            body = String(body.dropFirst(prefix.count))
+                            break
+                        }
+                    }
+                }
+            }
+        case .transcript, .chat:
+            // The cleaned transcript when one exists, which is what the transcript tab shows.
+            body = editedText ?? meeting.displayTranscript
+        }
+        let wordCount = body.split(whereSeparator: { $0.isWhitespace }).count
+        return MeetingExporter.metadataHeader(for: meeting, wordCount: wordCount) + "\n" + body
     }
 
     private func isRawTranscript(_ meeting: MeetingRecord) -> Bool {
@@ -2210,6 +2247,16 @@ struct MeetingDetailView: View {
         }
         if meeting.notesState != .structuredNotes {
             return "# \(meeting.title)\n\n## Raw Transcript\n\n\(meeting.rawTranscript)"
+        }
+        return meeting.formattedNotes
+    }
+
+    static func notesCopyContent(for meeting: MeetingRecord) -> String {
+        if meeting.status == .noteOnly {
+            return meeting.manualNotes
+        }
+        if meeting.notesState != .structuredNotes {
+            return "## Raw Transcript\n\n\(meeting.rawTranscript)"
         }
         return meeting.formattedNotes
     }
