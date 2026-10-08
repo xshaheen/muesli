@@ -213,6 +213,7 @@ case "${shard}" in
       MeetingActivityDetectionPolicyTests
       MeetingParticipantStoreTests
       MeetingProcessingStageTests
+      MeetingRecordingConcatenatorTests
       MeetingRecordingWriterTests
       MeetingRecordingElapsedClockTests
       MeetingRecordButtonTests
